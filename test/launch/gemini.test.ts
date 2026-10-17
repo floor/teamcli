@@ -201,6 +201,7 @@ describe('the plan launches gemini and delivers its rules as the first message',
       session: 'scratch',
       sessionRunning: true,
       watchAlive: true,
+      watchLabel: 'Watch · scratch',
       seats: [
         {
           name: 'gemini',

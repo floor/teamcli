@@ -9,6 +9,38 @@ writes it for you. The commands check that file against the machine and start an
 The live file is what they read. It runs the team in
 [herdr](https://herdr.dev), and Node 22 or later runs it.
 
+## What's new in 0.5.0
+
+The first release since 0.3.5, and the first on npm since it. The full list is in
+[CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
+
+- **A registry, and `team register`.** The machine records the agents, teams and projects it has
+  seen, and a seat that is already running is written in without a relaunch, so the other
+  commands can address it by name.
+- **`team send`, and the channel it takes.** A plain send walks the receiving seat's delivery
+  order — `native`, `mcp-inbox`, `typed` by default, and a level of that seat's chain may drop
+  legs or reorder the ones it keeps, never add one — and this build walks it by the drop file and
+  one trigger line: no socket write, and the legs it keeps and cannot take are recorded
+  `unavailable` on the history line, which keeps the channel the send went by and the legs that
+  failed. `--wait` is refused for every seat — a Claude Code seat's refusal names the native leg
+  (`team route` and the caller's own `SendMessage`) that will carry a waited send, any other seat
+  its own reason, and a Claude Code seat whose delivery order does not lead with the native leg is
+  refused for that, naming the order in force — and nothing is written. A sender with its own
+  cross-session tool takes the native channel — `team route <seat>` answers the address, and
+  `team send --record <seat> --channel native --ms <n>` writes the delivery down. Every run ends
+  in one word — `delivered`, `answered`, `held`, `not-submitted`, `timeout`, `unreachable` or
+  `refused`. A seat its file marks `assistant: true` is its entity's assistant, admitted to the
+  entity's main coordinator by its place in the chain, never by a role's name.
+- **Projects.** A team names the project it sits in; `team projects` lists them, and
+  `team status --project <name>` covers one project's teams.
+- **Seat state, live.** `team seats` gives each seat a state and the source it was read from, and
+  a blind seat is called blind.
+- **Grants and delegates, the owner's alone.** `team grant` records what a seat or a team may do
+  and `team delegate` what a pane outside the team may run; `team revoke` takes any of them back.
+- **`team approve` is gone.** The file in the clone is the record, and `team up` admits from it.
+- **`team check` is integrity, not authority.** It reads and reports and grants nothing: a clean
+  answer approves no change, starts no seat and gives no right.
+
 ## Install
 
 ```sh
@@ -50,6 +82,7 @@ the file stays private to your clone (it goes in `.git/info/exclude`, never `.gi
 - The full README, and the command reference: [github.com/floor/teamcli](https://github.com/floor/teamcli#readme)
 - Changelog: [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md)
 - Upgrading from an earlier release: [UPGRADE-0.3.md](https://github.com/floor/teamcli/blob/main/UPGRADE-0.3.md)
+- Upgrading to 0.5.0: [UPGRADE-0.5.md](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.md)
 - RFC 000, what the project stands on: [floor/teamcli discussion 147](https://github.com/floor/teamcli/discussions/147)
 
 ## License

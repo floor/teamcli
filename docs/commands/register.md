@@ -13,8 +13,17 @@ the process is the one the seat's CLI profile names — the file's `cli` is the 
 `argv0` for the pane (or the agent name herdr reports for it) the reading — and that the screen is
 the seat at its prompt — `idle` or `working`. A
 dialog, a CLI that has exited, another CLI in front, or a reading this version does not recognise
-is not a seat to record. Nothing is typed into the pane, and no workspace is created, closed or
-renamed.
+is not a seat to record. Nothing is typed into the pane, and no workspace is created or closed.
+The seat's two sidebar lines are written the way `up` and `add` write them after a launch: the
+workspace's label (`workspaceLabel`) and the pane's display line (`displayAgent`), re-applied from
+the file so a label or display that drifted is put back where the seat stands.
+
+`--pane <id>` is for a pane herdr never named — a seat started before this team managed the
+session. The pane is held to the same reading, named as the seat herdr would have named it at
+launch (the rename a launch runs, through herdr), and the record is written for it. A pane herdr
+already names — as this seat, or as another agent — is not one `--pane` adopts: the seat's own
+name is recorded the same way without the flag, and a pane herdr names as another agent is
+refused. Without the flag, the seat's name finds the pane herdr already answers to.
 
 What it does not write is what only a launch knows: the state's `model`, `version`, `effort` and
 `launch_line` are what a launch declared, and a pane started by hand declares nothing this run can
@@ -23,20 +32,22 @@ agent session.
 
 ## Synopsis
 
-    team register <seat> [--session <name>] [--dry-run]
+    team register <seat> [--session <name>] [--pane <id>] [--dry-run]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session the pane is verified in, instead of `team.session`; the owner's alone |
+| `--pane` | `<id>` | a pane herdr never named: it is named as the seat through herdr and recorded; a pane herdr already answers to needs no flag |
 | `--dry-run` | — | verify the seat and print the line the real run would print, writing nothing |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## What it reads and writes
 
 Reads the team file, the session's record in `.agents/team.state.json`, herdr (the session's state
-and its agents), the pane's processes, and the pane's text through the seat's own CLI profile.
+and its agents), the pane's processes, the pane's text through the seat's own CLI profile, and the
+team registry's record of this team, for its roster.
 
 Writes `.agents/team.state.json` — the seat's record: its id, `stage: ready`, the CLI, the pane, the
 workspace, the process identity read from the pane, the agent session herdr reports, and the
@@ -45,7 +56,18 @@ directory, and the registry's agent and roster for the seat, the address a cross
 reaches it at included: the pane's live session socket, read and recorded the way a launch records
 it. A record that names another pane, or
 no pane at all, is never overwritten from here: stopping the team and starting it again is the
-owner's own act.
+owner's own act. On a seat the pane already holds ready, the run is the repair: the pane's live
+CLI is verified again — a pane whose CLI exited or was replaced is refused, never re-recorded as
+running — and the registry record — the signing, the roster, the address and the team's project
+pointers — is written again from the file, and the session's own record is left exactly as it is.
+
+A team the registry holds no record of — a team started before this version kept registry
+records — is written by the repair too: the team record, the seat's agent record and its roster
+line, exactly as a launch writes them, and the run says so. Where the registry holds a record of
+the team and its roster does not list the seat, the roster line is written, exactly as a launch
+writes it, and the run says so. The roster is the seat's identity for the permission bridge
+(`src/permissions/who.ts`): a seat the roster does not list has no record there whatever the file
+declares, and every gate wired to the bridge refuses it what the file says it holds.
 
 ## Who may run it
 
@@ -53,17 +75,21 @@ owner's own act.
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` is the owner's own |
 | a run with no terminal | nothing, unless an active create-grant covers this project: `team register: only the owner runs this, from a terminal outside herdr` |
+| a seat of this team | run it: the record it writes belongs to the seat's own team, its own seat's included |
 | a caller the file's `delegates` section names for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it |
-| the seat the file's `grant` names for `up` | run it: the grant gate that admits the owner's `team up` admits the record write, and `--session` is refused in the grant's words — the owner's flag |
-| anyone else | nothing: `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is <caller>` |
+| the seat the file's `grant` names for `up`, where the row above does not admit it | run it: the grant gate that admits the owner's `team up` admits the record write, and the write is audited as the grant's; a verified grant that names another seat or pane, or leaves `up` out of its scope, refuses it. The grant is the fallback for a caller the row refused: a run the row admitted is neither refused nor audited by it, and a file no approval covers grants nothing. `--session` is refused in the grant's words — the owner's flag |
+| anyone else | nothing: `team register: only the owner or a seat of this team registers a running seat; this call is <caller>` |
 
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the seat's record was written | `<seat>: registered — pane <pane>; nothing was launched` | 0 |
-| the seat was already recorded on that pane | `<seat>: already registered — pane <pane>; nothing was written` | 0 |
-| `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched` | 0 |
+| the seat was already recorded on that pane | `<seat>: already registered — pane <pane>; the record was refreshed from the file, nothing relaunched` | 0 |
+| the seat was already recorded, and the team registry's roster does not list it | `<seat>: already registered — pane <pane>; the team registry's roster did not list it, and was written` | 0 |
+| the seat was already recorded and the roster does not list it, under `--dry-run` | `<seat>: already registered — pane <pane>; the team registry's roster would be written` | 0 |
+| `--pane` named the pane as the seat and wrote the record | `<seat>: registered — pane <pane>; the pane was named <seat>, nothing was launched` — `herdr did not take the name, nothing was launched` when the rename did not land; the record is written either way | 0 |
+| `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched`; with `--pane`, `the pane would be named <seat> and recorded` stands before `, nothing would be launched` | 0 |
 | the run was refused | `team register: <reason>` | 1 |
 | the invocation or the team file can't be read | `team register: <problem>`, with the usage for the invocation | 2 |
 
@@ -76,7 +102,7 @@ owner's own act.
 | `team register: only the owner runs this, from a terminal outside herdr` | 1 |
 | `team register: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team register: --session is the owner's; the granted seat cannot use it` | 1 |
-| `team register: only the owner, a delegate this file names for \`up\`, or the seat a grant names for it registers a running seat; this call is <caller>` | 1 |
+| `team register: only the owner or a seat of this team registers a running seat; this call is <caller>` | 1 |
 | ``team register: only the owner or the approved delegate runs `up`; this call is <caller>`` — the file's `delegates` section decided, and refused | 1 |
 | `team register: only the seat the grant names runs this: this call is <caller>` / ``team register: the grant does not list `up` `` / `team register: a grant needs a verified approval: <why>` — the file's `grant` decided, and refused | 1 |
 | `team register: the file has no seat "<name>"` | 1 |
@@ -91,6 +117,9 @@ owner's own act.
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |
+| `team register: pane <pane> is named <other agent> in session "<session>"; --pane names a pane herdr never named, nothing was registered` — `--pane` named a pane herdr already names as another agent | 1 |
+| `team register: pane <pane> is <other seat>'s in session "<session>"; nothing was registered` — the pane this run would record is one another seat's record already holds | 1 |
+| `team register: no pane <pane> in session "<session>"; nothing was registered` — `--pane` named a pane this run can read no process for | 1 |
 
 ## Example
 
@@ -144,16 +173,17 @@ claude-beacon: registered — pane w1:p1; nothing was launched
 exit 0
 ```
 
-The record names the pane herdr showed, so a second run has nothing left to write:
+The record names the pane herdr showed, so a second run has nothing to launch; it writes the
+registry record again from the file — the repair a drifted signing calls for:
 
 ```console
 $ team register claude-beacon ; echo "exit $?"
-claude-beacon: already registered — pane w1:p1; nothing was written
+claude-beacon: already registered — pane w1:p1; the record was refreshed from the file, nothing relaunched
 exit 0
 ```
 
-The seat is now `team send`'s and `team down`'s to address, and the implementer's seat is not the
-owner: it registers no seat, its own included:
+The seat is now `team send`'s and `team down`'s to address. A seat of this team registers its
+session's seats — its own included; a caller outside the team registers nothing:
 
 ```console
 $ team register claude-keeper ; echo "exit $?"
@@ -161,9 +191,9 @@ team register: no agent named claude-keeper is running in session "beacon"; noth
 exit 1
 ```
 
-```console caller=claude-beacon
+```console caller=agent
 $ team register claude-keeper ; echo "exit $?"
-team register: only the owner, a delegate this file names for `up`, or the seat a grant names for it registers a running seat; this call is claude-beacon
+team register: only the owner or a seat of this team registers a running seat; this call is unplaced (it is run by an agent (claude) outside herdr)
 exit 1
 ```
 

@@ -125,7 +125,7 @@ describe('down remembers only after the caller gate', () => {
     const io = testIo(root, WORKER);
     const code = await runDown([], io, downSources(() => new Date(T0), true));
     expect(code).toBe(1);
-    expect(io.err).toContain('only the owner, the orchestrator or the operator stops the team');
+    expect(io.err).toContain('only the owner or `leads` stops the team');
     expect(readFileSync(join(dir, STATE_FILE), 'utf8')).toBe(before);
   });
 

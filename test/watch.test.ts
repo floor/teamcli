@@ -17,6 +17,7 @@ import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { parseLoadavg, parseMeminfo, parseMemoryPressure, parseSwapUsage, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, NUDGE_TEXT, pass, RING_TEXT } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
@@ -471,7 +472,7 @@ describe('a pass of the watch', () => {
     const now = live({ 'claude-coordinator-acme': { screen: busy.replace('Opus 5.5', 'Fable 5.1') } });
     now.agents = now.agents.filter((one) => one.name !== 'deepseek-acme-2');
     now.agents.push(agent('stranger', 'w8', 'working'), agent(null, 'w9', 'working'));
-    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: 'watchdog' });
+    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: watchLabel('acme-web') });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: now, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
     expect(texts).toEqual([
       'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)',
@@ -1000,6 +1001,50 @@ describe('team watch', () => {
     const code = await runWatch(['--file', file], io, sources(1, { live: () => doubled }));
     expect(code).toBe(0);
     expect(typed).toEqual([]);
+  });
+
+  test('a status line changed between passes reaches line 2 on the sweep, once per change', async () => {
+    const io = testIo(dir, { kind: 'owner' });
+    const pushed: string[] = [];
+    // Nobody idle: no nudge, so the pane text the sweep reads is only what this test sets.
+    const working = live({ 'deepseek-acme': { status: 'working', screen: busy }, 'deepseek-acme-2': { status: 'working', screen: busy } });
+    let waits = 0;
+    const code = await runWatch(['--file', file], io, sources(1, {
+      live: () => working,
+      // The pane as the owner's /model and /effort left it, some seconds after the pass.
+      screen: () => '  main · Sonnet 4.5\nwith high effort\n',
+      reportDisplayAgent: (_session, pane, text) => { pushed.push(`${pane} ${text}`); return true; },
+      wait: async (_seconds, onTick) => { waits += 1; onTick?.(); onTick?.(); return false; },
+    }));
+    expect(code).toBe(0);
+    expect(waits).toBe(1);
+    // The pass painted the file's line from the whole read; the sweep painted the changed one,
+    // and its second tick — the same screen again — painted nothing.
+    expect(pushed.filter((line) => line.startsWith('w1:p1 '))).toEqual([
+      'w1:p1 Claude Opus 5.5 default',
+      'w1:p1 Claude Sonnet 4.5 high',
+    ]);
+  });
+
+  test('a display herdr refuses between passes is said, and the older line stands for the next tick', async () => {
+    const io = testIo(dir, { kind: 'owner' });
+    const pushed: string[] = [];
+    const working = live({ 'deepseek-acme': { status: 'working', screen: busy }, 'deepseek-acme-2': { status: 'working', screen: busy } });
+    let allow = true;
+    const code = await runWatch(['--file', file], io, sources(1, {
+      live: () => working,
+      screen: () => '  main · Sonnet 4.5\n',
+      reportDisplayAgent: (_session, pane, text) => { pushed.push(`${pane} ${text}`); return allow; },
+      // The first tick finds herdr gone; the second finds it back, so the line is tried again.
+      wait: async (_seconds, onTick) => { allow = false; onTick?.(); allow = true; onTick?.(); return false; },
+    }));
+    expect(code).toBe(0);
+    expect(io.out).toContain('claude-coordinator-acme: its display was not reported');
+    expect(pushed.filter((line) => line.startsWith('w1:p1 '))).toEqual([
+      'w1:p1 Claude Opus 5.5 default',
+      'w1:p1 Claude Sonnet 4.5 default',
+      'w1:p1 Claude Sonnet 4.5 default',
+    ]);
   });
 
   test('reports to the log, the desktop and the operator, and writes its heartbeat', async () => {

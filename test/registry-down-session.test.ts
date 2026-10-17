@@ -3,7 +3,7 @@
 // a stop of the session it lives in.
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
@@ -130,6 +130,20 @@ function downSources(fixture: Fixture): DownSources {
 const owner = { kind: 'owner' } as const;
 
 describe('team down --session and the team record', () => {
+  test('a stopped seat’s hook reading goes with its record', async () => {
+    // The stop interrupts whatever turn was on: the file's `working` would otherwise answer for
+    // a seat that no longer runs, up to the hook's day. The drop takes it with the record.
+    const fixture = makeFixture();
+    registerBoth(fixture, 'alternate');
+    seedState(fixture, 'alternate');
+    mkdirSync(join(fixture.dir, 'seat-state'), { recursive: true });
+    writeFileSync(join(fixture.dir, 'seat-state', 'worker.json'), `{"state":"working","since":"${NOW.toISOString()}"}\n`);
+
+    const io = testIo(fixture.root, owner);
+    expect(await runDown(['--session', 'alternate'], io, downSources(fixture))).toBe(0);
+    expect(existsSync(join(fixture.dir, 'seat-state', 'worker.json'))).toBe(false);
+  });
+
   test('a stop of the session the registry addresses the team in moves the team to stopped, and keeps that session', async () => {
     const fixture = makeFixture();
     const ids = registerBoth(fixture, 'alternate');

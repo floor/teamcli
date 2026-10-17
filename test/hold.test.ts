@@ -1,4 +1,4 @@
-// `team hold` at its edges: one record in the state, the caller rule `down` uses, `--until`'s
+// `team hold` at its edges: one record in the state, the session walk's caller rule, `--until`'s
 // two shapes, and the expiry that needs no writer. The status note and the doctor line are their
 // readers: the note lives in status.test.ts beside the reading it joins, and the doctor line is
 // pinned here against a plain run, as `doctor-machine.test.ts` pins its finding.

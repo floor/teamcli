@@ -12,7 +12,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -31,7 +30,7 @@ import {
   type DaemonHost,
   type SendDaemonHandle,
 } from '../src/send/daemon.ts';
-import { historyPath, readHistory } from '../src/send/history.ts';
+import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
@@ -655,18 +654,16 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(host.enters).toEqual([]);
   });
 
-  test('routes --wait socket sends through the daemon and returns answered reply', async () => {
+  test('--wait is refused on both sides: the CLI never asks, and the daemon refuses an older caller', async () => {
     const w = setupWorld();
     writeFileSync(join(w.sockets, '222.sock'), '');
+    // A deliver that would prove a dial: it counts the attempt and throws, so a swallow
+    // somewhere on the path still leaves the count behind.
+    let dialed = 0;
     const host = makeHost(w, {
-      deliver: async (_sock, frame) => {
-        host.frames.push(frame);
-        const replySock = createConnection(join(w.sockets, `${String(process.pid)}.sock`));
-        replySock.on('error', () => {});
-        replySock.on('connect', () => {
-          replySock.end(`${JSON.stringify({ type: 'user', message: { role: 'user', content: 'ack from lead' }, msg_id: 'rep-1' })}\n`);
-        });
-        return { ok: true };
+      deliver: async () => {
+        dialed += 1;
+        throw new Error('the socket was dialed');
       },
     });
 
@@ -674,17 +671,64 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     if (started.kind !== 'serving') throw new Error(started.kind);
     handles.push(started.handle);
 
+    // The CLI's own --wait refuses before the daemon is ever asked.
     const io = ownerIo(w.root);
     const code = await runSend(['lead', 'ping over socket', '--wait'], io, host);
-    expect(code).toBe(0);
-    expect(io.out).toBe('lead: answered\nack from lead\n');
+    expect(code).toBe(1);
+    expect(io.err).toContain('needs the native leg');
 
+    // An older CLI that still asks the daemon for a waited send gets the same refusal from the
+    // daemon's own gate, and the daemon dials nothing either.
+    const asked = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'owner',
+      to: 'lead',
+      body: 'from an older caller',
+      wait: true,
+      timeout_s: 1,
+    });
+    const refused = asked && 'outcome' in asked ? asked : null;
+    expect(refused?.outcome).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toContain('needs the native leg');
+    expect(dialed).toBe(0);
+
+    // Neither refusal writes a history line: nothing was sent.
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
-    if (hist.ok) {
-      expect(hist.entries[0]?.outcome).toBe('answered');
-      expect(existsSync(historyPath('acme', w.root, w.home))).toBe(true);
-    }
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([]);
+  });
+
+  test('the daemon refuses a stopped seat for a caller that reaches it directly, and starts no worker', async () => {
+    const w = setupWorld();
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('  - role: reviewer', '  - role: reviewer\n    stopped: true'));
+    const loaded = loadTeamFile(w.root, { home: w.home });
+    if (!loaded.ok) throw new Error('fixture team.yaml failed to reload');
+    const host = makeHost(w);
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: loaded.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    // An older caller that still asks the daemon directly is refused at the queue, and no leg runs.
+    const asked = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'owner',
+      to: 'native',
+      body: 'from an older caller',
+    });
+    const refused = asked && 'outcome' in asked ? asked : null;
+    expect(refused?.outcome).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toBe('native is stopped');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([]);
   });
 
   test('trigger points at state-folder drop path when delivered through the daemon', async () => {

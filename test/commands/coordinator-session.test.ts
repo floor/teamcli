@@ -332,6 +332,15 @@ type Case = {
   // cause, and the repair. For `answer` only the coordinator is ever a caller, so the operator
   // meets the ordinary refusal there instead of this line.
   noPane: (name: string) => string;
+  // Whether this command's gate admits an operator seat caller: where it does, a state that
+  // records no pane for that seat gives it the no-pane line; where it does not — `answer` judges
+  // the coordinator alone, and the map's `down` row admits the owner and `leads` — the operator
+  // meets its refusal, not for the missing pane but for being the operator.
+  operatorAdmitted?: boolean;
+  // Whether this command's gate admits a seat caller at all: where it does not — the map's `add`
+  // row is the owner's alone in 0.5.0 — every scene below meets the ordinary refusal whatever
+  // pane the caller sits on and whatever the state records, so no pane is ever the cause.
+  seatAdmitted?: boolean;
   // The refusal for the seat's name in the seat's session, on any pane but the one the state
   // records for it: the recorded pane is named, and so is the repair.
   anotherPane: (name: string, pane: string) => string;
@@ -348,8 +357,10 @@ const COMMANDS: Case[] = [
   {
     name: 'add',
     run: (caller, argv = [], options) => call((io) => runAdd(['probe-seat', ...argv], io, addSources()), caller, options),
-    refusal: (who) => `team add: only the owner, the orchestrator or the operator runs it; this call is ${who}\n`,
+    refusal: (who) => `team add: only the owner or a standing grant (delegate) runs it; this call is ${who}\n`,
     noPane: (name) => `team add: ${NO_PANE(name)}\n`,
+    operatorAdmitted: false,
+    seatAdmitted: false,
     anotherPane: (name, pane) => `team add: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team add: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team add: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
@@ -358,8 +369,9 @@ const COMMANDS: Case[] = [
   {
     name: 'remove',
     run: (caller, argv = [], options) => call((io) => runRemove([SEAT, ...argv], io, removeSources()), caller, options),
-    refusal: (who) => `team remove: only the owner, the orchestrator or the operator runs it; this call is ${who}\n`,
+    refusal: (who) => `team remove: only the owner or \`leads\` removes a seat; this call is ${who}\n`,
     noPane: (name) => `team remove: ${NO_PANE(name)}\n`,
+    operatorAdmitted: false,
     anotherPane: (name, pane) => `team remove: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team remove: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team remove: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
@@ -401,8 +413,9 @@ const COMMANDS: Case[] = [
   {
     name: 'down',
     run: (caller, argv = [], options) => call((io) => runDown([...argv], io, downSources()), caller, options),
-    refusal: (who) => `team down: only the owner, the orchestrator or the operator stops the team; this call is ${who}\n`,
+    refusal: (who) => `team down: only the owner or \`leads\` stops the team; this call is ${who}\n`,
     noPane: (name) => `team down: ${NO_PANE(name)}\n`,
+    operatorAdmitted: false,
     anotherPane: (name, pane) => `team down: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team down: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team down: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
@@ -413,6 +426,7 @@ const COMMANDS: Case[] = [
     run: (caller, argv = [], options) => call((io) => runAnswer([SEAT, 'trust', ...argv], io, answerHost()), caller, options),
     refusal: () => `${SEAT}: only the owner, or the orchestrator from its own seat, can answer\n`,
     noPane: (name) => `team answer: ${NO_PANE(name)}\n`,
+    operatorAdmitted: false,
     anotherPane: (name, pane) => `team answer: ${ANOTHER_PANE(name, pane)}\n`,
     sessionOwner: (who) => `team answer: ${OWNER_ONLY(who)}\n`,
     fileOwner: (who) => `team answer: --file is the owner's, from a terminal outside herdr; this call is ${who}\n`,
@@ -442,11 +456,13 @@ for (const command of COMMANDS) {
 
     test('a pane merely renamed, in the team\'s own session, is refused: the state records another pane', async () => {
       const run = await command.run(placed(SESSION, COORDINATOR, 'w9:p1'));
-      // exit 1: <command>.another-pane, the case's own id (docs/reference/exit-codes.md).
+      // exit 1: <command>.another-pane, the case's own id (docs/reference/exit-codes.md). Where
+      // the map admits no seat to the command at all (`add`), the renamed pane meets the ordinary
+      // refusal like every other placement: no pane is ever the cause.
       expect({ code: run.code, out: run.out, err: run.err }).toEqual({
         code: 1,
         out: '',
-        err: command.anotherPane(COORDINATOR, COORDINATOR_PANE),
+        err: command.seatAdmitted === false ? command.refusal(COORDINATOR) : command.anotherPane(COORDINATOR, COORDINATOR_PANE),
       });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });
@@ -458,7 +474,7 @@ for (const command of COMMANDS) {
       expect({ code: run.code, out: run.out, err: run.err }).toEqual({
         code: 1,
         out: '',
-        err: command.anotherPane(COORDINATOR, COORDINATOR_PANE),
+        err: command.seatAdmitted === false ? command.refusal(COORDINATOR) : command.anotherPane(COORDINATOR, COORDINATOR_PANE),
       });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });
@@ -482,23 +498,28 @@ for (const command of COMMANDS) {
 
     test('a state that records no pane refuses the coordinator: the cause and the repair', async () => {
       const run = await command.run(placed(SESSION, COORDINATOR, COORDINATOR_PANE), [], { state: null });
-      // exit 1: <command>.no-pane, the case's own id (docs/reference/exit-codes.md).
-      expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err: command.noPane(COORDINATOR) });
+      // exit 1: <command>.no-pane, the case's own id (docs/reference/exit-codes.md); the map's
+      // owner-only `add` row refuses a seat before any pane is read, so there the cause is the
+      // rule, not the missing record.
+      const err = command.seatAdmitted === false ? command.refusal(COORDINATOR) : command.noPane(COORDINATOR);
+      expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });
 
     test('a state that records no pane refuses the operator the same way', async () => {
       const run = await command.run(placed(SESSION, OPERATOR, 'w4:p1'), [], { state: null });
-      // `answer` judges the coordinator alone, so an operator is refused for being the operator,
-      // not for the missing pane: the line it meets is its ordinary refusal.
-      const err = command.name === 'answer' ? command.refusal(OPERATOR) : command.noPane(OPERATOR);
+      // Where the gate does not admit an operator seat caller, it is refused for being the
+      // operator, not for the missing pane: the line it meets is its ordinary refusal. The same
+      // holds where no seat is admitted at all.
+      const err = command.operatorAdmitted === false || command.seatAdmitted === false ? command.refusal(OPERATOR) : command.noPane(OPERATOR);
       expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });
 
     test('a state that names another seat records no pane for the coordinator either', async () => {
       const run = await command.run(placed(SESSION, COORDINATOR, COORDINATOR_PANE), [], { state: TEMPORARY_STATE });
-      expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err: command.noPane(COORDINATOR) });
+      const err = command.seatAdmitted === false ? command.refusal(COORDINATOR) : command.noPane(COORDINATOR);
+      expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });
 
@@ -506,7 +527,8 @@ for (const command of COMMANDS) {
       // The caller sits on `w3:p1`, the pane the state records for codex-acme; the name it
       // holds has no record. Another seat's pane is not this seat's.
       const run = await command.run(placed(SESSION, COORDINATOR, 'w3:p1'), [], { state: TEMPORARY_STATE });
-      expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err: command.noPane(COORDINATOR) });
+      const err = command.seatAdmitted === false ? command.refusal(COORDINATOR) : command.noPane(COORDINATOR);
+      expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err });
       expect(readFileSync(file, 'utf8')).toBe(run.before);
     });
 
@@ -820,7 +842,7 @@ describe('the renamed pane in another session', () => {
     const run = await call((io) => runRemove([SEAT], io, removeSources()), placed(OTHER, COORDINATOR, COORDINATOR_PANE));
     expect(run.code).toBe(1);
     expect(run.out).toBe('');
-    expect(run.err).toBe(`team remove: only the owner, the orchestrator or the operator runs it; this call is ${COORDINATOR}\n`);
+    expect(run.err).toBe(`team remove: only the owner or \`leads\` removes a seat; this call is ${COORDINATOR}\n`);
     expect(readFileSync(file, 'utf8')).toBe(run.before);
     expect(readFileSync(stateFile, 'utf8')).toBe(run.beforeState);
     expect(readFileSync(file, 'utf8')).toContain(`name: ${SEAT}`);
@@ -889,13 +911,18 @@ describe('the sessions the check lets in', () => {
   });
 });
 
-// The dry runs fail the same way as the real runs: the refusal itself where the gate sits before
-// the plan (`add`, and any `--session` the caller may not aim), and the `! down would refuse:`
-// line over the plan where `down` prints a refusal the plan stage found, exiting as the real run.
+// The dry runs fail the same way as the real runs, and explain instead of refusing bare: `add`
+// prints its `! add would refuse:` line and the unblocking command, and `down` prints a refusal
+// the plan stage found over the plan, each exiting as the real run.
 describe('a dry run of the no-pane refusal', () => {
-  test('add --dry-run is refused: the gate sits before the dry run', async () => {
+  test('add --dry-run explains the gate\'s refusal and exits 1: the gate sits before the dry run', async () => {
+    // The map's owner-only `add` row refuses a seat before any pane is read, so the state that
+    // records nothing is not the cause here: the line is the caller gate's own, said beside the
+    // dry answer instead of a plan.
     const run = await byName('add').run(placed(SESSION, COORDINATOR, COORDINATOR_PANE), ['--dry-run'], { state: null });
-    expect({ code: run.code, out: run.out, err: run.err }).toEqual({ code: 1, out: '', err: byName('add').noPane(COORDINATOR) });
+    expect({ code: run.code, err: run.err }).toEqual({ code: 1, err: '' });
+    expect(run.out).toContain(`! add would refuse: ${byName('add').refusal(COORDINATOR).replace(/^team add: /, '').trimEnd()}`);
+    expect(run.out).toContain('! to unblock:');
     expect(readFileSync(file, 'utf8')).toBe(run.before);
   });
 

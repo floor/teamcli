@@ -89,8 +89,10 @@ function agent(home: string, init: { name: string; role: string; cli: string; te
   });
 }
 
-function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string }[]): void {
-  upsertTeam(home, id, { project, entity: project, session, root, lobby: join(home, 'lobby'), roster, lifecycle: 'running' });
+function team(home: string, id: string, project: string, session: string, root: string, roster: { agent: string; seat: string; role: string; leads: boolean }[]): void {
+  // The file sets neither `entity` nor `lobby`, so the lobby its seats start in — and the entry
+  // its trust lists — is the machine lobby; the record says the same, as `up` would have noted it.
+  upsertTeam(home, id, { project, entity: project, session, root, lobby: lobbyDir(home), roster, lifecycle: 'running' });
 }
 
 /** The state record `up` leaves for a launched seat: the pane herdr placed it on. The placement
@@ -112,7 +114,7 @@ function admitRuleFor(home: string, target: Agent): string {
 function seatOf(w: World, project: string, session: string, seat: string, role: string, pane: string | null, cli = 'claude-code'): Agent {
   const id = teamIdOf(w.root);
   const made = agent(w.home, { name: seat, role, cli, team: id, seat, session, pane });
-  team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role }]);
+  team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role, leads: false }]);
   return made;
 }
 
@@ -307,7 +309,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     const beta = world('beta', 'beta', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')], alpha);
     const betaAgent = agent(beta.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'lead', session: 'beta', pane: 'pane-beta-lead' });
-    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator' }]);
+    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator', leads: true }]);
     const betaPane = scripted(['idle', 'working']);
     const alphaPane = scripted(['idle']);
     const host = sendHost(beta, 'beta', { lead: { pane: 'pane-beta-lead', paneStatus: betaPane } });
@@ -334,7 +336,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     const beta = world('beta', 'beta', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')], alpha);
     const betaAgent = agent(beta.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'lead', session: 'beta', pane: 'pane-beta-lead' });
-    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator' }]);
+    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: betaAgent.id, seat: 'lead', role: 'coordinator', leads: true }]);
     const betaPane = scripted(['idle', 'working']);
     const host = sendHost(beta, 'beta', { lead: { pane: 'pane-beta-lead', paneStatus: betaPane } });
     const io = testIo(alpha.root, OWNER);
@@ -367,12 +369,50 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(drop.text).toContain(BODY);
   });
 
+  test('a recorded pane another seat now holds is never typed into', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    // The record still names the pane builder-1 was launched on; herdr now lists the lead there
+    // and names no agent of builder-1's at all — the pane was reused after the record was
+    // written. The trigger must not go into the lead's box on the strength of the record.
+    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-reused' });
+    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
+    const leadPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-reused', paneStatus: leadPane } });
+    const io = testIo(alpha.root, OWNER);
+
+    const code = await runSend([builder.id, BODY], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toBe('team send: builder-1: unreachable: no live agent carries that name in the session\n');
+    expect(leadPane.typed).toEqual([]);
+    expect(leadPane.enters).toBe(0);
+    expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
+  });
+
+  test('a seat herdr lists on another pane is reached there, never at the pane the record carries', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-old' });
+    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: builder.id, seat: 'builder-1', role: 'builder', leads: false }]);
+    const builderPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-new', paneStatus: builderPane } });
+    const io = testIo(alpha.root, OWNER);
+
+    const code = await runSend([builder.id, BODY], io, host);
+
+    expect(code).toBe(0);
+    expect(builderPane.typed.length).toBe(1);
+    const typed = builderPane.typed[0] as Typed;
+    expect(typed.pane).toBe('pane-new');
+    const drop = dropOf(typed.text);
+    expect(drop.text).toContain(BODY);
+  });
+
   test('a seat whose own record is missing is judged as the file\'s seat: the own-team rules admit it', async () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     // The team record and the target exist; the caller's own seat has no record of its own — the
     // live file declares it, and that declared seat is the identity the own-team rule judges.
     const target = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
-    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: target.id, seat: 'builder-1', role: 'builder' }]);
+    team(alpha.home, teamIdOf(alpha.root), 'alpha', 'alpha', alpha.root, [{ agent: target.id, seat: 'builder-1', role: 'builder', leads: false }]);
     const builderPane = scripted(['idle', 'working']);
     const host = sendHost(alpha, 'alpha', { lead: { pane: 'pane-alpha-lead', paneStatus: scripted(['idle']) }, 'builder-1': { pane: 'pane-builder', paneStatus: builderPane } });
     // The state records the caller on the orchestrator's pane — the placement the declared
@@ -396,7 +436,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const alpha = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     const beta = world('beta', 'beta', 'chief', [seatBlock('coordinator', 'chief', 'claude-code', 'anthropic')], alpha);
     const chief = agent(beta.home, { name: 'chief', role: 'coordinator', cli: 'claude-code', team: teamIdOf(beta.root), seat: 'chief', session: 'beta', pane: 'pane-beta-chief' });
-    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: chief.id, seat: 'chief', role: 'coordinator' }]);
+    team(beta.home, teamIdOf(beta.root), 'beta', 'beta', beta.root, [{ agent: chief.id, seat: 'chief', role: 'coordinator', leads: true }]);
     const chiefPane = scripted(['idle', 'working']);
     const host = sendHost(beta, 'beta', { chief: { pane: 'pane-beta-chief', paneStatus: chiefPane } });
     // A record-less caller is judged as the file's seat for its own team's rules only: another

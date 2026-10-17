@@ -13,12 +13,14 @@ import {
   isOwner,
   judgeCallerIn,
   judgeCallerOf,
-  mayChangeTeamVerdict,
   noPaneRefusal,
   sessionOwnerRefusal,
   standingOf,
   walkCaller,
+  type Caller,
+  type SeatStanding,
 } from '../caller.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
@@ -49,6 +51,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
@@ -57,12 +60,14 @@ import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRules
 import { rulesOf } from '../launch/rules.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
+import { shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -163,6 +168,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const loaded = loadTeamFile(io.cwd, {
     ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
     home: sources.home,
+    // The session this run addresses: the placement check reads that session's recorded lobby.
+    ...(args.values.session !== undefined ? { session: args.values.session } : {}),
   });
   if (!loaded.ok) {
     return configuration(out, loaded.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('\n'));
@@ -170,9 +177,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const { team, root, path } = loaded;
   const dir = dirname(path);
 
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: owner or `leads` for this team, decided from records.
+  const home = sources.home ?? homedir();
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, home, 'restart', at, sources.now);
   const judged = args.values.session !== undefined
     ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }
-    : judgeCallerIn(io, dir, team);
+    : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown, session } = judged;
   if (session === 'default') {
     return callerRefused(out, 'session can\'t be "default", herdr\'s own session');
@@ -186,11 +198,33 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // file that changed since the last approval is not a refusal.
   const ceilings = ceilingsOf(team);
 
-  const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
-  if (mayChange.kind === 'no-pane') return callerRefused(out, noPaneRefusal(mayChange.name));
-  if (mayChange.kind === 'another-pane') return callerRefused(out, anotherPaneRefusal(mayChange.name, mayChange.recordedPane));
-  if (mayChange.kind === 'refused') {
-    return callerRefused(out, `only the owner, the orchestrator or the operator restarts a seat; this call is ${plainLine(describeCaller(shown))}`);
+  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
+  // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
+  // `1`, dev mode says this gate once, as a warning, and the restart continues — exactly as
+  // `up` does. Every other refusal stays a refusal: the target placement, the CLI, the
+  // records, the approvals and trust. The warning is logged where this call runs; a dry run
+  // says it beside the dry answer and decides nothing.
+  const mayRun = mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
+    : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
+      : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}`
+        : null;
+  if (mayRun !== null) {
+    if (io.env.TEAMCLI_DEV_MODE === '1') {
+      const said = `warning: ${mayRun}; dev mode continues`;
+      if (dry) out.stdout(`! ${said}\n`);
+      else {
+        out.stderr(`team restart: ${plainText(said)}\n`);
+        logLine(dir, 'restart', describeCaller(caller), said, sources.now());
+      }
+    } else {
+      // The dry answer names the refusal and the one command that unblocks it, on stdout where
+      // a dry run's answers go; both paths exit through the refusal's one exit site below.
+      return callerRefused(
+        out,
+        mayRun,
+        dry ? `! restart would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(ownerRestartRun(argv))}\n` : undefined,
+      );
+    }
   }
 
   const recordedSession = readState(dir).sessions[session] ?? emptySession();
@@ -233,10 +267,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (!profile) {
     return notReadyRefused(out, `no launch profile for \`${plainLine(declared.cli)}\` in this version`);
   }
-  for (const problem of placedProblems(team, root, sources.home)) {
+  for (const problem of placedProblems(team, root, sources.home, undefined, session)) {
     return notReadyRefused(out, problem.message);
   }
-  const start = seatStart(team, declared, root, sources.home);
+  const start = seatStart({ ...team, session }, declared, root, sources.home);
   if ('problem' in start) {
     return notReadyRefused(out, start.problem);
   }
@@ -282,6 +316,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
+      cliHooks: plannedCliHooks(dir, [planSeat]),
+      watchLabel: watchLabel(team.project),
     });
     return dryRunExit(out, `${stopStep}${plainText(formatPlan(preview))}`);
   }
@@ -357,13 +393,25 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     }
 
     const records = progressWriter({ stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false });
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and relaunches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, [planSeat]);
+    const installed = installCliHooks(dir, [planSeat]);
+    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
+      logLine(dir, 'restart', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+    }
     const plan = upPlan({
       root,
       session,
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
+      cliHooks: installed,
+      watchLabel: watchLabel(team.project),
     });
+    // The old pane is closed: whatever its last turn wrote says nothing about the seat this
+    // plan starts.
+    resetCliHookState(dir, [planSeat.name]);
     const host = hostOf({
       dir,
       session,
@@ -374,6 +422,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       running: runningSeats,
       seat: declared,
       caller: who,
+      owner: caller.kind === 'owner',
+      devMode: io.env.TEAMCLI_DEV_MODE === '1',
       now: sources.now,
       launch: sources.upLaunch,
       readMachine: sources.machine,
@@ -558,6 +608,8 @@ function hostOf(input: {
   running: Running[];
   seat: Seat;
   caller: string;
+  owner: boolean;
+  devMode: boolean;
   now(): Date;
   launch: Launch;
   readMachine?: (root: string) => Machine;
@@ -697,7 +749,7 @@ function hostOf(input: {
         // The registry: a relaunch keeps the seat's agent and re-points it to the new pane.
         if (name === seat.name) {
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
@@ -771,8 +823,19 @@ function detachedExit(out: Io, message: string): number {
   return 1;
 }
 
-function callerRefused(out: Io, message: string): number {
-  out.stderr(`team restart: ${plainText(message)}\n`);
+/** The one command that unblocks a `restart` this caller cannot run: the owner's own, in this
+ *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's own flag
+ *  dropped, so the printed line is a command that runs. */
+function ownerRestartRun(argv: string[]): string {
+  const words = ['team', 'restart', ...argv.filter((word) => word !== '--dry-run').map(shellQuote)];
+  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+}
+
+/** The gate's refusal: the sentence on stderr, or, with `dryAnswer`, the dry run's own words on
+ *  stdout — the same outcome either way, so both leave through this one exit site. */
+function callerRefused(out: Io, message: string, dryAnswer?: string): number {
+  if (dryAnswer === undefined) out.stderr(`team restart: ${plainText(message)}\n`);
+  else out.stdout(dryAnswer);
   // exit: restart.caller
   return 1;
 }
@@ -826,7 +889,7 @@ function replacedRefused(out: Io, name: string): number {
 }
 
 function abandonWorkingRefused(out: Io, name: string): number {
-  out.stderr(`team restart: ${plainLine(name)} is working; a granted abandon leaves it (the owner's --abandon closes it)\n`);
+  out.stderr(`team restart: ${plainLine(name)} is working; a seat's --abandon leaves it (the owner's --abandon closes it)\n`);
   // exit: restart.abandon-working
   return 1;
 }

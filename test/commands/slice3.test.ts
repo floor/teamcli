@@ -688,8 +688,11 @@ describe('team up', () => {
     expect(run.out).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -c model_reasoning_effort=high -a never -s danger-full-access');
     expect(run.out).toContain('pane send-text <pane of codex-acme>');
     expect(run.out).toContain('  skip grok-acme: stopped in the file; start it with `team add grok-acme`\n');
-    expect(run.out).toContain('detached; the state records its pid');
+    // The plan's last steps: the watch's own workspace, then its command in that pane.
+    expect(run.out).toContain(`+ herdr --session acme-web workspace create --cwd ${root} --label 'Watch · acme-web' --no-focus\n`);
+    expect(run.out).toContain("+ herdr --session acme-web pane run <pane of Watch · acme-web> '");
     expect(run.out).toContain('watch --session acme-web');
+    expect(run.out).toContain('    (a desktop notification follows when the watch exits)\n');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
@@ -700,7 +703,7 @@ describe('team up', () => {
     });
     expect(run.code).toBe(1);
     expect(run.err).toBe('');
-    expect(run.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is deepseek-acme\n');
+    expect(run.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is deepseek-acme\n');
     expect(run.out).toContain('! to unblock: the owner runs `team up --file .agents/team.yaml` from this folder, at a terminal outside herdr\n');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
@@ -754,7 +757,7 @@ describe('team down', () => {
   test('a seat other than the coordinator or the operator stops nothing', async () => {
     const run = await down([], WORKER);
     expect(run.code).toBe(1);
-    expect(run.err).toContain('team down: only the owner, the orchestrator or the operator stops the team; this call is deepseek-acme\n');
+    expect(run.err).toContain('team down: only the owner or `leads` stops the team; this call is deepseek-acme\n');
     expect(run.out).toBe('');
   });
 
@@ -796,7 +799,7 @@ describe('team down', () => {
 
     const worker = await down(['--dry-run'], WORKER);
     expect(worker.out).toStartWith(
-      '! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is deepseek-acme\n',
+      '! down would refuse: only the owner or `leads` stops the team; this call is deepseek-acme\n',
     );
   });
 

@@ -150,7 +150,7 @@ describe('the lead is a field, or the legacy key', () => {
     // `marked` carries the lead's mark on line 14 and the worker seat on 15..21, so the second
     // mark lands on line 22.
     const twice = change(marked, '    launch: codex\n', '    launch: codex\n    leads: true\n');
-    expect(errors(twice)).toEqual(['22: `leads` is on more than one seat: a team has one orchestrator']);
+    expect(errors(twice)).toEqual(['22: `leads` is on 2 seats: "lead", "worker"; a team has one lead']);
   });
 
   test('the key alone still reads, with its own refusals', () => {
@@ -205,6 +205,41 @@ describe('the lead is a field, or the legacy key', () => {
     ]);
     const off = change(marked, '    leads: true\n', '    leads: false\n');
     expect(errors(off)).toEqual(['1: the file has no seat that leads: put `leads: true` on one seat']);
+  });
+});
+
+// The entity's assistant: `assistant: true` on at most one seat, never on one the file expands
+// from a count. Unlike the lead there is no key to spell it with, so the mark rides the built
+// seat — the capability admits a send, and the seat's digest is what the owner approves.
+describe('the assistant is one seat the file marks', () => {
+  const mark = (text: string, at = '    launch: claude --model claude-opus-5-5\n'): string =>
+    change(text, at, `${at}    assistant: true\n`);
+
+  test('the mark rides the seat, and no other spelling is needed', () => {
+    const { team, warnings } = valid(mark(marked));
+    expect(team.seats.filter((seat) => seat.assistant === true).map((seat) => seat.name)).toEqual(['lead']);
+    expect(warnings).toEqual([]);
+  });
+
+  test('a file that marks none carries no field at all', () => {
+    const { team } = valid(marked);
+    expect(team.seats.map((seat) => seat.assistant)).toEqual([undefined, undefined]);
+  });
+
+  test('two marks are refused at the second one', () => {
+    // The lead's mark lands on line 14 in `marked`, which shifts the worker's seat down one; the
+    // worker's mark lands on 23.
+    expect(errors(mark(mark(marked), '    launch: codex\n'))).toEqual([
+      '23: `assistant` is on more than one seat: a team has one assistant',
+    ]);
+  });
+
+  test('a mark on a seat with a count is refused at the field', () => {
+    // The worker is the operator in this fixture, so the operator moves to the lead's seat: the
+    // count's own refusal would otherwise stand beside the assistant's.
+    const moved = change(marked, 'operator: worker\n', 'operator: lead\n');
+    const counted = change(moved, '    launch: codex\n', '    launch: codex\n    count: 2\n    assistant: true\n');
+    expect(errors(counted)).toEqual(['23: `assistant` on "worker" can\'t be a seat with count']);
   });
 });
 

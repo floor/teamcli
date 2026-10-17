@@ -13,6 +13,7 @@ import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Live } from '../src/status/compare.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { testIo } from './helpers.ts';
 
 const EXAMPLE = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
@@ -43,7 +44,7 @@ function built(pane: string): Live {
     ],
     workspaces: [
       { id: 'w1', label: 'claude opus 5.5' }, { id: 'w2', label: 'gpt sol 6' },
-      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: 'watchdog' },
+      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: watchLabel('acme-web') },
     ],
     screens: {},
   };

@@ -118,6 +118,21 @@ describe('team doctor on a file of every model shape', () => {
     expect(run.code).toBe(0);
   });
 
+  test('a launch naming the same model in another word order is no warning', async () => {
+    // agy's flag splits the vendor's display order: the launch starts Gemini Argon 4 and the file
+    // writes Gemini 4 Argon with the same version. One model, so the doctor says nothing of it.
+    edit((text) =>
+      text
+        .replace('launch: agy', 'launch: agy --model gemini-4-argon')
+        .replace('    model: Gemini Flash\n    version: "3.8"', '    model: Gemini 4 Argon\n    version: "4"'),
+    );
+    await approve();
+    const run = await doctor();
+    expect(run.out).not.toContain('plain-voyager: the launch starts');
+    // A seat launched on another model still warns, spelled as launcher and file spell it.
+    expect(run.out).toContain('warn  other-model: the launch starts Claude Fable 5.1, the file says Opus 5.5 (dev)\n');
+  });
+
   test('a declared model_from makes the note say what really happens', async () => {
     edit((text) => text.replace('launch: zsh launcher.sh', 'launch: claude\n    model_from: launcher'));
     await approve();

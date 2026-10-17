@@ -18,6 +18,7 @@ import {
   TeamsError,
   upsertTeam,
 } from '../src/registry/teams.ts';
+import { get as getProject, list as listProjects, projectsFile } from '../src/registry/projects.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T12:00:00Z');
@@ -92,6 +93,7 @@ describe('the registry file', () => {
         'teams:',
         '  abcdef012345:',
         '    project: acme',
+        '    project_id: null',
         '    entity: acme',
         '    session: acme',
         '    root: /work/acme',
@@ -107,17 +109,19 @@ describe('the registry file', () => {
   test('what was written reads back whole, roster and null entity included', () => {
     const roster = [
       { agent: 'agt_0123456789ab', seat: 'builder-1', role: 'builder' },
-      { agent: 'agt_ba9876543210', seat: 'orchestrator', role: 'orchestrator' },
+      { agent: 'agt_ba9876543210', seat: 'orchestrator', role: 'orchestrator', leads: true },
     ];
     upsertTeam(home, 'abcdef012345', { ...seed, lobby: '/home/lobby', roster, by: 'owner', at: AT });
     expect(readTeams(home)).toEqual({
       abcdef012345: {
         id: 'abcdef012345',
         project: 'acme',
+        projectId: null,
         entity: null,
         session: 'acme',
         root: '/work/acme',
         lobby: '/home/lobby',
+        lobbies: { acme: '/home/lobby' },
         roster,
         lifecycle: 'defined',
         provenance: { registered_by: 'owner', registered_at: AT, updated_at: AT },
@@ -224,11 +228,61 @@ describe('upsertTeam', () => {
   });
 });
 
+describe('a team record points to its project by id', () => {
+  test('a team registered into a project keeps the id, and a team with none reads null — its own project', () => {
+    upsertTeam(home, 'abcdef012345', { ...seed, projectId: 'teamcli', at: AT });
+    upsertTeam(home, 'fedcba987654', { ...seed, at: AT });
+    expect(getTeam(home, 'abcdef012345')?.projectId).toBe('teamcli');
+    expect(getTeam(home, 'fedcba987654')?.projectId).toBeNull();
+  });
+
+  test('the pointer is written, moves on an update, and can be cleared', () => {
+    upsertTeam(home, 'abcdef012345', { ...seed, projectId: 'teamcli', at: AT });
+    expect(readFileSync(teamsFile(home), 'utf8')).toContain('    project_id: teamcli');
+    expect(upsertTeam(home, 'abcdef012345', { projectId: 'site', at: AT }).projectId).toBe('site');
+    expect(upsertTeam(home, 'abcdef012345', { projectId: null, at: AT }).projectId).toBeNull();
+  });
+
+  test('a pointer of the wrong kind is refused and the file stays as it was', () => {
+    upsertTeam(home, 'abcdef012345', { ...seed, at: AT });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    expect(() => upsertTeam(home, 'abcdef012345', { projectId: 7 } as never)).toThrow('"project_id" must be a project ID or null');
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+  });
+
+  test('a registry written before the project level reads, every team its own project', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      [
+        'teams:',
+        '  abcdef012345:',
+        '    project: acme',
+        '    entity: null',
+        '    session: acme',
+        '    root: /work/acme',
+        '    lobby: /home/lobby',
+        '    roster: []',
+        '    lifecycle: running',
+        `    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }`,
+        '',
+      ].join('\n'),
+    );
+    expect(getTeam(home, 'abcdef012345')).toMatchObject({ project: 'acme', projectId: null });
+  });
+
+  test('a project_id that is neither text nor null names the file and the team', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(teamsFile(home), 'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    project_id: 7\n');
+    expect(() => readTeams(home)).toThrow(/"project_id" must be a project ID or null/);
+  });
+});
+
 describe('setRoster and setTeamLifecycle', () => {
   test('set the roster, replacing it whole', () => {
     upsertTeam(home, 'abcdef012345', { ...seed, at: AT });
     setRoster(home, 'abcdef012345', [{ agent: 'agt_000000000001', seat: 'a', role: 'builder' }]);
-    const next = [{ agent: 'agt_000000000002', seat: 'b', role: 'tester' }];
+    const next = [{ agent: 'agt_000000000002', seat: 'b', role: 'tester', leads: true }];
     expect(setRoster(home, 'abcdef012345', next).roster).toEqual(next);
     expect(getTeam(home, 'abcdef012345')?.roster).toEqual(next);
   });
@@ -245,6 +299,81 @@ describe('setRoster and setTeamLifecycle', () => {
     expect(() => setRoster(home, 'abcdef012345', [])).toThrow('no team abcdef012345 in the registry');
     expect(() => setTeamLifecycle(home, 'abcdef012345', 'running')).toThrow('no team abcdef012345 in the registry');
     expect(existsSync(teamsFile(home))).toBe(false);
+  });
+});
+
+describe('the roster line carries the lead capability', () => {
+  test('the seat that leads is written and read back whole', () => {
+    upsertTeam(home, 'abcdef012345', {
+      ...seed,
+      at: AT,
+      roster: [
+        { agent: 'agt_0123456789ab', seat: 'lead', role: 'builder', leads: true },
+        { agent: 'agt_ba9876543210', seat: 'worker', role: 'builder' },
+      ],
+    });
+    const text = readFileSync(teamsFile(home), 'utf8');
+    expect(text).toContain('      - { agent: agt_0123456789ab, seat: lead, role: builder, leads: true }');
+    expect(text).toContain('      - { agent: agt_ba9876543210, seat: worker, role: builder }');
+    expect(getTeam(home, 'abcdef012345')?.roster.map((entry) => entry.leads)).toEqual([true, undefined]);
+  });
+
+  test('a line written before the field existed reads as before: not known to lead', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    session: acme\n    root: /work/acme\n    roster:\n      - { agent: agt_0123456789ab, seat: lead, role: builder }\n    provenance: { registered_by: owner, registered_at: "2026-10-16T12:00:00.000Z", updated_at: "2026-10-16T12:00:00.000Z" }\n',
+    );
+    expect(getTeam(home, 'abcdef012345')?.roster).toEqual([
+      { agent: 'agt_0123456789ab', seat: 'lead', role: 'builder' },
+    ]);
+  });
+
+  test('a leads of the wrong kind names the line', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    roster:\n      - { agent: agt_0123456789ab, seat: lead, role: builder, leads: 1 }\n    provenance: { registered_by: owner, registered_at: "2026-10-16T12:00:00.000Z", updated_at: "2026-10-16T12:00:00.000Z" }\n',
+    );
+    expect(() => readTeams(home)).toThrow(/roster line 1: "leads" must be true or false/);
+  });
+});
+
+describe('the roster line carries the assistant capability', () => {
+  test('the seat that assists is written and read back whole, beside the lead', () => {
+    upsertTeam(home, 'abcdef012345', {
+      ...seed,
+      at: AT,
+      roster: [
+        { agent: 'agt_0123456789ab', seat: 'lead', role: 'builder', leads: true },
+        { agent: 'agt_ba9876543210', seat: 'assistant', role: 'builder', assistant: true },
+        { agent: 'agt_000000000001', seat: 'worker', role: 'builder' },
+      ],
+    });
+    const text = readFileSync(teamsFile(home), 'utf8');
+    expect(text).toContain('      - { agent: agt_ba9876543210, seat: assistant, role: builder, assistant: true }');
+    expect(text).toContain('      - { agent: agt_0123456789ab, seat: lead, role: builder, leads: true }');
+    expect(getTeam(home, 'abcdef012345')?.roster.map((entry) => entry.assistant)).toEqual([undefined, true, undefined]);
+  });
+
+  test('a line written before the field existed reads as before: not the assistant', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    session: acme\n    root: /work/acme\n    roster:\n      - { agent: agt_0123456789ab, seat: assistant, role: builder }\n    provenance: { registered_by: owner, registered_at: "2026-10-16T12:00:00.000Z", updated_at: "2026-10-16T12:00:00.000Z" }\n',
+    );
+    expect(getTeam(home, 'abcdef012345')?.roster).toEqual([
+      { agent: 'agt_0123456789ab', seat: 'assistant', role: 'builder' },
+    ]);
+  });
+
+  test('an assistant of the wrong kind names the line', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      teamsFile(home),
+      'teams:\n  abcdef012345:\n    project: acme\n    lifecycle: running\n    roster:\n      - { agent: agt_0123456789ab, seat: assistant, role: builder, assistant: 1 }\n    provenance: { registered_by: owner, registered_at: "2026-10-16T12:00:00.000Z", updated_at: "2026-10-16T12:00:00.000Z" }\n',
+    );
+    expect(() => readTeams(home)).toThrow(/roster line 1: "assistant" must be true or false/);
   });
 });
 
@@ -305,7 +434,7 @@ describe('noteTeam', () => {
     mkdirSync(root);
     const the = { project: 'acme', entity: null, session: 'acme', lobby: null };
     noteTeam(home, root, the, 'defined', 'owner');
-    const roster = [{ agent: 'agt_0123456789ab', seat: 'a', role: 'builder' }];
+    const roster = [{ agent: 'agt_0123456789ab', seat: 'a', role: 'builder', leads: true }];
     setRoster(home, teamIdOf(root), roster);
     noteTeam(home, root, the, 'stopped', 'someone else');
     expect(getTeam(home, teamIdOf(root))).toMatchObject({ roster, lifecycle: 'stopped', provenance: { registered_by: 'owner' } });
@@ -316,6 +445,68 @@ describe('noteTeam', () => {
     writeFileSync(teamsFile(home), 'teams: [1]\n');
     const said = noteTeam(home, base, { project: 'p', entity: null, session: 's', lobby: null }, 'defined', 'owner');
     expect(said).toMatch(/^the team registry was not updated: .*"teams" must be a map/);
+  });
+});
+
+describe('noteTeam and the project level', () => {
+  const cli = () => join(base, 'cli');
+  const site = () => join(base, 'site');
+  const seedOf = (inProject?: string | null) => ({ project: 'acme', entity: 'Acme', session: 'acme', lobby: null, inProject });
+
+  beforeEach(() => {
+    mkdirSync(cli(), { recursive: true });
+    mkdirSync(site(), { recursive: true });
+  });
+
+  test('a file that names a project joins it, and the record is made with the name written and the team', () => {
+    expect(noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner')).toBeNull();
+    const teamId = teamIdOf(cli());
+    expect(getTeam(home, teamId)?.projectId).toBe('teamcli');
+    expect(getProject(home, 'teamcli')).toMatchObject({ name: 'TeamCLI', entity: 'Acme', lead: null, teams: [teamId] });
+  });
+
+  test('the second team joins the first project, not a second record', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, site(), seedOf('TeamCLI'), 'defined', 'owner');
+    expect(listProjects(home)).toHaveLength(1);
+    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli()), teamIdOf(site())]);
+  });
+
+  test('a team moved to another project leaves the one that named it', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, cli(), seedOf('Site'), 'defined', 'owner');
+    expect(getProject(home, 'teamcli')?.teams).toEqual([]);
+    expect(getProject(home, 'site')?.teams).toEqual([teamIdOf(cli())]);
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('site');
+  });
+
+  test('a file that stops naming a project leaves it, and reads as its own project', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, cli(), seedOf(null), 'defined', 'owner');
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBeNull();
+    expect(getProject(home, 'teamcli')?.teams).toEqual([]);
+  });
+
+  test('a seed that names no project at all leaves the pointer as it is', () => {
+    noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    noteTeam(home, cli(), seedOf(), 'defined', 'owner');
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('teamcli');
+    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli())]);
+  });
+
+  test('a project registry that cannot be written is its own line, and the team record is still written', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(projectsFile(home), 'projects: [1]\n');
+    const said = noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
+    expect(said).toMatch(/^the project registry was not updated: .*"projects" must be a map/);
+    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('teamcli');
+  });
+
+  test('a project name with nothing to keep is a line, and nothing is written at all', () => {
+    const said = noteTeam(home, cli(), seedOf('***'), 'defined', 'owner');
+    expect(said).toMatch(/^the project registry was not updated: "\*\*\*" is not a project name/);
+    expect(getTeam(home, teamIdOf(cli()))).toBeNull();
+    expect(existsSync(projectsFile(home))).toBe(false);
   });
 });
 

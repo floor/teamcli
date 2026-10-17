@@ -27,7 +27,7 @@ unless its owner abandons it.
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
 | a caller outside herdr whose ancestry names a create-grant's `runner` | remove a named seat, for a file whose root and this call's folder both sit under the paths that record covers, before it expires; a lead seat, `--keep`, `--abandon`, `--session` and `--file` are not granted |
 | a run with no terminal | nothing, unless a create-grant's `runner` names the caller: `team remove: only the owner runs this, from a terminal outside herdr` |
-| the orchestrator's seat, the operator's seat | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` |
+| the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` |
 | the approved delegate, when the file's `delegates` section names it | remove a named seat; never `--keep`, `--abandon`, `--session` or `--file` |
 | the orchestrator's seat, when the approved `grant` lists `swap` | `--keep` on the operator's seat (a swap) |
 | the approved delegate whose entry lists `swap` | `--keep` on the orchestrator's or the operator's seat (a swap) |

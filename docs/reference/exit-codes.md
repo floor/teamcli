@@ -10,7 +10,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.ready` | `add` | 0 | the seat is ready | `team add worker` |
 | `add.agents` | `add` | 1 | the agents can't be read | `team add worker` |
 | `add.already-running` | `add` | 1 | the seat is already running | `team add worker` |
-| `add.another-pane` | `add` | 1 | the state records another pane for the caller's seat | `team add worker` |
 | `add.branch-missing` | `add` | 1 | the merged branch doesn't exist | `team add --temporary --like lead --until merged:missing` |
 | `add.budget` | `add` | 1 | the budget refuses the seat | `team add worker` |
 | `add.caller` | `add` | 1 | the caller may not change the team | `team add worker` |
@@ -21,7 +20,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.delegate` | `add` | 1 | the caller is not the approved delegate | `team add worker` |
 | `add.delegate-approval` | `add` | 1 | delegation needs a verified approval | `team add worker` |
 | `add.delegate-command` | `add` | 1 | the approved delegate may not run add | `team add worker` |
-| `add.delegate-edit` | `add` | 1 | the delegate's add would edit the file or the approval | `team add worker` |
+| `add.delegate-edit` | `add` | 1 | the delegate's add is not a same-copy seat: it would edit the file, or names a stanza the approval does not hold | `team add worker` |
 | `add.delegate-evidence` | `add` | 1 | the delegate's placement or seats can't be verified | `team add worker` |
 | `add.delegate-flag` | `add` | 1 | the delegate may not use this flag | `team add worker --temporary` |
 | `add.delegate-placement` | `add` | 1 | the approved delegate must be an external non-seat pane | `team add worker` |
@@ -35,7 +34,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.merged-base` | `add` | 1 | workspace.base is required to read a merged end | `team add --temporary --like lead --until merged:topic` |
 | `add.never-approved` | `add` | 1 | the file was never approved | `team add worker` |
 | `add.no-like` | `add` | 1 | the file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
-| `add.no-pane` | `add` | 1 | the state records no pane for the caller's seat | `team add worker` |
 | `add.no-profile` | `add` | 1 | the seat has no launch profile | `team add worker` |
 | `add.no-seat` | `add` | 1 | the file has no such seat | `team add missing` |
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |
@@ -102,8 +100,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `broker.invocation` | `broker` | 2 | the invocation can't be read | `team broker extra` |
 | `broker.not-a-repo` | `broker` | 2 | not inside a git repository | `team broker` |
 | `check.ok` | `check` | 0 | nothing needs acting on | `team check` |
+| `check.repaired` | `check` | 0 | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | `team check --repair` |
 | `check.file-owner` | `check` | 1 | --file is the owner's | `team check --file .agents/team.yaml` |
 | `check.findings` | `check` | 1 | something needs acting on | `team check` |
+| `check.repair-owner` | `check` | 1 | --repair is the owner's | `team check --repair` |
 | `check.session-owner` | `check` | 1 | --session is the owner's | `team check --session team` |
 | `check.file` | `check` | 2 | the team file can't be read | `team check --file missing.yaml` |
 | `check.file-invalid` | `check` | 2 | the team file can't be parsed | `team check --file team.yaml` |
@@ -172,10 +172,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
-| `grant.done` | `grant` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team grant lead --scope up,down` |
-| `grant.refused` | `grant` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team grant lead --scope up,down` |
-| `grant.invalid` | `grant` | 2 | the team file or proposed authority record is invalid or cannot be read | `team grant lead --scope up,down` |
-| `grant.invocation` | `grant` | 2 | the command arguments are invalid | `team grant lead --scope up,down` |
+| `grant.done` | `grant` | 0 | the authority was written or already matched — the team file's grant, or a standing grant record — or a write-free preview passed | `team grant lead --scope up,down` |
+| `grant.refused` | `grant` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team grant lead --capabilities gate,merge` |
+| `grant.invalid` | `grant` | 2 | the team file, the named seat or team, or the proposed authority record is invalid, unknown or cannot be read | `team grant @team --capabilities create` |
+| `grant.invocation` | `grant` | 2 | the command arguments are invalid | `team grant lead` |
 | `hold.placed` | `hold` | 0 | the hold was placed | `team hold "freeze deploys"` |
 | `hold.released` | `hold` | 0 | the hold was released | `team hold --release` |
 | `hold.caller` | `hold` | 1 | not the owner, the orchestrator or the operator | `team hold "freeze deploys"` |
@@ -277,6 +277,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `proc.file-invalid` | `proc` | 2 | the team file can't be parsed | `team proc add build` |
 | `proc.invocation` | `proc` | 2 | the invocation can't be read | `team proc` |
 | `proc.not-yours` | `proc` | 2 | the caller may not read this team | `team proc list` |
+| `projects.listed` | `projects` | 0 | the projects are listed | `team projects` |
+| `projects.unreadable` | `projects` | 1 | the project registry cannot be read | `team projects` |
+| `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
 | `register.already` | `register` | 0 | the seat is already recorded on that pane | `team register worker` |
 | `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |
 | `register.ready` | `register` | 0 | the running seat's record was written | `team register worker` |
@@ -290,10 +293,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
 | `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
 | `register.no-cli` | `register` | 1 | the pane holds no CLI in front of its shell | `team register worker` |
+| `register.no-pane` | `register` | 1 | no pane of that id runs in the session | `team register worker --pane w9:p9` |
 | `register.no-profile` | `register` | 1 | the seat has no launch profile | `team register worker` |
 | `register.no-seat` | `register` | 1 | the file has no such seat | `team register missing` |
 | `register.no-session` | `register` | 1 | the herdr session is not running | `team register worker` |
 | `register.not-owner` | `register` | 1 | the caller is not the owner, a delegate this file names for up, or the seat its grant names | `team register worker` |
+| `register.pane-named` | `register` | 1 | --pane named a pane herdr already names as another agent | `team register worker --pane w2:p2` |
+| `register.pane-taken` | `register` | 1 | another seat of the session holds that pane | `team register worker --pane w2:p2` |
 | `register.recorded` | `register` | 1 | the state records another pane for that seat | `team register worker` |
 | `register.screen` | `register` | 1 | the pane is not the seat at its prompt | `team register worker` |
 | `register.session-file` | `register` | 1 | the session was launched from another team file | `team register worker --session other` |
@@ -384,10 +390,17 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
 | `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
 | `restart.usage` | `restart` | 2 | the invocation can't be read | `team restart` |
-| `revoke.done` | `revoke` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team revoke grant` |
+| `revoke.done` | `revoke` | 0 | the authority was removed or matched, the standing grant's revocation was appended or already named, or a write-free preview passed | `team revoke flag-gate` |
 | `revoke.refused` | `revoke` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team revoke grant` |
-| `revoke.invalid` | `revoke` | 2 | the team file or proposed authority record is invalid or cannot be read | `team revoke grant` |
-| `revoke.invocation` | `revoke` | 2 | the command arguments are invalid | `team revoke grant` |
+| `revoke.invalid` | `revoke` | 2 | the team file, the named target or the proposed authority record is invalid or cannot be read | `team revoke delegate malformed` |
+| `revoke.invocation` | `revoke` | 2 | the command arguments are invalid | `team revoke all` |
+| `route.dry-run` | `route` | 0 | the pair is admitted; the address is answered and nothing was written | `team route builder-2 --dry-run` |
+| `route.routed` | `route` | 0 | the pair is admitted and the recipient's address is answered and recorded | `team route builder-2` |
+| `route.detached` | `route` | 1 | a run with no terminal | `team route builder-2` |
+| `route.refused` | `route` | 1 | no address was answered, on purpose | `team route builder-2` |
+| `route.unrecorded` | `route` | 1 | the pair is admitted and the route record could not be written | `team route builder-2` |
+| `route.configuration` | `route` | 2 | the team file cannot be read | `team route builder-2` |
+| `route.usage` | `route` | 2 | the invocation cannot be read | `team route` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
@@ -401,17 +414,22 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
+| `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
+| `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
+| `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
 | `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
+| `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |
 | `status.file-owner` | `status` | 1 | --file is the owner's | `team status --file .agents/team.yaml` |
+| `status.project-unknown` | `status` | 1 | no project is named that | `team status --project nope` |
 | `status.session-owner` | `status` | 1 | --session is the owner's | `team status --session team` |
 | `status.file` | `status` | 2 | the team file can't be read | `team status --file missing.yaml` |
 | `status.file-invalid` | `status` | 2 | the team file can't be parsed | `team status --file team.yaml` |
@@ -479,6 +497,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `usage.block` | `usage` | 0 | the machine's report printed | `team usage` |
 | `usage.invocation` | `usage` | 2 | the invocation can't be read | `team usage extra` |
 | `usage.store` | `usage` | 2 | the store folder can't be read | `team usage` |
+| `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
 | `watch.already` | `watch` | 1 | a watch already runs | `team watch` |
 | `watch.caller` | `watch` | 1 | a run with no terminal | `team watch` |
@@ -486,6 +505,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.no-notify` | `watch` | 1 | a seat passed --no-notify | `team watch --no-notify` |
 | `watch.no-nudge` | `watch` | 1 | a seat passed --no-nudge | `team watch --no-nudge` |
 | `watch.watchdog` | `watch` | 1 | only the recorded watch may read the file up recorded | `team watch --session acme` |
+| `watch.workspace` | `watch` | 1 | the watch did not start in its workspace | `team watch` |
 | `watch.file` | `watch` | 2 | the team file can't be read | `team watch --file missing.yaml` |
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |

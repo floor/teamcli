@@ -1,14 +1,14 @@
-import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
-import { callerLabel, callerOf, callerVerdict, describeCaller, detachedRefusal, mayLaunchSeats, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -47,6 +47,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -62,7 +63,8 @@ import { trustPolicy } from '../file/dialogs.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
-import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
+import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
@@ -73,13 +75,14 @@ import { teamIdOf } from '../registry/teams.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, mintSeatId, readState, updateState, type SeatState } from '../state.ts';
+import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
+import { watchLabel, watchRunning } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 
@@ -159,19 +162,6 @@ export type Launch = {
   deleteSession?(session: string): boolean | Promise<boolean>;
   sleep(ms: number): Promise<void>;
   now(): Date;
-  /** Starts the watch detached. The pid, or null when it did not start. */
-  spawnWatch?(command: string, cwd: string): number | null;
-}
-
-/** The watch, off in its own process: no pane, no workspace. */
-function detachWatch(command: string, cwd: string): number | null {
-  try {
-    const child = spawn('sh', ['-c', `exec ${command}`], { cwd, detached: true, stdio: 'ignore' });
-    child.unref();
-    return child.pid ?? null;
-  } catch {
-    return null;
-  }
 }
 
 function aim(session: string): string | undefined {
@@ -233,7 +223,6 @@ const realLaunch: Launch = {
   deleteSession: sessionDelete,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
-  spawnWatch: detachWatch,
 };
 
 export const realSources: UpSources = {
@@ -387,6 +376,8 @@ function seatPlan(
   resume: boolean,
   root: string,
   home: string,
+  /** The session this run addresses: the lobby the seat is told to move into is that session's. */
+  session: string,
   processes: Readonly<Record<string, PaneProcesses | null>> = {},
   screenOf: (pane: string) => string | null = () => null,
   owner = true,
@@ -523,7 +514,7 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
-        ...restartNote(team, seat.name, recorded, home, root),
+        ...restartNote(team, seat.name, recorded, home, root, session),
       };
     }
     return planned;
@@ -542,7 +533,7 @@ function seatPlan(
 }
 
 // What only a relaunch repairs, for a ready seat this `up` leaves as it is: a process team it
-// never recorded (a launch from before identities were), or a start outside the machine lobby
+// never recorded (a launch from before identities were), or a start outside the team's lobby
 // (an old release's start). The skip line says what does repair it; both repairs relaunch the
 // seat — one seat at a time, or the whole team (for an orchestrator or operator, only the whole team).
 /** The restored seat's detail. A model that differs from the file is reported and is not closed. */
@@ -566,24 +557,17 @@ function restartNote(
   recorded: SeatState,
   home: string,
   root: string,
+  session: string,
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
   if (!recorded.launched) return { restartNote: `a relaunch records its process: ${fix}` };
   // A running lead is at home in the lobby or in the project. Either recording is left as it
   // is. Every other seat still outside the lobby is told how to move.
-  if (recorded.start_cwd && recorded.start_cwd !== resolveLobby(home, team)) {
+  if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
     if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};
-}
-
-/** The live file names this caller for `up`: the grant seat, on the pane the state records. */
-function grantAdmitsUp(team: TeamFile, io: Io, dir: string): boolean {
-  const grant = team.grant;
-  if (!grant || !grant.scope.includes('up')) return false;
-  const caller = callerOf(io, grant.session);
-  return callerVerdict(caller, grant.seat, standingOf(dir, grant.session, caller)).kind === 'ok';
 }
 
 /** A caller who is not the owner and is not named for `up`. Stderr is the word `deny`. */
@@ -605,9 +589,10 @@ function denyUp(out: { stderr(text: string): void }): number {
 
 /** The sentence a caller the run does not admit is refused with. One spelling, so the bare
  *  `deny` a real run answers with, the warning dev mode folds it into, and the `! up would
- *  refuse:` line a dry run prints are the same words. */
+ *  refuse:` line a dry run prints are the same words. The rule is the map's `up` row
+ *  (`owner-or-leads`): the owner, or a seat this team's record marks `leads`. */
 function placementRefusal(caller: Caller): string {
-  return `only the owner runs \`up\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  return `only the owner or \`leads\` starts the team; this call is ${describeCaller(caller)}`;
 }
 
 /** The one command that unblocks a run this caller cannot start: the owner's own, in this folder,
@@ -669,43 +654,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // or the token. The refusal is one sentence, on the dry run and the real run.
   const detached = detachedRefusal(walked);
   const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
-  const delegateTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
-  const verdict = delegateTeam
-    ? (sources.delegateGate ?? delegateGate)({
-        command: 'up',
-        team: delegateTeam.team,
-        root: delegateTeam.root,
-        dir: dirname(delegateTeam.path),
-        flags: [...args.flags, ...Object.keys(args.values)],
-        io,
-        home: sources.home,
-      })
-    : null;
-  // The approved `<session>/<pane id>` when this run is a delegated one: the ordinary caller rule
-  // refused, the default file's `delegates` section named a pane, and the gate passed it.
-  let delegated: string | null = null;
-  if (verdict?.kind === 'passed') delegated = verdict.pane;
-  // The grant is asked where the ordinary rule refused and a delegate did not take the run.
-  // A delegate refusal that already named a listed pane — a flag, a drift, an approval — keeps
-  // that sentence. `up.delegate` is the caller who is not a listed pane, and that caller may be
-  // the granted seat. A file that omits `grant` does not ask.
-  const grantTeam = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.grant !== null ? defaultLoad : null;
-  const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
-  let grantedSeat: string | null = null;
-  let grantRefusal: string | null = null;
-  if (!mayLaunchSeats(walked) && delegated === null && delegateMissed && grantTeam) {
-    const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
-    if (said.kind === 'passed') grantedSeat = said.grant.seat;
-    else grantRefusal = said.text;
-  }
   // A non-owner passing `--session`, or a `--file` other than this folder's own team file, is
-  // refused here, before that file is read, before a session is asked, and before an out-of-band
-  // owner token is matched. The walk reads no session. The token is a yes for the launch this
-  // folder's own file would make, so it is matched only on the path below, which never opens a
-  // flagged file and never asks a named session. A delegate verdict that already refused this aim
-  // returns in the gate's words, before the caller is placed. A granted seat that aims either
-  // flag is refused in its own words, and the flagged path is not opened. This folder's own
-  // file, with no `--session`, continues below.
+  // refused before the map is walked for this run: the aim is the owner's, the walk reads a
+  // session and asks the host, and the flagged path and the named session are never read. The
+  // gate's own sentence replaces the walk's where a delegate refused the aim, and a granted
+  // seat that aims either flag is refused in its own words. The owner-only rule is the first
+  // thing the aim meets: a grant that refused the run — for any reason — never turns the aim
+  // into an ordinary one on the file's own session. This folder's own file, with no
+  // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
   if (detached !== undefined && aimed) {
@@ -713,46 +669,123 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.detached
     return 1;
   }
-  if (!mayLaunchSeats(walked) && aimed && grantedSeat !== null) {
-    const flag = args.values.session !== undefined ? 'session' : 'file';
-    out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
-    // exit: up.grant-flag
-    return 1;
-  }
-  // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
-  // One return answers both runs: a real one with the bare word, a dry one never denied but told
-  // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
-  // run prints no plan for it.
-  if (!mayLaunchSeats(walked) && aimed && verdict === null && grantRefusal === null && !dev) {
-    if (dry) {
-      out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
-      out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
-    } else {
-      out.stderr('deny\n');
+  // The two fallbacks, read from the DEFAULT live file of this cwd, with no flag: a delegate's
+  // eligibility never comes from a file the caller names, and neither gate opens the aim.
+  const delegatesFile = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.delegates ? defaultLoad : null;
+  const grantFile = defaultLoad !== null && defaultLoad.ok && defaultLoad.team.grant !== null ? defaultLoad : null;
+  const judgeGates = (): {
+    verdict: ReturnType<typeof delegateGate> | null;
+    delegated: string | null;
+    grantedSeat: string | null;
+    grantRefusal: string | null;
+  } => {
+    const verdict = delegatesFile
+      ? (sources.delegateGate ?? delegateGate)({
+          command: 'up',
+          team: delegatesFile.team,
+          root: delegatesFile.root,
+          dir: dirname(delegatesFile.path),
+          flags: [...args.flags, ...Object.keys(args.values)],
+          io,
+          home: sources.home,
+        })
+      : null;
+    // The approved `<session>/<pane id>` when this run is a delegated one: the default file's
+    // `delegates` section named a pane, and the gate passed it.
+    const delegated = verdict?.kind === 'passed' ? verdict.pane : null;
+    // The grant is asked where no delegate took the run. A delegate refusal that already named a
+    // listed pane — a flag, a drift, an approval — keeps that sentence. `up.delegate` is the
+    // caller who is not a listed pane, and that caller may be the granted seat. A file that
+    // omits `grant` does not ask.
+    const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
+    let grantedSeat: string | null = null;
+    let grantRefusal: string | null = null;
+    if (delegated === null && delegateMissed && grantFile) {
+      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
+      if (said.kind === 'passed') grantedSeat = said.grant.seat;
+      else grantRefusal = said.text;
     }
-    // exit: up.not-owner
-    return 1;
+    return { verdict, delegated, grantedSeat, grantRefusal };
+  };
+  if (!mayLaunchSeats(walked) && aimed) {
+    const gates = judgeGates();
+    if (gates.grantedSeat !== null) {
+      const flag = args.values.session !== undefined ? 'session' : 'file';
+      out.stderr(`team up: --${flag} is the owner's; the granted seat cannot use it\n`);
+      // exit: up.grant-flag
+      return 1;
+    }
+    // Dev mode does not return here: the file is mounted, and the same sentence is a warning below.
+    // One return answers both runs: a real one with the bare word, a dry one never denied but told
+    // the reason and the owner's own command. Either way the flagged file stays unread, so the dry
+    // run prints no plan for it.
+    if (gates.verdict === null && !dev) {
+      if (dry) {
+        out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}\n`);
+        out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+      } else {
+        out.stderr('deny\n');
+      }
+      // exit: up.not-owner
+      return 1;
+    }
+    if (gates.verdict?.kind === 'refused') {
+      out.stderr(`team up: ${gates.verdict.text}\n`);
+      // exit: up.delegate-flag
+      return 1;
+    }
   }
-  if (!mayLaunchSeats(walked) && aimed && verdict?.kind === 'refused' && grantRefusal === null) {
-    out.stderr(`team up: ${verdict.text}\n`);
-    // exit: up.delegate-flag
-    return 1;
+  // The caller rule is the map's row (`owner-or-leads`): the owner, or a seat the team's record
+  // marks `leads` — its orchestrator, or a roster mark. The decision is made where the caller
+  // stands, by the same search `down` makes (`judgeCallerIn`), and the pane proof stays the
+  // standing's: a lead the state does not record on its pane is still refused below. The row
+  // reads the file the run is on. It is decided before either fallback is used: an admitted run
+  // owes neither gate, and neither gate's audit line.
+  const gate = defaultLoad !== null && defaultLoad.ok ? defaultLoad : null;
+  let judged: ReturnType<typeof judgeCallerIn> | null = null;
+  let rule: ReturnType<typeof gateVerdict> | null = null;
+  if (gate !== null) {
+    const gateDir = dirname(gate.path);
+    const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+      gateVerdict(who, gate.team, gate.root, sources.home ?? homedir(), 'up', at, sources.now);
+    judged = judgeCallerIn(io, gateDir, gate.team, verdictOf);
+    rule = verdictOf(judged.caller, standingOf(gateDir, judged.session, judged.caller));
   }
-  const caller = callerOf(io);
+  const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
+  const caller = judged?.caller ?? callerOf(io);
+  // The two fallbacks are used only where the map refused. A gate refusal replaces the ordinary
+  // caller refusal; a passed one makes the run the gate's, and its audit line is written where
+  // the run has effects — never beside the map's own admission.
+  const delegateTeam = !ordinaryAdmitted && delegatesFile !== null ? delegatesFile : null;
+  const gates = ordinaryAdmitted ? null : judgeGates();
+  const verdict = gates?.verdict ?? null;
+  const delegated = gates?.delegated ?? null;
+  const grantedSeat = gates?.grantedSeat ?? null;
+  const grantRefusal = gates?.grantRefusal ?? null;
   // The file this run is whole on: the default one whenever the gate decided on it — a refused
   // run stops on the gate's words without reading a flagged target, a delegated one runs the
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
   // as before.
   const loaded =
-    aimed && grantRefusal !== null && grantTeam !== null
-      ? grantTeam
-      : delegateTeam ??
-        (defaultLoad !== null && !args.values.file
-          ? defaultLoad
-          : loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), home: sources.home }));
+    delegateTeam ??
+    (defaultLoad !== null && !args.values.file
+      ? defaultLoad
+      : loadTeamFile(io.cwd, {
+          ...(args.values.file ? { file: args.values.file } : {}),
+          home: sources.home,
+          // The session this run addresses: the placement check reads that session's recorded
+          // lobby, which `up --session alt` records apart from the file's own.
+          ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+        }));
   if (!loaded.ok) {
+    // A file that does not load refuses both runs, one voice each: the real one stops in
+    // `team up`'s own words, the dry one says what a real run would stop on (`! up would
+    // refuse:`, the dry run's line for every refusal it reaches) and prints no plan, because
+    // this file builds none. Both exit as the file error does, and neither launches anything.
     for (const problem of loaded.errors) {
-      out.stderr(`team up: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+      const said = `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`;
+      if (dry) out.stdout(`! up would refuse: ${said}\n`);
+      else out.stderr(`team up: ${said}\n`);
     }
     // exit: up.not-a-repo
     // exit: up.file
@@ -760,13 +793,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     return 2;
   }
   const { team, root } = loaded;
-  // The lobby this team operates on: its own when it sets `entity` or `lobby`, else the
-  // machine-global one. Every lobby read and make below runs against it, so a second team on the
-  // machine no longer waits behind the first team's lobby.
-  const teamLobby = resolveLobby(sources.home, team);
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
-  // file's own session, and a refused one never adopts the session its caller tried to name.
-  const session = verdict !== null || (aimed && grantRefusal !== null) ? team.session : (args.values.session ?? team.session);
+  // file's own session, and an aimed run by anyone but the owner has already returned above.
+  const session = verdict !== null ? team.session : (args.values.session ?? team.session);
+  // The lobby this session operates on: the one the registry recorded for it, else its own when
+  // the file sets `entity` or `lobby`, else the machine-global one. Every lobby read and make
+  // below runs against it, so a second team on the machine — or another session of this one —
+  // no longer waits behind the first lobby.
+  const teamLobby = lobbyOf(sources.home, root, { ...team, session });
   const dir = dirname(loaded.path);
   let state = resolveState(sources, session);
   // A stopped session this team's state records is cleared under the run lock, then started.
@@ -786,7 +820,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
   const ownerToken =
     detached === undefined &&
-    !mayLaunchSeats(caller) &&
+    !ordinaryAdmitted &&
     verdict === null &&
     grantedSeat === null &&
     grantRefusal === null &&
@@ -794,13 +828,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ownerAuthorized(io.env, upFp);
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
-  // The owner, the seat the live file names for `up`, or an agent with an active entity create-grant.
+  // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
+  // the live file names for `up`, or an agent with an active entity create-grant. A grant is not
+  // a constraint on an admitted run: it was never asked, and its audit line is never written.
   const named =
-    mayLaunchSeats(caller) ||
+    ordinaryAdmitted ||
     ownerToken ||
     grantedSeat !== null ||
     delegated !== null ||
-    grantAdmitsUp(team, io, dir) ||
     delegateNamedFor(team, 'up', io) ||
     createGranted;
 
@@ -849,7 +884,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (mayLaunchSeats(caller) || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
+      if (!dry && (ordinaryAdmitted || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push(problem);
@@ -874,10 +909,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // was never renamed, so herdr lists its pane with no `name` field at all. That agent is
       // known by its pane, whatever its name is now: the resume path verifies pane and process
       // itself, and its prompt is the only way the owner can finish the seat.
+      // The file is the truth: a record for a seat the file no longer declares names nothing of
+      // this team's, and the pane it claims is no reason to know an agent there (`seatOfFile`).
+      const declared = new Set(team.seats.map((seat) => seat.name));
       const waitingPanes = new Set(
-        Object.values(recorded)
-          .filter((seat) => seat.waiting)
-          .map((seat) => seat.pane)
+        Object.entries(recorded)
+          .filter(([name, seat]) => seat.waiting && seatOfFile(name, seat, declared))
+          .map(([, seat]) => seat.pane)
           .filter((pane) => pane !== undefined),
       );
       // A seat left at `launched` — a run stopped between "the pane exists" and "the seat has
@@ -887,9 +925,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // Only `launched` qualifies — a seat at `named` or `ready` has its name, so a foreign
       // agent on its pane is refused exactly as before, and so is any pane no record names.
       const launchedPanes = new Set(
-        Object.values(recorded)
-          .filter((seat) => seat.stage === 'launched')
-          .map((seat) => seat.pane)
+        Object.entries(recorded)
+          .filter(([name, seat]) => seat.stage === 'launched' && seatOfFile(name, seat, declared))
+          .map(([, seat]) => seat.pane)
           .filter((pane) => pane !== undefined),
       );
       // A force-close — a non-owner's `remove` — leaves its seat's pane running and renames the
@@ -918,7 +956,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The block names every entry the next `up` will require, computed from the file, so one
     // edit takes the file past validation. The same block is what `doctor` and `add` print.
     refusals.push(
-      `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(team, root, sources.home)}`,
+      `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText({ ...team, session }, root, sources.home)}`,
     );
   }
 
@@ -965,6 +1003,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       state === 'running',
       root,
       sources.home,
+      session,
       processes,
       (pane) => sources.launch?.paneText(session, pane) ?? null,
       // A passed delegation is not the owner, pane or seat. Every other caller keeps today's
@@ -1034,7 +1073,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       seats.push({ ...planned, ...launchProblem, ...(budget.kind === 'clear' ? {} : { budget }) });
       continue;
     }
-    const start = seatStart(team, seat, root, sources.home);
+    const start = seatStart({ ...team, session }, seat, root, sources.home);
     if ('problem' in start) {
       if (!start.once || !refused.has(start.problem)) {
         refused.add(start.problem);
@@ -1090,10 +1129,22 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     } else if (launchingIntoLobby) createLobby = !dry;
   }
   const watch = recorded?.watch;
-  const watchAlive = Boolean(watch && sources.alive?.(watch.pid));
+  // A recorded watch is running while its process lives; right after a start, before the pane's
+  // first pass records the pid, its pane and a heartbeat no older than two in-force intervals
+  // are what say so.
+  const watchAlive = watchRunning(watch, {
+    alive: (pid) => sources.alive?.(pid) ?? false,
+    now: (sources.now?.() ?? new Date()).getTime(),
+    interval: watchInForceOf(standing, team).interval,
+  });
   // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
-  // this file, or read another one, the resolved path is recorded for the process.
+  // this file, or read another one, the resolved path is recorded for the pane.
   const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
+  // The seats' own state hooks: a settings file per seat, named at the end of its launch line.
+  // A dry run plans the map it would write; the real run writes the files below, before the
+  // plan is built, and a seat whose file did not land launches exactly as the file declares.
+  const hookSeats = () => seats.map(({ name, cli, launch }) => ({ name, cli, launch }));
+  let cliHooks = plannedCliHooks(dir, hookSeats());
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   const buildPlan = () => upPlan({
@@ -1103,9 +1154,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // One that is still `stopped` here is not this team's: the refusal already stopped the run.
     sessionRunning: state === 'running' || state === 'stopped',
     seats,
+    watchLabel: watchLabel(team.project),
     watchAlive,
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
+    cliHooks,
   });
 
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
@@ -1125,7 +1178,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // dialog. A folder is written only when the grant's paths cover it and the file's `trust:` lists
   // it. The owner at a terminal, and every caller the grant does not admit, write nothing here.
   const stampGrantedTrust = () => {
-    if (!createGranted || mayLaunchSeats(caller)) return;
+    if (!createGranted || ordinaryAdmitted) return;
     const now = sources.now?.() ?? new Date();
     const grant = {
       covers: (folder: string) => entityGrantAdmits(root, io, { home: sources.home, now, cwd: folder }),
@@ -1237,7 +1290,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
     stampGrantedTrust();
+    // The settings files land before the plan types a line, so every launch carries its flag. A
+    // seat whose file did not land is said once, in the log, and its launch is the plain line.
+    const installed = installCliHooks(dir, hookSeats());
+    for (const name of Object.keys(cliHooks)) {
+      if (installed[name] === undefined) {
+        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
+      }
+    }
+    cliHooks = installed;
     const plan = buildPlan();
+    // A relaunch starts from no reading at all: the `working` a killed turn left behind says
+    // nothing about the seat this run starts.
+    resetCliHookState(dir, plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : [])));
 
     // Every launch uses the limits declared in the live file, with or without a stored approval.
     const ceilings = ceilingsOf(team);
@@ -1336,7 +1401,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // The session's workspaces with their labels now; the pause compares the label of the pane's
       // live workspace with the one this seat's launch gives (`pause.ts`, `waitingProblem`).
       workspaces: () => sources.workspaces?.(session) ?? null,
-      seatStates: () => readState(dir).sessions[session]?.seats ?? null,
+      // The proof a waiting pane is asked for looks at the session's seat records (`pause.ts`,
+      // `waitingProblem`): a record for a seat the file no longer declares names no pane of this
+      // team's, and does not block the seat that now stands there (`seatOfFile`).
+      seatStates: () => {
+        const seats = readState(dir).sessions[session]?.seats ?? null;
+        if (seats === null) return null;
+        const declared = new Set(team.seats.map((seat) => seat.name));
+        return Object.fromEntries(Object.entries(seats).filter(([name, seat]) => seatOfFile(name, seat, declared)));
+      },
       workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
       classify: (name, pane, cli) => readScreen(cli, launch.paneText(name, pane) ?? undefined).kind,
       paneText: (session, pane) => launch.paneText(session, pane),
@@ -1452,20 +1525,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return sources.doctor.version(profile.binary);
       },
       log: (who, what) => logLine(dir, 'up', callerLabel(caller), `${who}: ${what}`, now()),
-      noteWatchFile(file) {
+      noteWatchFile(pane, file) {
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
-          current.watchdog = { file };
+          current.watchdog = { file, pane };
         });
       },
-      noteWatchSpawn(pid) {
+      noteWatch(pane, workspace) {
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
-          current.watch = { pid, heartbeat: now().toISOString() };
+          current.watch = { pane, heartbeat: now().toISOString(), ...(workspace ? { workspace } : {}) };
         });
-      },
-      spawnWatch(command, cwd) {
-        return launch.spawnWatch ? launch.spawnWatch(command, cwd) : 4242;
       },
       /**
        * §3/§4: what happens to a seat this run finds at a dialog. The owner at a terminal is
@@ -1563,9 +1633,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     if (projectionNote) logLine(dir, 'up', callerLabel(caller), projectionNote, now());
     const afterwards = readState(dir).sessions[session]?.seats ?? {};
     // The registry follows the state this run left: a ready seat is registered, or re-pointed to
-    // its pane when it was relaunched; a seat the file stops, or one not ready, is stopped.
+    // its pane when it was relaunched; a seat the file stops, or one not ready, is stopped. The
+    // run's own dev mode is stated with the write, so a record an un-gated run registered says so
+    // — and the owner's run in force, stating it false, takes any earlier mark off; anyone
+    // else's write in force leaves the mark for the owner.
     for (const note of registerRun(
-      { home: sources.home, team, root, by: callerLabel(caller), session },
+      {
+        home: sources.home, team, root, by: callerLabel(caller), session, devMode: dev, owner: caller.kind === 'owner',
+        // The delegation this run was admitted by, on the record it writes: the owner as signer,
+        // the gate's pane as actor, the one command `up` — never the pane as signer.
+        ...(delegated === null ? {} : { delegated: { actor: delegated, command: 'up' as const } }),
+      },
       team.seats.map((seat) => ({
         seat,
         pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,

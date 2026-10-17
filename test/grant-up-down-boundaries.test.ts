@@ -18,6 +18,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { canonicalLanding } from '../src/file/paths.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { LOG_FILE, emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
@@ -118,6 +119,19 @@ function record(seats: Record<string, { pane: string; workspace: string }>): voi
         { stage: 'ready' as const, pane: seat.pane, workspace: seat.workspace },
       ])),
     };
+  });
+}
+
+/** The registry's record of this team, holding no line for the lead: the map's record does not
+ *  admit it, so the file's `grant` is the path the scenes that call this judge. An unregistered
+ *  team would fall back to the file's declaration, and the orchestrator's own row would admit
+ *  it: the grant is only the fallback for a caller the row refused. */
+function unlisted(): void {
+  upsertTeam(home, teamIdOf(root), {
+    project: 'acme',
+    session: 'alpha',
+    root,
+    roster: [{ agent: 'agt_bbbbbbbbbbbb', seat: 'worker', role: 'implementer' }],
   });
 }
 
@@ -372,7 +386,7 @@ describe('the placement walk decides the granted seat', () => {
     );
     const code = await runDown([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toContain('team down: only the owner, the orchestrator or the operator stops the team; this call is ');
+    expect(io.err).toContain('team down: only the owner or `leads` stops the team; this call is ');
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
@@ -386,7 +400,7 @@ describe('the placement walk decides the granted seat', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('down of the operator\'s seat keeps today\'s rule and writes no grant line', async () => {
+  test('down of the operator\'s seat: the map refuses it, and nothing is stopped', async () => {
     record({
       lead: { pane: 'lead-pane', workspace: 'lead-ws' },
       pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' },
@@ -395,10 +409,11 @@ describe('the placement walk decides the granted seat', () => {
     const { sources, trace } = downTrace(() => people());
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
     const code = await runDown([], io, sources);
-    expect(code).toBe(0);
-    expect(trace.closed).toEqual(['worker-ws']);
-    expect(io.out).toContain("skip lead: left running; only the owner stops the orchestrator's or the operator's seat\n");
-    expect(io.out).toContain("skip pilot: left running; only the owner stops the orchestrator's or the operator's seat\n");
+    expect(code).toBe(1);
+    // The operator is no longer the rule's second leg: `down` admits the owner or `leads`, and
+    // the operator holds neither. Nothing is closed and no grant line is written.
+    expect(io.err).toContain('team down: only the owner or `leads` stops the team; this call is ');
+    expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
   });
 });
@@ -406,6 +421,7 @@ describe('the placement walk decides the granted seat', () => {
 describe('the scope the approval signed', () => {
   test('up is refused when the grant lists no `up`', async () => {
     setup({ scope: ['down'] });
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -431,15 +447,24 @@ describe('the scope the approval signed', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('up with no grant section denies a seat', async () => {
+  test('up with no grant section is the lead\'s own run', async () => {
     setup({ grant: false });
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
     const code = await runUp([], io, sources);
-    expect(code).toBe(1);
-    expect(io.err).toBe('deny\n');
-    expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
+    // The map's row admits the orchestrator: no grant section means no grant to constrain it,
+    // and the run is the lead's, with no audit line behind it.
+    expect(code, io.err + io.out).toBe(0);
+    expect(trace.workspaces).toEqual([
+      { label: 'lead', cwd: root },
+      { label: 'pilot', cwd: root },
+      { label: 'worker', cwd: lobby },
+      // Last, the watch's own workspace: the pane that runs the watch for the session.
+      { label: 'Watch · acme', cwd: root },
+    ]);
+    expect(trace.closed).toEqual([]);
+    expect(trace.audits).toEqual([]);
   });
 
   test('down with no grant section stays the seat\'s own run', async () => {
@@ -474,6 +499,8 @@ describe('the approval the grant rides on', () => {
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
+      // Last, the watch's own workspace: the pane that runs the watch for the session.
+      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -482,6 +509,7 @@ describe('the approval the grant rides on', () => {
   test('an edited grant admits the granted seat, and doctor does not name approve', async () => {
     setup();
     writeFileSync(join(dir, 'team.yaml'), teamText({ scope: ['up', 'down', 'approve'] }));
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -493,6 +521,8 @@ describe('the approval the grant rides on', () => {
     expect(trace.workspaces).toEqual([
       { label: 'pilot', cwd: root },
       { label: 'worker', cwd: lobby },
+      // Last, the watch's own workspace.
+      { label: 'Watch · acme', cwd: root },
     ]);
     expect(trace.audits).toEqual([{ seat: 'lead', act: 'up' }]);
     const doctorIo = testIo(root);
@@ -520,6 +550,7 @@ describe('the approval the grant rides on', () => {
 
 describe('the owner-only flags', () => {
   test('up refuses --file before the flagged path is read', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -530,6 +561,7 @@ describe('the owner-only flags', () => {
   });
 
   test('up refuses --session before the named session is read', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -634,6 +666,7 @@ describe('the seats a granted down keeps', () => {
 
 describe('the audit line', () => {
   test('a dry granted up writes no audit line', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
     const { sources, trace, session } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -645,6 +678,7 @@ describe('the audit line', () => {
   });
 
   test('a granted up writes its line through the real writer', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
     const { sources, trace } = upTrace();
     delete (sources as { logGranted?: unknown }).logGranted;
@@ -673,6 +707,7 @@ describe('the audit line', () => {
   });
 
   test('a granted up that would repair the orchestrator\'s seat closes nothing of it', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);

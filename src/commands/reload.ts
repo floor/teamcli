@@ -23,14 +23,17 @@ import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { logLine } from '../log.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { modelDiffers } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import type { Launch } from './up.ts';
 
@@ -217,13 +220,26 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         reload: { detail },
       },
     };
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and relaunches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, [planned]);
+    const installed = installCliHooks(dir, [planned]);
+    if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
+      logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
+        sources.now ? sources.now() : new Date());
+    }
     const steps = upPlan({
       session,
       root,
       seats: [planned],
       sessionRunning: true,
       startWatch: false,
+      cliHooks: installed,
+      watchLabel: watchLabel(team.project),
     });
+    // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
+    // run starts.
+    resetCliHookState(dir, [planned.name]);
     const launch = sources.launch;
     const now = sources.now ?? (() => new Date());
     let closed = false;
@@ -270,6 +286,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const prior = current.seats[next] ?? { stage: patch.stage };
           const { waiting: written, effort, createdWorkspace: _created, ...rest } = patch;
           const stored: SeatState = { ...prior, ...rest };
+          // The record keeps the file's own launch line, never the executed one: the state hooks'
+          // `--settings` rides on the command the pane runs, not on what the seat declared.
+          const launch_line = (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
+          if (launch_line) stored.launch_line = launch_line;
           if (written === null) delete stored.waiting;
           else if (written) stored.waiting = written;
           if (effort === null) delete stored.effort;
@@ -280,7 +300,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         // model and effort the file now declares.
         if (patch.pane && next === seat.name && sources.home) {
           const made = registerLaunch(
-            { home: sources.home, team, root, by: describeCaller(caller), session },
+            { home: sources.home, team, root, by: describeCaller(caller), session, owner },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[next]?.id,
@@ -327,7 +347,16 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
 
 /** `model`, `effort`, or `model; effort`. Null when the launch record already matches the file. */
 function driftOf(recorded: SeatState, seat: Seat): string | null {
-  const model = recorded.model !== seat.model || recorded.version !== seat.version;
+  // The shared comparison (`modelDiffers`): another word order, another casing, or the version
+  // written inside the recorded model name is the model the file declares. A record without a
+  // model is a drift, as before — the caller refuses those seats earlier anyway.
+  const model =
+    recorded.model === undefined || recorded.version === undefined
+      ? true
+      : modelDiffers(
+          { model: recorded.model, version: recorded.version },
+          { model: seat.model, version: seat.version },
+        );
   const effort = (recorded.effort ?? null) !== (seat.effort ?? null);
   if (!model && !effort) return null;
   return [model ? 'model' : '', effort ? 'effort' : ''].filter(Boolean).join('; ');

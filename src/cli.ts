@@ -34,6 +34,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   remove: () => import('./commands/remove.ts'),
   restart: () => import('./commands/restart.ts'),
   send: () => import('./commands/send.ts'),
+  route: () => import('./commands/route.ts'),
   feed: () => import('./commands/feed.ts'),
   release: () => import('./commands/release.ts'),
   usage: () => import('./commands/usage.ts'),
@@ -44,6 +45,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   broker: () => import('./commands/broker.ts'),
   mcp: () => import('./commands/mcp.ts'),
   proc: () => import('./commands/proc.ts'),
+  projects: () => import('./commands/projects.ts'),
 };
 
 // The usage below the opening sentence: `team --help`'s first line is package.json's

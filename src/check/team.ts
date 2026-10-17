@@ -1,32 +1,49 @@
 // Bare `team check`: one answer to "is anything wrong with this team that someone should act on",
 // for the callers who may see it — the owner, a seat of the team, and a pane the team's approved
-// file names (design note §3, §4). It needs no git, it reads, and it changes nothing: the file is
-// resolved with `remember` false for every caller, nothing of the watch's pass, report, readings
-// or nudge path is called, and the one screen reading (§3.3a) is read-only.
+// file names (design note §3, §4). It needs no git, it reads, and it changes nothing but the two
+// leftovers the owner's `--repair` drops — a state record for a seat the file no longer declares, a
+// state record for a session with no seat of the team in it: the file is resolved with `remember`
+// false for every caller, nothing of the watch's pass, report, readings or nudge path is called, and
+// the one screen reading (§3.3a) is read-only.
 //
 // The caller decides, not the flags. The walk classifies the caller before any target is opened,
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
+import { join } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
-import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { blindDifferences } from '../commands/seats.ts';
 import { approvalCaseRow, emptyOverrides, overrideDrift, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
-import type { Problem, TeamFile } from '../file/types.ts';
+import { declaredModel } from '../file/model.ts';
+import { loadTeamFile, TEAM_FILE } from '../file/load.ts';
+import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
+import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
+import { logLine } from '../log.ts';
+import { resolveLobby } from '../lobby/gate.ts';
+import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
+import { rosterOf } from '../permissions/who.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { emptySession, readState, type SessionState, type State } from '../state.ts';
+import { findAgent } from '../registry/agents.ts';
+import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
+import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
+import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
+import { observeLabel } from '../labels/observe.ts';
+import { modelDiffers, seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen } from '../watch/screen.ts';
 
-/** The team check's own arguments: both flags are the owner's, and both are optional. */
-export type TeamCheckArgs = { session?: string; file?: string };
+/** The team check's own arguments: all three flags are the owner's, and all are optional. */
+export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean };
 
 // What the check reads from outside the file and the state, so tests and the docs harness can
 // stand in for it: the same reads `status` makes, except that the live read is narrowed to the
@@ -101,7 +118,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // standing, the state and herdr — and uses all of it only to decide: for a caller that does not
   // pass, `--file` is never opened and no session is placed, so the target is the file the
   // caller's own place finds.
-  const current = currentTeam(io.cwd, owner ? args.file : undefined, sources.now(), sources.home, false);
+  const current = currentTeam(io.cwd, owner ? args.file : undefined, sources.now(), sources.home, false, owner ? args.session : undefined);
   if (owner) {
     if (!current.ok) {
       printProblems(io, current.errors);
@@ -126,6 +143,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       // exit: check.session-owner
       return 1;
     }
+    // `--repair` writes the state: the one act the check has, and the owner's alone, as the two
+    // aimed flags are.
+    if (args.repair === true) {
+      io.stderr("team check: --repair is the owner's\n");
+      // exit: check.repair-owner
+      return 1;
+    }
   }
   const { team, root, dir } = current;
   const session = owner ? (args.session ?? team.session) : team.session;
@@ -140,25 +164,61 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // exit: check.state
     return 2;
   }
-  const state = whole.sessions[session] ?? emptySession();
-  const live = sources.live(session, team, state);
+  // The live read comes before the repair: the check refuses when herdr cannot answer, and a run
+  // that refuses must have changed nothing. The read is the state's own seats for the file's
+  // seats — the leftovers the repair drops are never among them — so the comparison below reads
+  // the same live session either way.
+  const recorded = whole.sessions[session] ?? emptySession();
+  const live = sources.live(session, team, recorded);
   if (!live) {
     io.stderr('team check: herdr doesn\'t answer; is it installed and running?\n');
     // exit: check.herdr
     return 2;
   }
+  // The state's leftovers, read before anything is compared: a record for a seat the file no
+  // longer declares, and a session the file does not name with no seat of the team in it. They
+  // are named as differences below; with the owner's `--repair` they are dropped first, so the
+  // comparison runs on the state the file would have written. The file is the truth: nothing is
+  // ever guessed back into it.
+  let stale = staleState(team, session, whole);
+  const repaired: string[] = [];
+  if (args.repair === true && (stale.seats.length > 0 || stale.sessions.length > 0)) {
+    // A write that fails throws, as every other command's state write does: the failure is
+    // `team.command-threw`'s, not a second reading of the state.
+    repaired.push(...dropStale(dir, session, stale));
+    for (const line of repaired) {
+      io.stdout(`repaired: ${line}\n`);
+      logLine(dir, 'check', callerLabel(walked), `repaired: ${line}`, sources.now());
+    }
+    whole = readState(dir);
+    stale = staleState(team, session, whole);
+  }
+  const state = whole.sessions[session] ?? emptySession();
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
+    ...signingDifferences(team, state, live, root, sources.home),
+    ...devModeDifferences(team, root, sources.home),
     ...attentionDifferences(team, state, live),
+    ...labelDifferences(team, state, live),
+    ...rosterDifferences(team, state, live, root, sources.home),
+    ...registryDifferences(team, root, sources.home),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same row `status` prints: a legacy record or one the verification refused still says what
     // it is; a machine that never approved the file is the ordinary file now, and nothing to repair.
     ...approvalCaseRow(standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null),
     ...overrideDrift(overrides),
     ...rulesFileDifferences(standing, team, root, sources.home),
+    ...staleDifferences(stale),
+    // A blind seat — unknown past the blind threshold — counts as not working, and is
+    // a must-fix here exactly as it is in `team status`.
+    ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir }),
   ]);
   const differences = comparison.differences;
+  // The notes print above the differences, as `team status` prints them: a note names something
+  // worth acting on without counting it wrong — it is not in the total and does not change the exit.
+  for (const note of delegateNotes(team)) io.stdout(`note: ${note}\n`);
+  for (const note of lobbyNotes(team, root, sources.home, session)) io.stdout(`note: ${note}\n`);
   for (const difference of differences) {
     io.stdout(`difference: ${difference.what}\n  repair: ${difference.repair}\n`);
   }
@@ -171,9 +231,22 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // What the check cannot see is not silently implied to be fine (§3.4, decision 2): the one line
   // that names it stands under both answers.
   io.stdout('not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n');
-  // exit: check.findings
+  // Under both answers too, the decision record's own limits, in its words: the gaps this release
+  // does not close are named here, never left to be discovered
+  // (decided-grants-minimum-2026-10-17, "What 0.5.0 must not pretend").
+  for (const line of NOT_PRETENDED) io.stdout(`${line}\n`);
+  if (differences.length > 0) {
+    // exit: check.findings
+    return 1;
+  }
+  // The owner's own repair ran and left nothing to act on: the state now says what the file
+  // does, and the run ends as a clean check with the dropped records named above.
+  if (repaired.length > 0) {
+    // exit: check.repaired
+    return 0;
+  }
   // exit: check.ok
-  return differences.length > 0 ? 1 : 0;
+  return 0;
 }
 
 // The one sentence a caller that does not pass gets, whatever failed underneath it: it names no
@@ -182,6 +255,210 @@ function notYours(io: Io): number {
   io.stderr('team check: this team is not yours to check\n');
   // exit: check.not-yours
   return 2;
+}
+
+/** A state seat record the file no longer declares, with the pane it claims when it expects one. */
+type StaleSeat = { name: string; pane?: string };
+
+/** What the state keeps that the file does not: seats the file no longer declares (a temporary
+ *  seat excepted — the file never lists one), and sessions with no seat of the team in them. */
+type Stale = { seats: StaleSeat[]; sessions: string[] };
+
+/**
+ * The state's leftovers, read against the file alone. The addressed session's seats are compared
+ * with the file's own: a record for a name the file no longer declares names no pane of this
+ * team's, and only a temporary seat — which the file never lists — keeps its record. Every other
+ * session the state holds is a leftover unless a seat of the team lives in it: a name the file
+ * declares, or a temporary seat the file never lists. The file's own session and the addressed
+ * session are never leftovers themselves: the first is where the team runs, and the second is the
+ * session this run is about — `--session` aims the check at it, so the repair must not drop the
+ * record it is reading. What herdr is running is not read: the state's own claims are the subject,
+ * and a pane herdr no longer lists is still a pane the state claims.
+ */
+function staleState(team: TeamFile, session: string, whole: State): Stale {
+  const declared = new Set(team.seats.map((seat) => seat.name));
+  const seats: StaleSeat[] = [];
+  for (const [name, seat] of Object.entries(whole.sessions[session]?.seats ?? {})) {
+    if (seatOfFile(name, seat, declared)) continue;
+    seats.push({ name, ...(seat.pane !== undefined ? { pane: seat.pane } : {}) });
+  }
+  const sessions: string[] = [];
+  for (const [name, held] of Object.entries(whole.sessions)) {
+    if (name === team.session || name === session) continue;
+    if (Object.entries(held.seats).some(([seatName, seat]) => seatOfFile(seatName, seat, declared))) continue;
+    sessions.push(name);
+  }
+  return { seats, sessions };
+}
+
+/** One difference per leftover, the owner's to drop: the check names them and `--repair` is the
+ *  repair — never an edit of the file, and never a guess at which record is right. */
+function staleDifferences(stale: Stale): Difference[] {
+  const repair = 'drop its record from the state (team check --repair)';
+  const out: Difference[] = [];
+  for (const seat of stale.seats) {
+    out.push({
+      what: seat.pane === undefined
+        ? `${seat.name}: a state seat not in the file`
+        : `${seat.name}: a state seat not in the file claims pane ${seat.pane}`,
+      repair,
+      owner: true,
+    });
+  }
+  for (const name of stale.sessions) {
+    out.push({
+      what: `the state records the session "${name}", and no seat of the team is in it`,
+      repair,
+      owner: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * The owner's repair: the leftovers `staleState` named, dropped from the state in one locked
+ * write, each one re-checked against the record now on disk — a temporary seat, or a record
+ * gone already, is left alone. The lines returned are the ones actually dropped, each printed
+ * as a `repaired:` line and written to the log; a write that fails throws, as every command's
+ * state write does.
+ */
+function dropStale(dir: string, session: string, stale: Stale): string[] {
+  return updateState(dir, (state) => {
+    const lines: string[] = [];
+    for (const name of stale.sessions) {
+      if (!Object.hasOwn(state.sessions, name)) continue;
+      delete state.sessions[name];
+      lines.push(`the state's session "${name}" holds no seat of the team; its record is dropped`);
+    }
+    const current = state.sessions[session];
+    if (current !== undefined) {
+      for (const seat of stale.seats) {
+        const held = current.seats[seat.name];
+        if (held === undefined || held.temporary !== undefined) continue;
+        delete current.seats[seat.name];
+        lines.push(seat.pane === undefined
+          ? `${seat.name}: a state seat not in the file; its record is dropped`
+          : `${seat.name}: a state seat not in the file claimed pane ${seat.pane}; its record is dropped`);
+      }
+    }
+    return lines;
+  });
+}
+
+/**
+ * A seat whose record carries the dev mark: its registration was written by a run whose caller
+ * gate was folded into a warning (`src/registry/agents.ts`, `src/registry/sync.ts`), so the
+ * record that says what the seat is was made without the ordinary gate behind it. The difference
+ * names the caller the record itself kept — the dev-mode run's own `dev_mode_by`, and the
+ * `registered_by` of an older record that kept only the mark — and the one repair that takes the
+ * mark off: the owner's own `team register`, the same write with nothing folded — a clean launch
+ * of the seat does it too. A seat the file no longer names, and one whose record the registry
+ * holds none for, is not this finding's.
+ */
+function devModeDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
+  if (home === undefined) return [];
+  const out: Difference[] = [];
+  const teamId = teamIdOf(root);
+  for (const seat of team.seats) {
+    const record = findAgent(home, { team: teamId, seat: seat.name });
+    if (record?.provenance.dev_mode !== true) continue;
+    out.push({
+      what: `${seat.name}: registered under dev mode (by ${record.provenance.dev_mode_by ?? record.provenance.registered_by})`,
+      repair: `re-record the seat with the caller gate in force (team register ${seat.name})`,
+    });
+  }
+  return out;
+}
+
+/**
+ * The lobby the registry holds against the one the file would derive. Once the registry holds a
+ * team's lobby, the entity never derives it again (`src/lobby/recorded.ts`): changing `entity` on
+ * a running team no longer moves its seats, so the check names the file that now derives another
+ * lobby and says which path stands. A file with an explicit `lobby:` is not a derivation — the
+ * owner's own declaration re-records it — and a team the registry holds no lobby for has nothing
+ * recorded to stand. The registry keeps one lobby per session, so the record speaks for this run
+ * through the session it addresses — the file's own, or the `--session` the check was given; a
+ * session with no entry derives from its entity, as a new team does. A home that names no store
+ * answers for no registry, as the other notes do.
+ */
+function lobbyNotes(team: TeamFile, root: string, home: string | undefined, session: string): string[] {
+  if (home === undefined || team.lobby) return [];
+  let recorded = '';
+  try {
+    const record = getTeam(home, teamIdOf(root));
+    // The session the check addresses: its own recorded lobby is the one that stands, and it is
+    // the file's own unless `team check --session` named another.
+    if (record !== null) recorded = record.lobbies[session] ?? '';
+  } catch (error) {
+    // An unreadable registry already has its own difference; it cannot say where the lobby is.
+    if (!(error instanceof TeamsError)) throw error;
+    return [];
+  }
+  if (!recorded) return [];
+  const derived = resolveLobby(home, { entity: team.entity });
+  if (derived === recorded) return [];
+  return [`the file's entity derives the lobby ${derived}, and the registry records ${recorded}: the recorded lobby stands`];
+}
+
+/**
+ * The check's notes: what it names without counting it wrong. A `delegates` entry naming `approve`
+ * is one — `team approve` was removed, and the word is still accepted only so a file that already
+ * names it loads unchanged, so the file carries a stale word to drop. A note prints above the
+ * differences, is counted in neither their total nor the exit code, and names the entry's pane.
+ */
+function delegateNotes(team: TeamFile): string[] {
+  const notes: string[] = [];
+  for (const delegate of team.delegates ?? []) {
+    if (!delegate.commands.includes('approve')) continue;
+    notes.push(`${delegate.pane}'s delegate entry names approve, which no command acts on since team approve was removed; drop it from the file`);
+  }
+  return notes;
+}
+
+/**
+ * The registry's signing triple against the pane: a seat whose agent record says it signs as
+ * `<model> <version>` while its screen runs another model would sign commits with a model it does
+ * not run, so the two things are named side by side with the re-record and the relaunch beside
+ * them. The live agent must be the pane the state recorded for the seat, as the attention and
+ * label differences read it: a name herdr lists on another pane is a stray, and its screen is not
+ * this seat's. The record is the launch's own declaration (`src/registry/sync.ts`), and nothing
+ * here updates it: `team register` writes the file's declared model into the record, so an
+ * accepted drift is the file's model updated first and registered after, or the seat relaunched
+ * on the record's model. A team the registry holds no record for reads as before, and a screen
+ * the reader cannot name a model from — unread, or another maker's through Claude Code — is never
+ * wrong.
+ */
+function signingDifferences(team: TeamFile, state: SessionState, live: Live, root: string, home: string | undefined): Difference[] {
+  if (home === undefined) return [];
+  const out: Difference[] = [];
+  const teamId = teamIdOf(root);
+  for (const seat of team.seats) {
+    // The pane the state recorded for the seat: a name on another pane is not the seat, and its
+    // model is not the one the record is compared with.
+    const recorded = state.seats[seat.name]?.pane;
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent || agent.pane !== recorded) continue;
+    const running = seatModel(seat, live.screens[agent.pane]);
+    if (!running) continue;
+    const record = findAgent(home, { team: teamId, seat: seat.name });
+    if (!record) continue;
+    const { model, version } = record.signing;
+    // The comparison is the file's own (`modelDiffers`): a name in another word order, or a
+    // version spelled inside the record's model name, is the model the pane runs.
+    if (!modelDiffers(running, { model, version })) continue;
+    // The record's own words, unless the file still declares exactly what the record signs: then
+    // the seat's display spelling is the record's, the spelling every other line gives it.
+    const signs = seat.model === model && seat.version === version ? declaredModel(seat) : `${model} ${version}`;
+    const command = isLeadSeat(team, seat.name)
+      ? relaunchRepair(team, seat.name, 'plain')
+      : `team remove ${seat.name} --keep, then team add ${seat.name}`;
+    out.push({
+      what: `${seat.name}: signs as ${signs}, runs ${running.model} ${running.version}`,
+      repair: `update the team file's model, then team register ${seat.name}, or relaunch on the recorded model (${command})`,
+      needs: 'approve',
+    });
+  }
+  return out;
 }
 
 /**
@@ -202,6 +479,179 @@ function attentionDifferences(team: TeamFile, state: SessionState, live: Live): 
     const quiet = agent.status === 'idle' || agent.status === 'done';
     const view = viewOf(attentionOf(readScreen(seat.cli, live.screens[recorded]), agent.status, quiet), seat.name, agent.status);
     if (view) out.push(view);
+  }
+  return out;
+}
+
+/**
+ * The two herdr sidebar lines a file seat carries, as differences when they read as neither the
+ * file's own text nor a line the watch is entitled to paint. Line 1 is exactly
+ * `workspaceLabel(seat)` — nothing else writes it — so any other label is drift. Line 2 is the
+ * watch's (`src/labels/observe.ts`): it may carry the model the pane shows in place of the file's
+ * display, and an effort word read from a screen, so a line the observation explains is left
+ * alone. The repair is `team register <seat>`, which re-applies both lines from the file without
+ * a relaunch. One pane per seat, the one this project's state records — the same read the
+ * attention report makes.
+ */
+function labelDifferences(team: TeamFile, state: SessionState, live: Live): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    const recorded = state.seats[seat.name]?.pane;
+    if (recorded === undefined) continue;
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent || agent.pane !== recorded) continue;
+    const title = live.workspaces.find((workspace) => workspace.id === agent.workspace)?.label;
+    if (title !== undefined && title !== workspaceLabel(seat)) {
+      out.push({
+        what: `${seat.name}: its herdr workspace label reads "${title}", the file says "${workspaceLabel(seat)}"`,
+        repair: `team register ${seat.name}`,
+      });
+    }
+    const line = agent.displayAgent;
+    // A pane herdr holds no display for is not drift: many panes never had one reported, and the
+    // file does not say a pane must carry one. Only a line something else wrote is named.
+    if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) {
+      out.push({
+        what: `${seat.name}: its herdr display reads "${line}", the file's line is "${displayAgent(seat)}"`,
+        repair: `team register ${seat.name}`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * A seat this project's state holds ready, running on the pane it recorded, that the team
+ * registry's record does not list in its roster. The roster line is the seat's identity for
+ * the permission bridge (`src/permissions/who.ts`): where the registry holds a record of the
+ * team, the roster is the record of who its seats are, and a seat it does not list has none —
+ * every gate wired to the bridge refuses the seat what the live file says it holds. A team
+ * the registry holds no record of is not this difference: the bridge reads the file's own
+ * declaration then, and the seat is served. A seat still launching is not one either: the line
+ * is written when the seat reaches ready, and `team register <seat>` writes it for a seat that
+ * is ready without one, its repair here.
+ */
+function rosterDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  root: string,
+  home: string | undefined,
+): Difference[] {
+  if (home === undefined) return [];
+  const roster = rosterOf(home, root);
+  // Only a listed roster can name a missing line: a team the registry holds no record of reads
+  // the file's declaration, and a registry that cannot be read names nothing here either — the
+  // permission bridge refuses those callers closed, which this report does not soften.
+  if (roster.kind !== 'listed') return [];
+  const listed = new Set(roster.roster.map((line) => line.seat));
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (listed.has(seat.name)) continue;
+    const held = state.seats[seat.name];
+    if (held?.stage !== 'ready') continue;
+    // The live pane the state recorded for the seat, as the label differences read it: a pane
+    // herdr lists the name on anywhere else is a stale record, and `team register` would refuse
+    // it, so it is not repaired from here.
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (!agent || agent.pane !== held.pane) continue;
+    out.push({
+      what: `${seat.name}: ready and running, and the team registry's roster does not list it`,
+      repair: `team register ${seat.name}`,
+    });
+  }
+  return out;
+}
+
+/**
+ * Every effort word the `observeLabel` readers can print from a list, lowercased
+ * (`src/labels/observe.ts`). A grok pane's word is whatever sits in its parens, so it is not
+ * checked against this set.
+ */
+const EFFORT_WORDS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'none', 'minimal']);
+
+/**
+ * Whether a live line 2 is one the file or the watch could have written. The watch's line is
+ * `observeLabel(seat, screen)` (src/labels/observe.ts): the file's display, replaced by the model
+ * the pane shows when the screen names a different one, and the file's effort or one a screen
+ * showed. The effort the watch read from an *earlier* screen in its own process is not readable
+ * here, so any word those readers can print is accepted beside the line it would paint now.
+ */
+function displayLineMatches(seat: Seat, line: string, screen: string | undefined): boolean {
+  const observed = observeLabel(seat, screen).line;
+  if (line === observed) return true;
+  const cut = line.lastIndexOf(' ');
+  const model = cut < 0 ? line : line.slice(0, cut);
+  const effort = cut < 0 ? '' : line.slice(cut + 1);
+  const observedCut = observed.lastIndexOf(' ');
+  if (model !== (observedCut < 0 ? observed : observed.slice(0, observedCut))) return false;
+  if (effort === (seat.effort || 'default')) return true;
+  return seat.cli === 'grok' || EFFORT_WORDS.has(effort);
+}
+
+/**
+ * What the registries say about this team's place (src/registry/projects.ts, src/registry/teams.ts).
+ * A team is named in one project at most: `ofTeam` owns that rule and refuses the state where two
+ * name it, naming both, and the refusal is repeated here rather than re-derived. A registry that
+ * does not read refuses in the same line, so a machine whose registry cannot be read is not read
+ * as fine. The team registry is read for every team, a project lead's or not: the roster bridge
+ * (`src/permissions/who.ts`) answers from it for every seat, so a file it cannot read leaves every
+ * team unserved, and the difference is named wherever the check runs. And a project is led by one
+ * team: when this team declares `project_lead: true`, the
+ * project's other teams are looked up in the team registry (their `root` to their file) and a
+ * second declaring team is a difference. A sibling the registries cannot answer for — no record,
+ * no readable file, or a file naming another project — is not counted, and a team that declares
+ * no lead reads no sibling at all. A team no project names is its own project, and a machine with
+ * no registry has no projects: neither is a difference. A check with no home answers for no
+ * registry at all, exactly as it reads no approval store.
+ */
+function registryDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
+  if (home === undefined) return [];
+  try {
+    // Read for every team, not only below for a lead's siblings: `rosterOf` swallows the read's
+    // own error and reports no roster, which reads as no gap — so the unreadable registry is
+    // named here, once, wherever the check runs.
+    readTeams(home);
+    ofTeam(home, teamIdOf(root));
+    if (!team.projectLead || team.inProject === null) return [];
+    const project = byName(home, team.inProject);
+    if (project === null) return [];
+    const leads = [team.project, ...leadSiblings(team, root, home, project.teams)];
+    if (leads.length < 2) return [];
+    return [{
+      what: `the project ${team.inProject} has ${leads.length} lead teams: ${leads.join(', ')}`,
+      repair: 'take "project_lead: true" off all but one of them',
+    }];
+  } catch (error) {
+    if (error instanceof ProjectsError) return [{ what: `the project registry: ${error.message}`, repair: 'fix the project registry (~/.config/team/projects.yaml)' }];
+    if (error instanceof TeamsError) return [{ what: `the team registry cannot be read: ${error.message}`, repair: 'fix the team registry (~/.config/team/teams.yaml)' }];
+    throw error;
+  }
+}
+
+/**
+ * The names of this project's other teams whose files declare `project_lead: true` too, read
+ * through the team registry's `root` and the file's canonical path — text only, so a sibling's
+ * placement and its own trust are not this check's business. A sibling whose file names another
+ * project is a stale registry, not a second lead of this one.
+ */
+function leadSiblings(team: TeamFile, root: string, home: string, teamIds: string[]): string[] {
+  const mine = teamIdOf(root);
+  const out: string[] = [];
+  for (const id of teamIds) {
+    if (id === mine) continue;
+    const siblingRoot = getTeam(home, id)?.root;
+    if (siblingRoot === undefined) continue;
+    let loaded: LoadResult;
+    try {
+      loaded = loadTeamFile(siblingRoot, { file: join(siblingRoot, TEAM_FILE), home, checkOnly: true });
+    } catch {
+      // A file that cannot be read at all (permissions, a broken link) is a sibling the check
+      // cannot see: not counted, and not a reason for this team's check to fail.
+      continue;
+    }
+    if (!loaded.ok) continue;
+    if (loaded.team.projectLead && loaded.team.inProject === team.inProject) out.push(loaded.team.project);
   }
   return out;
 }

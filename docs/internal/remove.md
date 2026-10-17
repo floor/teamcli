@@ -53,7 +53,7 @@ would not validate is refused before the seat is stopped, so a broken file never
 
 ## Who may run it
 
-The owner, the orchestrator's seat and the operator's seat. The seat is that name's, in a session
+The owner and the orchestrator's seat. The seat is that name's, in a session
 this project's state records — the file's session, or one the state records the caller's pane in —
 on the pane the state records for that name in that session: a seat of another session, or a pane
 merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
@@ -132,8 +132,8 @@ with the text named, in the refusal below.
 | --- | --- |
 | `team remove: unknown option --x` / `team remove: a seat name is required` / `team remove: unexpected "x"` (each with the usage) | 2 |
 | `team remove: line <n>: <message>` | 2 |
-| `team remove: only the owner, the orchestrator or the operator runs it; this call is <caller>` | 1 |
-| `team remove: only the owner, the orchestrator, the operator or the approved delegate runs it; this call is <caller>` — the file names a delegate, and this call is not it | 1 |
+| ``team remove: only the owner or `leads` removes a seat; this call is <caller>`` | 1 |
+| ``team remove: only the owner, `leads` or the approved delegate removes a seat; this call is <caller>`` — the file names a delegate, and this call is not it | 1 |
 | ``team remove: delegation needs a verified approval: <reason>`` — the delegate gate, when the record is legacy or refused | 1 |
 | ``team remove: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team remove: the approved delegate must be an external non-seat pane` | 1 |
@@ -255,7 +255,7 @@ team remove: claude-beacon shows a screen the profile does not recognise; left a
 exit 1
 ```
 
-Anyone else — the orchestrator, the operator, or the approved delegate — meeting a seat herdr
+Anyone else — the lead, or the approved delegate — meeting a seat herdr
 reports idle or done takes the seat out and leaves the pane as it is instead; the example below
 shows that removal, and a seat herdr reports working is refused to them too, with their own way
 out named.
@@ -264,11 +264,11 @@ An implementer's seat may not remove anything — not even itself:
 
 ```console caller=claude-beacon
 $ team remove claude-beacon ; echo "exit $?"
-team remove: only the owner, the orchestrator or the operator runs it; this call is claude-beacon
+team remove: only the owner or `leads` removes a seat; this call is claude-beacon
 exit 1
 ```
 
-The orchestrator's seat may remove others, never itself, and `--abandon` is the owner's own, from a
+The orchestrator's seat — the lead — may remove others, never itself, and `--abandon` is the owner's own, from a
 terminal outside herdr:
 
 ```console caller=claude-keeper

@@ -41,7 +41,7 @@ import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { FRAME_LIMIT, sendFrame, type SendOutcome } from './uds.ts';
+import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -95,6 +95,10 @@ export type DaemonSendRequest = {
   body: string;
   wait?: boolean;
   timeout_s?: number;
+  /** The legs the caller's walk already tried and could not take the send, each `<leg>:
+   *  <reason>`: the daemon writes the history line this send ends in, and the failures travel
+   *  with it. Absent when the walk had none. */
+  failed?: string[];
 };
 
 export type DaemonRequest =
@@ -545,6 +549,18 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: it is not a declared seat; the file's seats are ${seatList}`,
       });
     }
+    // Defence in depth for a caller that reaches the daemon directly: the file's stopped seat
+    // takes nothing, and no worker is started. The CLI refuses earlier, with the same words.
+    if (configured.stopped === true) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: request.id ?? null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName} is stopped`,
+      });
+    }
     let queue = queues.get(seatName);
     if (!queue) {
       queue = [];
@@ -805,6 +821,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -821,6 +838,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -876,6 +894,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'held',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     };
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
@@ -892,6 +911,7 @@ async function executeQueuedSend(
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     };
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
@@ -978,6 +998,7 @@ async function executeQueuedSend(
         outcome: 'not-submitted',
         ms: Date.now() - startedAt,
         via: 'typed',
+        failed: request.failed,
       });
       return {
         v: 1,
@@ -1009,6 +1030,7 @@ async function executeQueuedSend(
       outcome: 'delivered',
       ms: Date.now() - startedAt,
       via: 'typed',
+      failed: request.failed,
     });
     return {
       v: 1,
@@ -1041,6 +1063,20 @@ async function executeSocketSend(
   host: DaemonHost,
   alive: (pid: number) => boolean,
 ): Promise<DaemonSendResponse> {
+  // While SOCKET_SEND is off, the daemon serves no waited send: the frame the reply would ride
+  // is one this build does not write, and a caller asking for one anyway — an older CLI — is
+  // refused here rather than dialed. Nothing is written, nothing is locked, and no history
+  // line is appended: the daemon did not touch the seat.
+  if (!SOCKET_SEND) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent`,
+    };
+  }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
   const startedAt = Date.now();
   const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;

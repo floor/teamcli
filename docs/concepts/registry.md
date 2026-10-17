@@ -1,10 +1,11 @@
-# The agent and team registries
+# The agent, team and project registries
 
-Two records hold who the fleet is: one file per agent under `~/.config/team/agents/`, and one teams
-file. `team` writes them — registration happens at a seat's first launch by `up`, `add`, `restart`
-or `reload` — and routing, [team list](../commands/list.md) and
-[team send](../commands/send.md) read them. The team file (`.agents/team.yaml`) stays the seed and
-the projection; the registries are the live truth that `up` and routing read.
+Three records hold who the fleet is: one file per agent under `~/.config/team/agents/`, one teams
+file, and one projects file. `team` writes them — registration happens at a seat's first launch by
+`up`, `add`, `restart` or `reload` — and routing, [team list](../commands/list.md),
+[team send](../commands/send.md) and [team projects](../commands/projects.md) read them. The team
+file (`.agents/team.yaml`) stays the seed and the projection; the registries are the live truth
+that `up` and routing read.
 
 ## The agent record
 
@@ -35,12 +36,37 @@ of the SHA-256 of the root's real path, so two stores of one root are one team:
 
 | Field | Meaning |
 | --- | --- |
-| `project`, `entity` | the project's name, and the entity it belongs to — the entity whose lobby the team lives in |
-| `session` | the herdr session |
-| `root`, `lobby` | the checkout, and the lobby folder |
-| `roster` | one `{agent, seat, role}` per seat |
+| `project`, `entity` | the team's own name — today's `project:` key in the team file, not the project it sits in — and the entity it belongs to, which seeds the team's lobby at registration |
+| `project_id` | the project the team sits in, by project ID, or `null`: a team no project names is its own project; written from the team file's `in_project` |
+| `session` | the herdr session — the last one a command acted on, `up --session alt` included |
+| `root`, `lobby` | the checkout, and the lobby folder for `session` |
+| `lobbies` | the lobby recorded for each session, `session` among them — recorded at a session's first registration and kept: editing the file's `entity` never moves a registered team's lobby, and an explicit `lobby:` in the file re-records it. A second team file in the same checkout, and `up --session alt`, each record their own session's entry without taking another's; `up --session alt` also records the file's own session, so a plain `team check` reads the same lobby back. A record written before the map reads as one entry: `lobby` under `session` |
+| `roster` | one `{agent, seat, role}` per seat, and the capabilities on the seats that hold them: `leads: true` on the one seat the team file marks as its lead, `assistant: true` on the one it marks as its entity's assistant — readable without a role name; an absent field means the seat is not known to hold the capability, so a record written before the fields reads unchanged |
 | `lifecycle` | `defined`, `running`, `stopped` or `archived` |
 | `provenance` | including when the record was last updated |
+
+## The project record
+
+`~/.config/team/projects.yaml`, one entry per project, keyed by the project ID — the display name
+lowercased, every run of characters outside letters, digits, `.`, `_` and `-` written as one `-`,
+nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is `team-cli`. A team file's
+`in_project` writes the display name, and the id is the key it reaches. The id is minted when the
+project is first written and never moves: a rename writes `name`. The team file's `in_project`
+writes this record — the name, the entity and the team IDs — and a team that sets
+`project_lead: true` beside it supplies `lead` on every launch: the agent of that team's own lead
+seat, so a mark that moves in the file moves the record with it. A file that stops claiming
+`project_lead`, or stops naming the project, clears the lead it set — only while the lead on record
+is one of that team's agents — so an agent the team no longer leads with is not left admitted as
+the project's lead. A team the registry names in two projects is refused by
+[`team check`](../commands/check.md), which names both.
+
+| Field | Meaning |
+| --- | --- |
+| `name` | the display name — what people and team files call the project (`TeamCLI`) |
+| `entity` | the entity the project belongs to |
+| `lead` | the project lead, by agent ID — never a seat or a role name: the agent of the lead seat (`leads: true`) of the one team whose file sets `project_lead: true` beside `in_project`, re-resolved on that team's every launch and cleared when that team drops the mark or leaves; a lead seat with no agent yet leaves it `null` |
+| `teams` | the team IDs the project groups |
+| `provenance` | who registered the record, and when it was registered and last updated |
 
 ## The id is the identity
 

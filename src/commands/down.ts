@@ -3,7 +3,8 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
@@ -36,6 +37,7 @@ import { executePlan } from '../launch/execute.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { resetCliHookState } from '../launch/cli-hook.ts';
 import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -553,18 +555,24 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // flag keeps aiming the run, for the owner alone. A delegated run stops the whole team, in the
   // session the file names: its caller is a pane outside that team, and no placement of it may
   // move the run onto another session — its own included.
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: owner or `leads` for this team, decided from records — the registry roster's line
+  // where it stands, the file's own declaration where the registry holds no record of the team,
+  // and the standing's pane proof for a seat the map admits.
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home ?? homedir(), 'down', at, sources.now);
   const judged = branching()
     ? { caller: callerOf(io), session: team.session }
     : sessionFlag !== undefined
       ? { caller: callerOf(io, sessionFlag === 'default' ? undefined : sessionFlag), session: sessionFlag }
-      : judgeCallerIn(io, dir, team);
+      : judgeCallerIn(io, dir, team, verdictOf);
   let caller = judged.caller;
   let session = judged.session;
 
   // The ordinary caller rule, for the session the caller's own placement named. It is what decides
   // whether the gate is asked at all: a caller the rule accepts never enters the delegate branch,
   // and a run it accepts keeps its own session, its own plan and today's bytes exactly.
-  const rule = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  const rule = verdictOf(caller, standingOf(dir, session, caller));
   // A gate answer can move a run onto another session: the delegate branch always stops the team
   // the file names, whatever session the caller's placement pointed at. The two differ only for a
   // caller placed in a session the state holds (`team up --session <other>`), and the owner is
@@ -629,7 +637,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       // A registry that cannot be read is said by the write below, which reads it again.
     }
     if (session !== addressed) return;
-    const unrecorded = noteTeam(sources.home, root, { ...team, session }, 'stopped', describeCaller(caller));
+    const unrecorded = noteTeam(
+      sources.home,
+      root,
+      // The run notes the session it stopped; the file's own session keeps the same lobby.
+      { ...team, session, aliasSession: team.session },
+      'stopped',
+      describeCaller(caller),
+    );
     if (unrecorded) io.stderr(`team down: ${unrecorded}\n`);
   };
   // A session found already stopped has no agent left in it: the registry's agents that were
@@ -682,7 +697,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         refusals.push(anotherPaneRefusal(rule.name, rule.recordedPane));
       } else {
         refusals.push(
-          `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`,
+          `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`,
         );
       }
     } else if (said.kind === 'refused') {
@@ -701,7 +716,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // Dev mode says the caller-placement line once, as a warning, and the stop continues.
   // Every other refusal stays a refusal. Unset, the list is unchanged. Nothing here writes
   // an approval, a key, or a grant.
-  const placement = `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`;
+  const placement = `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`;
   let warning = '';
   if (dev) {
     const kept: string[] = [];
@@ -855,14 +870,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
 
   const watch = state?.watch;
-  const watchAlive = Boolean(watch && sources.alive(watch.pid));
+  // Only a pid can be killed; a record whose pane's first pass has not written one yet is left
+  // as it is, as a watch whose process is not alive is.
+  const watchAlive = Boolean(watch && watch.pid !== undefined && sources.alive(watch.pid));
   if (watchAlive && refusals.length === 0) notes.push('watch: its pid is only in the state; left running');
   for (const note of notes) io.stdout(`${note}\n`);
   const plan = downPlan({
     session,
     seats,
     extra,
-    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid : null,
+    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
@@ -1019,6 +1036,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           }
           delete current.seats[name];
         });
+        // The seat's own hook reading goes with its record: a `working` left by a turn the stop
+        // interrupted must not answer for a seat that is no longer running.
+        resetCliHookState(dir, [name]);
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
         // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
         if (sources.home !== undefined) {

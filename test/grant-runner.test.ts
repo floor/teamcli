@@ -572,7 +572,7 @@ describe("a create-grant's runner and the team's other commands", () => {
           body: WITH_RUNNER,
           cwd: v8,
           ancestors: UNDER_HERDR,
-          line: 'team down: only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+          line: 'team down: only the owner or `leads` stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
         },
       ];
       for (const one of cases) {
@@ -636,12 +636,12 @@ describe("a create-grant's runner and the team's other commands", () => {
       const under = walkIo(v9, UNDER_HERDR);
       expect(await runAdd(['builder-2'], under, addSources(sb.home))).toBe(1);
       expect(under.err).toBe(
-        'team add: only the owner, the orchestrator or the operator runs it; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+        'team add: only the owner or a standing grant (delegate) runs it; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
       );
       const underRemove = walkIo(v9, UNDER_HERDR);
       expect(await runRemove(['builder-2'], underRemove, stopSources(sb.home, stopped))).toBe(1);
       expect(underRemove.err).toBe(
-        'team remove: only the owner, the orchestrator or the operator runs it; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
+        'team remove: only the owner or `leads` removes a seat; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n',
       );
       // No run but the admitted removal had an effect: it stopped nothing (no live agent to
       // stop), and no refused run read far enough to write.
@@ -699,17 +699,17 @@ describe("a create-grant's named seat", () => {  test('the named seat is admitte
       ]) {
         const add = testIo(one.cwd, one.who);
         expect(await runAdd(['builder-3'], add, addSources(sb.home)), one.name).toBe(1);
-        expect(add.err, one.name).toContain('only the owner, the orchestrator or the operator runs it');
+        expect(add.err, one.name).toContain('only the owner or a standing grant (delegate) runs it');
         const remove = testIo(one.cwd, one.who);
         expect(await runRemove(['builder-1'], remove, stopSources(sb.home, stopped)), one.name).toBe(1);
-        expect(remove.err, one.name).toContain('only the owner, the orchestrator or the operator runs it');
+        expect(remove.err, one.name).toContain('only the owner or `leads` removes a seat');
       }
 
       // An expired record admits nobody, the seat it names included.
       writeGrant(sb.home, 'beacon.yaml', SEAT_RECORD(PAST));
       const expired = testIo(v9, seatOf('builder-2'));
       expect(await runRemove(['builder-1'], expired, stopSources(sb.home, stopped))).toBe(1);
-      expect(expired.err).toContain('only the owner, the orchestrator or the operator runs it');
+      expect(expired.err).toContain('only the owner or `leads` removes a seat');
       expect(readFileSync(join(v9, '.agents', 'team.yaml'), 'utf8')).toBe(five);
       // No run but the admitted removal had an effect.
       expect(stopped.n).toBe(0);
@@ -732,12 +732,12 @@ describe("a create-grant's named seat", () => {  test('the named seat is admitte
       // A non-lead `--keep` re-signs the approval, so the record does not admit it.
       const seat = testIo(v9, seatOf('builder-2'));
       expect(await runRemove(['builder-1', '--keep'], seat, stopSources(sb.home, stopped))).toBe(1);
-      expect(seat.err).toContain('only the owner, the orchestrator or the operator runs it');
+      expect(seat.err).toContain('only the owner or `leads` removes a seat');
       writeGrant(sb.home, 'beacon.yaml', WITH_RUNNER);
       const runner = walkIo(v9, OUTSIDE_HERDR);
       expect(await runRemove(['builder-1', '--keep'], runner, stopSources(sb.home, stopped))).toBe(1);
       expect(runner.err).toBe(
-        'team remove: only the owner, the orchestrator or the operator runs it; this call is unplaced (it doesn\'t run on a terminal)\n',
+        'team remove: only the owner or `leads` removes a seat; this call is unplaced (it doesn\'t run on a terminal)\n',
       );
       // A lead's `--keep` is a swap: the record is not the team file's swap grant.
       const swap = walkIo(v9, OUTSIDE_HERDR);
@@ -765,7 +765,7 @@ describe("a create-grant's named seat", () => {  test('the named seat is admitte
       // never for a seat that leads.
       const add = walkIo(v9, OUTSIDE_HERDR);
       expect(await runAdd(['orchestrator'], add, addSources(sb.home))).toBe(1);
-      expect(add.err).toContain('only the owner, the orchestrator or the operator runs it');
+      expect(add.err).toContain('only the owner or a standing grant (delegate) runs it');
       const remove = walkIo(v9, OUTSIDE_HERDR);
       expect(await runRemove(['orchestrator'], remove, stopSources(sb.home, { n: 0 }))).toBe(1);
       expect(remove.err).toContain('only the owner removes the orchestrator\'s or the operator\'s seat');

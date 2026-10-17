@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
+import { DELIVERY_LEGS } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -10,6 +11,7 @@ import type { Mode, Seat, SeatReach } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
 import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
+import { readDeliveryOrder } from './delivery_order.ts';
 import { MODES } from './workspace.ts';
 
 export type DraftSeat = Omit<Seat, 'mode'> & { mode?: Mode };
@@ -51,10 +53,18 @@ export const seats: Section = {
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
         label: { type: 'string', $comment: 'the workspace title when written; left out, the title is the seat name and its role, and this stored value stays the model and version in lowercase' },
         effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
+        delivery_order: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { enum: DELIVERY_LEGS },
+          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and never adds a leg, which the walk settles',
+        },
         mode: { enum: MODES },
         parked: { type: 'boolean' },
         stopped: { type: 'boolean' },
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
+        assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         count: { type: 'integer', minimum: 1 },
         reach: {
           type: 'object',
@@ -92,10 +102,11 @@ function readSeats(
     return [];
   }
   const seats: DraftSeat[] = [];
+  const assistants: { name: string; line: number }[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'reach',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'reach', 'delivery_order',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -138,9 +149,23 @@ function readSeats(
     const leadsField = fields.get('leads');
     const leads = check.flag(leadsField, `${at}: leads`);
     if (leads && name && leadsField) marks.push({ name, line: leadsField.value.line });
+    // The entity's assistant, unlike the lead, is a field of the built seat: there is no second
+    // spelling of it to equate a marked file with, and it admits a send, so it belongs in the
+    // seat's digest — granting it is a change the owner approves. At most one seat carries it,
+    // and never a seat with a count: the slot names one seat, and admission reads its name.
+    const assistantField = fields.get('assistant');
+    const assistant = check.flag(assistantField, `${at}: assistant`);
+    if (assistant && name && assistantField) assistants.push({ name, line: assistantField.value.line });
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
+    if (assistant && count > 1) {
+      check.fail(assistantField?.value.line ?? line, `\`assistant\` on "${name}" can't be a seat with count`);
+    }
     const label = check.text(fields.get('label'), `${at}: label`);
     const effort = readEffort(fields.get('effort'), at, vendor, check);
+    // The seat's own word on the delivery order, when the file writes one. A field of the built
+    // seat like `effort`, so it is part of the seat's digest and omitted when the file omits the
+    // key — every file that writes none keeps the digest it had.
+    const deliveryOrder = readDeliveryOrder(fields.get('delivery_order'), `${at}: delivery_order`, check);
     // The written label, or the lowercase model and version, stays on the seat: `seatDigest`
     // hashes `label`, and a file the owner approved keeps its key. `labelWritten` is not hashed: it only
     // records that the file wrote the field, so `workspaceLabel` can tell the two apart.
@@ -164,6 +189,10 @@ function readSeats(
         ...(account ? { account } : {}),
         // Omitted when the file has no effort, so `seatDigest` hashes the same fields as before.
         ...(effort ? { effort } : {}),
+        // Omitted when the file declares no order, for the same reason.
+        ...(deliveryOrder ? { deliveryOrder } : {}),
+        // Omitted when the file marks no assistant, so every file that writes none keeps its digest.
+        ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
         ...(reach ? { reach } : {}),
@@ -172,6 +201,11 @@ function readSeats(
   }
   reportCollisions(seats, 'name', check);
   reportReach(seats, check);
+  // Refused at the second mark's line, the one that makes it more than one — the lead's own
+  // refusal, one seat over: the entity's assistant is one seat, and admission reads its name.
+  if (assistants.length > 1) {
+    check.fail(assistants[1]!.line, '`assistant` is on more than one seat: a team has one assistant');
+  }
   return seats;
 }
 

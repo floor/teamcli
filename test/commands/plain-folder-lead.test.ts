@@ -179,7 +179,7 @@ async function bringUp(home: string, root: string, text: string, prefix: string)
 }
 
 describe('a lead in the lobby of a plain folder', () => {
-  test('up records the file, and the lead runs add and down from the lobby with no flag', async () => {
+  test('up records the file, the lead\'s add from the lobby is the map\'s refusal, and down runs with no flag', async () => {
     const { home, lobby } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -198,8 +198,11 @@ describe('a lead in the lobby of a plain folder', () => {
       now: () => NOW,
       launch: world('n'),
     } satisfies AddSources);
+    // The recorded file is read — the run is not refused for the lobby's plain folder — and the
+    // lead's add stops at the map's own row: adding a seat is the owner's in 0.5.0.
     expect(added.err).not.toContain(NOT_A_REPO);
-    expect(addCode).not.toBe(2);
+    expect(added.err).toBe(`team add: only the owner or a standing grant (delegate) runs it; this call is ${LEAD}\n`);
+    expect(addCode).toBe(1);
 
     const down = testIo(lobby, lead);
     const downCode = await runDown([], down, {

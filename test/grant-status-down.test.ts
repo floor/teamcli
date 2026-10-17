@@ -321,7 +321,7 @@ describe('every other caller and path still refuses', () => {
       expect(io.err).toBe('');
       // The sentence is the walk's own, from the run this test makes: under herdr with no agent
       // list to read, the placement says so, and the record is never consulted for it.
-      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n');
+      expect(io.out).toContain('! down would refuse: only the owner or `leads` stops the team; this call is unplaced (it runs under herdr, and herdr doesn\'t answer)\n');
       expect(io.out.endsWith('dry run: nothing was run\n')).toBe(true);
       expect(code).toBe(1);
     } finally {
@@ -334,16 +334,16 @@ describe('every other caller and path still refuses', () => {
 // stands in. A seat the record names is the holder it was written for. The team file these
 // scenes read names the seat's own session, so the walk places the caller — the reading and
 // the stop are the record's to admit or refuse, not the placement's.
-const SEAT_GRANT = `entity: beacon\nsession: floor\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
+const SEAT_GRANT = `entity: beacon\nsession: floor\nagent: scout\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
 /** The same record, naming a session the seat doesn't stand in. */
-const ELSEWHERE_GRANT = `entity: beacon\nsession: elsewhere\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
-const PAST_GRANT = `entity: beacon\nsession: floor\nagent: iris\npaths:\n  - ~/Code/beacon\nexpires: "${PAST}"\n`;
+const ELSEWHERE_GRANT = `entity: beacon\nsession: elsewhere\nagent: scout\npaths:\n  - ~/Code/beacon\nexpires: "${FUTURE}"\n`;
+const PAST_GRANT = `entity: beacon\nsession: floor\nagent: scout\npaths:\n  - ~/Code/beacon\nexpires: "${PAST}"\n`;
 
 /** The walk of a herdr seat: herdr above it, the pane root among the ancestors, and the one
  *  session the seat stands in — and only it — listing the pane under the seat's name. A walk
  *  asked about any other session finds no agent there, as a session that doesn't hold the pane
  *  answers. */
-function seatIo(cwd: string, name = 'iris', session = 'floor', pane = 'w1:p1') {
+function seatIo(cwd: string, name = 'scout', session = 'floor', pane = 'w1:p1') {
   const root = 4242;
   const io = testIo(cwd);
   io.callerSources = (asked?: string) => ({
@@ -451,7 +451,7 @@ describe('a create-grant names a seat of another team', () => {
       const io = seatIo(sb.covered, 'co-worker');
       const code = await runDown(['--dry-run'], io, downSources(sb.home));
       expect(io.err).toBe('');
-      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is co-worker\n');
+      expect(io.out).toContain('! down would refuse: only the owner or `leads` stops the team; this call is co-worker\n');
       expect(code).toBe(1);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
@@ -466,7 +466,7 @@ describe('a create-grant names a seat of another team', () => {
       const io = seatIo(sb.covered);
       const code = await runDown(['--dry-run'], io, downSources(sb.home));
       expect(io.err).toBe('');
-      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is iris\n');
+      expect(io.out).toContain('! down would refuse: only the owner or `leads` stops the team; this call is scout\n');
       expect(code).toBe(1);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
@@ -480,7 +480,7 @@ describe('a create-grant names a seat of another team', () => {
       teamAt(sb.outside, sb.home, 'floor');
       const io = seatIo(sb.outside);
       const code = await runDown(['--dry-run'], io, downSources(sb.home));
-      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is iris\n');
+      expect(io.out).toContain('! down would refuse: only the owner or `leads` stops the team; this call is scout\n');
       expect(code).toBe(1);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
@@ -494,7 +494,7 @@ describe('a create-grant names a seat of another team', () => {
       teamAt(sb.covered, sb.home, 'floor');
       const io = seatIo(sb.covered);
       const code = await runDown(['--dry-run'], io, downSources(sb.home));
-      expect(io.out).toContain('! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is iris\n');
+      expect(io.out).toContain('! down would refuse: only the owner or `leads` stops the team; this call is scout\n');
       expect(code).toBe(1);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });

@@ -35,6 +35,8 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^the overrides differ from the approved copy: /, why: "the owner's overrides, held against the copy the record stored" },
   // The record is written by the owner's own `team up`: this sentence asks for exactly that.
   { literal: /^ask the owner to approve this exact folder and answer through team up$/, why: "the record is written by the owner's own `team up`, which this asks for" },
+  // A grant gate's refusal id (`a grant needs a verified approval: …`), compared by `up` and
+  // `register` and never printed: a grant's own approval-state key, not an approved copy.
   // A grant's own word: a delegate the owner granted `swap` to is an approved one.
   { literal: /an approved delegate swaps/, why: "the delegate grant's word: a delegate granted `swap` is an approved one" },
   // Seat membership in the file: the note names a pane the file does not carry.

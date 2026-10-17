@@ -26,7 +26,7 @@ or holding unsent text — is left as it is unless `--abandon` is given.
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` and `--file` are the owner's own |
 | a run with no terminal | nothing: `team restart: only the owner runs this, from a terminal outside herdr` |
-| the orchestrator's seat, the operator's seat | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
+| the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
 
 ## Output and exit codes
 

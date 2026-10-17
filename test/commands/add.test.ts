@@ -10,6 +10,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
+import { readAgents } from '../../src/registry/agents.ts';
 import { readLedger, storePath, writeApproval } from '../../src/store/store.ts';
 import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { rulesFilePath } from '../../src/launch/rules-file.ts';
@@ -229,6 +230,20 @@ describe('team add', () => {
     expect(readState(join(project, '.agents')).sessions.acme?.seats.worker?.stage).toBe('ready');
     const loaded = loadTeamFile(project, { home });
     expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
+  });
+
+  test('a dev-mode add records the mark and the caller it admitted', async () => {
+    const made = world();
+    const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runAdd(['worker'], io, sources(made))).toBe(0);
+    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs it; this call is helper; dev mode continues\n');
+    // The launch's write says the run was folded and who it admitted: the record a later
+    // `team check` reads names the helper, and the owner's own write is what takes it off.
+    const record = readAgents(home).find((agent) => agent.reach.seat === 'worker');
+    expect(record?.provenance.dev_mode).toBe(true);
+    expect(record?.provenance.dev_mode_by).toBe('helper');
+    expect(record?.provenance.registered_by).toBe('helper');
   });
 
   test('a dry run previews a launch-line refusal, creates nothing, and edits nothing', async () => {
@@ -519,7 +534,7 @@ describe('team add', () => {
     expect(missing.err).toContain('no seat');
     const seat = testIo(project, { kind: 'seat', name: 'stranger', pane: 'w1:p1' });
     expect(await runAdd(['worker'], seat, sources(world()))).toBe(1);
-    expect(seat.err).toContain('only the owner, the orchestrator or the operator');
+    expect(seat.err).toContain('only the owner or a standing grant (delegate)');
     expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toContain('stopped: true');
   });
 
@@ -534,7 +549,7 @@ describe('team add', () => {
     const before = logged();
     expect(await runAdd(['worker'], io, sources(world()))).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team add: only the owner, the orchestrator or the operator runs it; this call is stranger\n');
+    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is stranger\n');
     expect(logged()).toBe(before);
   });
 
@@ -668,7 +683,7 @@ describe('team add', () => {
     // A caller the caller gate refuses returns before the machine gate is even read.
     const seat = testIo(project, { kind: 'seat', name: 'stranger', pane: 'w1:p1' });
     expect(await runAdd(['worker'], seat, sources(world(), { machine: () => refusing }))).toBe(1);
-    expect(seat.err).toContain('only the owner, the orchestrator or the operator');
+    expect(seat.err).toContain('only the owner or a standing grant (delegate)');
     expect(logged()).toBeNull();
   });
 
@@ -1089,15 +1104,6 @@ describe('team add', () => {
     });
 
     const UNKNOWN = 'nothing this profile reads\n';
-    const lead = { kind: 'seat' as const, name: 'lead', pane: 'w0:p1', session: 'acme' };
-
-    function recordLead(): void {
-      updateState(join(project, '.agents'), (state) => {
-        const session = state.sessions.acme ?? emptySession();
-        session.seats.lead = { stage: 'ready', pane: lead.pane };
-        state.sessions.acme = session;
-      });
-    }
 
     test('an unrecognised screen names abandon to the owner', async () => {
       const { made, closes, listed, before } = setupReadySeat();
@@ -1116,17 +1122,21 @@ describe('team add', () => {
       expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
     });
 
-    test('an unrecognised screen tells anyone else that the owner runs abandon', async () => {
+    test('an unrecognised screen tells the approved delegate that the owner runs abandon', async () => {
+      // The map's row stops every seat before the already-running line, so the one caller who
+      // still reads its non-owner wording in 0.5.0 is the approved delegate: the verdict below
+      // passes, and the run reaches the running seat — the refusal that names the owner's repair.
       const { made, closes, listed } = setupReadySeat();
-      recordLead();
+      approve(DELEGATE_FILE);
       const before = readFileSync(join(project, '.agents/team.state.json'), 'utf8');
       made.launch.processInfo = () => ({ shell: 400, foreground: [400, 401] });
       made.launch.paneText = () => UNKNOWN;
-      const io = testIo(project, lead);
+      const io = testIo(project, pilot);
       const code = await runAdd(['worker'], io, sources(made, {
         sessionState: () => 'running',
         agents: () => [listed],
         workspaces: () => [{ id: 'w9' }],
+        delegateGate: () => passed,
       }));
       expect(code).toBe(1);
       expect(io.err).toBe('team add: worker is already running (the owner runs team remove worker --abandon, which closes its workspace without typing)\n');
@@ -1191,7 +1201,7 @@ const DELEGATES = `delegates:
 const DELEGATE_FILE = FILE + DELEGATES;
 const pilot = { kind: 'seat' as const, name: 'pilot', pane: 'w1:p1', session: 'main' };
 const passed = { kind: 'passed' as const, pane: 'main/w1:p1' };
-const EDIT_REFUSAL = 'team add: the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat\n';
+const EDIT_REFUSAL = 'team add: the approved delegate adds only a same-copy seat: the live file\'s own stanza, hash for hash; a missing, stopped or changed seat is the owner\'s\n';
 // A gate that fails the test the moment it is asked where the run must not ask it: the ordinary
 // rule's own callers never reach the delegate branch, and neither does a file with no delegates.
 const THROWING_GATE: NonNullable<AddSources['delegateGate']> = () => {
@@ -1199,7 +1209,7 @@ const THROWING_GATE: NonNullable<AddSources['delegateGate']> = () => {
 };
 
 describe('team add delegated', () => {
-  test('no delegates in the file: the refusal is today\'s and the gate is never asked', async () => {
+  test('no delegates in the file: the map\'s refusal, and the gate is never asked', async () => {
     const made = world();
     const io = testIo(project, pilot);
     let asked = 0;
@@ -1207,7 +1217,7 @@ describe('team add delegated', () => {
       delegateGate: () => { asked += 1; return passed; },
     }));
     expect(code).toBe(1);
-    expect(io.err).toBe('team add: only the owner, the orchestrator or the operator runs it; this call is pilot\n');
+    expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs it; this call is pilot\n');
     expect(asked).toBe(0);
   });
 
@@ -1318,12 +1328,13 @@ describe('team add delegated', () => {
     expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
   });
 
-  test('the coordinator\'s ordinary restoring add re-signs as today, and the gate is never asked', async () => {
-    // Amendment 3, with the reviewer's finding on it: a caller the ordinary rule accepts never
-    // enters the delegate branch — the injected gate throws the moment it is asked, so the run
-    // below passes only because it never reached it. The coordinator's restoring `add` is the
-    // role path that edits the file and re-signs the approval — it must keep working with a
-    // `delegates` section in the file, unreachable from the delegate branch.
+  test('the coordinator\'s restoring add is the owner\'s too: even a passed delegate verdict refuses it', async () => {
+    // The map's `add` row is the owner's alone in 0.5.0: a seat of this team never reaches a
+    // restoring add any more, whatever the file's `delegates` section says. The gate below is
+    // the widest reading of a delegated run — a verdict that passed — and the add still refuses
+    // it, because the one seat a delegate may start is the live file's own stanza and
+    // `worker` is stopped: starting it would edit the file. Nothing is written, signed or
+    // started, and the run is not attributed to the delegate.
     approve(DELEGATE_FILE);
     updateState(join(project, '.agents'), (state) => {
       const session = state.sessions.acme ?? emptySession();
@@ -1334,14 +1345,13 @@ describe('team add delegated', () => {
     const store = storePath('acme', project, home);
     const before = readFileSync(join(store, 'approval.json'), 'utf8');
     const io = testIo(project, { kind: 'seat', name: 'lead', pane: 'w0:p1', session: 'acme' });
-    const code = await runAdd(['worker'], io, sources(made, { delegateGate: THROWING_GATE }));
-    expect(code).toBe(0);
-    expect(made.creates).toEqual(['worker']);
-    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).not.toMatch(/# the seat stays in this order\n    stopped: true/);
-    // The role path re-signed the seat digest, exactly as today, and no audit line was written:
-    // the log holds the run's own records and no delegate attribution.
-    expect(readFileSync(join(store, 'approval.json'), 'utf8')).not.toBe(before);
-    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).not.toContain('delegate [delegate]');
+    const code = await runAdd(['worker'], io, sources(made, { delegateGate: () => passed }));
+    expect(code).toBe(1);
+    expect(io.err).toBe(EDIT_REFUSAL);
+    expect(made.creates).toEqual([]);
+    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toContain('stopped: true');
+    expect(readFileSync(join(store, 'approval.json'), 'utf8')).toBe(before);
+    expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
   });
 
   test('the owner\'s ordinary restoring add runs as today too: the gate is not for it', async () => {
@@ -1662,15 +1672,13 @@ describe('team add --model and --effort', () => {
   });
 
   test('refuses non-owner --model or --effort on a declared seat, and refuses unknown model or effort', async () => {
-    const leadPane = ['w0', 'p1'].join(':');
-    updateState(join(project, '.agents'), (state) => {
-      const session = state.sessions.acme ?? emptySession();
-      session.seats.lead = { stage: 'ready', pane: leadPane };
-      state.sessions.acme = session;
-    });
-    const leadCaller = { kind: 'seat' as const, name: 'lead', pane: leadPane, session: 'acme' };
-    const nonOwnerIo = testIo(project, leadCaller);
-    expect(await runAdd(['worker', '--model', 'claude-sonnet-5-5'], nonOwnerIo, sources(world()))).toBe(1);
+    // The one way a seat reaches the flags' own refusal in 0.5.0 is as a delegated add: the map
+    // refuses every seat of this team at the caller gate, the delegate verdict below is what
+    // opens a seat's run, and the same-copy gate lets this one through — `lead` is the approved
+    // file's own stanza, hash for hash. The `--model` on it is what stops the run.
+    approve(DELEGATE_FILE);
+    const nonOwnerIo = testIo(project, pilot);
+    expect(await runAdd(['lead', '--model', 'claude-sonnet-5-5'], nonOwnerIo, sources(world(), { delegateGate: () => passed }))).toBe(1);
     expect(nonOwnerIo.err).toBe(
       "team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat\n",
     );

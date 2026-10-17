@@ -39,6 +39,12 @@ export interface Approval {
    * none. Absent on a record written before the file existed.
    */
   overrides?: string | null;
+  /**
+   * The approved delegate pane that submitted this approval, when one did. Inside the signed
+   * bytes (`payloadOf` covers it): the approving word is the owner's — the signature — and the
+   * submission is the pane's. Absent on the owner's own approvals.
+   */
+  actor?: string;
 }
 
 export interface LedgerEntry {
@@ -120,7 +126,9 @@ function sameRoot(a: string, b: string): boolean {
 /**
  * The bytes a signature covers: the approval (its `format` included, so the
  * stored format cannot be flipped outside the signature), the stored copy, the
- * root inside the approval, and the generation.
+ * root inside the approval, and the generation. The delegate's `actor`, when
+ * the record names one, is in here too: the submission is signed beside the
+ * approving word, and a record whose actor was changed after approval refuses.
  */
 export function payloadOf(approval: Approval, file: string, generation: number): Json {
   return {
@@ -132,6 +140,7 @@ export function payloadOf(approval: Approval, file: string, generation: number):
       ceilings: { seats: approval.ceilings.seats, temporary: approval.ceilings.temporary, vendors: approval.ceilings.vendors },
       checks: approval.checks ?? null,
       overrides: approval.overrides ?? null,
+      ...(approval.actor !== undefined ? { actor: approval.actor } : {}),
     },
     file,
     generation,
@@ -259,7 +268,8 @@ function countProblem(value: unknown, field: string): string | null {
  * know is a problem naming the field, and a missing or wrongly-typed field is
  * a problem naming the path. Null when the shape is exactly what this version
  * writes — a legacy record included, which is the same shape minus the
- * signature and the generation.
+ * signature and the generation, and a delegated approval is the signed shape
+ * plus the actor that submitted it.
  */
 export function shapeProblem(record: unknown): string | null {
   if (record === null || typeof record !== 'object' || Array.isArray(record)) return 'the record is not an object';
@@ -269,7 +279,7 @@ export function shapeProblem(record: unknown): string | null {
     return 'the record says format 1 but carries a signature';
   }
   const allowed = ['format', 'approvedAt', 'root', 'fingerprints', 'ceilings', 'file', 'checks', 'overrides'];
-  if (flat.format === 2) allowed.push('generation', 'signature');
+  if (flat.format === 2) allowed.push('generation', 'signature', 'actor');
   for (const key of Object.keys(flat)) {
     if (!allowed.includes(key)) return `the record carries a field this version does not know ("${key}")`;
   }
@@ -284,6 +294,7 @@ export function shapeProblem(record: unknown): string | null {
     if (flat.generation > SAFE_GENERATION) return '"generation" is beyond the safe integer range';
     if (flat.signature === undefined) return 'the record has no "signature"';
     if (typeof flat.signature !== 'string') return '"signature" is not a string';
+    if (flat.actor !== undefined && typeof flat.actor !== 'string') return '"actor" is not a string';
   }
   for (const key of ['fingerprints', 'ceilings']) {
     if (flat[key] === null || typeof flat[key] !== 'object' || Array.isArray(flat[key])) return `"${key}" is not an object`;

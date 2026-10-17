@@ -17,7 +17,8 @@ import { declaredModel } from '../file/model.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
+import { verifyLobby } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
@@ -27,7 +28,7 @@ import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { holdText, liveHold, readState, type SeatState } from '../state.ts';
-import { canShowModel, seatModel } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -302,7 +303,9 @@ function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Findin
     if (named === null) {
       const finding = modelFlagFinding(seat, profile);
       if (finding) findings.push(finding);
-    } else if (named.model !== seat.model || named.version !== seat.version) {
+    } else if (modelDiffers(named, { model: seat.model, version: seat.version })) {
+      // The same comparison `team check` and `status` use: a name in another word order, or a
+      // version spelled inside the launch's model name, is the model the file declares.
       findings.push({
         level: 'warn',
         text: `${seat.name}: the launch starts ${named.model} ${named.version}, the file says ${declaredModel(seat)}`,
@@ -399,7 +402,7 @@ function watchFindings(
   if (recorded.pane && sources.watchPane && sources.watchAlive) {
     const there = sources.watchPane(session, recorded.pane, recorded.workspace);
     if (there === false) {
-      if (sources.watchAlive(recorded.pid)) {
+      if (recorded.pid !== undefined && sources.watchAlive(recorded.pid)) {
         const name = sources.processComm?.(recorded.pid) ?? 'process';
         return [{
           level: 'miss',
@@ -476,7 +479,7 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
     if (inRange) {
       const shown = extractFolder(inRange.extract, screen);
       const landed = shown ? showLanding(shown) : null;
-      const lobby = showLanding(resolveLobby(sources.home, team));
+      const lobby = showLanding(lobbyOf(sources.home, root, { ...team, session }));
       const project = showLanding(root);
       // A lead may be showing the lobby or the project: both are folders `up` leaves a running
       // lead in. The shown spelling must be that folder itself, not something that only
@@ -652,7 +655,7 @@ export function doctorFindings(
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
   findings.push(...trustFindings(team, root, dir, session, sources));
 
-  const lobby = resolveLobby(sources.home, team);
+  const lobby = lobbyOf(sources.home, root, { ...team, session });
   // The same walk `up` and `add` use before a launch into the lobby: a path a shipped CLI
   // reads at start is a miss. A file a CLI only writes is named afterwards, so an owner
   // still sees whose lock is sitting in the folder.
@@ -762,7 +765,7 @@ export function doctorFindings(
     const fromText = oldLobby ? `from ${plainLine(oldLobby)} to ${plainLine(lobby)}` : `to ${plainLine(lobby)}`;
     findings.push({
       level: 'note',
-      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText(team, root, sources.home)}`),
+      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText({ ...team, session }, root, sources.home)}`),
     });
   }
   return findings;
@@ -806,7 +809,12 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   } catch {
     // Tests may supply a proxy that throws on any read to prove no source was touched before validation.
   }
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), ...(home ? { home } : {}) });
+  const loaded = loadTeamFile(io.cwd, {
+    ...(args.values.file ? { file: args.values.file } : {}),
+    ...(home ? { home } : {}),
+    // The session this run addresses: the placement check reads that session's recorded lobby.
+    ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+  });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);

@@ -584,6 +584,17 @@ describe('team remove', () => {
     expect(text).toContain('name: lead');
   });
 
+  test('a hook reading left before the stop goes with the seat', async () => {
+    // A turn the stop interrupted never writes its `idle`: the state file still says working.
+    // The run that stops the seat takes the reading with it — `--keep`'s stopped entry is no
+    // more mid-turn than a full removal.
+    mkdirSync(join(dir, '.agents', 'seat-state'), { recursive: true });
+    writeFileSync(join(dir, '.agents', 'seat-state', 'worker.json'), '{"state":"working","since":"2026-10-17T09:00:00Z"}\n');
+    const made = world();
+    expect(await runRemove(['worker', '--keep', '--file', file], testIo(dir, owner), made.sources)).toBe(0);
+    expect(existsSync(join(dir, '.agents', 'seat-state', 'worker.json'))).toBe(false);
+  });
+
   test('--keep retains the seat id and last_active while a full remove clears them', async () => {
     const id = 'seat_0123456789ab';
     const lastActive = '2026-10-14T10:00:00.000Z';
@@ -1107,7 +1118,7 @@ describe('team remove', () => {
   test('a caller who may not change the team changes nothing', async () => {
     const io = testIo(dir, { kind: 'seat', name: 'worker', pane: 'w1:p1' });
     expect(await runRemove(['worker'], io, world().sources)).toBe(1);
-    expect(io.err).toContain('only the owner, the orchestrator or the operator');
+    expect(io.err).toContain('only the owner or `leads` removes a seat');
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
   });
 });
@@ -1161,7 +1172,7 @@ describe('team remove delegated', () => {
       delegateGate: () => { asked += 1; return passed; },
     });
     expect(code).toBe(1);
-    expect(io.err).toBe('team remove: only the owner, the orchestrator or the operator runs it; this call is pilot\n');
+    expect(io.err).toBe('team remove: only the owner or `leads` removes a seat; this call is pilot\n');
     expect(asked).toBe(0);
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
   });

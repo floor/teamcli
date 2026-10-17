@@ -22,6 +22,16 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "in_project": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "$comment": "the project this team belongs to, by name; absent, the team is its own project"
+    },
+    "project_lead": {
+      "type": "boolean",
+      "$comment": "this team leads the project it sits in; one team per project declares it"
+    },
     "entity": {
       "type": "string",
       "minLength": 1,
@@ -516,6 +526,19 @@
             "minLength": 1,
             "$comment": "optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it"
           },
+          "delivery_order": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "native",
+                "mcp-inbox",
+                "typed"
+              ]
+            },
+            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and never adds a leg, which the walk settles"
+          },
           "mode": {
             "enum": [
               "worktree",
@@ -531,6 +554,10 @@
           "leads": {
             "type": "boolean",
             "$comment": "the seat that leads: exactly one seat carries it"
+          },
+          "assistant": {
+            "type": "boolean",
+            "$comment": "the entity's assistant: at most one seat carries it"
           },
           "count": {
             "type": "integer",
@@ -588,6 +615,19 @@
         ],
         "$comment": "account must name a key of budgets.accounts; the workspace title is the written label, or the seat name and role when none is written; display and effort are the pane display; a seat with count is neither lead"
       }
+    },
+    "delivery_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "native",
+          "mcp-inbox",
+          "typed"
+        ]
+      },
+      "$comment": "the legs a send may walk, outermost first: native, mcp-inbox, typed; a level may drop or reorder the legs in force and may never add one"
     },
     "releases": {
       "type": "array",

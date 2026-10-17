@@ -6,9 +6,11 @@ import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
 import type { SeatState, SessionState } from '../state.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
@@ -61,8 +63,6 @@ export type Difference = {
 };
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
-
-export const WATCH_LABEL = 'watchdog';
 
 /** The one row a seat shows while it waits, ahead of the ordinary launch-stopped and unnamed rows. */
 function waitingView(
@@ -460,7 +460,7 @@ export function compare(
   }
 
   for (const agent of live.agents) {
-    if (claimed.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
+    if (claimed.has(agent.pane) || labels.get(agent.workspace) === watchLabel(team.project)) continue;
     differences.push({
       what: `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`,
       repair: 'add the seat to the file, or close it',
@@ -471,6 +471,20 @@ export function compare(
     if (worktree.setup === 'failed') {
       differences.push({ what: `worktree ${task}: its setup failed`, repair: `team worktree remove ${task}`, needs: 'approve' });
     }
+  }
+
+  // The watch the state records, as one line: where it runs, whose process it is once a pass has
+  // recorded one, and how old its last heartbeat is. The difference below says when that is too
+  // old; this note is what stands either way.
+  if (state.watch) {
+    const beat = Date.parse(state.watch.heartbeat);
+    const seconds = Number.isFinite(beat) ? Math.max(0, Math.round((now.getTime() - beat) / 1000)) : null;
+    const age = seconds === null
+      ? 'never recorded'
+      : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
+    const where = state.watch.pane ? `pane ${state.watch.pane}` : 'pane not recorded';
+    const whose = state.watch.pid !== undefined ? `pid ${state.watch.pid}` : 'pid not recorded yet';
+    notes.push(`watch: ${where}, ${whose}, last heartbeat ${age}`);
   }
 
   if (live.running && anyRunning) {
@@ -612,7 +626,8 @@ function modelOf(
   /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
   unidentified: boolean,
 ): string {
-  const running = seatModel(seat, live.screens[agent.pane]);
+  const screen = live.screens[agent.pane];
+  const running = seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.
@@ -623,21 +638,36 @@ function modelOf(
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }
-  if (!modelDiffers(running, seat)) return seat.display;
+  // What the pane shows against what the file promises, effort included: the word the screen
+  // prints is the observed one, and a screen printing none leaves the file's word standing —
+  // the rule the label's own line follows — so only a word actually seen can differ from it.
+  // When the file declares no effort, a seen word is not a drift. When only the effort drifts,
+  // the line names the effort alone so it never echoes the model in another word order.
+  const seen = observedEffort(seat.cli, screen);
+  const modelDrifts = modelDiffers(running, seat);
+  const effortDrifts = seen !== undefined && seat.effort !== undefined && seen !== seat.effort;
+  if (!modelDrifts && !effortDrifts) return seat.display;
   const declared = declaredModel(seat);
+  const observed = `${running.model} ${running.version}${seen ? ` ${seen}` : ''}`;
+  const file = `${declared}${seat.effort ? ` ${seat.effort}` : ''}`;
+  const detail = modelDrifts
+    ? `running ${observed}, file says ${file}`
+    : `effort ${seen}, file says ${seat.effort}`;
   differences.push(unidentified
     ? {
-        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}; its process was never recorded`,
+        what: `${seat.name}: ${detail}; its process was never recorded`,
         repair: unidentifiedRepair(team, seat.name),
         needs: 'approve',
         owner: true,
       }
     : {
-        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}`,
+        what: `${seat.name}: ${detail}`,
         repair: modelMismatchRepair(team, seat.name),
         needs: 'approve',
       });
-  return `${running.model} ${running.version} (file: ${seat.display})`;
+  // The column is the running model's when that is what drifted; an effort alone does not
+  // change it, the model on the pane is still the file's.
+  return modelDrifts ? `${running.model} ${running.version} (file: ${seat.display})` : seat.display;
 }
 
 /** The model-mismatch repair. A lead cannot be removed, so it gets the same whole-team

@@ -20,12 +20,15 @@ export function ceilingsOf(team: TeamFile): Ceilings {
   return { seats: team.limits.seats, temporary: team.limits.temporary, vendors: { ...team.limits.vendors } };
 }
 
-/** The record an approval of this file writes. */
+/** The record an approval of this file writes. `actor` is the approved delegate pane that
+ *  submitted it, on a delegated approval: the approving word stays the owner's, and the
+ *  submission is written beside the signature so the record names who ran it. */
 export function approvalOf(
   team: TeamFile,
   root: string,
   now: Date = new Date(),
   checks: Record<string, ApprovedCheck> = {},
+  actor?: string,
 ): Approval {
   return {
     format: 2,
@@ -34,6 +37,7 @@ export function approvalOf(
     fingerprints: fingerprints(team),
     ceilings: ceilingsOf(team),
     checks,
+    ...(actor !== undefined ? { actor } : {}),
   };
 }
 

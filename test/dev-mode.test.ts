@@ -16,6 +16,7 @@ import { brokerSocket } from '../src/broker/protocol.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { readAgents } from '../src/registry/agents.ts';
 import { keyFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readState } from '../src/state.ts';
@@ -103,7 +104,6 @@ function world(): { launch: Launch; runs: { pane: string; command: string }[] } 
     foreground: () => ['claude'],
     sleep: async () => {},
     now: () => NOW,
-    spawnWatch: () => 1,
   };
   return { launch, runs };
 }
@@ -168,15 +168,23 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   const mountedCode = await runUp([], mountedIo, sources(mounted.home, mountedWorld.launch));
   expect(mountedCode).toBe(0);
   expect(mountedIo.err).toContain('team up: warning:');
-  expect(mountedIo.err).toContain('only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)');
+  expect(mountedIo.err).toContain('only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)');
   expect(mountedIo.err).toContain('the file was never approved on this machine');
   expect(mountedIo.err).not.toContain('team approve');
-  expect(mountedIo.err).not.toContain('team up: only the owner runs `up`');
+  expect(mountedIo.err).not.toContain('team up: only the owner or `leads` starts the team');
   expect(mountedIo.err).not.toContain('team up: the file was never approved');
   expect(mountedIo.err).not.toContain('team up: run `team approve`');
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('claude --model claude-opus-5-5');
   expect(readState(join(mounted.root, '.agents')).sessions.acme?.seats.lead?.stage).toBe('ready');
   expect(approvalArtifacts(mounted.home, mounted.root)).toEqual([]);
+  // The registration this run made says so: the record's provenance carries the dev mark,
+  // written to the file as its own line. The refused run registered nothing at all.
+  expect(readAgents(refused.home)).toEqual([]);
+  const record = readAgents(mounted.home)[0];
+  expect(record?.provenance.dev_mode).toBe(true);
+  expect(record?.provenance.registered_by).toBe('unplaced (it runs under herdr)');
+  const recordFile = readFileSync(join(mounted.home, '.config', 'team', 'agents', `${record?.id}.yaml`), 'utf8');
+  expect(recordFile).toContain('  dev_mode: true\n');
 });
 
 /** Bytes of every approval, key, and grant under home. A rules file is not one of these. */
@@ -264,7 +272,7 @@ test('an approved file that has since changed refuses, and the same file mounts 
   const mountedCode = await runUp([], mountedIo, sources(mounted.home, mountedWorld.launch));
   expect(mountedCode).toBe(0);
   expect(mountedIo.err).toContain('team up: warning:');
-  expect(mountedIo.err).toContain('only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs under herdr)');
+  expect(mountedIo.err).toContain('only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)');
   expect(mountedIo.err).not.toContain('not the approved one');
   expect(mountedIo.err).not.toContain('team approve');
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('--live-mount');
@@ -274,7 +282,7 @@ test('an approved file that has since changed refuses, and the same file mounts 
 });
 
 test('team down refuses an unplaced caller, and the same call stops the team when TEAMCLI_DEV_MODE=1', async () => {
-  const placement = 'only the owner, the orchestrator or the operator stops the team; this call is unplaced (it runs under herdr)';
+  const placement = 'only the owner or `leads` stops the team; this call is unplaced (it runs under herdr)';
   const refused = repo();
   approve(refused.home, refused.root);
   const refusedBefore = durableBytes(refused.home);
@@ -296,7 +304,9 @@ test('team down refuses an unplaced caller, and the same call stops the team whe
   expect(stoppedCode).toBe(0);
   expect(stoppedIo.err).toContain('team down: warning:');
   expect(stoppedIo.err).toContain(placement);
-  expect(stoppedIo.err).not.toContain('team down: only the owner, the orchestrator or the operator stops the team');
+  // The refusal form, not the warning's: dev mode speaks the sentence as a warning, never as a
+  // refusal — the needle is built from `placement`, so a re-worded sentence keeps the tooth.
+  expect(stoppedIo.err).not.toContain(`team down: ${placement}`);
   expect(didStop.n).toBe(1);
   expect(durableBytes(stopped.home)).toBe(stoppedBefore);
   expect(durableBytes(stopped.home)).not.toContain('grant.json');

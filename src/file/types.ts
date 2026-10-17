@@ -2,6 +2,7 @@ export type Problem = { line: number; message: string };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
+import type { DeliveryLeg } from '../settings/inherit.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
 /** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation.
@@ -90,8 +91,23 @@ export type Seat = {
   mode: Mode;
   parked: boolean;
   stopped: boolean;
+  /**
+   * The entity's assistant: the seat the file marks with `assistant: true`. At most one seat
+   * carries it, and admission reads it as a place in the chain — the entity's first assistant,
+   * the one seat admitted to its coordinator — never a role's name. Absent means the seat is not
+   * the assistant, so a file that marks none keeps every digest it had; marking one is a change
+   * the owner approves, because the capability admits a send.
+   */
+  assistant?: true;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
+  /**
+   * The seat's own word on the delivery order, when the file writes one: the legs a send to this
+   * seat may walk, in order. Absent otherwise, so a file that writes none keeps the digest it
+   * had. Only the word's shape is settled here; whether it drops or reorders the order in force,
+   * or would add a leg, is settled when a send resolves the chain (`src/settings/inherit.ts`).
+   */
+  deliveryOrder?: DeliveryLeg[];
   // The entry's `name` and `count` as written, and this seat's place in it (1 for the first).
   declared: string;
   count: number;
@@ -102,6 +118,16 @@ export type Seat = {
 export type TeamFile = {
   format: 1;
   project: string;
+  /**
+   * The project this team sits in, by the name the file wrote, or null when it names none — a
+   * team with no project is its own. `project:` above is still the team's own name.
+   */
+  inProject: string | null;
+  /**
+   * Whether this team leads the project it sits in — the team-side `leads: true`. One team per
+   * project sets it (`team check` refuses two), and the file must name the project it leads.
+   */
+  projectLead: boolean;
   /** The entity the team belongs to, or null. Sets the team's lobby to
    *  `~/.config/team/lobbies/<slug>` unless `lobby` names one outright. */
   entity: string | null;
@@ -113,6 +139,12 @@ export type TeamFile = {
   /** The lead's seat, however the file spelled it: the `coordinator:` key or `leads: true`. */
   orchestrator: string;
   operator: string;
+  /**
+   * The file's own word on the delivery order, or null when it writes none: the order a send to
+   * any of its seats walks when the seat and the levels above say nothing. Non-owner and
+   * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
+   */
+  deliveryOrder: DeliveryLeg[] | null;
   tools: Record<string, Record<string, string>>;
   identity: {
     signature: {

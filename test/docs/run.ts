@@ -35,6 +35,7 @@ import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPlan } from '../../src/commands/plan.ts';
 import { runProc } from '../../src/commands/proc.ts';
+import { runProjects } from '../../src/commands/projects.ts';
 import { runUsage } from '../../src/commands/usage.ts';
 import { runLock } from '../../src/commands/lock.ts';
 import { runUnlock } from '../../src/commands/unlock.ts';
@@ -51,7 +52,7 @@ import { emptySession, updateState } from '../../src/state.ts';
 import { blocksOf, EXIT_SUFFIX, transcript, type Block } from './blocks.ts';
 import { createFixture, type Fixture } from './fixture.ts';
 import { DEFAULT_SPEC, specOf, type ScreenKind, type Spec, type ToolState } from './spec.ts';
-import { createWorld, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
+import { createWorld, projectsAt, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
 
 export type Failure = { page: string; line: number; message: string };
 
@@ -130,7 +131,14 @@ async function setup(page: Page): Promise<void> {
   if (page.spec.watch === 'alive' || page.spec.watch === 'stale') {
     const interval = page.team?.watch.interval ?? 120;
     const ago = page.spec.watch === 'stale' ? 3 * interval : 0;
-    session.watch = { pid: WATCH_PID, heartbeat: new Date(Date.parse(page.spec.now) - ago * 1000).toISOString() };
+    // A watch `up` started runs in its own workspace, and its pass records that pane; a page's
+    // seeded watch is that shape, so `team status` reads the pane it runs in.
+    session.watch = {
+      pid: WATCH_PID,
+      heartbeat: new Date(Date.parse(page.spec.now) - ago * 1000).toISOString(),
+      pane: 'w9:p1',
+      workspace: 'w9',
+    };
   }
   for (const [key, value] of Object.entries(page.spec.state)) {
     const current = (session[key] ?? {}) as Record<string, unknown>;
@@ -247,8 +255,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRestart(rest, io, world.restartSources());
     case 'send': {
       // Every seat of the page's file is a live agent, so a native-CLI example resolves.
-      // `reply="…"` on the fence is the fake seat's answer: with it, a `--wait` example has a
-      // reply to print; without it, the seat stays silent and the wait times out.
+      // `reply="…"` on the fence is the fake seat's answer: a `--wait` example with it would
+      // print a reply. No page uses it while SOCKET_SEND (src/send/uds.ts) is off — a waited
+      // send is refused before a frame exists — so it stands for the socket leg's return.
       const seats = page.team?.seats.map((seat) => seat.name) ?? ['claude-keeper'];
       return runSend(rest, io, sendHost(fixture, seats, spec.now, reply));
     }
@@ -281,6 +290,10 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
         // the machine running the suite happens to have.
         alive: (pid) => pid === PROC_PID,
       });
+    case 'projects':
+      // The page's registry is its own fence, `~/.config/team/projects.yaml` under the
+      // fixture's home: the reads are the registry module's, pointed at that home.
+      return runProjects(rest, io, projectsAt(fixture.home));
     case 'tempo':
       return runTempo(rest, io, { home: fixture.home });
     case 'unlock':
@@ -321,8 +334,9 @@ function answerHost(home: string): AnswerHost {
 /** The docs page's send: a fake seat whose pane reports one process with a file at the socket's
  *  measured name, and a deliver that accepts. With `reply`, the delivery answers too: a
  *  connection back to the sender's own measured `cc-socks/<pid>.sock` — the frame a replying
- *  session writes — so a `--wait` example has a reply to print. No session is read and no pane
- *  is touched. */
+ *  session writes — so a `--wait` example prints what the seat said; without it, the seat stays silent and the wait times out. No path calls this
+ *  deliver while SOCKET_SEND (src/send/uds.ts) is off, so `reply` stands unused until the
+ *  native leg returns. No session is read and no pane is touched. */
 const SEND_PID = 4200;
 
 function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string): SendHost {
@@ -364,6 +378,10 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
     },
     now: () => new Date(now),
     home: fixture.home,
+    // The roster's project column reads the fixture's own registry: a page that seeds
+    // `~/.config/team/projects.yaml` shows the registry's grouping, one that does not shows
+    // each team's own `project:` line.
+    projects: projectsAt(fixture.home),
   };
 }
 
@@ -457,6 +475,9 @@ async function consoleBlock(page: Page, block: Block, failures: Failure[]): Prom
         failures.push({ page: page.name, line: step.line, message: (error as Error).message });
         continue;
       }
+      // The next `$ ` line is typed after the watch a run just started has reached its first
+      // pass, so the record it reads holds that pass's pid, as a reader's own would.
+      (page.world as World).settle();
       if (step.showsExit) parts.push(`exit ${code}\n`);
       const produced = normalize(parts.join(''), page);
       const expected = normalize(step.expected, page);

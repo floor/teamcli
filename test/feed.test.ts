@@ -15,7 +15,6 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runFeed } from '../src/commands/feed.ts';
@@ -40,7 +39,7 @@ function teamFile(root: string, lobby: string): string {
   return `format: 1
 project: acme
 coordinator: lead
-operator: helper
+operator: lead
 session: acme
 workspace:
   mode: shared
@@ -144,7 +143,7 @@ function registerSeat(home: string, seat: string, role: string): void {
       '  team: "acme"',
       `  seat: "${seat}"`,
       '  session: "acme"',
-      '  pane: "pane-lead"',
+      `  pane: "pane-${seat}"`,
       '  address: null',
       'mcp: []',
       'skills: []',
@@ -187,7 +186,7 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the id admission admitted, and the rule.
     const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
@@ -199,6 +198,12 @@ describe('team send history log & team feed', () => {
       outcome: 'delivered',
       ms: 0,
       via: 'typed',
+      // The walk landed on the typed leg through both legs ahead of it: the socket write this
+      // build does not make, and the mcp-inbox leg it does not carry.
+      failed: [
+        'native: unavailable; the frame path is a socket write this build does not make',
+        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+      ],
     });
 
     // Team log in .agents/ keeps only byte counts, never the message body; lobbies stay empty.
@@ -212,10 +217,20 @@ describe('team send history log & team feed', () => {
     expect(feedIo.out).toBe(
       `15:30:00  helper -> lead  [delivered] via typed in 0 ms  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
     );
+
+    // The formatted line keeps the channel; `--json` carries the legs that failed before it.
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const jsonLine = JSON.parse(jsonIo.out) as Record<string, unknown>;
+    expect(jsonLine.failed).toEqual([
+      'native: unavailable; the frame path is a socket write this build does not make',
+      'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+    ]);
   });
 
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
     const { root, home, sockets } = world();
+    // A file at the measured socket name stands while every send below runs: no path consults it.
     writeFileSync(join(sockets, '222.sock'), '');
 
     // 1. refused (unknown seat), --list, --dry-run write nothing to messages.jsonl
@@ -236,27 +251,31 @@ describe('team send history log & team feed', () => {
       ),
     ).toBe(1);
 
-    // 4. answered (--wait)
-    const answeringHost = hostFor(home, sockets, {
-      deliver: async () => {
-        const back = createConnection(join(sockets, `${String(process.pid)}.sock`));
-        back.on('error', () => {});
-        back.on('connect', () =>
-          back.end('{"type":"user","message":{"role":"user","content":"ack"},"msg_id":"r-1"}\n'),
-        );
-        return { ok: true };
-      },
+    // 4. a --wait refusal writes nothing either. The waited outcomes are out of this build's
+    // reach while the socket is off, so the answered and timeout lines are seeded straight into
+    // the history — as the native leg's will be — and the feed renders the history, not the
+    // runs that made it.
+    expect(await runSend(['lead', 'msg-refused-wait', '--wait'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(1);
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}msg-answered`,
+      id: 'seed-answered',
+      outcome: 'answered',
+      ms: 0,
+      via: 'socket',
     });
-    expect(await runSend(['lead', 'msg-answered', '--wait'], testIo(root, { kind: 'owner' }), answeringHost)).toBe(0);
-
-    // 5. timeout (--wait)
-    expect(
-      await runSend(
-        ['lead', 'msg-timeout', '--wait', '--timeout', '1'],
-        testIo(root, { kind: 'owner' }),
-        hostFor(home, sockets),
-      ),
-    ).toBe(1);
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}msg-timeout`,
+      id: 'seed-timeout',
+      outcome: 'timeout',
+      ms: 0,
+      via: 'socket',
+    });
 
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);

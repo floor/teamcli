@@ -17,14 +17,19 @@ import { emptySession, holdText, liveHold, liveProcs, pidAlive, readState, type 
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import type { SeatStateWord, StateSource } from '../labels/state.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { INTEGRITY_NOT_AUTHORITY } from '../permissions/must-not-pretend.ts';
 import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
+import { readTeams } from '../registry/teams.ts';
+import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
+import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
-import { renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
+import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
 export type StatusSources = {
@@ -37,6 +42,8 @@ export type StatusSources = {
   now(): Date;
   /** The home whose store holds the override file and the key. Absent in a test that does not set one. */
   home?: string;
+  /** The project registry, for `--project`. The real one when absent; a test stands in for it. */
+  projects?: ProjectSources;
   /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
    *  that does not read them; absent is not "fine", it is nothing said. */
   machine?(root: string): Machine;
@@ -98,6 +105,7 @@ export const realSources: StatusSources = {
   standing: standingSource(homedir()),
   now: () => new Date(),
   home: homedir(),
+  projects: realProjectSources,
   machine: readMachine,
 };
 
@@ -123,6 +131,16 @@ export interface StatusJson {
     last_active?: string | null;
     pane: string;
     launch_line?: string | null;
+    /** The seat's own reading (src/labels/state.ts), the table's STATE and SOURCE columns.
+     *  `state` above keeps its published meaning — the comparison's phrase about the record. */
+    seat_state?: SeatStateWord;
+    seat_state_source?: StateSource;
+    /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
+     *  as not working (the table's `(blind)`). */
+    blind?: true;
+    /** `--all` only, like the registry's other fields: present when the seat's registry record
+     *  carries the dev mark — a registration dev mode admitted wrote it. */
+    dev_mode?: boolean;
     start_cwd?: string;
   }>;
   notes: string[];
@@ -145,15 +163,25 @@ export interface StatusJson {
   }>;
 }
 
-export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n';
+export const USAGE = 'Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n';
 
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['all', 'json']);
-  if (args.error || args.rest.length) {
-    out.stderr(`team status: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
+  const args = readArgs(argv, ['session', 'file', 'project'], ['all', 'json']);
+  // `--project` reads the project level instead of one team: the project's teams, from the
+  // registry, wherever the run stands — no team file and no caller gate, the way `team projects`
+  // reads. `--session` and `--file` name one team's readings and do not apply beside it.
+  const beside = args.values.project !== undefined && (args.values.session !== undefined || args.values.file !== undefined);
+  if (args.error || args.rest.length || beside) {
+    const why = args.error ?? (args.rest.length
+      ? `unexpected "${args.rest[0]}"`
+      : '--project reads the project; --session and --file name one team');
+    out.stderr(`team status: ${plainText(why)}\n${USAGE}`);
     // exit: status.invocation
     return 2;
+  }
+  if (args.values.project !== undefined) {
+    return projectReport(args.values.project, out, io, sources, args.flags.has('json'));
   }
   // `--file` and `--session` are the owner's. The walk decides that before any file or session
   // is read, the same gate `worktree` and `watch` use. A plain folder's own seats need no flag:
@@ -218,10 +246,19 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     return 2;
   }
   const now = sources.now();
+  // The team's hold first of all, the way it is the first thing a reader should know: a hold
+  // past its `until` reads as none (`liveHold`), so neither the note nor the document carries
+  // one that has lapsed. Read before the comparison below, whose held seats it marks.
+  const hold = liveHold(whole, now);
   const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
   const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
   const all = args.flags.has('all');
-  const registryRows = all ? seatRegistryRows(team, state, live, comparison, now, true) : undefined;
+  // The registry rows carry each seat's own reading: `--all` renders them as the expanded
+  // table, and every `--json` document carries the reading on each row whether `--all` is
+  // there or not. Without either, nothing here is read.
+  const registryRows = all || args.flags.has('json')
+    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir })
+    : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
   // as one note, in the reading's own words. `up`'s refusal on it is its own line, and nothing
@@ -232,10 +269,6 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (problem !== null) comparison.notes.unshift(problem);
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
-  // The team's hold first of all, the way it is the first thing a reader should know: a hold
-  // past its `until` reads as none (`liveHold`), so neither the note nor the document carries
-  // one that has lapsed.
-  const hold = liveHold(whole, now);
   if (hold) comparison.notes.unshift(holdText(hold));
   // What the seats recorded with `team proc add`: one note per live process, read the same way
   // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
@@ -262,6 +295,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...overrideDrift(overrides),
     // The file's own rules files, only once a record exists for a launch to have written them.
     ...rulesFileDifferences(standing, team, root, sources.home),
+    // A seat whose reading is blind — unknown past the blind threshold — counts as
+    // not working, and is a must-fix here exactly as it is in `team check`.
+    ...blindDifferences(team, state, live, comparison, now, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir }),
   ]);
 
   if (args.flags.has('json')) {
@@ -270,7 +306,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       project: team.project,
       session,
       rows: comparison.rows.map((row) => {
-        const extra = registryByName?.get(row.name);
+        // The expanded columns stay `--all`'s: without it `extra` is undefined and every field
+        // the row published stands as it was. The reading below is every row's, `--all` or not.
+        const found = registryByName?.get(row.name);
+        const extra = all ? found : undefined;
         return {
           name: row.name,
           ...(extra ? { id: extra.id } : row.id ? { id: row.id } : {}),
@@ -280,6 +319,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           ...(extra ? { effort: extra.effort, last_active: extra.last_active } : {}),
           pane: row.pane,
           ...(extra ? { launch_line: extra.launch_line } : {}),
+          ...(found ? { seat_state: found.state, seat_state_source: found.state_source } : {}),
+          ...(found?.blind ? { blind: true as const } : {}),
+          ...(extra?.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
         };
       }),
@@ -373,6 +415,49 @@ export function protectedCheckouts(team: TeamFile, root: string, sources: { bran
   return out;
 }
 
+/**
+ * `team status --project <name>`: the project's teams, from the registry — the project itself
+ * through the projects source, each team's record through the team registry. The reading covers
+ * every team of the project the way the plain reading covers every seat of a team: a team the
+ * registry does not know is said as such, never left out.
+ */
+function projectReport(name: string, out: Io, io: Io, sources: StatusSources, json: boolean): number {
+  // An injected projects source answers for itself; with none, the registry the home holds is the
+  // reading — the same file `team projects` reads, bound to the injected home, never another's.
+  const project = sources.projects ? sources.projects.byName(name) : projectRegistry.byName(sources.home ?? homedir(), name);
+  if (!project) {
+    out.stderr(`team status: no project named ${JSON.stringify(name)}; nothing to show\n`);
+    // exit: status.project-unknown
+    return 1;
+  }
+  const records = readTeams(sources.home ?? homedir());
+  const teams = project.teams.map((teamId) => {
+    const record = records[teamId] ?? null;
+    return {
+      name: teamId,
+      session: record?.session ?? null,
+      lifecycle: record?.lifecycle ?? null,
+      seats: record ? record.roster.length : null,
+    };
+  });
+  if (json) {
+    io.stdout(`${JSON.stringify({ format: 1, project, teams }, null, 2)}\n`);
+  } else {
+    const head = [`project ${plainLine(project.name)}  ${plainLine(project.id ?? '-')}`];
+    if (project.entity !== null) head.push(`entity ${plainLine(project.entity)}`);
+    head.push(`lead ${plainLine(project.lead ?? '-')}`);
+    const lines = [head.join('  ')];
+    for (const team of teams) {
+      lines.push(team.session === null
+        ? `  ${plainLine(team.name)}  not registered`
+        : `  ${plainLine(team.name)}  session "${plainLine(team.session)}"  ${plainLine(team.lifecycle ?? '?')}  ${String(team.seats ?? '?')} seat(s)`);
+    }
+    out.stdout(`${lines.join('\n')}\n`);
+  }
+  // exit: status.project-listed
+  return 0;
+}
+
 function render(
   team: TeamFile,
   session: string,
@@ -418,6 +503,10 @@ function render(
   } else {
     lines.push(`${comparison.differences.length} difference(s)`);
   }
+  // The footer the decision record puts on a view of records
+  // (decided-grants-minimum-2026-10-17, "every record and view says so"): this reading is a view,
+  // not an authority. The plain reading alone carries it; the document is a script's to read.
+  lines.push(INTEGRITY_NOT_AUTHORITY);
   return `${lines.join('\n')}\n`;
 }
 

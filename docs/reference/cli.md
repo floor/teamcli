@@ -131,7 +131,7 @@ Hidden: no
 
 Usage:
 
-    team check [--session <name>] [--file <path>]
+    team check [--session <name>] [--file <path>] [--repair]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
 
 ### Flags
@@ -141,6 +141,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--pr` | yes | no | no |
+| `--repair` | no | no | no |
 | `--session` | yes | no | no |
 | `--since` | yes | no | no |
 | `-h` | no | no | yes |
@@ -309,13 +310,17 @@ Hidden: no
 Usage:
 
     team grant <seat> --scope <act,...> [--dry-run]
+    team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--capabilities` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--expires` | yes | no | no |
 | `--help` | no | no | no |
+| `--name` | yes | no | no |
 | `--scope` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -323,7 +328,8 @@ Usage:
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `seat` | no | no |
+| `seat` | yes | no |
+| `seat\|@team` | yes | no |
 
 ## `help`
 
@@ -696,13 +702,33 @@ Usage:
 
 None.
 
+## `projects`
+
+Hidden: no
+
+Usage:
+
+    team projects [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `register`
 
 Hidden: no
 
 Usage:
 
-    team register <seat> [--session <name>] [--dry-run]
+    team register <seat> [--session <name>] [--pane <id>] [--dry-run]
 
 ### Flags
 
@@ -710,6 +736,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
+| `--pane` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -841,17 +868,21 @@ Usage:
 
     team revoke grant [--dry-run]
     team revoke delegate <session/pane> [--dry-run]
+    team revoke <name> [--dry-run]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--help` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `name` | no | no |
 
 ### `delegate`
 
@@ -895,6 +926,29 @@ Usage:
 
 None.
 
+## `route`
+
+Hidden: no
+
+Usage:
+
+    team route <seat> [--json] [--dry-run]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `seats`
 
 Hidden: no
@@ -927,17 +981,22 @@ Usage:
 
     team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
+    team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--channel` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--list` | no | no | no |
+| `--ms` | yes | no | no |
+| `--record` | yes | no | no |
 | `--timeout` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |
@@ -955,7 +1014,7 @@ Hidden: no
 
 Usage:
 
-    team status [--session <name>] [--file <path>] [--all] [--json]
+    team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
 
 ### Flags
 
@@ -965,6 +1024,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--project` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

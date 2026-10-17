@@ -19,7 +19,7 @@ import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
 // What git must never pick up: the file and the runtime files beside it — the broker's start
 // files included: the lock, its takeover claim (a killed claim-holder can leave it), and the
 // private temp an atomic create keeps only while it runs.
-export const EXCLUDED = [TEAM_FILE, `.agents/${STATE_FILE}`, `.agents/${LOG_FILE}*`, `.agents/${LOCK_FILE}`, '.agents/seat-locks', '.agents/messages/', '.agents/leases/', '.agents/broker.sock', '.agents/broker.sock.lock', '.agents/broker.sock.lock.takeover', '.agents/broker.sock.lock.*.new'];
+export const EXCLUDED = [TEAM_FILE, `.agents/${STATE_FILE}`, `.agents/${LOG_FILE}*`, `.agents/${LOCK_FILE}`, '.agents/seat-locks', '.agents/messages/', '.agents/leases/', '.agents/hooks/', '.agents/seat-state/', '.agents/broker.sock', '.agents/broker.sock.lock', '.agents/broker.sock.lock.takeover', '.agents/broker.sock.lock.*.new'];
 
 export const PRIVACY = `The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
@@ -174,10 +174,20 @@ export async function runInit(
     // exit: init.detached
     return 1;
   }
+  // The who-may-run-it gate: set to exactly `1`, dev mode says the owner line once, as a
+  // warning, and the run continues — exactly as `up` does. Every other refusal stays a
+  // refusal. The warning is logged where the run knows the folder it writes in.
+  let devOwnerLine: string | null = null;
   if (!isOwner(caller) && !createGranted) {
-    io.stderr(`team init: only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
-    // exit: init.not-owner
-    return 1;
+    const ownerLine = `only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+    if (io.env.TEAMCLI_DEV_MODE === '1') {
+      devOwnerLine = `warning: ${ownerLine}; dev mode continues`;
+      io.stderr(`team init: ${devOwnerLine}\n`);
+    } else {
+      io.stderr(`team init: ${ownerLine}\n`);
+      // exit: init.not-owner
+      return 1;
+    }
   }
   const root = rootOf();
   if (!root) {
@@ -186,6 +196,7 @@ export async function runInit(
     return 2;
   }
   const path = join(root, TEAM_FILE);
+  if (devOwnerLine !== null) logLine(dirname(path), 'init', describeCaller(caller), devOwnerLine, sources.now?.());
   if (git(root, 'ls-files', '--error-unmatch', TEAM_FILE) !== null) {
     io.stderr(`team init: ${TEAM_FILE} is tracked by git, and a team file is private. Untrack it, keeping the file:\n  git rm --cached ${TEAM_FILE}\nthen run team init again. History is not rewritten.\n`);
     // exit: init.tracked

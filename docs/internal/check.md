@@ -8,23 +8,63 @@ the exit codes stay on the page.
 ## What the run does: the differences, each with its repair
 
 One answer to one question: **is anything wrong with this team that someone should act on?**
-It reads the team file, the approval, the state and herdr, and changes nothing — no git is
-needed, so it answers as well in a plain folder as in a repository. It is not
+It reads the team file, the approval, the state and herdr, and changes nothing but the two
+leftovers the owner's `--repair` drops — no git is needed, so it answers as well in a plain folder
+as in a repository. It is not
 [`team status`](status.md) with fewer lines: status answers *what the team is* — the rows, the
 budgets, every difference and note — and the check answers *what to act on*: the differences
-alone, each with its repair.
+alone, each with its repair, and the one note a file can earn.
 
 `team check` is also the old name of the two commands that took its halves —
 [`team commits check`](commits.md) and [`team pr check`](pr.md). A line that spells one of
 those — a `<ref>`, `--pr`, `--since`, any other word or option — is still read as that command
 through 0.3.3; the last section keeps those spellings and their bytes.
 
+## The state's leftovers, and the owner's `--repair`
+
+The file is the truth about who the seats are. The state can keep a record the file no longer
+speaks for — a seat an older file named and this one dropped — and a session the file does not
+name with no seat of the team in it. Both are leftovers, and both are named:
+
+    difference: <seat>: a state seat not in the file claims pane <pane>
+      repair: drop its record from the state (team check --repair)
+    difference: the state records the session "<name>", and no seat of the team is in it
+      repair: drop its record from the state (team check --repair)
+
+A record with no pane reads `<seat>: a state seat not in the file`, without the pane clause. The
+repair is never an edit of the file and never a guess at which record is right: the commands that
+resolve who holds a pane read past a record the file does not declare (`seatOfFile`,
+`src/state.ts`), so a departed seat's old record no longer refuses the real seat's registration,
+and the record itself waits for the owner's `--repair`. That flag is the check's one act: it drops
+exactly the leftovers it named, in one locked state write, re-checking each record against the
+state now on disk; it prints one `repaired:` line per record, logs each line under `check` and the
+owner, and leaves the file, the approval store and every other record as they stood. A temporary
+seat is never a leftover: `team add --temporary` never writes one into the file, so its record is
+the only place it exists, and neither the check nor the repair touches it. A session with a seat
+of the team in it — a name the file declares, or a temporary seat — is the team's too, whatever
+the file's own `session` key says, and is left where it is. The file's own session and the session
+this run addresses — `--session`, or `team.session` when it aims nothing — are never leftovers
+themselves either: one is where the team runs, and the other is what the run is about, so
+`--repair` never drops the record the check is reading. The records inside the addressed session
+are compared with the file all the same. Herdr is not consulted about which records are leftovers:
+the state's own claims are the subject, a pane herdr no longer lists is still a pane the state
+claims, and a session it runs is still a leftover with no seat of the team in it. The repair still
+waits for the live read: a check whose herdr cannot answer exits `check.herdr` before it drops
+anything, so a refused run has changed nothing.
+
+The repair is the owner's alone. A caller that passes the gate but is not the owner meets
+`team check: --repair is the owner's` and exit 1, as it does for the two aimed flags; nothing is
+written. A `--repair` run whose drop leaves nothing else to act on is a clean check — the `repaired:`
+lines, then `team check: nothing wrong`, exit 0. A state write that fails throws, as every
+command's state write does, and the run is `team.command-threw`'s.
+
 ## Who the check answers
 
 The caller decides, not the flags. Three callers get the answer:
 
 - **the owner**, from a terminal outside herdr — the same walk `status` and the changing
-  commands make. An owner **without a terminal** is not this caller: a script meets the fixed
+  commands make, and the only caller who may aim `--file`, `--session` or `--repair`. An owner
+  **without a terminal** is not this caller: a script meets the fixed
   sentence below;
 - **a seat of the team being checked** — placed in the file's session, on the pane the state
   records for it. A seat the state records no pane for, or records on another pane, fails
@@ -56,31 +96,121 @@ and open nothing: the target is the file the caller's own place finds.
   session, another project or nobody at all is not read, and the pass uses the watch's own
   screen reader, so the words a seat's screen yields are the watch's own words. Nothing of the
   watch's pass, report or nudge path runs: no key is sent, no pane is typed into, no memory is
-  written.
+  written. The same pass reads the two sidebar lines each file seat's pane carries — its herdr
+  workspace label and the display line under it — and a line that reads as neither the file's own
+  text nor one the watch may paint is a difference whose repair is `team register <seat>`,
+  re-applying both lines from the file without a relaunch;
+- the project and team registries (`~/.config/team/projects.yaml`, `~/.config/team/teams.yaml`),
+  for the team's place ([the registries](../concepts/registry.md)). A team two projects name is a
+  difference that repeats the registry's own refusal, naming both, with fixing the registry file
+  as its repair, and a registry that cannot be read is a difference in the same shape; a team no
+  project names is its own project, never a difference. When this team's file declares
+  `project_lead: true`, the project's other teams are read through the team registry — their
+  `root`, then their file, text only — and a second declaring team is a difference:
+  `the project <name> has <n> lead teams: <names>`, repaired with `take "project_lead: true" off
+  all but one of them`. A sibling the registries cannot answer for — no record, no readable file,
+  or one naming another project — is not counted, and a team that declares no lead reads no
+  sibling at all. A check with no home reads no registry;
+- the seat's own reading, the pair [`team seats`](../commands/seats.md) prints as STATE and SOURCE
+  (`src/labels/state.ts`): the word and where it came from, best source first — a screen waiting on
+  someone (a dialog, a question, an error, a composer holding unsent text), the CLI's own state hook
+  where its launch installed one, the pane's screen, herdr's word, the seat's newest trace, its
+  process — save one exception: a trace inside the window (`state_trace_window_seconds`, 2m
+  shipped) beats an idle word, from the hook, the screen or herdr, and only a trace with its own
+  clock counts as fresh — a commit, an ack, a message that reached the seat (a send the seat did not
+  take — `unreachable`, `not-submitted`, `held`, `timeout` — is no trace: it would read a seat as
+  working because someone failed to reach it, and clear a blind seat's flag without a sign the seat
+  moved). A tool row read off a screen carries no clock of its own and is never weighed as recency
+  (it is kept for display), so a seat whose last commit, ack or message is that fresh reads
+  `working` while its prompt shows; a working screen, a blocked screen — a composer holding unsent
+  text included — and the certainties (`held`, `unreachable`, `done`) never yield to it. The hook
+  (`cli-hook`) is a per-launch settings file, written under the project's `.agents/`, that the CLI
+  loads for two command hooks — a turn start and a turn end — and the state file it keeps there is
+  read for a day: a fresh `working` reads working while its turn is young
+  (`state_hook_working_seconds`, 2m shipped, the project free to loosen it), past which a screen
+  that still reads answers instead — an interrupted turn leaves the file's `working` behind while
+  the prompt shows again — and a screen it cannot read leaves the hook to answer; a fresh `idle`
+  idle; an older reading or one this version cannot parse is no reading, so the screen answers
+  again. `team down`, `team remove` and `team register` take the seat's state file with the record
+  they change, so a stopped seat starts from no reading. A blocked screen outranks
+  the hook, which cannot see a dialog the CLI stopped at after its last turn ended. `done` from the file's
+  `stopped` or from a retained record stands only while herdr names no agent for the seat: a live
+  agent is the observation, and a file's `stopped` beside a running seat is a difference of its
+  own, never the state. A process the comparison calls `restored, not launched by team` is
+  untrusted: neither its screen nor herdr's word for it is read, and the reading is TeamCLI's own
+  records or nothing — `unknown`, blind by its trace's age. A seat blind — `unknown` past the
+  blind threshold, 30m shipped — counts as not working:
+  one difference, the owner's, `<seat>: unknown for over 30m — blind, and it counts as not working`,
+  repaired with the owner's look at the pane;
+- the agent registry (`<home>/.config/team/agents/`), one read of each seat's record for the
+  signing triple the commit gate checks ([the registries](../concepts/registry.md)). A seat
+  whose record signs as another model than its pane runs is a difference — `signs as X, runs Y`,
+  X in the record's own words unless the file still declares exactly what the record signs (then
+  the seat's `display` spelling stands) — with `team register <seat>` (once the drift is
+  accepted) or the relaunch beside it. The record is the launch's own declaration: a read cannot
+  change it and the check writes nothing here; the drift is re-recorded by `team register`, a
+  reload or the next launch. A team the registry holds no record for reads as before, and a
+  screen the reader cannot name a model from is never wrong;
+- the team registry's record of this team (`~/.config/team/teams.yaml`), for its roster
+  ([the registries](../concepts/registry.md)): a seat the state records ready, running on the pane
+  it recorded, that the roster does not list is a difference — `<seat>: ready and running, and the
+  team registry's roster does not list it`, repaired with `team register <seat>`. The roster line
+  is the seat's identity for the permission bridge (`src/permissions/who.ts`): where the registry
+  holds a record of the team, the roster it holds is the record of who its seats are, and a seat
+  the roster does not list has no record there whatever the file declares. A team the registry
+  holds no record of is not this difference — the bridge falls back to the file's own declaration
+  then — and neither is a seat still launching: the line is written when the seat reaches ready.
+  The roster is read the way the bridge reads it, so a registry that cannot be read reads as no
+  record of the team here and the difference is not raised on it.
 
 It writes nothing at all — not the state, not the store, not the `last_valid` copy `status`
-keeps beside the file it read — for every caller, the owner included.
+keeps beside the file it read — for every caller, the owner included, save the one act: the
+owner's `--repair` write that drops the leftovers named above.
 
 ## Output
 
-One line per finding, its repair under it, then the closing count; the check prints no seat
-table, no budget block and no notes:
+One line per finding, its repair under it, then the closing count; a note, where the file earns
+one, prints above the findings. The check prints no seat table and no budget block:
 
+    note: main/w9:p3's delegate entry names approve, which no command acts on since team approve was removed; drop it from the file
     difference: claude-beacon is in the file and is not running
       repair: the owner runs team up
     team check: 1 difference(s), 1 for the owner
 
+The note is earned by a `delegates` entry still naming `approve`: `team approve` was removed,
+and the word stays accepted only so a file that already names it loads unchanged. It is a note
+and not a finding — in neither the closing count nor the exit code, so a file whose only note is
+this one still answers `team check: nothing wrong`, and the repair it asks for is the file:
+one word shorter.
+
 The closing line counts the differences and, after a comma, how many of their repairs are the
 owner's. With nothing to act on it is `team check: nothing wrong`.
 
-Under either answer stands the one line that names what the check cannot see:
+A `--repair` run that dropped records prints one `repaired: <what was dropped>` line per record before
+the answer — `repaired: <seat>: a state seat not in the file claimed pane <pane>; its record is
+dropped` and `repaired: the state's session "<name>" holds no seat of the team; its record is
+dropped` — and each line is written to the project's log under `check` and the owner's label. The
+drop runs before the comparison, so a check whose only findings were the leftovers answers
+`team check: nothing wrong`, exit 0.
+
+Under either answer stand the one line that names what the check cannot see and, under it, the
+grants decision record's block of what 0.5.0 must not pretend — its list, in its words
+(`decided-grants-minimum-2026-10-17`, "What 0.5.0 must not pretend, said plainly"): the limits
+this release does not close, said where the check runs rather than left to be discovered.
 
     not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+    what 0.5.0 must not pretend:
+      Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+      Standing grants with an expiry, not leases
+      No two-granter agreement, no `agree`, no `create` bounds
+      No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+      No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+      No policy object yet (amendment 02)
 
 The readers are agents too, so this text is the contract: one `difference:` line per finding,
-its `  repair:` line under it, the closing count line, and the `not known:` line. A finding
-never quotes a seat's screen text beyond the profile's fixed words for the kind of screen it
-is.
+its `  repair:` line under it, the closing count line, the `note:` line for each note the file
+earns (above the findings), the `repaired:` line for each record a `--repair` dropped, the `not known:` line, and the block under both answers. A finding never quotes a seat's screen text beyond the profile's fixed
+words for the kind of screen it is.
 
 ## Examples, moved here whole
 
@@ -130,6 +260,13 @@ The team runs as the file and the state say, so there is nothing to act on:
 $ team check ; echo "exit $?"
 team check: nothing wrong
 not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+  No policy object yet (amendment 02)
 exit 0
 ```
 
@@ -139,6 +276,13 @@ A seat of the team runs it too, and reads the same answer:
 $ team check ; echo "exit $?"
 team check: nothing wrong
 not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+  No policy object yet (amendment 02)
 exit 0
 ```
 
@@ -153,6 +297,13 @@ difference: claude-beacon is in the file and is not running
   repair: the owner runs team up
 team check: 2 difference(s), 2 for the owner
 not known: work sent and unread, a lead waiting on a seat, a landing not recorded
+what 0.5.0 must not pretend:
+  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+  Standing grants with an expiry, not leases
+  No two-granter agreement, no `agree`, no `create` bounds
+  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
+  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
+  No policy object yet (amendment 02)
 exit 1
 ```
 

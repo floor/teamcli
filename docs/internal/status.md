@@ -21,6 +21,10 @@ visible text, from which the running model is read. It also reads the machine's 
 one check a reading can show this machine cannot pass. It writes nothing but the `last_valid` copy of
 the file it read — and a run that is not the owner's writes nothing at all.
 
+`--project <name>` is the one reading that touches none of that: it reads the project registry
+(`~/.config/team/projects.yaml`) and the team records, no team file and no herdr, and writes
+nothing.
+
 ## Who may run it
 
 The caller decides, not the flags. Three callers get the reading:
@@ -39,7 +43,8 @@ invalid one, a file that was never approved, a refused approval:
 
 The sentence is the whole answer, with or without `--json`: stderr only, stdout empty, exit 2.
 It does need herdr to answer once the caller has passed: without it, `status` can't say anything
-and exits 2.
+and exits 2. `--project` is the exception to this gate — anyone may aim it, from any folder, with
+no caller check and no herdr.
 
 `--file` and `--session` are the owner's. Aimed by anyone else, each is refused before any file
 or session is read — `--file is the owner's, from a terminal outside herdr; this call is …`, or
@@ -51,11 +56,18 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
 ## Rows
 
     team beacon, session "beacon"
-      claude-keeper  missing  Claude Opus 5.5  -
-      claude-beacon  working  Claude Opus 5.5  w1:p1
+      claude-keeper  missing  Claude Opus 5.5  -     typed
+      claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 
-The columns are the seat, its state, the model, and the pane. The state is what herdr says
-(`idle`, `working`, `blocked`…), with `, parked` added for a seat the file parks and `, temporary`
+The columns are the seat, its state, the model, the pane, and the word for the channel a send would
+take to reach the seat: `socket` when the file declares it `cli: claude-code` and the pane's own
+processes carry a live session socket, `typed` otherwise — another CLI, a pane that is gone, one
+herdr could not read. A plain send is typed for every seat, Claude Code's included; no path opens
+a cross-session socket, and `--wait`, which would ride one, is refused for every seat until the
+native leg carries a waited send — nothing written. The word is
+read from the processes the comparison already holds, so no extra herdr call is
+made. The state is what herdr says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
+the file parks and `, temporary`
 for a temporary one; or `<state> (unsent text)` when an idle or done seat — the two states `team`
 types into — holds text in its input box that was never sent; or `<state> (screen not recognised)`
 when an idle or done seat's screen is not one its profile reads: herdr's word alone would read a
@@ -93,7 +105,8 @@ row — `status` names the seat — the owner looks at the pane: it says whether
 one `team` launched, and `up`'s own guards are in `docs/commands/up.md`.
 
 The model is the seat's `display` when the running model matches the file, and
-`<model> <version> (file: <display>)` when it doesn't. A screen that doesn't show the model is a
+`<model> <version> (file: <display>)` when it doesn't. An effort word alone does not move the
+column: the model on the pane is still the file's. A screen that doesn't show the model is a
 `note` rather than a difference: `unread` is never wrong.
 
 A record in force is not a note of its own: the live file is what the commands read, so nothing is
@@ -153,8 +166,9 @@ here.
 | `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched` | the same restart. Said when the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model, and the process is not the one `team` launched — including when the stored agent session is still the live one, in which case the row stays the running seat |
 | `<seat> runs <model> <version>; the file says <declared>; its launch line starts a launcher; the process in its pane is not the one team launched` | the same restart, when the screen's model is not the file's and the launch line names a launcher |
 | `<seat>: the agent in <pane> is named "x"` | `herdr --session <s> agent rename <pane> <seat>` |
-| `<seat> runs <model> <version>; the file says <declared>` (`<declared>` is the seat's `display` spelling) | `restart the seat on the file's model (<command>), or correct the file`. `<command>` is `team remove <seat> --keep, then team add <seat>`, or, for a lead, `team down, then team up` (to restart the whole team) |
+| `<seat>: running <model> <version> <effort>, file says <declared> <effort>` — the model not matching the file (each side printing its effort word only when it has one; `<declared>` is the seat's `display` spelling); or `<seat>: effort <seen>, file says <effort>` when the model matches and an effort word the pane printed differs from the seat's declared `effort` (when the file declares no effort, a seen word is not a drift, and a pane that printed none leaves the file's word standing) | `restart the seat on the file's model (<command>), or correct the file`. `<command>` is `team remove <seat> --keep, then team add <seat>`, or, for a lead, `team down, then team up` (to restart the whole team) |
 | `<seat> is marked stopped in the file and is running` | `team remove <seat> --keep`, or take `stopped: true` off the seat |
+| `<seat>: unknown for over <threshold> — blind, and it counts as not working` | `the owner looks at the pane`. One per seat no source has heard from past the blind threshold — 30m shipped, declared as `state_blind_after_seconds`, the project free to loosen it — and the same reading [`team seats`](../commands/seats.md) prints as `unknown (blind)` beside its source |
 | `<seat>: waiting for owner (<classification>)` | `the owner runs team up` (it offers to open the pane, skip the seat or stop cleanly), or `team answer <seat> trust` when the classification is `trust` and the policy is `dialogs.trust: orchestrator` |
 | `<seat>: trust sent; recovery required` | `the owner runs team up` |
 | `<seat>: its launch stopped at "<stage>"` | `the owner runs team up (it resumes the launch)` |
@@ -179,23 +193,37 @@ what blocks a launch is `team doctor`'s
 to report. When at least one repair is the owner's, the summary line reports
 `N difference(s), M for the owner`.
 
+The plain reading closes with the decision record's own footer, in its words
+(`decided-grants-minimum-2026-10-17`, "every record and view says so"):
+
+    Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
+
+The line stands under the count, whatever the count says; it is the plain reading's, not the
+document's, and `team check` prints the same sentence first under its block of the limits 0.5.0
+does not close.
+
 ## The JSON
 
-`--json` prints the same reading as one document, format 1:
+`--json` prints the same reading as one document, format 1 (without the plain reading's footer
+line):
 
     {
       "format": 1,
       "project": "beacon",
       "session": "beacon",
-      "rows": [{ "name": "claude-keeper", "state": "missing", "model": "Claude Opus 5.5", "pane": "-" }],
+      "rows": [{ "name": "claude-keeper", "state": "missing", "model": "Claude Opus 5.5", "pane": "-", "seat_state": "done", "seat_state_source": "process" }],
       "notes": [],
       "differences": [{ "what": "claude-keeper is in the file and is not running", "repair": "team add claude-keeper" }],
       "notice": null
     }
 
 `rows`, `notes` and `differences` hold what the table, the notes and the repairs hold; each seat in
-`rows` has `name`, `state`, `model`, `pane`, and, when recorded at workspace creation by a migrated launch,
-`start_cwd`. `notice` is the line a normal run prints above the table, or null when there is none. `budgets` is present only
+`rows` has `name`, `state` — the comparison's phrase about the record, the meaning it always
+published — `seat_state` and `seat_state_source` (the seat's own reading, the table's STATE and
+SOURCE columns, on every row whether `--all` is given or not, with `blind: true` only where it
+applies), `model`, `pane`, and, when recorded at workspace creation by a migrated launch,
+`start_cwd`. With `--all` a row also carries the registry's own fields — the seat's `id`, `role`,
+`cli`, `effort`, `last_active` and `launch_line`. `notice` is the line a normal run prints above the table, or null when there is none. `budgets` is present only
 when the budgets table would be printed, one object per row (`account`, `window`, `left`, `used`,
 `resetsIn`, `seat`, `age`, `source`, `fallback`, `state`, `inside`, `reserve`). `inside` is true
 when a subscription's left figure is at or inside its reserve, `fallback` when the figure did not
@@ -328,6 +356,7 @@ budgets:
 difference: claude-keeper is in the file and is not running
   repair: team add claude-keeper
 1 difference(s)
+Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 1
 ```
 
@@ -345,13 +374,17 @@ team status: warning, line 3: `coordinator:` is now `leads: true` on the lead's 
       "name": "claude-keeper",
       "state": "missing",
       "model": "Claude Opus 5.5",
-      "pane": "-"
+      "pane": "-",
+      "seat_state": "done",
+      "seat_state_source": "process"
     },
     {
       "name": "claude-beacon",
       "state": "working",
       "model": "Claude Opus 5.5",
-      "pane": "w1:p1"
+      "pane": "w1:p1",
+      "seat_state": "working",
+      "seat_state_source": "cli"
     }
   ],
   "notes": [],
@@ -430,6 +463,7 @@ budgets:
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 0 difference(s)
+Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 0
 ```
 
@@ -451,6 +485,7 @@ budgets:
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 0 difference(s)
+Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
 exit 0
 ```
 

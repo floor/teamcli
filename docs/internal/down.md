@@ -40,11 +40,13 @@ nothing to stop.
 
 ## Who may run it
 
-The owner, the orchestrator's seat, the operator's seat, and the approved delegate (below). The
+The owner, the orchestrator's seat — and any seat the record marks a lead: the map's `leads` —
+and the
+approved delegate (below). The
 seat is that name's, in a session
 this project's state records — the file's session, or one the state records the caller's pane in —
 on the pane the state records for that name in that session: a seat of another session, or a pane
-merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
+merely renamed to the orchestrator's name, is refused — and so is a seat the state
 records no pane for, or records on another pane than this call is on; those two refusals name the
 seat and the repair. What that proves is placement, and no more: the state file is in the project,
 and a process of the same user that writes its own pane there under the orchestrator's name, and
@@ -63,7 +65,7 @@ rule above is applied exactly as it is without a `delegates` section, and only w
 does the delegate gate read the live team file directly — never the remembered copy and never the
 last copy that validated, so a file that does not load carries no delegate and the rules above
 stand. A caller that rule accepts keeps its own authority whatever the section says: the owner's
-call never reaches the gate, and neither does the orchestrator's or the operator's. A gate refusal
+call never reaches the gate, and neither does the orchestrator's. A gate refusal
 takes the place of the rule above, in the gate's own words, wherever that rule would have refused:
 a real run exits 1, and a dry run prints `! down would refuse: <the gate's text>` and then the
 plan. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
@@ -155,7 +157,7 @@ stop at all.
 | `team down: line <n>: <message>` | 2 |
 | `team down: herdr doesn't answer; is it installed and running?` | 2 |
 | `team down: the agents of session <session> can't be read` | 2 |
-| `team down: only the owner, the orchestrator or the operator stops the team; this call is <caller>` | 1 |
+| ``team down: only the owner or `leads` stops the team; this call is <caller>`` | 1 |
 | `team down: only the owner abandons a team, from a terminal outside herdr` | 1 |
 | `team down: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team down: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
@@ -237,7 +239,7 @@ An implementer's seat is not the orchestrator's: it cannot stop the team.
 
 ```console caller=claude-beacon
 $ team down ; echo "exit $?"
-team down: only the owner, the orchestrator or the operator stops the team; this call is claude-beacon
+team down: only the owner or `leads` stops the team; this call is claude-beacon
 exit 1
 ```
 

@@ -15,6 +15,7 @@ import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas } from './helpers.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
@@ -42,7 +43,7 @@ function built(): Live {
     ],
     workspaces: [
       { id: 'w1', label: 'claude opus 5.5' }, { id: 'w2', label: 'gpt sol 6' },
-      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: 'watchdog' },
+      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: watchLabel('acme-web') },
     ],
     screens: { 'w1:p1': claudeScreen('Opus 5.5') },
   };
@@ -201,7 +202,7 @@ describe('team status', () => {
   test('a seat that runs another model than the file\'s', async () => {
     live = { ...built(), screens: { 'w1:p1': claudeScreen('Fable 5.1') } };
     const { code, out } = await status();
-    expect(out).toContain('difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5');
+    expect(out).toContain('difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5');
     expect(code).toBe(1);
   });
 
@@ -215,11 +216,11 @@ describe('team status', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+      'difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5\n' +
         '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).toContain(
-      'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol\n' +
+      'difference: codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol\n' +
         '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
@@ -242,7 +243,7 @@ describe('team status', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+      'difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5\n' +
         '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
@@ -255,7 +256,7 @@ describe('team status', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+      'difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5\n' +
         '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
@@ -267,7 +268,7 @@ describe('team status', () => {
   test('a codex seat whose captured status line names another model', async () => {
     live = { ...built(), screens: { ...built().screens, 'w2:p1': codexScreen('idle') } };
     const { code, out } = await status();
-    expect(out).toContain('difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol');
+    expect(out).toContain('difference: codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol');
     expect(code).toBe(1);
   });
 
@@ -278,8 +279,8 @@ describe('team status', () => {
     live = { ...built(), screens: { ...built().screens, 'w2:p1': codexScreen('idle') } };
     const { out } = await status();
     expect(out).toContain('(file: GPT-6 Sol)');
-    expect(out).toContain('the file says GPT-6 Sol');
-    expect(out).not.toContain('the file says GPT Sol 6');
+    expect(out).toContain('file says GPT-6 Sol');
+    expect(out).not.toContain('file says GPT Sol 6');
   });
 
   test('a status-line id the map doesn\'t know is unread: a note, never a difference', async () => {
@@ -570,7 +571,7 @@ describe('team status', () => {
     live = null;
     expect(await status()).toMatchObject({ code: 2, err: expect.stringContaining('herdr doesn\'t answer') });
     expect(await status('--fix')).toMatchObject({ code: 2, err: expect.stringContaining('unknown option --fix') });
-    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n');
+    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n');
   });
 
   test('--json: pins the stable format 1 shape on a clean team', async () => {
@@ -588,13 +589,18 @@ describe('team status', () => {
       'codex-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme-2: version unread (its screen doesn\'t show the model)',
+      // The watch the state records, after the seats' notes: `status` lists it on every run.
+      'watch: pane not recorded, pid 1, last heartbeat 60s ago',
     ]);
+    // `state` stays the comparison's phrase about the record, byte for byte as it published;
+    // each row also carries the seat's own reading beside it, seat_state/seat_state_source —
+    // the table's STATE and SOURCE columns — and no `blind` key here: every row reads a word.
     expect(doc.rows).toEqual([
-      { name: 'claude-coordinator-acme', state: 'working', model: 'Claude Opus 5.5', pane: 'w1:p1' },
-      { name: 'codex-acme', state: 'idle (screen not recognised), parked', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
-      { name: 'deepseek-acme', state: 'done (screen not recognised)', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
-      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
-      { name: 'grok-acme', state: 'stopped', model: 'Grok 4.7', pane: '-' },
+      { name: 'claude-coordinator-acme', state: 'working', seat_state: 'idle', seat_state_source: 'cli', model: 'Claude Opus 5.5', pane: 'w1:p1' },
+      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
+      { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
+      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
+      { name: 'grok-acme', state: 'stopped', seat_state: 'done', seat_state_source: 'process', model: 'Grok 4.7', pane: '-' },
     ]);
   });
 
@@ -925,9 +931,13 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).toContain('1 difference(s), 1 for the owner\n');
     const doc = JSON.parse((await status('--json')).out);
+    // The comparison's own 'missing' is a certainty: the reading is done, from the process,
+    // even while herdr still lists the agent in the pane.
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
       state: 'missing',
+      seat_state: 'done',
+      seat_state_source: 'process',
       model: 'GPT-6 Sol',
       pane: 'w2:p1',
     });
@@ -970,9 +980,16 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).not.toContain('difference: codex-acme: the process in its pane is not the one team launched');
     const doc = JSON.parse((await status('--json')).out);
+    // A pane `team` did not launch is not the seat's process, and its word is not 'done' either —
+    // nor is herdr's idle word about whatever runs there the seat's. It is untrusted: the reading
+    // is TeamCLI's own records or nothing, and this record carries no trace — unknown, and past
+    // the blind threshold the stale record is blind, which counts as not working.
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
       state: 'restored, not launched by team',
+      seat_state: 'unknown',
+      seat_state_source: 'none',
+      blind: true,
       model: '-',
       pane: 'w2:p1',
     });
@@ -1143,7 +1160,7 @@ describe('a pane that no longer holds the process team launched', () => {
     };
     const { code, out } = await status();
     expect(code).toBe(1);
-    expect(out).toContain('codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol; its process was never recorded');
+    expect(out).toContain('codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol; its process was never recorded');
     expect(out).toContain('repair: team remove codex-acme --abandon, then team up');
     expect(out).not.toContain('team remove codex-acme --keep');
     expect(out).not.toContain('the owner runs team up');
@@ -1162,7 +1179,7 @@ describe('a pane that no longer holds the process team launched', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5; its process was never recorded',
+      'claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5; its process was never recorded',
     );
     expect(out).toContain('repair: team down --abandon, then team up');
     expect(out).not.toContain('team remove claude-coordinator-acme');
@@ -1177,7 +1194,7 @@ describe('a pane that no longer holds the process team launched', () => {
       screens: { ...built().screens, 'w2:p1': codexScreen('idle') },
     };
     const { out } = await status();
-    expect(out).toContain('codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol');
+    expect(out).toContain('codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol');
     expect(out).toContain('team remove codex-acme --keep, then team add codex-acme');
     expect(out).not.toContain('--abandon');
   });

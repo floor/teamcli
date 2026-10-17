@@ -43,8 +43,8 @@ describe("team send: the file's seat, before its record", () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    // The delivery path stays builder-4's subject: `delivered (socket)` and the plain word are
-    // the same outcome here. What this file judges is the header the receiver reads.
+    // The delivery path stays another suite's subject: the plain word is the outcome here.
+    // What this file judges is the header the receiver reads.
     expect(io.out.startsWith('lead: delivered'), `outcome line: ${io.out}`).toBe(true);
     const drops = dropDir(one.dir, 'lead');
     expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
