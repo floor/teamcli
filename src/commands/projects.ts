@@ -90,8 +90,6 @@ export async function runProjects(argv: string[], io: Io, sources: ProjectSource
   }
   if (json) {
     writeJson(io, 'team.projects', { format: 1 as const, projects: listed });
-  } else if (listed.length === 0) {
-    out.stdout('(no projects)\n');
   } else {
     const style = ttyStyle(io, { json: false });
     const lines = renderTable({

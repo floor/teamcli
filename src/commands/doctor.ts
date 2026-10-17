@@ -9,7 +9,7 @@ import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { isParseError, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
@@ -829,7 +829,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
     if (json) {
       const id = loaded.errors[0]?.message.includes('not inside a git repository')
         ? 'doctor.not-a-repo'
-        : loaded.errors.some((p) => p.line !== undefined)
+        : loaded.errors.some(isParseError)
           ? 'doctor.file-invalid'
           : 'doctor.file';
       const msg = loaded.errors.map((p) => `${p.line ? `line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');

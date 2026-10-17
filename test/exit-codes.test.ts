@@ -1730,6 +1730,9 @@ async function projects(place: Place, argv: string[], sources: ProjectSources, c
 
 scene('projects.invocation', async (place) => show(await projects(place, ['extra'], projectSources()), 'unexpected'));
 scene('projects.listed', async (place) => {
+  const empty = await projects(place, [], { ...projectSources(), list: () => [] });
+  expect(empty.code).toBe(0);
+  expect(empty.out).toBe('ID  NAME  ENTITY  LEAD  TEAMS\n0 project(s)\n');
   const ran = await projects(place, [], projectSources());
   expect(ran.out).toContain('TeamCLI');
   expect(ran.out).toContain(TEAM_A);

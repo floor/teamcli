@@ -493,7 +493,7 @@ function render(
 ): string {
   const lines = [contextLine(team.project, session)];
   if (registryRows) {
-    lines.push(...renderSeatsTable(registryRows, '  ').trimEnd().split('\n'));
+    lines.push(...renderSeatsTable(registryRows, '  ', style).trimEnd().split('\n'));
   } else {
     const visibleRows = comparison.rows.filter((row) => row.state !== 'stopped');
     lines.push(

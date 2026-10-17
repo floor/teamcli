@@ -2,6 +2,7 @@ import { watchInForceOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { currentTeam } from '../file/current.ts';
+import { isParseError } from '../file/load.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
@@ -89,6 +90,7 @@ export interface SeatsJson {
   format: 1;
   project: string;
   session: string;
+  notice?: string | null;
   seats: Array<{
     name: string;
     id: string | null;
@@ -314,7 +316,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
   if (args.error || args.rest.length || (watching && json)) {
     const why = args.error
       ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : "--watch and --json can't be used together");
-    if (json && !watching) {
+    if (json) {
       writeJsonError(io, 'seats.invocation', why, null);
     } else {
       io.stderr(`team seats: ${why}\n${USAGE}`);
@@ -362,7 +364,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
     if (json) {
       const id = current.errors[0]?.message.includes('not inside a git repository')
         ? 'seats.not-a-repo'
-        : current.errors.some((p) => p.line !== undefined)
+        : current.errors.some(isParseError)
           ? 'seats.file-invalid'
           : 'seats.file';
       const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; ');
@@ -412,6 +414,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
         format: 1 as const,
         project: team.project,
         session,
+        ...(current.notice !== undefined ? { notice: current.notice } : {}),
         seats: rows.map((row) => ({
           name: row.name,
           id: row.id,

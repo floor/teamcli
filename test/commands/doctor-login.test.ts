@@ -267,16 +267,24 @@ describe('team doctor --login', () => {
       project: string;
       session: string;
       login_only: boolean;
+      findings: { level: string; text: string; blocks_launch: boolean }[];
       summary: { missing: number; warnings: number; blockers: number };
     }>(io.out, DOCTOR_OUTPUT_SCHEMA);
     expect(doc.project).toBe('acme-web');
     expect(doc.login_only).toBe(true);
     expect(doc.summary.missing).toBeGreaterThan(0);
+    expect(doc.summary.blockers).toBeGreaterThan(0);
+    expect(doc.findings.some((f) => f.blocks_launch === true)).toBe(true);
 
     const badIo = testIo(dir);
     const badCode = await runDoctor(['--file', file, '--json', 'extra'], badIo, fakeSources());
     expect(badCode).toBe(2);
     expect(badIo.err).toBe('');
     assertJsonErrorShape(badIo.out, { id: 'doctor.invocation', messageContains: 'unexpected "extra"', repair: null });
+
+    const missingIo = testIo(dir);
+    expect(await runDoctor(['--file', join(dir, 'missing.yaml'), '--json'], missingIo, fakeSources())).toBe(2);
+    expect(missingIo.err).toBe('');
+    assertJsonErrorShape(missingIo.out, { id: 'doctor.file', messageContains: 'no team file', repair: null });
   });
 });

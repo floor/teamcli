@@ -43,6 +43,12 @@
       "type": "string",
       "minLength": 1
     },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "seats": {
       "type": "array",
       "items": {

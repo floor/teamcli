@@ -44,7 +44,8 @@ and `-` written as one `-` and nothing left at either end: `TeamCLI` is `teamcli
 `name`. The registry sits beside the agent and team records, all three described in
 [the registries](../concepts/registry.md).
 
-A missing file is no projects — every team is its own project — and prints `(no projects)`. A
+A missing file is no projects — every team is its own project — and prints the table header and
+`0 project(s)`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without
 a name, a provenance that is not a map of three instants) is refused with the file's path and what
 is wrong; nothing is listed. Reads no team file and needs no caller. Writes nothing.
@@ -62,8 +63,8 @@ Anyone may run it, from any folder.
 
 | Outcome | Exit | Printed |
 | --- | --- | --- |
-| listed | 0 | one line per project — id, name, entity, lead and teams — or `(no projects)` when the file names none; `--json` prints one document instead |
-| unreadable | 1 | `team: <path>: <what is wrong>` on stderr |
+| listed | 0 | the `ID  NAME  ENTITY  LEAD  TEAMS` table and `<n> project(s)` (or `0 project(s)` when the file names none); `--json` prints one document instead |
+| unreadable | 1 | `team projects: the project registry cannot be read: <what is wrong>` on stderr |
 | usage | 2 | `team projects: <message>` and the usage on stderr |
 
 ## Examples
@@ -72,7 +73,8 @@ On a machine that has never registered a project, there is nothing to list:
 
 ```console
 $ team projects ; echo "exit $?"
-(no projects)
+ID  NAME  ENTITY  LEAD  TEAMS
+0 project(s)
 exit 0
 $ team projects --json ; echo "exit $?"
 {
