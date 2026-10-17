@@ -290,7 +290,15 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const live = sources.live(session, team, state);
   if (!live) {
     if (json) {
-      writeJsonError(io, 'status.herdr', "herdr doesn't answer; is it installed and running?", 'start herdr and run `team status` again');
+      writeJsonError(
+        io,
+        'status.herdr',
+        "herdr doesn't answer; is it installed and running?",
+        'start herdr and run `team status` again',
+        1,
+        undefined,
+        current.notice ? plainText(current.notice) : undefined,
+      );
     } else {
       out.stderr('team status: herdr doesn\'t answer; is it installed and running?\n');
     }

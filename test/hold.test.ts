@@ -442,7 +442,7 @@ describe('team hold', () => {
     expect(detachedDoc.error).toMatchObject({ rule: 'unplaced' });
   });
 
-  test('--json carries notice when team.yaml is invalid and falls back to the stored copy', async () => {
+  test('--json carries notice on both team.hold and team.error when team.yaml is invalid and falls back to the stored copy', async () => {
     const where = place();
     expect((await hold(['freeze deploys'], where)).code).toBe(0);
     writeFileSync(where.file, 'format: 2\n');
@@ -455,6 +455,18 @@ describe('team hold', () => {
     expect(String(releasedDoc.notice)).toContain('team.yaml is invalid');
     expect(String(releasedDoc.notice)).toContain('using the copy of');
 
+    const notHeld = await hold(['--release', '--json'], where);
+    expect(notHeld.code).toBe(1);
+    expect(notHeld.err).toBe('');
+    const notHeldDoc = assertJsonErrorShape(notHeld.out, {
+      id: 'hold.not-held',
+      messageContains: 'not held',
+      repair: null,
+    });
+    expect(typeof notHeldDoc.notice).toBe('string');
+    expect(String(notHeldDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(notHeldDoc.notice)).toContain('using the copy of');
+
     const placed = await hold(['freeze deploys', '--json'], where);
     expect(placed.code).toBe(0);
     expect(placed.err).toBe('');
@@ -462,6 +474,30 @@ describe('team hold', () => {
     expect(typeof placedDoc.notice).toBe('string');
     expect(String(placedDoc.notice)).toContain('team.yaml is invalid');
     expect(String(placedDoc.notice)).toContain('using the copy of');
+
+    const alreadyHeld = await hold(['second', '--json'], where);
+    expect(alreadyHeld.code).toBe(1);
+    expect(alreadyHeld.err).toBe('');
+    const alreadyHeldDoc = assertJsonErrorShape(alreadyHeld.out, {
+      id: 'hold.held',
+      messageContains: 'already held: freeze deploys',
+      repair: 'team hold --release',
+    });
+    expect(typeof alreadyHeldDoc.notice).toBe('string');
+    expect(String(alreadyHeldDoc.notice)).toContain('team.yaml is invalid');
+    expect(String(alreadyHeldDoc.notice)).toContain('using the copy of');
+
+    const bystander: Caller = { kind: 'seat', name: 'builder', pane: 'w2:p1', session: 'acme' };
+    const refusedCaller = await hold(['--release', '--json'], where, bystander);
+    expect(refusedCaller.code).toBe(1);
+    expect(refusedCaller.err).toBe('');
+    const refusedCallerDoc = assertJsonErrorShape(refusedCaller.out, {
+      id: 'hold.caller',
+      messageContains: 'only the owner, the orchestrator or the operator holds the team; this call is builder',
+      repair: null,
+    });
+    expect(typeof refusedCallerDoc.notice).toBe('string');
+    expect(String(refusedCallerDoc.notice)).toContain('team.yaml is invalid');
   });
 });
 

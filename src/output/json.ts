@@ -22,6 +22,8 @@ export interface JsonErrorPayload {
 export interface JsonErrorEnvelope {
   schema: OutputSchemaTag;
   error: JsonErrorPayload;
+  /** Optional fallback notice (e.g. when `team.yaml` is invalid and the stored approved copy was used). */
+  notice?: string | null;
 }
 
 export interface JsonDifference {
@@ -104,13 +106,14 @@ export function writeJson<T extends Record<string, unknown>>(
   io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
 }
 
-/** Builds a structured `--json` error document (`{"schema": {"name": "team.error", "version": 1}, "error": {"id", "message", "repair", "rule?"}}`). */
+/** Builds a structured `--json` error document (`{"schema": {"name": "team.error", "version": 1}, "error": {"id", "message", "repair", "rule?"}, "notice?"}`). */
 export function jsonError(
   id: string,
   message: string,
   repair: string | null = null,
   version = 1,
   rule?: string | null,
+  notice?: string | null,
 ): JsonErrorEnvelope {
   return {
     schema: { name: 'team.error', version },
@@ -120,6 +123,7 @@ export function jsonError(
       repair,
       ...(rule !== undefined ? { rule } : {}),
     },
+    ...(notice !== undefined && notice !== null ? { notice } : {}),
   };
 }
 
@@ -131,6 +135,7 @@ export function writeJsonError(
   repair: string | null = null,
   version = 1,
   rule?: string | null,
+  notice?: string | null,
 ): void {
-  io.stdout(`${JSON.stringify(jsonError(id, message, repair, version, rule), null, 2)}\n`);
+  io.stdout(`${JSON.stringify(jsonError(id, message, repair, version, rule, notice), null, 2)}\n`);
 }

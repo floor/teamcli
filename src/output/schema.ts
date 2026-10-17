@@ -193,6 +193,7 @@ export const ERROR_OUTPUT_SCHEMA: CommandSchemaSpec = {
         rule: { type: ['string', 'null'] },
       },
     },
+    notice: { type: ['string', 'null'] },
   },
 };
 

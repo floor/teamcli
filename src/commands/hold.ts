@@ -95,7 +95,8 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     return 2;
   }
   const { team, dir } = current;
-  if (current.notice && !json) out.stdout(`${plainText(current.notice)}\n`);
+  const notice = current.notice ? plainText(current.notice) : undefined;
+  if (notice !== undefined && !json) out.stdout(`${notice}\n`);
   const { caller, session } = judgeCallerIn(io, dir, team);
   const verdict = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
   if (verdict.kind !== 'ok') {
@@ -103,7 +104,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     if (json) {
       const rule = verdict.kind === 'no-pane' || verdict.kind === 'another-pane' ? 'unplaced' : 'owner-or-leads';
       const repair = verdict.kind === 'no-pane' ? 'team up' : verdict.kind === 'another-pane' ? 'team down && team up' : null;
-      writeJsonError(out, 'hold.caller', msg, repair, 1, rule);
+      writeJsonError(out, 'hold.caller', msg, repair, 1, rule, notice);
     } else {
       out.stderr(`team hold: ${msg}\n`);
     }
@@ -129,14 +130,13 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   } catch (error) {
     const msg = plainText(error instanceof Error ? error.message : String(error));
     if (json) {
-      writeJsonError(out, 'hold.io', msg, null);
+      writeJsonError(out, 'hold.io', msg, null, 1, undefined, notice);
     } else {
       out.stderr(`team hold: ${msg}\n`);
     }
     // exit: hold.io
     return 1;
   }
-  const notice = current.notice ? plainText(current.notice) : undefined;
   if (op.kind === 'placed') {
     const summary = holdText(op.hold);
     if (json) {
@@ -181,7 +181,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   if (op.kind === 'held') {
     const msg = `already held${op.hold.until ? ` until ${op.hold.until}` : ''}: ${op.hold.reason}`;
     if (json) {
-      writeJsonError(out, 'hold.held', msg, 'team hold --release');
+      writeJsonError(out, 'hold.held', msg, 'team hold --release', 1, undefined, notice);
     } else {
       out.stderr(`team hold: ${msg}\n`);
     }
@@ -189,7 +189,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     return 1;
   }
   if (json) {
-    writeJsonError(out, 'hold.not-held', 'not held', null);
+    writeJsonError(out, 'hold.not-held', 'not held', null, 1, undefined, notice);
   } else {
     out.stderr('team hold: not held\n');
   }

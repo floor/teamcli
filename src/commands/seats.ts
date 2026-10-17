@@ -397,7 +397,15 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
     const live = sources.live(session, team, state);
     if (!live) {
       if (json) {
-        writeJsonError(io, 'seats.herdr', "herdr doesn't answer; is it installed and running?", 'start herdr and run `team seats` again');
+        writeJsonError(
+          io,
+          'seats.herdr',
+          "herdr doesn't answer; is it installed and running?",
+          'start herdr and run `team seats` again',
+          1,
+          undefined,
+          current.notice,
+        );
       } else {
         io.stderr("team seats: herdr doesn't answer; is it installed and running?\n");
       }

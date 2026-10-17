@@ -134,15 +134,17 @@ export function assertMatchesOutputSchema<T = Record<string, unknown>>(
 /** Asserts that raw `--json` output conforms to the standard `team.error` schema. */
 export function assertJsonErrorShape(
   rawJson: string,
-  expected?: { id?: string; messageContains?: string; repair?: string | null },
+  expected?: { id?: string; messageContains?: string; repair?: string | null; notice?: string | null },
 ) {
   const doc = assertMatchesOutputSchema<{
     schema: { name: string; version: number };
-    error: { id: string; message: string; repair: string | null };
+    error: { id: string; message: string; repair: string | null; rule?: string | null };
+    notice?: string | null;
   }>(rawJson, ERROR_OUTPUT_SCHEMA);
   expect(doc.schema).toEqual({ name: 'team.error', version: 1 });
   if (expected?.id !== undefined) expect(doc.error.id).toBe(expected.id);
   if (expected?.messageContains !== undefined) expect(doc.error.message).toContain(expected.messageContains);
   if (expected?.repair !== undefined) expect(doc.error.repair).toBe(expected.repair);
+  if (expected?.notice !== undefined) expect(doc.notice).toBe(expected.notice);
   return doc;
 }

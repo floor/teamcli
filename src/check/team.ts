@@ -161,7 +161,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     if (args.file !== undefined) {
       const msg = fileOwnerRefusal(io, args.file) ?? "--file is the owner's";
       if (args.json) {
-        writeJsonError(io, 'check.file-owner', msg);
+        writeJsonError(io, 'check.file-owner', msg, null, 1, undefined, current.notice);
       } else {
         io.stderr(`team check: ${msg}\n`);
       }
@@ -171,7 +171,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     if (args.session !== undefined) {
       const msg = sessionOwnerRefusal(walked);
       if (args.json) {
-        writeJsonError(io, 'check.session-owner', msg);
+        writeJsonError(io, 'check.session-owner', msg, null, 1, undefined, current.notice);
       } else {
         io.stderr(`team check: ${msg}\n`);
       }
@@ -183,7 +183,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     if (args.repair === true) {
       const msg = "--repair is the owner's";
       if (args.json) {
-        writeJsonError(io, 'check.repair-owner', msg);
+        writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, current.notice);
       } else {
         io.stderr(`team check: ${msg}\n`);
       }
@@ -202,7 +202,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (args.json) {
-      writeJsonError(io, 'check.state', msg);
+      writeJsonError(io, 'check.state', msg, null, 1, undefined, current.notice);
     } else {
       io.stderr(`team check: ${msg}\n`);
     }
@@ -218,7 +218,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   if (!live) {
     const msg = "herdr doesn't answer; is it installed and running?";
     if (args.json) {
-      writeJsonError(io, 'check.herdr', msg);
+      writeJsonError(io, 'check.herdr', msg, null, 1, undefined, current.notice);
     } else {
       io.stderr(`team check: ${msg}\n`);
     }

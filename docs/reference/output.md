@@ -313,7 +313,7 @@ Every `--json` document carries a top-level `schema` tag as its first key (`json
 
 ### 5.3 Structured Errors Under `--json` (`jsonError`, `writeJsonError`)
 
-When a command fails (exit code `1`, `2`, or `64`) while `--json` is passed, it writes a structured error envelope (`schema/error.schema.json`) to `stdout` via `writeJsonError(io, id, message, repair, version, rule)` (with `stderr` empty) and exits with the contract exit code:
+When a command fails (exit code `1`, `2`, or `64`) while `--json` is passed, it writes a structured error envelope (`schema/error.schema.json`) to `stdout` via `writeJsonError(io, id, message, repair, version, rule, notice)` (with `stderr` empty) and exits with the contract exit code:
 
 ```json
 {
@@ -336,6 +336,7 @@ When a command fails (exit code `1`, `2`, or `64`) while `--json` is passed, it 
 - `error.message` is the human-readable failure text (without the leading `team <command>: ` prefix).
 - `error.repair` is the actionable repair string, or `null` when no automated repair command applies.
 - `error.rule` (optional `string | null`) carries the permission resolver's `PermissionRule` (`'no-record'`, `'unreadable'`, `'unplaced'`, `'not-in-map'`, `'owner-only'`, `'owner-or-leads'`, `'owner-or-own-team'`, `'absent'`, `'outside-envelope'`, `'outside-scope'`, `'other-team'`, `'admission'`, `'pane-authority'`) whenever a caller/permission gate refuses the command.
+- `notice` (optional top-level `string | null` on `team.error`) carries the load's fallback notice (e.g. `'team.yaml is invalid …; using the copy of <date>'`) whenever a refusal is decided after `currentTeam` fell back to a stored copy.
 - **`team up`'s `deny` path under `--json`**: `up`'s unplaced/untrusted `deny` refusal exists specifically to disclose nothing about the team or file. Under `--json`, it writes `{ "schema": { "name": "team.error", "version": 1 }, "error": { "id": "up.deny", "message": "deny", "repair": null, "rule": "no-record" } }` on `stdout` (`stderr` empty, exit `1`), disclosing no team, seat, or path details beyond `"deny"` and `"no-record"`.
 - **`--dry-run` refusals under `--json`**: when a `--dry-run` call hits an exit-1 or exit-2 refusal, `--json` writes the `team.error` envelope using the **exact `contract/exit-codes.json` row ID** for that refusal site (e.g. `up.dry-…` or `add.dry-…` where a dedicated dry-run exit ID exists, or the shared refusal ID such as `add.caller` when `dry` and real runs share that `// exit:` marker). When `--dry-run` exits `0` and includes `! <cmd> would refuse: …` / `! to unblock: …` lines inside the plan, it emits the normal `team.<command>` envelope with `dry_run: true` and those `!` steps in `plan`.
 
@@ -475,8 +476,8 @@ export function formatHelpExits(exits: readonly HelpExitSpec[]): string;
 export function toJsonDifference(diff: OutputDifference): JsonDifference;
 export function jsonEnvelope<T extends Record<string, unknown>>(schemaName: string, payload: T, version?: number): JsonEnvelope<T>;
 export function writeJson<T extends Record<string, unknown>>(io: Pick<Io, 'stdout'>, schemaName: string, payload: T, version?: number): void;
-export function jsonError(id: string, message: string, repair?: string | null, version?: number, rule?: string | null): JsonErrorEnvelope;
-export function writeJsonError(io: Pick<Io, 'stdout'>, id: string, message: string, repair?: string | null, version?: number, rule?: string | null): void;
+export function jsonError(id: string, message: string, repair?: string | null, version?: number, rule?: string | null, notice?: string | null): JsonErrorEnvelope;
+export function writeJsonError(io: Pick<Io, 'stdout'>, id: string, message: string, repair?: string | null, version?: number, rule?: string | null, notice?: string | null): void;
 
 // JSON Schema builder and registry (src/output/schema.ts)
 export function buildActionSchemaSpec(spec: ActionSchemaSpec): CommandSchemaSpec;

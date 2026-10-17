@@ -58,6 +58,12 @@
           ]
         }
       }
+    },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   }
 }
