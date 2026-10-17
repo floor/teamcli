@@ -6,6 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
+import { devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { findRoot, loadTeamFile } from '../file/load.ts';
@@ -263,9 +264,19 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   if (verdict.kind === 'refused' && delegatePane === null && !createGranted) {
-    io.stderr(`team remove: only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}\n`);
-    // exit: remove.caller
-    return 1;
+    // The caller gate, the one dev mode lifts for this command (`dev_mode.ts`): on, the
+    // refusal's own words print as a warning, the run goes on, and the audit log records the
+    // caller it admitted. Every later gate — the owner-only abandon, the lead's seat, the
+    // placement in the session — still refuses.
+    const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}`;
+    const folded = devModeCallerGate('remove', io, said);
+    if (folded === null) {
+      io.stderr(`team remove: ${said}\n`);
+      // exit: remove.caller
+      return 1;
+    }
+    io.stderr(`team remove: ${folded}\n`);
+    logDevMode(dir, 'remove', describeCaller(shown), folded, sources.now());
   }
   if (session === 'default') {
     io.stderr('team remove: session can\'t be "default", herdr\'s own session\n');
@@ -274,13 +285,11 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const abandon = args.flags.has('abandon');
   if (abandon && caller.kind !== 'owner') {
-    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the abandon continues.
-    if (io.env.TEAMCLI_DEV_MODE !== '1') {
-      io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
-      // exit: remove.abandon
-      return 1;
-    }
-    io.stderr('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
+    // Owner-only in every mode: abandoning is not the caller gate dev mode lifts, so the
+    // caller gate above may have been folded and this one still refuses.
+    io.stderr('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
+    // exit: remove.abandon
+    return 1;
   }
   // A lead is taken out of the file by the owner alone. Its swap — `--keep` — is the owner's,
   // the granted seat's when the grant lists `swap`, or an approved delegate's whose entry lists

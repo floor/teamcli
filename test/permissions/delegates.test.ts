@@ -457,7 +457,7 @@ describe('the delegated add: the file it may not write', () => {
     expect(existsSync(join(place.root, '.agents', 'team.log'))).toBe(false);
   });
 
-  test('in dev mode the same non-copy add says the rule once and continues, the warning in the log', async () => {
+  test('in dev mode the same non-copy add is refused all the same, with no log line', async () => {
     const place = layout();
     const approved = addFile(place, entry('main/w1:p1', 'add')).replace('    stopped: true\n', '');
     const changed = approved.replace('    label: worker\n', '    label: worker-2\n');
@@ -469,17 +469,14 @@ describe('the delegated add: the file it may not write', () => {
       delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
     });
     const ran = await added(place, ['worker'], pilot, sources, { TEAMCLI_DEV_MODE: '1' });
-    expect(ran.code).toBe(0);
-    expect(ran.err).toBe(`team add: warning: ${ADD_DELEGATE_EDIT.text}; dev mode continues\n`);
-    // The run continued: the moved stanza is the one started, and the file is still the live
-    // bytes — dev mode says the rule, it never makes the copied edit for the delegate.
+    // The same-copy rule is not the caller gate dev mode lifts: the delegate's file edit is
+    // refused in every mode, the stanza is never started, and no gate was used to log.
+    expect(ran.code).toBe(1);
+    expect(ran.err).toBe(`team add: ${ADD_DELEGATE_EDIT.text}\n`);
+    expect(ran.err).not.toContain('dev mode continues');
     expect(readFileSync(place.file, 'utf8')).toBe(changed);
-    expect(launch.agentPanes('acme')).toEqual(['w1:p1']);
-    const log = readFileSync(join(place.root, '.agents', 'team.log'), 'utf8');
-    expect(log.startsWith(
-      `${NOW.toISOString()} add [pilot] warning: ${ADD_DELEGATE_EDIT.text}; dev mode continues\n`,
-    )).toBe(true);
-    expect(log).toContain(`${NOW.toISOString()} delegate [delegate] main/w1:p1 add\n`);
+    expect(launch.agentPanes('acme')).toEqual([]);
+    expect(existsSync(join(place.root, '.agents', 'team.log'))).toBe(false);
   });
 });
 

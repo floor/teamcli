@@ -554,7 +554,6 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
 | the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
-| ``the file was never approved on this machine `` — dev mode only, as a warning; a missing record is not a refusal |
 | ``approved before records were signed`` — the record was written by an earlier `team` |
 | the case a refused record names — a signed record that does not verify |
 | a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |

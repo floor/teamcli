@@ -20,6 +20,7 @@ import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerLabel, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
+import { devMode, logDevMode } from '../dev_mode.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -299,7 +300,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // screen and every write stay enforced. The record the run writes says so: its provenance
   // carries `dev_mode: true` — `team check` shows it as a difference — until a run in force
   // writes the seat's record again.
-  const dev = io.env.TEAMCLI_DEV_MODE === '1';
+  const dev = devMode(io);
   const warning: string[] = [];
   // The caller gate is the one refusal with a command of its own behind it: nothing in the file
   // changes who may run this, the owner's own run does. `up`'s sentence, for this command.
@@ -339,8 +340,12 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     const said = team.grant !== null ? (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home }) : null;
     if (said?.kind === 'passed') return grantFlagRefused(out);
     const line = sessionOwnerRefusal(walked);
-    if (dev) warning.push(line);
-    else return callerRefused(out, line, dry, unblock(args.values));
+    if (dev) {
+      warning.push(line);
+      // The audit line the fold owes, written where the gate is used: the refusal's words, on
+      // a real run. A dry run decides nothing and writes none.
+      if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}`, sources.now());
+    } else return callerRefused(out, line, dry, unblock(args.values));
   }
 
   // The caller rule is the map's row (`owner-or-own-team`): the owner, or a seat this team's
@@ -389,8 +394,10 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // the owner's own command beside it. The grant's and the delegate's own refusals stay
     // refusals either way, as they do for `up`.
     const line = notOwnerLine(caller);
-    if (dev) warning.push(line);
-    else return notOwnerRefused(out, caller, dry, unblock(args.values));
+    if (dev) {
+      warning.push(line);
+      if (!dry) logDevMode(dir, 'register', callerLabel(walked), `warning: ${line}`, sources.now());
+    } else return notOwnerRefused(out, caller, dry, unblock(args.values));
   }
   if (warning.length > 0) {
     const line = [...new Set(warning)].join('; ');

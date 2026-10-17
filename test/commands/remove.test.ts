@@ -1305,16 +1305,21 @@ describe('team remove delegated', () => {
     expect(readFileSync(file, 'utf8')).toContain('name: worker');
   });
 
-  test('with TEAMCLI_DEV_MODE=1, --abandon from a granted caller warns and closes the worker', async () => {
+  test('with TEAMCLI_DEV_MODE=1, --abandon from a granted caller is still refusal, nothing closes', async () => {
+    // The abandon gate is the owner's alone in every mode: it is not the caller gate dev mode
+    // folds, so a delegated caller past the ordinary rule still ends here.
     approveFile(FILE + DELEGATES);
     const made = world();
     made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
     const io = testIo(dir, pilot);
     io.env = { ...io.env, TEAMCLI_DEV_MODE: '1' };
     const code = await runRemove(['worker', '--abandon'], io, { ...made.sources, delegateGate: () => passed });
-    expect(io.err).toContain('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
-    expect(made.closed).toContain('w3');
-    expect(code).toBe(0);
+    expect(code).toBe(1);
+    expect(io.err).toBe('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
+    expect(io.err).not.toContain('dev mode continues');
+    expect(made.closed).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toContain('name: worker');
+    expect(existsSync(join(dir, 'team.log'))).toBe(false);
     const lead = testIo(dir, pilot);
     lead.env = { ...lead.env, TEAMCLI_DEV_MODE: '1' };
     expect(await runRemove(['lead', '--abandon'], lead, { ...made.sources, delegateGate: () => passed })).toBe(1);

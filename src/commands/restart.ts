@@ -20,6 +20,7 @@ import {
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
+import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
@@ -209,12 +210,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}`
         : null;
   if (mayRun !== null) {
-    if (io.env.TEAMCLI_DEV_MODE === '1') {
-      const said = `warning: ${mayRun}; dev mode continues`;
-      if (dry) out.stdout(`! ${said}\n`);
+    const folded = devModeCallerGate('restart', io, mayRun);
+    if (folded !== null) {
+      if (dry) out.stdout(`! ${folded}\n`);
       else {
-        out.stderr(`team restart: ${plainText(said)}\n`);
-        logLine(dir, 'restart', describeCaller(caller), said, sources.now());
+        out.stderr(`team restart: ${plainText(folded)}\n`);
+        logDevMode(dir, 'restart', describeCaller(caller), folded, sources.now());
       }
     } else {
       // The dry answer names the refusal and the one command that unblocks it, on stdout where
@@ -423,7 +424,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       seat: declared,
       caller: who,
       owner: caller.kind === 'owner',
-      devMode: io.env.TEAMCLI_DEV_MODE === '1',
+      devMode: devMode(io),
       now: sources.now,
       launch: sources.upLaunch,
       readMachine: sources.machine,

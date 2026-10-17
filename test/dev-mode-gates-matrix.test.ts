@@ -1,7 +1,8 @@
 // The dev-mode gates matrix. TEAMCLI_DEV_MODE=1 turns a command's caller gate into a warning
-// (a log line beside it where the command logs) and the run continues past it; unset, every gate
-// refuses as always. `grant`, `delegate`, `revoke` and `approve` are owner-only in every mode.
-// Every file, caller and pane below is synthetic.
+// (a log line beside it, on every command the list names) and the run continues past it; unset,
+// every gate refuses as always. `grant`, `delegate`, `revoke` and `approve` are owner-only in
+// every mode, and so are `broker`, `tempo` and `remove --abandon`. Every file, caller and pane
+// below is synthetic.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,6 +20,7 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { DEV_MODE_COMMANDS } from '../src/dev_mode.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -30,6 +32,12 @@ import { claudeBox, CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
 const UNPLACED = { kind: 'unplaced' as const, reason: 'it runs under herdr' };
+
+test('the dev-mode scope is one list: exactly these seven commands', () => {
+  // The one place the scope is written (`src/dev_mode.ts`). A command added here is a caller
+  // gate dev mode folds; a command left off stays owner-only in every mode.
+  expect([...DEV_MODE_COMMANDS]).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init']);
+});
 
 let dirs: string[] = [];
 
@@ -263,6 +271,11 @@ test('up: unset, the caller gate refuses; set, it is a warning and the mount con
   expect(mountedIo.err).not.toContain('team up: only the owner or `leads` starts the team');
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('claude --model claude-opus-5-5');
   expect(readState(join(mounted.root, '.agents')).sessions.acme?.seats.lead?.stage).toBe('ready');
+  // The audit line the fold owes, beside the warning it printed.
+  const upLog = readFileSync(join(mounted.root, '.agents', 'team.log'), 'utf8');
+  expect(upLog).toContain(`${NOW.toISOString()} up [unplaced (it runs under herdr)] warning: `);
+  expect(upLog).toContain('only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)');
+  expect(existsSync(join(refused.root, '.agents', 'team.log'))).toBe(false);
 });
 
 // --- down -------------------------------------------------------------------------------------
@@ -289,11 +302,16 @@ test('down: unset, the caller gate refuses; set, it is a warning and the stop co
   expect(stoppedIo.err).toContain(placement);
   expect(stoppedIo.err).not.toContain(`team down: ${placement}`);
   expect(didStop.n).toBe(1);
+  // The fold is on record, and the run that refused at the gate wrote nothing.
+  expect(readFileSync(join(stoppedRepo.root, '.agents', 'team.log'), 'utf8'))
+    .toContain(`${NOW.toISOString()} down [unplaced (it runs under herdr)] warning: ${placement}`);
+  expect(existsSync(join(refused.root, '.agents', 'team.log'))).toBe(false);
 });
 
 // --- remove -----------------------------------------------------------------------------------
-// `remove`'s dev-mode gate is the owner-only `--abandon`; the ordinary caller gate and every
-// other refusal stay as they are.
+// `remove`'s dev-mode gate is the caller rule (owner or `leads`): under the mode it warns, logs
+// and the removal goes on. The owner-only `--abandon` is not that gate and stays a refusal in
+// every mode, as every other refusal does.
 
 const REMOVE_FILE = `format: 1
 project: acme
@@ -373,7 +391,8 @@ function removeWorld(home: string, screen: Screen = { kind: 'idle' }, status = '
   return { sources, typed, keys, closed, agents, running };
 }
 
-test('remove --abandon: unset, the owner-only gate refuses; set, it is a warning and the close continues', async () => {
+test('remove --abandon: the owner-only gate refuses with the mode unset and with it set', async () => {
+  const line = 'only the owner abandons a seat, from a terminal outside herdr';
   const { root, home } = repo(() => REMOVE_FILE + REMOVE_DELEGATES);
   approve(home, root);
 
@@ -382,17 +401,46 @@ test('remove --abandon: unset, the owner-only gate refuses; set, it is a warning
   const refusedIo = testIo(root, pilot);
   const refusedCode = await runRemove(['worker', '--abandon'], refusedIo, { ...refused.sources, delegateGate: () => passed });
   expect(refusedCode).toBe(1);
-  expect(refusedIo.err).toBe('team remove: only the owner abandons a seat, from a terminal outside herdr\n');
+  expect(refusedIo.err).toBe(`team remove: ${line}\n`);
   expect(refused.closed).toEqual([]);
+  expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
 
-  const continued = removeWorld(home);
-  continued.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
-  const continuedIo = testIo(root, pilot);
-  continuedIo.env = { ...continuedIo.env, TEAMCLI_DEV_MODE: '1' };
-  const continuedCode = await runRemove(['worker', '--abandon'], continuedIo, { ...continued.sources, delegateGate: () => passed });
-  expect(continuedCode).toBe(0);
-  expect(continuedIo.err).toContain('team remove: warning: only the owner abandons a seat, from a terminal outside herdr; dev mode continues\n');
-  expect(continued.closed).toContain('w3');
+  // The mode is on and the delegate admits the caller, so no other gate folds: the abandon
+  // refusal is the whole answer, and no dev-mode audit line is owed.
+  const dev = removeWorld(home);
+  dev.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+  const devIo = testIo(root, pilot);
+  devIo.env = { ...devIo.env, TEAMCLI_DEV_MODE: '1' };
+  const devCode = await runRemove(['worker', '--abandon'], devIo, { ...dev.sources, delegateGate: () => passed });
+  expect(devCode).toBe(1);
+  expect(devIo.err).toBe(`team remove: ${line}\n`);
+  expect(devIo.err).not.toContain('dev mode continues');
+  expect(dev.closed).toEqual([]);
+  expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+});
+
+test('remove: the caller gate refuses unset and is a logged warning under dev mode', async () => {
+  const line = 'only the owner or `leads` removes a seat; this call is unplaced (it runs under herdr)';
+  const { root, home } = repo(() => REMOVE_FILE);
+  approve(home, root);
+
+  const refused = removeWorld(home);
+  refused.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+  const refusedIo = testIo(root, UNPLACED);
+  expect(await runRemove(['worker'], refusedIo, refused.sources)).toBe(1);
+  expect(refusedIo.err).toBe(`team remove: ${line}\n`);
+  expect(refused.closed).toEqual([]);
+  expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+
+  const wentOn = removeWorld(home);
+  wentOn.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+  const wentIo = testIo(root, UNPLACED);
+  wentIo.env = { ...wentIo.env, TEAMCLI_DEV_MODE: '1' };
+  expect(await runRemove(['worker'], wentIo, wentOn.sources)).toBe(0);
+  expect(wentIo.err).toContain(`team remove: warning: ${line}; dev mode continues\n`);
+  expect(wentOn.closed).toContain('w3');
+  expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8'))
+    .toContain(` remove [unplaced (it runs under herdr)] warning: ${line}; dev mode continues\n`);
 });
 
 // --- add --------------------------------------------------------------------------------------
@@ -480,8 +528,8 @@ test('init: unset, the caller gate refuses and nothing is written; set, it warns
 // --- register ---------------------------------------------------------------------------------
 // Past the gate under dev mode the run reads the file and herdr next: the session is running,
 // herdr places no agent of the name, and that refusal — which dev mode never lifts — is the line
-// that shows the run moved past the gate. The warning is stderr-only: `register` logs when a
-// registration completes, and none did.
+// that shows the run moved past the gate. The folded gate is on record all the same: the audit
+// line is written where the gate is used, before the later refusal ends the run.
 
 const REGISTER_LINE = 'only the owner or a seat of this team registers a running seat; this call is unplaced (it runs under herdr)';
 
@@ -508,7 +556,8 @@ test('register: unset, the caller gate refuses; set, it warns and the run reads 
     + 'team register: no agent named lead is running in session "acme"; nothing was registered\n',
   );
   expect(readIo.out).toBe('');
-  expect(existsSync(join(readOn.root, '.agents', 'team.log'))).toBe(false);
+  expect(readFileSync(join(readOn.root, '.agents', 'team.log'), 'utf8'))
+    .toContain(`warning: ${REGISTER_LINE}\n`);
 });
 
 // --- the owner-only edits ---------------------------------------------------------------------

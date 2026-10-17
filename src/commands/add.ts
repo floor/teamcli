@@ -10,6 +10,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
+import { devMode, devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -310,12 +311,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? `only the owner or a standing grant (delegate) runs it; this call is ${plainLine(describeCaller(shown))}`
     : null;
   if (mayRun !== null) {
-    if (io.env.TEAMCLI_DEV_MODE === '1') {
-      const said = `warning: ${mayRun}; dev mode continues`;
-      if (dry) out.stdout(`! ${said}\n`);
+    const folded = devModeCallerGate('add', io, mayRun);
+    if (folded !== null) {
+      if (dry) out.stdout(`! ${folded}\n`);
       else {
-        out.stderr(`team add: ${plainText(said)}\n`);
-        logLine(dir, 'add', describeCaller(caller), said, sources.now());
+        out.stderr(`team add: ${plainText(folded)}\n`);
+        logDevMode(dir, 'add', describeCaller(caller), folded, sources.now());
       }
     } else {
       if (dry) out.stdout(`! add would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(ownerAddRun(argv))}\n`);
@@ -434,24 +435,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // must write nothing. A missing seat, a stopped seat or a stanza the approval does not hold
   // would extend or edit the file, and that stays the owner's. Refused after the
   // already-running refusal, before the write, the digest and any dry-run plan — so a
-  // non-copy delegated add writes neither file nor approval. Dev mode says the rule once, as a
-  // warning, and the run continues, exactly as the caller gate above.
+  // non-copy delegated add writes neither file nor approval. The rule is not the caller gate
+  // dev mode lifts: a delegate's edit is refused in every mode, so a folded caller gate above
+  // still ends here.
   if (delegatePane !== null) {
     const stanza = fingerprints(team).seats[built.name];
     const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
     if (built.edited !== original || inCopy === undefined || inCopy !== stanza) {
-      if (io.env.TEAMCLI_DEV_MODE === '1') {
-        const said = `warning: ${ADD_DELEGATE_EDIT.text}; dev mode continues`;
-        if (dry) out.stdout(`! ${said}\n`);
-        else {
-          out.stderr(`team add: ${plainText(said)}\n`);
-          logLine(dir, 'add', describeCaller(caller), said, sources.now());
-        }
-      } else {
-        out.stderr(`team add: ${plainText(ADD_DELEGATE_EDIT.text)}\n`);
-        // exit: add.delegate-edit
-        return 1;
-      }
+      out.stderr(`team add: ${plainText(ADD_DELEGATE_EDIT.text)}\n`);
+      // exit: add.delegate-edit
+      return 1;
     }
   }
   const profile = profileFor(built.seat.cli);
@@ -808,7 +801,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     resetCliHookState(dir, [planSeat.name]);
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
-      caller: who, owner: caller.kind === 'owner', devMode: io.env.TEAMCLI_DEV_MODE === '1', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
+      caller: who, owner: caller.kind === 'owner', devMode: devMode(io), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
       ...(delegatePane === null ? {} : { delegated: { actor: delegatePane, command: 'add' as const } }),
       verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
       doctor: sources.doctor,

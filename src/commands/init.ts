@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { devModeCallerGate, logDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
@@ -180,14 +181,14 @@ export async function runInit(
   let devOwnerLine: string | null = null;
   if (!isOwner(caller) && !createGranted) {
     const ownerLine = `only the owner runs init, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (io.env.TEAMCLI_DEV_MODE === '1') {
-      devOwnerLine = `warning: ${ownerLine}; dev mode continues`;
-      io.stderr(`team init: ${devOwnerLine}\n`);
-    } else {
+    const folded = devModeCallerGate('init', io, ownerLine);
+    if (folded === null) {
       io.stderr(`team init: ${ownerLine}\n`);
       // exit: init.not-owner
       return 1;
     }
+    devOwnerLine = folded;
+    io.stderr(`team init: ${devOwnerLine}\n`);
   }
   const root = rootOf();
   if (!root) {
@@ -196,7 +197,7 @@ export async function runInit(
     return 2;
   }
   const path = join(root, TEAM_FILE);
-  if (devOwnerLine !== null) logLine(dirname(path), 'init', describeCaller(caller), devOwnerLine, sources.now?.());
+  if (devOwnerLine !== null) logDevMode(dirname(path), 'init', describeCaller(caller), devOwnerLine, sources.now?.());
   if (git(root, 'ls-files', '--error-unmatch', TEAM_FILE) !== null) {
     io.stderr(`team init: ${TEAM_FILE} is tracked by git, and a team file is private. Untrack it, keeping the file:\n  git rm --cached ${TEAM_FILE}\nthen run team init again. History is not rewritten.\n`);
     // exit: init.tracked

@@ -7,6 +7,7 @@ import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
+import { devMode, logDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
@@ -636,7 +637,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   }
   const dry = args.flags.has('dry-run');
   // Set to exactly `1`. Anything else, including unset, leaves every refusal where it is.
-  const dev = io.env.TEAMCLI_DEV_MODE === '1';
+  const dev = devMode(io);
   // §RFC0007: a caller the ordinary rule refuses is judged by the delegate gate against the
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
@@ -1190,6 +1191,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
   // and mounts. Every other refusal stays a refusal. Unset, the list is unchanged.
   const warning = dev ? devWarningLine(refusals, standing, caller) : '';
+  // The audit line the fold owes: written where the gate is used, on a real run, whether a
+  // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
+  if (!dry && warning) logDevMode(dir, 'up', callerLabel(caller), `warning: ${warning}`, sources.now?.() ?? new Date());
 
   if (dry) {
     stampLobbyTrust(false);

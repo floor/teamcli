@@ -3,7 +3,8 @@
 // run is never a bare refusal, and a registration dev mode admitted says so in its record.
 //
 // (a) TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate said once as a
-//     warning on stderr, and the run writes its own audit line;
+//     warning on stderr, the folded gate written to the audit log, and the run writes its own
+//     record line;
 // (b) unset: the same call is refused with the bare sentence, and nothing is written;
 // (c) TEAMCLI_DEV_MODE=1: a pane herdr does not place as the seat — none of the name in the
 //     session, or one whose foreground is not the file-cli's program — is still refused;
@@ -136,8 +137,9 @@ test('TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate as a
   expect(r.err).toContain(`team register: warning: ${CALLER_GATE}\n`);
   expect(r.err).not.toContain(`team register: ${CALLER_GATE}`);
   expect(written(w)).toEqual({ state: true, agents: 1, log: true, panes: true });
-  // The run's own audit line: the record was written, which is the log line dev mode promises.
+  // Two audit lines: the folded gate, written where the gate is used, and the record's own.
   const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
+  expect(log).toContain(`warning: ${CALLER_GATE}\n`);
   expect(log).toContain('lead: registered seat_');
   expect(log).toContain(PANE);
   expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('ready');
@@ -203,7 +205,9 @@ test('TEAMCLI_DEV_MODE=1: a pane herdr does not place as the seat is still refus
   expect(noAgent.code).toBe(1);
   expect(noAgent.err).toContain('team register: warning:');
   expect(noAgent.err).toContain('no agent named lead is running in session "acme"');
-  expect(written(missing)).toEqual(NOTHING);
+  // Nothing was registered, and the folded gate is on record all the same.
+  expect(written(missing)).toEqual({ ...NOTHING, log: true });
+  expect(readFileSync(join(missing.dir, LOG_FILE), 'utf8')).toContain(`warning: ${CALLER_GATE}\n`);
 
   // An agent of the name whose foreground process is not the file-cli's program: still refused.
   const foreign = world();
@@ -211,7 +215,8 @@ test('TEAMCLI_DEV_MODE=1: a pane herdr does not place as the seat is still refus
   expect(other.code).toBe(1);
   expect(other.err).toContain('team register: warning:');
   expect(other.err).toContain('lead: pane w1:p1 holds no `claude-code` process; nothing was registered');
-  expect(written(foreign)).toEqual(NOTHING);
+  expect(written(foreign)).toEqual({ ...NOTHING, log: true });
+  expect(readFileSync(join(foreign.dir, LOG_FILE), 'utf8')).toContain(`warning: ${CALLER_GATE}\n`);
 });
 
 test('--dry-run says the refusal and the owner\'s own command, and under dev mode the record instead', async () => {

@@ -43,20 +43,12 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
   const placement = `only the owner runs tempo, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
   const owner = isOwner(caller);
   if (!owner) {
-    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the write
-    // continues. The orchestrator's and the operator's own seats stay refused in every mode:
-    // the peek reads the file for those two names and nothing else.
-    const dev = io.env.TEAMCLI_DEV_MODE === '1';
-    const peeked = dev ? loadTeamFile(io.cwd, { home: sources.home ?? homedir() }) : null;
-    const held = !dev
-      || (peeked !== null && peeked.ok && caller.kind === 'seat'
-        && (caller.name === peeked.team.orchestrator || caller.name === peeked.team.operator));
-    if (held) {
-      io.stderr(`team tempo: ${placement}\n`);
-      // exit: tempo.not-owner
-      return 1;
-    }
-    io.stderr(`team tempo: warning: ${placement}; dev mode continues\n`);
+    // Dev mode does not reach this gate: setting the tempo is never a dev-mode command
+    // (`dev_mode.ts`), so every non-owner call is refused, the orchestrator's and the
+    // operator's included.
+    io.stderr(`team tempo: ${placement}\n`);
+    // exit: tempo.not-owner
+    return 1;
   }
   const loaded = loadTeamFile(io.cwd, { home: sources.home ?? homedir() });
   let failed: string | undefined;

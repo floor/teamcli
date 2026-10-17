@@ -3,8 +3,7 @@
 Sets the team's tempo. `relaxed` doubles the watch's idle and nudge waits, `urgent` halves
 them, and `normal` leaves them as written. The five waits stay as the file wrote them; the
 word is what scales them, and `relaxed` or `urgent` takes effect when the watch reads the live file.
-The owner runs it from a terminal outside herdr. With `TEAMCLI_DEV_MODE=1`, other callers
-may continue with a warning; the orchestrator and operator seats remain refused.
+The owner runs it from a terminal outside herdr; every other caller is refused, whoever it is.
 
 ## Synopsis
 
