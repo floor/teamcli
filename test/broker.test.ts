@@ -1287,7 +1287,12 @@ describe('the start protocol', () => {
     // `touched ≥ rounds` carries the zero. The detector rides the first route that proves
     // itself on this runner (a canary import's own call must fire the wrap before any round is
     // scored); where no route arms, the tuples are pinned and the unlink event is unasserted,
-    // loudly. The timeout is the pin's own: 413 rounds of six real processes.
+    // loudly. The timeout is the pin's own: 413 rounds of six real processes. Each round is a
+    // bounded step: its six starts are killed and reaped before the next round begins, the live
+    // set may never pass the six a round holds, and a step that outlives its budget tears its
+    // own round down at once and fails naming the step. A run that cannot finish inside its
+    // own budget stops with the round and step named — not at the suite's ten minutes with no
+    // name — and every start is reaped and the leftover count asserted on each of those paths.
     project();
     record();
     const routes = ['A1', 'A2', 'M', 'R'];
@@ -1298,13 +1303,58 @@ describe('the start protocol', () => {
       selftestLog.push(`${candidate}: ${verdict.line}`);
       if (verdict.ok) { route = candidate; break; }
     }
+    const ROUND_SIZE = 6;
+    const STEP_MS = 10_000;
+    // The pin's own measured wall is ≈0.23 s a round (≈95 s all told); a run that cannot get
+    // through 413 rounds in three times that is failing on the machine, not finding the race —
+    // it stops inside this budget with the round and step named, never at the suite's ten
+    // minutes with no name and its starts still alive.
+    const RUN_BUDGET_MS = 300_000;
+    // The inner waits outlive their step on purpose: the step's own budget is what names it.
+    const START_MS = STEP_MS + 10_000;
     const breaches: string[] = [];
-    const kids: ClaimChild[] = [];
+    const live = new Set<ClaimChild>();
+    /** A start joins the live set on spawn and leaves it when it is reaped. */
+    const track = (kid: ClaimChild): ClaimChild => {
+      live.add(kid);
+      void kid.exited.then(() => live.delete(kid));
+      return kid;
+    };
+    /** One step of a round, bounded by its own budget: a step that runs out kills and reaps its
+     *  round's starts at once and fails naming the step, never the child it waited on. */
+    const within = async <T>(label: string, roundKids: ClaimChild[], fn: () => Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`the claim lane: step "${label}" outlived its ${STEP_MS} ms budget; its starts were killed and reaped`)),
+          STEP_MS,
+        );
+      });
+      try {
+        return await Promise.race([fn(), late]);
+      } catch (error) {
+        for (const kid of roundKids) kid.kill();
+        await Promise.all(roundKids.map((kid) => kid.exited));
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    /** The round's own end: every start it made is killed and reaped before the next begins. */
+    const reap = async (roundKids: ClaimChild[]): Promise<void> => {
+      for (const kid of roundKids) kid.kill();
+      await Promise.all(roundKids.map((kid) => kid.exited));
+    };
     let events = 0;
     let touched = 0;
     let broken = 0;
+    let failure: unknown;
+    const runStart = Date.now();
     try {
       for (let round = 0; round < 413; round++) {
+        if (Date.now() - runStart > RUN_BUDGET_MS) {
+          throw new Error(`the claim lane: the run outlived its ${RUN_BUDGET_MS / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
+        }
         const roundRoot = join(base, `claimburst-${round}`);
         mkdirSync(join(roundRoot, '.agents'), { recursive: true });
         writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
@@ -1313,13 +1363,15 @@ describe('the start protocol', () => {
         if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
         writeFileSync(`${at}.lock`, `${dead.pid}\n`);
         const go = join(base, `claimgo-${round}`);
-        const roundKids = Array.from({ length: 6 }, () =>
-          spawnClaimKid(['run', roundRoot, go, join(import.meta.dir, '..')], route ? { DS_DETECT: '1', DS_ROUTE: route, DS_PARENT: String(process.pid) } : {}),
+        const roundKids = Array.from({ length: ROUND_SIZE }, () =>
+          track(spawnClaimKid(['run', roundRoot, go, join(import.meta.dir, '..')], route ? { DS_DETECT: '1', DS_ROUTE: route, DS_PARENT: String(process.pid) } : {})),
         );
-        kids.push(...roundKids);
-        await Promise.all(roundKids.map((kid) => readyOf(kid)));
+        if (live.size > ROUND_SIZE) {
+          throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        }
+        await within(`round ${round}: ready`, roundKids, () => Promise.all(roundKids.map((kid) => readyOf(kid, START_MS))));
         writeFileSync(go, 'go\n');
-        const outcomes = await Promise.all(roundKids.map((kid) => outcomeOf(kid)));
+        const outcomes = await within(`round ${round}: outcomes`, roundKids, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, START_MS))));
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && !outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
         if (serving.length !== 1 || busy.length !== 5) {
@@ -1334,10 +1386,21 @@ describe('the start protocol', () => {
             breaches.push(`round ${round}: UNLINK_LIVE ${item.path.replace(base, '…')} pid=${item.pid} me=${item.me} bytes="${String(item.bytes).trim()}"`);
           }
         }
+        await reap(roundKids);
       }
-    } finally {
-      for (const kid of kids) kid.kill();
+    } catch (error) {
+      failure = error;
     }
+    // The teardown is the pin's own, whichever way the body ended — a pass, a failure, or a
+    // step's timeout: every start still alive is killed and reaped, and the leftover count is
+    // asserted, so no run can leave a process behind.
+    for (const kid of live) kid.kill();
+    await Promise.all([...live].map((kid) => kid.exited));
+    const leftBehind = live.size;
+    if (leftBehind !== 0) {
+      throw new Error(`the claim lane: ${leftBehind} start${leftBehind === 1 ? '' : 's'} still alive after teardown${failure === undefined ? '' : ` (the run had already failed: ${String(failure)})`}`);
+    }
+    if (failure !== undefined) throw failure;
     if (route === undefined) {
       console.log(`the claim-lane pin: no detector route fired here (${selftestLog.join(' | ')}) — the tuples are pinned, the unlink event is unasserted on this runner`);
       expect(breaches).toEqual([]);
