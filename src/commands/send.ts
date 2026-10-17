@@ -6,17 +6,20 @@ import { readArgs, type Args } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
+import { rulesOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
+import { profileFor } from '../profiles/index.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { liveSocketOf } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
+import { deliverCompose } from '../send/compose.ts';
 import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
@@ -37,8 +40,12 @@ export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>]
        team send --list [--json]
 
 Writes one message to one seat. A plain send writes the body whole to a drop file
-(mode 0600, atomic rename) and types one short trigger line, for every seat. The body
-is never typed and never split across several writes. delivered means herdr reported
+(mode 0600, atomic rename) and types one short trigger line, for every seat. The
+body is never split across several writes. A seat whose CLI builds its own work
+item from its screens — a profile with a compose module — still gets the drop
+file, but the body is typed through those screens and never becomes a trigger
+line; delivered there means the CLI printed the line that creates the item.
+delivered means herdr reported
 the seat working — or done or blocked, changed from the status read before Enter —
 after that line and Enter, or the transcript shows the drop being read, and the line has
 left the seat's input box, and the pane is not a dialog this command already classifies
@@ -79,14 +86,18 @@ The outcome is one of seven, and none of them is silent:
   not-submitted the line was typed and the seat never took it (exit 1): Enter was
                pressed up to three times, and only to a box still holding exactly the
                trigger; the message names what the box holds, faint suggestions not
-               counted, and the drop path
+               counted, and the drop path. A compose seat's brief that was typed and
+               never confirmed is also not-submitted: its message names the screen
+               that never came and the one line that repairs it
   timeout      --wait to a Claude Code seat: the frame was sent on the socket, and no
                reply came within the window (exit 1). A seat which does not accept
                messages from other sessions holds the frame until a person lets it
                through
   unreachable  the channel did not confirm (exit 1): the session is not running, no
                live agent carries the seat's name, the pane is one of those dialogs,
-               no socket took a waited frame, or the pane would not take the trigger
+               no socket took a waited frame, or the pane would not take the trigger.
+               A compose seat refuses here, naming the repair, when the module
+               stopped before typing anything
   refused      nothing was sent (exit 1): not a declared seat, --wait (the frame
                needs the native leg — the team route and the caller's own
                SendMessage — which this build does not carry), a --wait whose
@@ -173,6 +184,8 @@ export const realHost: SendHost = {
     status: (session, pane) => agentStatus(pane, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     paneText: (session, pane) => paneRead(pane, 40, session),
+    sendKey: (session, pane, key) => sendKey(pane, key, session),
+    foregroundCwd: (session, pane) => paneForegroundCwd(pane, session),
   },
   now: () => new Date(),
   home: homedir(),
@@ -358,6 +371,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // The receiver sees the sender before the message: the drop file, the frame and the daemon's
   // own write all carry the same first lines.
   body = `${senderHeader(admission.sender, admission.rule)}\n${body}`;
+  // A seat whose profile carries its rules in every brief has no standing session to keep
+  // them: `rules: prepend` puts the same text a launch would deliver in front of each brief,
+  // on every leg — the drop file, the socket frame and a compose seat's typed box all carry
+  // this one body. `rulesOf` is the launch's own builder, so the file's rules, the seat's
+  // signature lines and the workspace lines are the ones its launch would have sent.
+  if (declared !== undefined && receiving.ok && profileFor(declared.cli)?.rulesMode === 'prepend') {
+    body = `${rulesOf(receiving.team, declared, to.root)}\n\n${body}`;
+  }
 
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
@@ -395,8 +416,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return deliverSocket(io, dir, who, from, to, body, dry, timeoutS, host, report, startedAt);
   }
 
-  // A plain send, every seat: the body is never typed. It is written whole to a 0600 drop
-  // file, and the pane gets one trigger line.
+  // A plain send, every seat: the body is written whole to a 0600 drop file, and the pane
+  // gets one trigger line. A compose seat (a CLI that builds its work item from its own
+  // screens) gets the drop file too, but the body is typed through those screens instead of
+  // a trigger line.
   const msgId = randomUUID();
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
   const dropPath = join(dropDir, msgId);
@@ -438,15 +461,19 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       continue;
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
-    // trigger past the measured line before anything is written.
+    // trigger past the measured line before anything is written. A compose seat's typed leg is
+    // its CLI's own screens instead: there is no drop-file trigger to build, and the walk is
+    // run in this process (below), not handed to the daemon.
+    const compose = profileFor(to.cli)?.compose ?? null;
     const trigger = triggerLine(dropPath);
-    if (trigger === null) {
+    if (trigger === null && compose === null) {
       return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
     }
     // The daemon serves seats of the caller's own team; a seat in another team's record is
-    // reached directly, under that team's folder.
+    // reached directly, under that team's folder. A compose seat is reached directly too: the
+    // screen walk and the seat lock belong to one process.
     const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
-    const viaDaemon = to.cross
+    const viaDaemon = to.cross || compose !== null
       ? null
       : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, body, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
@@ -468,6 +495,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
     }
     report.sent = msgId;
+    if (compose !== null) {
+      // The seat's own folder: the record's `cwd` under the receiving team's root, else the
+      // folder this send already writes to.
+      const seatCwd = declared === undefined ? to.dir : resolve(to.root, declared.cwd);
+      return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, msgId, body, seatCwd, host, report, startedAt, failures);
+    }
+    if (trigger === null) {
+      return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
+    }
     return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, msgId, body, trigger, host, report, startedAt, socketNote ?? undefined, failures);
   }
 
@@ -489,6 +525,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 function walkPhrase(order: readonly DeliveryLeg[], cli: string): string {
   const walkable = order.filter((leg) => (leg === 'native' ? cli === 'claude-code' && SOCKET_SEND : leg === 'typed'));
   if (walkable.length === 0) return 'no leg of its delivery order this build can walk';
+  // A compose seat's brief is not a drop-file trigger: it is typed through the CLI's screens.
+  if (profileFor(cli)?.compose != null) return 'a typed brief through its own screens';
   if (walkable[0] !== 'native') return 'a 0600 drop file and one trigger line';
   return walkable.includes('typed')
     ? 'its cross-session socket, falling back to a 0600 drop file and one trigger line'
@@ -877,6 +915,87 @@ async function deliverNative(
   } finally {
     lock.release();
   }
+}
+
+/**
+ * A compose seat's typed leg: the drop file is written, then the profile's module walks the
+ * CLI's own screens and types the brief there. Delivered means the CLI printed its proof line
+ * (a created session); a module refusal after it typed is `not-submitted` — the box may hold
+ * the text — and one before it typed is `unreachable`. The drop file stays the message's copy
+ * when the walk fails, and every ending names it.
+ */
+async function deliverComposeSeat(
+  io: Io,
+  dir: string,
+  root: string,
+  who: string,
+  from: string,
+  project: string,
+  session: string,
+  seatName: string,
+  cli: string,
+  pane: string,
+  dropDir: string,
+  msgId: string,
+  body: string,
+  seatCwd: string,
+  host: SendHost,
+  report: Report,
+  startedAt: number,
+  failures: readonly string[] = [],
+): Promise<number> {
+  const failed = failures.length > 0 ? { failed: [...failures] } : {};
+  const profile = profileFor(cli);
+  const compose = profile?.compose ?? null;
+  if (profile === null || compose === null) {
+    return refuse(io, dir, who, `${seatName}: its profile carries no compose module; nothing was sent`, host, report);
+  }
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) {
+    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+  }
+  try {
+    let path: string;
+    try {
+      sealDropTree(dir, session, seatName);
+      path = dropMessage(dropDir, msgId, body);
+    } catch {
+      return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was typed`, host, report);
+    }
+    const result = await deliverCompose(host.native, {
+      profile: compose,
+      binary: profile.binary,
+      session,
+      pane,
+      seatCwd,
+      idleTimeout: profile.idleTimeout,
+      message: body,
+    });
+    const where = `the drop file is at ${path}`;
+    const entry = { ts: host.now().toISOString(), from, to: seatName, body, id: msgId };
+    if (result.outcome === 'unreachable') {
+      appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+      return unreachable(io, dir, who, seatName, `${result.reason}; ${where}`, host, report);
+    }
+    if (result.outcome === 'not-submitted') {
+      appendHistory(project, root, host.home, { ...entry, outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+      return typedBriefNotSubmitted(io, dir, who, seatName, `${result.reason}; ${where}`, host, report);
+    }
+    logLine(dir, 'send', who, `${seatName}: delivered (typed brief, ${result.evidence})`, host.now());
+    appendHistory(project, root, host.home, { ...entry, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+    return delivered(io, seatName, report, 'typed brief');
+  } finally {
+    lock.release();
+  }
+}
+
+/** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
+ *  message is on disk, and the one team.log line is the orchestrator's notice. Exit 1. */
+function typedBriefNotSubmitted(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
+  logLine(dir, 'send', who, `${seat}: not-submitted: ${reason}`, host.now());
+  if (report.json) writeJsonError(io, 'send.not-submitted', `${seat}: not-submitted: ${reason}`);
+  else io.stderr(`team send: ${seat}: not-submitted: ${reason}\n`);
+  return 1; // exit: send.not-submitted
 }
 
 /** `send-drops`, the session directory, and the seat directory are each mode 0700.

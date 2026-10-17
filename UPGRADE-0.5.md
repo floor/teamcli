@@ -46,8 +46,9 @@ stay the owner's, from a terminal outside herdr.
 
 [`team send`](https://github.com/floor/teamcli/blob/main/docs/commands/send.md) writes the body
 whole to a mode-0600 drop file and types one
-short trigger line — for every seat, Claude Code's included; the body is never typed and never
-split. Every run ends in one word: `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
+short trigger line — for every seat, Claude Code's included; the body is never split. A seat
+whose CLI builds its own work item from its screens (a profile with a compose module) still gets
+the drop file, and the body is typed through those screens instead of a trigger line. Every run ends in one word: `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
 `unreachable` or `refused`. No path opens a cross-session socket in this build: `--wait` is
 refused for every seat and nothing is written — a Claude Code seat's refusal names the native leg
 (`team route` and the caller's own `SendMessage`) that will carry a waited send, and any other seat

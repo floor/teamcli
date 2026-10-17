@@ -34,6 +34,7 @@ import { boxHoldsText } from '../launch/deliver.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { profileFor } from '../profiles/index.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
@@ -793,6 +794,20 @@ async function executeQueuedSend(
 
   const waitMs = host.deliverWaitMs ?? DELIVER_WAIT_MS;
   const pollMs = host.pollReadyMs ?? POLL_READY_MS;
+
+  // A compose seat's brief is typed through the CLI's own screens by its profile's module,
+  // which this daemon does not drive; typing a drop-file trigger there would land in a
+  // screen that reads no file. The typed leg in `team send` delivers these seats itself.
+  if (profileFor(configured.cli)?.compose != null) {
+    return {
+      v: 1,
+      ok: false,
+      id: null,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName} runs ${configured.cli}: its brief is typed through the CLI's own screens, which this daemon does not drive; nothing was sent`,
+    };
+  }
 
   if (request.wait) {
     if (configured.cli !== 'claude-code') {
