@@ -37,6 +37,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename as pathBasename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripSgr } from '../src/ansi.ts';
+import { boxHoldsText } from '../src/launch/deliver.ts';
 import {
   paneRead,
   paneShellBack,
@@ -205,7 +206,7 @@ export function readmeStub(cli: string, version: string, versionText: string, sl
     '',
     `Captured from the installed macOS ${cli} CLI with herdr ${herdrVersion}, \`pane read --source visible --lines 200\` (${plain}),`,
     'in a scratch session created for the purpose and stopped afterwards. ' +
-      `\`${cli} --version\` printed \`${versionText.trim()}\`. Directory paths are \`<workspace>\`.`,
+      `The binary's \`--version\` printed \`${versionText.trim()}\`. Directory paths are \`<workspace>\`.`,
     '',
     ...rows,
     '',
@@ -429,6 +430,11 @@ function runStages(options: Options, profile: NonNullable<ReturnType<typeof prof
       const composer = classifyComposer(options.cli, raw.split('\n')).kind;
       if (expected.composer !== 'unknown' && composer !== expected.composer) {
         throw new Error(`${stage}: expected the composer to read ${expected.composer}, but it read ${composer}`);
+      }
+      // The unsent capture must also prove the text is still in the box, as delivery reads it;
+      // a kind alone does not say the composer holds what was typed.
+      if (stage === 'unsent' && !boxHoldsText(options.cli, options.probe, raw)) {
+        throw new Error('unsent: the composer does not read back as holding the probe text');
       }
       const cleaned = options.plain ? stripSgr(raw) : raw;
       const screen = scrubCapture(cleaned, {
