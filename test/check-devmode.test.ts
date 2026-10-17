@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { readAgents, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
@@ -168,6 +168,50 @@ describe('the dev-mode mark on a record', () => {
     const { code, out } = check(root, home);
     expect(out).not.toContain('registered under dev mode');
     expect(code).toBe(0);
+  });
+
+  test('a re-registration under dev mode names that run\'s caller, not the original registrant', () => {
+    const { root, home } = place();
+    // The owner registered the seat first; a later run under dev mode, by a caller the gate did
+    // not admit, wrote the record again. `registered_by` is still the owner's, and the finding
+    // names the run that made the record without the gate behind it.
+    const id = record(home, root, { by: 'owner' });
+    updateAgent(home, id, { provenance: { dev_mode: true, dev_mode_by: DEV_CALLER } });
+    const { code, out } = check(root, home);
+    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
+    expect(out).not.toContain('registered under dev mode (by owner)');
+    expect(code).toBe(1);
+  });
+
+  test('the record keeps the registrant, and the dev-mode caller beside the mark', () => {
+    const { root, home } = place();
+    const id = record(home, root, { by: 'owner' });
+    const marked = updateAgent(home, id, { provenance: { dev_mode: true, dev_mode_by: DEV_CALLER } });
+    expect(marked.provenance.registered_by).toBe('owner');
+    expect(marked.provenance.dev_mode_by).toBe(DEV_CALLER);
+    expect(marked.provenance.dev_mode_at).toBeDefined();
+    // The write in force takes the mark off, and the caller it named with it.
+    const cleaned = updateAgent(home, id, { provenance: { dev_mode: false } });
+    expect(cleaned.provenance.dev_mode).toBeUndefined();
+    expect(cleaned.provenance.dev_mode_by).toBeUndefined();
+    expect(cleaned.provenance.dev_mode_at).toBeUndefined();
+  });
+
+  test('the caller and the time are read back from the file, as a fresh command reads them', () => {
+    const { root, home } = place();
+    const id = record(home, root, { by: 'owner' });
+    updateAgent(home, id, { provenance: { dev_mode: true, dev_mode_by: DEV_CALLER } });
+    const read = readAgents(home).find((agent) => agent.id === id);
+    expect(read?.provenance.registered_by).toBe('owner');
+    expect(read?.provenance.dev_mode_by).toBe(DEV_CALLER);
+    expect(read?.provenance.dev_mode_at).toBeDefined();
+  });
+
+  test('a record a dev-mode run registered first names that run\'s caller too', () => {
+    const { root, home } = place();
+    record(home, root, { by: DEV_CALLER, dev: true });
+    const { out } = check(root, home);
+    expect(out).toContain(`difference: lead: registered under dev mode (by ${DEV_CALLER})`);
   });
 
   test('a check with no home reads no registry: the mark is invisible to it', () => {

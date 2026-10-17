@@ -94,7 +94,9 @@ and open nothing: the target is the file the caller's own place finds.
   screen the reader cannot name a model from is never wrong. A record whose provenance carries
   the dev mark — its registration was written by a run with dev mode on, the caller gate folded
   into a warning (`src/commands/register.ts`) — is one more difference: `<seat>: registered under
-  dev mode (by <caller>)`, the caller the record itself kept, repaired with `team register <seat>`
+  dev mode (by <caller>)`, the caller the dev-mode run itself recorded — the record's
+  `registered_by` on one written before the dev-mode caller was kept apart — repaired with
+  `team register <seat>`
   — the same write with the caller gate in force — and a clean launch of the seat does it too:
   `register` and `up`, the two launch-command writes that know a mode, say which one they ran in,
   every other launch-command write is one in force, and so the mark stands exactly while the last
