@@ -720,6 +720,10 @@ describe('a team whose owner ran up --file', () => {
         lines.push(command);
         return true;
       },
+      spawnWatch: (command) => {
+        lines.push(command);
+        return 4242;
+      },
       renameAgent: () => true,
       closeWorkspace: () => true,
       agentPanes: () => [],
@@ -750,7 +754,7 @@ describe('a team whose owner ran up --file', () => {
       io.callerSources = sourcesUnderHerdr(OTHER, COORDINATOR, COORDINATOR_PANE);
       return runWatch(['--session', SESSION], io, watchSources());
     });
-    expect(pane.code, pane.out + pane.err).toBe(0);
+    expect(pane.code).toBe(0);
     expect(pane.out).toContain(`watching the session "${SESSION}"`);
   });
 

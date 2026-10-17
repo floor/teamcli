@@ -134,6 +134,7 @@ function upWorld(): { launch: Launch; runs: { pane: string; command: string }[] 
     foreground: () => ['claude'],
     sleep: async () => {},
     now: () => NOW,
+    spawnWatch: () => 1,
   };
   return { launch, runs };
 }

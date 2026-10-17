@@ -1,8 +1,9 @@
+import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -80,7 +81,6 @@ import { blocksLaunch, doctorFindings, realSources as doctorSources, type Doctor
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
-import { watchLabel, watchRunning } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 
@@ -160,6 +160,19 @@ export type Launch = {
   deleteSession?(session: string): boolean | Promise<boolean>;
   sleep(ms: number): Promise<void>;
   now(): Date;
+  /** Starts the watch detached. The pid, or null when it did not start. */
+  spawnWatch?(command: string, cwd: string): number | null;
+}
+
+/** The watch, off in its own process: no pane, no workspace. */
+function detachWatch(command: string, cwd: string): number | null {
+  try {
+    const child = spawn('sh', ['-c', `exec ${command}`], { cwd, detached: true, stdio: 'ignore' });
+    child.unref();
+    return child.pid ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function aim(session: string): string | undefined {
@@ -221,6 +234,7 @@ const realLaunch: Launch = {
   deleteSession: sessionDelete,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
+  spawnWatch: detachWatch,
 };
 
 export const realSources: UpSources = {
@@ -1113,16 +1127,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     } else if (launchingIntoLobby) createLobby = !dry;
   }
   const watch = recorded?.watch;
-  // A recorded watch is running while its process lives; right after a start, before the pane's
-  // first pass records the pid, its pane and a heartbeat no older than two in-force intervals
-  // are what say so.
-  const watchAlive = watchRunning(watch, {
-    alive: (pid) => sources.alive?.(pid) ?? false,
-    now: (sources.now?.() ?? new Date()).getTime(),
-    interval: watchInForceOf(standing, team).interval,
-  });
+  const watchAlive = Boolean(watch && sources.alive?.(watch.pid));
   // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
-  // this file, or read another one, the resolved path is recorded for the pane.
+  // this file, or read another one, the resolved path is recorded for the process.
   const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
@@ -1133,7 +1140,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // One that is still `stopped` here is not this team's: the refusal already stopped the run.
     sessionRunning: state === 'running' || state === 'stopped',
     seats,
-    watchLabel: watchLabel(team.project),
     watchAlive,
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
@@ -1483,17 +1489,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return sources.doctor.version(profile.binary);
       },
       log: (who, what) => logLine(dir, 'up', callerLabel(caller), `${who}: ${what}`, now()),
-      noteWatchFile(pane, file) {
+      noteWatchFile(file) {
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
-          current.watchdog = { file, pane };
+          current.watchdog = { file };
         });
       },
-      noteWatch(pane, workspace) {
+      noteWatchSpawn(pid) {
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
-          current.watch = { pane, heartbeat: now().toISOString(), ...(workspace ? { workspace } : {}) };
+          current.watch = { pid, heartbeat: now().toISOString() };
         });
+      },
+      spawnWatch(command, cwd) {
+        return launch.spawnWatch ? launch.spawnWatch(command, cwd) : 4242;
       },
       /**
        * §3/§4: what happens to a seat this run finds at a dialog. The owner at a terminal is

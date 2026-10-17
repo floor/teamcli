@@ -862,16 +862,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
 
   const watch = state?.watch;
-  // Only a pid can be killed; a record whose pane's first pass has not written one yet is left
-  // as it is, as a watch whose process is not alive is.
-  const watchAlive = Boolean(watch && watch.pid !== undefined && sources.alive(watch.pid));
+  const watchAlive = Boolean(watch && sources.alive(watch.pid));
   if (watchAlive && refusals.length === 0) notes.push('watch: its pid is only in the state; left running');
   for (const note of notes) io.stdout(`${note}\n`);
   const plan = downPlan({
     session,
     seats,
     extra,
-    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
+    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid : null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],

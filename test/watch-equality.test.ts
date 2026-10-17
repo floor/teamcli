@@ -16,11 +16,11 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession } from '../src/state.ts';
 import type { SessionState } from '../src/state.ts';
+import { WATCH_LABEL } from '../src/status/compare.ts';
 import type { Live } from '../src/status/compare.ts';
 import { seatModel } from '../src/status/statusline.ts';
 import { gb, recordSwap } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { withWas } from './helpers.ts';
@@ -163,7 +163,7 @@ function oldPass(
   }
 
   for (const agent of live.agents) {
-    if (known.has(agent.pane) || labels.get(agent.workspace) === watchLabel(team.project)) continue;
+    if (known.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
     once(`extra:${agent.pane}`, `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`);
   }
 
@@ -476,7 +476,7 @@ describe('the modular core against the pass it replaced', () => {
     const now = live({ 'claude-coordinator-acme': { screen: busy.replace('Opus 5.5', 'Fable 5.1') } });
     now.agents = now.agents.filter((one) => one.name !== 'deepseek-acme-2');
     now.agents.push(agent('stranger', 'w8', 'working'), agent(null, 'w9', 'working'));
-    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: watchLabel('acme-web') });
+    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: 'watchdog' });
     both('missing and extra', team(), [
       { live: now, at: 0 },
       { live: now, at: MIN },

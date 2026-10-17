@@ -35,12 +35,12 @@ this session's state names: the command `up` runs carries no `--file`, and any o
 is refused. It also reads the machine's load, free memory, free disk and
 swap, and, when a temporary seat's end is judged, git.
 
-Writes `.agents/team.state.json` (the pane it runs in, the workspace, its pid and a heartbeat, once
-a pass; a temporary seat's `worked` and `own_commits` when it sees them; the accounts' latest screen
-readings and the money the spend checks read), `.agents/team.log` (every line it prints), and,
-through herdr: the nudge's text and Enter, and the seats' sidebar lines — the workspace title from
-the file, and the display line from the file and the pane's screen; it paints them on its first
-cycle and again when the title, the model or the effort changes.
+Writes `.agents/team.state.json` (the watch's pid and a heartbeat, once a pass; a temporary seat's
+`worked` and `own_commits` when it sees them; the accounts' latest screen readings and the money the
+spend checks read), `.agents/team.log` (every line it prints), and, through herdr: the nudge's text
+and Enter, and the seats' sidebar lines — the workspace title from the file, and the display line
+from the file and the pane's screen; it paints them on its first cycle and again when the title,
+the model or the effort changes.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone
@@ -78,33 +78,23 @@ in the transcript above an ordinary box leaves the screen unknown.
 ## Who may run it
 
 Anyone, in any terminal. A run with no terminal is refused before the watch starts:
-`team watch: only the owner runs this, from a terminal outside herdr`. `up` starts one for the
-session in a workspace of its own, labelled `Watch · <project>`, and records that pane — and its own
-passes record the pid. This is the one `team status` and `team doctor` look for. The owner who runs
-`team watch` alone, from a terminal outside herdr, gets the same: the watch hands itself to a
-workspace of the team's session, exactly as `up` would start it, and the terminal is free again.
-Started inside its own pane, it just runs — the pane the pass finds itself in is the one recorded.
-`--no-nudge` and `--no-notify` keep the watch in the terminal that passed them: they are the
-owner's, and the pane's own `team watch` could not carry them, so neither flag hands over. A watch
-that stays in its caller runs by hand: it prints the same lines, and Ctrl-C stops it and exits 0. Two watches
-must not fight over the same session, so a second one refuses: while the recorded watch's pane is
-there and its heartbeat is no older than two in-force intervals — or its pid lives — the run says
-`team watch: a watch already runs for the session "<session>"` and names the record beside it:
-`(pid <pid>)` once a pass has written the pid, `(pane <pane>)` before that, `(pane not recorded)`
-when the record has neither. `--file` is the owner's alone too: the watch `up` starts reads the
-project's own file from the project root and carries no flag, so a non-owner aiming `--file` at
-another project is refused before that file is read.
+`team watch: only the owner runs this, from a terminal outside herdr`. `up` starts one for the session as a background process, and records its
+pid. This is the one `team status` and `team doctor` look for. A person may run one by hand: it
+prints the same lines, and Ctrl-C stops it and exits 0. Two watches must not fight over the same
+session, so a second one refuses. `--no-nudge` and `--no-notify` are the owner's: a seat that
+passed either would be holding the session's only watch with the nudge, or the notices, turned
+off. `--file` is the owner's alone too: the watch `up` starts reads the project's own file from
+the project root and carries no flag, so a non-owner aiming `--file` at another project is
+refused before that file is read.
 
 ## When it stops
 
-`up` starts the watch in a workspace of its own, and the state records that pane, the workspace and
-the heartbeat of the pass that started it. Ctrl-C stops a watch the same way a stop signal does, and
-the record is cleared. A watch started inside a pane ends when the next pass finds that pane gone
-again; while it runs, each pass writes its pid and its heartbeat beside the pane. A watch that never
-saw itself in a pane — herdr could not tell it, or the process was started from a terminal that is
-not one — keeps going, and `team status` shows it with `pane not recorded`. While the pane is gone
-and the process is still running, `team doctor` names the process by its name and its pid and the
-repair is to stop it and run `team up`.
+`up` starts the watch detached, with no workspace and no pane, and the state records its pid.
+Ctrl-C stops a watch the same way a stop signal does, and the record is cleared. A watch started
+by hand records no pane and keeps running. A watch that already recorded a pane — an older `up` —
+ends when the next pass finds that pane gone again. While that pane is gone and the process is
+still running, `team doctor` names the process by its name and its pid and the repair is to stop
+it and run `team up`.
 `remove --keep` and `add` close the seat's workspace. They do not stop the watch.
 
 ## Flags
@@ -158,7 +148,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> has been idle for <n> minutes` | quiet for `watch.idle_first` since its last turn (reported once per idle period; repeated every `watch.idle_repeat` when set) |
 | `every agent is idle` | every seat that is not the orchestrator, the operator or parked, quiet for `watch.team_idle` |
 | `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
-| `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled `Watch · <project>` aside |
+| `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled watchdog aside |
 | `approved before records were signed` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
@@ -240,23 +230,17 @@ a first sight, which the launch gate calls `first sight only, not yet counted`, 
 
 | Message | Exit |
 | --- | --- |
-| `team watch: a watch already runs for the session "<session>" (pane <pane>)` / `(pid <pid>)` | 1 |
+| `team watch: a watch already runs for the session "<session>" (pid <pid>)` | 1 |
 | `team watch: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
-| `team watch: only the watch this session records may read the file up recorded; this call is <caller>` | 1 |
-| `team watch: the watch did not start in its workspace` | 1 |
-| `team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
-| `team watch: only the owner runs this, from a terminal outside herdr` | 1 |
 | `team watch: unknown option --x` / `team watch: unexpected "x"` (each with the usage) | 2 |
 | `team watch: team.yaml line <n>: <message>` / `team watch: <message>` | 2 |
 
 ## Exit codes
 
-- `0` — the watch ran, and stopped on Ctrl-C, a stop signal, or the end of its work. Or it handed
-  itself to its own workspace and the pane's command started. A seat that
+- `0` — the watch ran, and stopped on Ctrl-C, a stop signal, or the end of its work. A seat that
   misbehaves is a report, not a failure; neither is herdr not answering.
 - `1` — a watch already runs for the session. Or `--file` was aimed by a caller that is not the
-  owner, `--no-nudge`/`--no-notify` by a caller that is not the owner, the file `up` recorded was
-  aimed at by a process that is not the watch's pane, or the watch did not start in its workspace.
+  owner.
 - `2` — the invocation, the team file or the state can't be read.
 
 ## Examples
@@ -297,12 +281,6 @@ seats:
 ```fixture
 watch: none
 ```
-
-Every `team watch` console below shows a pass as the watch itself prints it — the lines its pane
-shows while it runs, and the same lines in `.agents/team.log`. Run bare from the owner's terminal
-outside herdr, `team watch` hands itself to its workspace and prints one line about that instead;
-a `--no-nudge` or `--no-notify` run, the owner's, stays in the caller's terminal and prints these
-lines directly.
 
 The seats are at their prompts, nothing to report: a pass is the two lines that frame it.
 
@@ -475,8 +453,8 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-`up` leaves a watch running in a workspace of its own, so a second one refuses rather than reading
-the same session twice:
+`up` leaves a watch running as a background process, so a second one refuses rather than reading the same
+session twice:
 
 ```console
 $ team up ; echo "exit $?"

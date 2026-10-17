@@ -135,7 +135,6 @@ describe('Antigravity launch and captured screens', () => {
       session: 'scratch',
       sessionRunning: true,
       watchAlive: true,
-      watchLabel: 'Watch · scratch',
       seats: [{ name: 'gemini', cli: 'antigravity', launch: 'agy', cwd: '.', label: 'gemini', stopped: false, rules: 'Rules.',
         repairLine: '`team remove gemini --keep` then `team add gemini`',
         rulesFile: { path: '/home/owner/.config/team/demo-3f9c2a8e1d7b/rules/gemini.md', line } }],
@@ -147,7 +146,7 @@ describe('Antigravity launch and captured screens', () => {
   });
   test('a message seat whose rules file has no typeable path is refused before anything is typed', () => {
     const plan = upPlan({
-      root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+      root: '.', session: 'scratch', sessionRunning: true, watchAlive: true,
       seats: [{ name: 'gemini', cli: 'antigravity', launch: 'agy', cwd: '.', label: 'gemini', stopped: false, rules: 'Rules.',
         repairLine: '`team remove gemini --keep` then `team add gemini`',
         rulesRefusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" }],

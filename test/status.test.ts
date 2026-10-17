@@ -15,7 +15,6 @@ import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
-import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas } from './helpers.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
@@ -43,7 +42,7 @@ function built(): Live {
     ],
     workspaces: [
       { id: 'w1', label: 'claude opus 5.5' }, { id: 'w2', label: 'gpt sol 6' },
-      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: watchLabel('acme-web') },
+      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: 'watchdog' },
     ],
     screens: { 'w1:p1': claudeScreen('Opus 5.5') },
   };
@@ -589,8 +588,6 @@ describe('team status', () => {
       'codex-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme-2: version unread (its screen doesn\'t show the model)',
-      // The watch the state records, after the seats' notes: `status` lists it on every run.
-      'watch: pane not recorded, pid 1, last heartbeat 60s ago',
     ]);
     // `state` stays the comparison's phrase about the record, byte for byte as it published;
     // each row also carries the seat's own reading beside it, seat_state/seat_state_source —

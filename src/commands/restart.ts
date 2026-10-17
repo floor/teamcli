@@ -66,7 +66,6 @@ import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
-import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -313,7 +312,6 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      watchLabel: watchLabel(team.project),
     });
     return dryRunExit(out, `${stopStep}${plainText(formatPlan(preview))}`);
   }
@@ -395,7 +393,6 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      watchLabel: watchLabel(team.project),
     });
     const host = hostOf({
       dir,
