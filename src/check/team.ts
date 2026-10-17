@@ -28,7 +28,7 @@ import { overridesInForceOf } from '../profiles/overrides.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
 import { byName, ofTeam, ProjectsError } from '../registry/projects.ts';
-import { getTeam, teamIdOf, TeamsError } from '../registry/teams.ts';
+import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { emptySession, liveHold, readState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
@@ -423,7 +423,10 @@ function displayLineMatches(seat: Seat, line: string, screen: string | undefined
  * A team is named in one project at most: `ofTeam` owns that rule and refuses the state where two
  * name it, naming both, and the refusal is repeated here rather than re-derived. A registry that
  * does not read refuses in the same line, so a machine whose registry cannot be read is not read
- * as fine. And a project is led by one team: when this team declares `project_lead: true`, the
+ * as fine. The team registry is read for every team, a project lead's or not: the roster bridge
+ * (`src/permissions/who.ts`) answers from it for every seat, so a file it cannot read leaves every
+ * team unserved, and the difference is named wherever the check runs. And a project is led by one
+ * team: when this team declares `project_lead: true`, the
  * project's other teams are looked up in the team registry (their `root` to their file) and a
  * second declaring team is a difference. A sibling the registries cannot answer for — no record,
  * no readable file, or a file naming another project — is not counted, and a team that declares
@@ -434,6 +437,10 @@ function displayLineMatches(seat: Seat, line: string, screen: string | undefined
 function registryDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   if (home === undefined) return [];
   try {
+    // Read for every team, not only below for a lead's siblings: `rosterOf` swallows the read's
+    // own error and reports no roster, which reads as no gap — so the unreadable registry is
+    // named here, once, wherever the check runs.
+    readTeams(home);
     ofTeam(home, teamIdOf(root));
     if (!team.projectLead || team.inProject === null) return [];
     const project = byName(home, team.inProject);
@@ -446,7 +453,7 @@ function registryDifferences(team: TeamFile, root: string, home: string | undefi
     }];
   } catch (error) {
     if (error instanceof ProjectsError) return [{ what: `the project registry: ${error.message}`, repair: 'fix the project registry (~/.config/team/projects.yaml)' }];
-    if (error instanceof TeamsError) return [{ what: `the team registry: ${error.message}`, repair: 'fix the team registry (~/.config/team/teams.yaml)' }];
+    if (error instanceof TeamsError) return [{ what: `the team registry cannot be read: ${error.message}`, repair: 'fix the team registry (~/.config/team/teams.yaml)' }];
     throw error;
   }
 }
