@@ -352,8 +352,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const folded = devModeCallerGate('add', io, mayRun);
     if (folded !== null) {
       // The document's note is the sentence itself; only the terminal's line carries the
-      // command's name in front.
-      if (json && !dry) out.stderr(`${folded}\n`);
+      // dry run's `! ` and the command's name in front.
+      if (json) (dry ? finalRecords : jsonNotes).push(folded);
       else if (dry) out.stdout(`! ${folded}\n`);
       else out.stderr(`team add: ${plainText(folded)}\n`);
       if (!dry) logDevMode(dir, 'add', describeCaller(caller), folded, sources.now());
@@ -726,9 +726,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {
-        const warning = `team add: warning: ${plainText(finding.text)}\n`;
-        if (dry) out.stdout(warning);
-        else out.stderr(warning);
+        // The document's note is the sentence itself; only the terminal's line carries the
+        // command's name in front.
+        const warning = `warning: ${plainText(finding.text)}`;
+        if (json) (dry ? finalRecords : jsonNotes).push(warning);
+        else if (dry) out.stdout(`team add: ${warning}\n`);
+        else out.stderr(`team add: ${warning}\n`);
         continue;
       }
       const launchText = launchProblem ? `${built.name}: ${launchProblemDetail ?? launchProblem}` : '';

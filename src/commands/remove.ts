@@ -66,7 +66,7 @@ export const realSources: RemoveSources = {
   foregroundCwd: (session, pane) => paneForegroundCwd(pane, aim(session)),
 };
 
-export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]\n\nExits 0 when the seat was removed or kept or the lead was stopped for a swap, 1 when the removal is refused, 2 when the invocation, team file or herdr can\'t be read.\n';
+export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]\n\nExits 0 when the seat is removed (or stopped for a swap), 1 when removal is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 /** The gate's refusal as this command prints it: the verdict's own sentence behind the prefix,
  *  and the verdict's own contract row under `--json`. Both delegate branches print it — the

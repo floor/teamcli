@@ -561,6 +561,36 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
+  test('--json: a dev-mode warning is a note, on the plan and on the real run, and stdout is the document alone', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources } = makeHarness(fixture);
+    const warning = 'warning: only the owner or `leads` restarts a seat; this call is helper; dev mode continues';
+
+    // The dry answer is the document: the warning rides in its notes, never in front of it.
+    const dry = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    dry.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker', '--dry-run', '--json'], dry, sources)).toBe(0);
+    expect(dry.err).toBe('');
+    const dryDoc = JSON.parse(dry.out) as { status: string; notes: string[] };
+    expect(dryDoc.status).toBe('dry-run');
+    expect(dryDoc.notes).toContain(warning);
+    expect(dry.out.startsWith('{')).toBe(true);
+
+    // The real run's terminal line carried the command's name; the document's note does not.
+    const real = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    real.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker', '--json'], real, sources)).toBe(0);
+    expect(real.err).toBe('');
+    const realDoc = JSON.parse(real.out) as { status: string; notes: string[] };
+    expect(realDoc.status).toBe('ready');
+    expect(realDoc.notes).toContain(warning);
+    expect(realDoc.notes.some((note) => note.startsWith('team restart:'))).toBe(false);
+  });
+
   test('--json: a refusal is the team.error document and leaves stderr empty', async () => {
     const fixture = makeFixture();
     const { sources } = makeHarness(fixture);

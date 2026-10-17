@@ -4,7 +4,7 @@
 // two-seat file, the approval written in force, herdr answered by closures.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
@@ -242,6 +242,34 @@ describe('team add --json', () => {
     expect(made.creates).toEqual([]);
   });
 
+  test('a read-at-start warning is a note of its own sentence, on a dry run and a real one', async () => {
+    const lobby = join(home, '.config', 'team', 'lobby');
+    mkdirSync(lobby, { recursive: true });
+    chmodSync(lobby, 0o700);
+    writeFileSync(join(lobby, 'CLAUDE.md'), 'plant\n');
+    const warning = `warning: the lobby ${lobby}: CLAUDE.md is read at start by claude-code, cursor and grok`;
+
+    // The lead starts in the project, so the planted file is said and not refused; the
+    // document's note is the sentence itself, without the terminal's `team add: `.
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['lead', '--json'], io, sources(made))).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(io.out, ADD_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.notes).toContain(warning);
+    expect(doc.notes.some((note) => note.startsWith('team add:'))).toBe(false);
+
+    const dryWorld = world();
+    const dry = testIo(project, owner);
+    expect(await runAdd(['lead', '--dry-run', '--json'], dry, sources(dryWorld))).toBe(0);
+    expect(dry.err).toBe('');
+    const dryDoc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(dry.out, ADD_OUTPUT_SCHEMA);
+    expect(dryDoc.status).toBe('dry-run');
+    expect(dryDoc.notes).toContain(warning);
+    expect(dryDoc.notes.some((note) => note.startsWith('team add:'))).toBe(false);
+  });
+
   test('the dev-mode warning rides in the document notes, and stderr stays empty', async () => {
     const made = world();
     const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
@@ -255,5 +283,17 @@ describe('team add --json', () => {
     );
     expect(doc.notes.some((note) => note.startsWith('team add:'))).toBe(false);
     expect(made.creates).toEqual(['worker']);
+
+    // A dry run collects the same sentence: the plan's `! ` marks a terminal line, not a note.
+    const dryIo = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    dryIo.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runAdd(['worker', '--dry-run', '--json'], dryIo, sources(world()))).toBe(0);
+    expect(dryIo.err).toBe('');
+    const dryDoc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(dryIo.out, ADD_OUTPUT_SCHEMA);
+    expect(dryDoc.status).toBe('dry-run');
+    expect(dryDoc.notes).toContain(
+      'warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is helper; dev mode continues',
+    );
+    expect(dryDoc.notes.some((note) => note.startsWith('! '))).toBe(false);
   });
 });

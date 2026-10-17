@@ -225,11 +225,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (mayRun !== null) {
     const folded = devModeCallerGate('restart', io, mayRun);
     if (folded !== null) {
-      if (dry) out.stdout(`! ${folded}\n`);
-      else {
-        out.stderr(`team restart: ${plainText(folded)}\n`);
-        logDevMode(dir, 'restart', describeCaller(caller), folded, sources.now());
-      }
+      // The document's note is the sentence itself; the terminal's lines carry the dry run's
+      // `! ` and the command's name.
+      if (json) notes.push(folded);
+      else if (dry) out.stdout(`! ${folded}\n`);
+      else out.stderr(`team restart: ${plainText(folded)}\n`);
+      if (!dry) logDevMode(dir, 'restart', describeCaller(caller), folded, sources.now());
     } else {
       // The dry answer names the refusal and the one command that unblocks it, on stdout where
       // a dry run's answers go; both paths exit through the refusal's one exit site below.
@@ -345,6 +346,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       session,
       seat: name,
       plan: [...stopPlan, ...planStepsOf(preview)],
+      notes,
     });
   }
 
@@ -1005,7 +1007,7 @@ function dryRunExit(
   out: Io,
   json: boolean,
   text: string,
-  spec: { project: string; session: string; seat: string; plan: readonly PlanStep[] },
+  spec: { project: string; session: string; seat: string; plan: readonly PlanStep[]; notes: readonly string[] },
 ): number {
   if (json) {
     writeJson(out, 'team.restart', {
@@ -1017,6 +1019,7 @@ function dryRunExit(
       session: spec.session,
       seat: spec.seat,
       plan: spec.plan,
+      ...(spec.notes.length > 0 ? { notes: spec.notes } : {}),
     });
   } else {
     out.stdout(text);
