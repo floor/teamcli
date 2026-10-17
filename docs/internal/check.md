@@ -96,11 +96,12 @@ and open nothing: the target is the file the caller's own place finds.
   into a warning (`src/commands/register.ts`) — is one more difference: `<seat>: registered under
   dev mode (by <caller>)`, the caller the dev-mode run itself recorded — the record's
   `registered_by` on one written before the dev-mode caller was kept apart — repaired with
-  `team register <seat>`
-  — the same write with the caller gate in force — and a clean launch of the seat does it too:
-  `register` and `up`, the two launch-command writes that know a mode, say which one they ran in,
-  every other launch-command write is one in force, and so the mark stands exactly while the last
-  write of the seat's record carries it. The table [`team seats`](../commands/seats.md) prints
+  `team register <seat>`, the same write with the caller gate in force; the owner's own launch of
+  the seat does it too. `register`, `up`, `add` and `restart`, the launch-command writes that
+  know a mode, say which one they ran in; `reload` is the one with none, and its write is one in
+  force. A write in force takes the mark off only when the owner makes it — a seat's, a lead's or
+  a delegate's write in force leaves it where it is, for the owner's own register or relaunch. The
+  table [`team seats`](../commands/seats.md) prints
   shows the same mark as `(dev)` beside the seat's id, read the same way — and only when the run
   was given a home to read the registry from;
 - the team registry's record of this team (`~/.config/team/teams.yaml`), for its roster

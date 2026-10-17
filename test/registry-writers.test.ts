@@ -226,6 +226,39 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     expect(getAgent(fixture.home, other)?.seat_handle).toBeUndefined();
   });
 
+  test('a dev-mode write marks the record, a write in force by anyone but the owner leaves the mark, and the owner takes it off', () => {
+    const fixture = makeFixture();
+    const input = registryOf(fixture);
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+
+    // The owner registers first, in force: the record's registrant from here on.
+    const first = registerLaunch({ ...input, owner: true }, worker, 'pane-0');
+    const id = (first as { id: string }).id;
+    expect(getAgent(fixture.home, id)?.provenance.dev_mode).toBeUndefined();
+
+    // A folded run writes the record again: the mark, and the caller that run admitted.
+    registerLaunch({ ...input, by: 'helper', devMode: true }, worker, 'pane-1');
+    const marked = getAgent(fixture.home, id)!;
+    expect(marked.provenance.registered_by).toBe('owner');
+    expect(marked.provenance.dev_mode).toBe(true);
+    expect(marked.provenance.dev_mode_by).toBe('helper');
+
+    // A lead's relaunch in force re-points the record and leaves the mark where it is: the
+    // routine write does not answer the finding the mark raises.
+    registerLaunch({ ...input, by: 'lead' }, worker, 'pane-2');
+    const kept = getAgent(fixture.home, id)!;
+    expect(kept.reach.pane).toBe('pane-2');
+    expect(kept.provenance.dev_mode).toBe(true);
+    expect(kept.provenance.dev_mode_by).toBe('helper');
+
+    // The owner's own write in force takes the mark off, and the caller it named with it.
+    registerLaunch({ ...input, owner: true }, worker, 'pane-3');
+    const cleared = getAgent(fixture.home, id)!;
+    expect(cleared.provenance.dev_mode).toBeUndefined();
+    expect(cleared.provenance.dev_mode_by).toBeUndefined();
+    expect(cleared.provenance.dev_mode_at).toBeUndefined();
+  });
+
   test('a seat the registry never knew is not written by a stop', () => {
     const fixture = makeFixture();
     expect(registerEnd(registryOf(fixture), 'worker', 'stopped')).toBeNull();

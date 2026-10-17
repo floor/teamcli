@@ -280,7 +280,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         // model and effort the file now declares.
         if (patch.pane && next === seat.name && sources.home) {
           const made = registerLaunch(
-            { home: sources.home, team, root, by: describeCaller(caller), session },
+            { home: sources.home, team, root, by: describeCaller(caller), session, owner },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[next]?.id,

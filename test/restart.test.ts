@@ -11,6 +11,9 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { loadTeamFile } from '../src/file/load.ts';
+import { readAgents } from '../src/registry/agents.ts';
+import { registerLaunch } from '../src/registry/sync.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -267,6 +270,62 @@ describe('team restart <seat>', () => {
 
     const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
     expect(log).toContain('restart [owner] restarted worker; pane pane-old -> pane-new\n');
+  });
+
+  test('a dev-mode restart records the mark and the caller it admitted', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources } = makeHarness(fixture);
+    const recorded = () => readAgents(fixture.home).find((agent) => agent.reach.seat === 'worker');
+
+    // A seat the gate refuses, folded into a warning: the restart proceeds, and its registry
+    // write says which mode it ran in and who it admitted — not `dev_mode: false`.
+    const folded = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    folded.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker'], folded, sources)).toBe(0);
+    expect(folded.err).toBe('team restart: warning: only the owner or `leads` restarts a seat; this call is helper; dev mode continues\n');
+    expect(recorded()?.provenance.dev_mode).toBe(true);
+    expect(recorded()?.provenance.dev_mode_by).toBe('helper');
+  });
+
+  test('a lead\'s restart in force leaves an existing mark, and the owner\'s restart takes it off', async () => {
+    /** The worker ready on `pane-old`, its record marked as a folded run wrote it. The lead is
+     *  on the roster, as a launched team lists it: the gate reads the record, not the file. */
+    function marked(): { fixture: Fixture; sources: RestartSources; recorded(): ReturnType<typeof readAgents>[number] | undefined } {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+        session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      });
+      const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+      if (!loaded.ok) throw new Error('fixture team does not validate');
+      const seat = (name: string) => loaded.team.seats.find((item) => item.name === name)!;
+      registerLaunch({ home: fixture.home, team: loaded.team, root: fixture.root, by: 'owner' }, seat('lead'), 'pane-lead');
+      registerLaunch({ home: fixture.home, team: loaded.team, root: fixture.root, by: 'helper', devMode: true }, seat('worker'), 'pane-old');
+      return {
+        fixture,
+        sources: makeHarness(fixture).sources,
+        recorded: () => readAgents(fixture.home).find((agent) => agent.reach.seat === 'worker'),
+      };
+    }
+
+    // A lead's restart in force is routine: it re-points the record and leaves the mark for the
+    // owner. The owner's own restart is the write that answers the finding.
+    const byLead = marked();
+    const lead = testIo(byLead.fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    expect(await runRestart(['worker'], lead, byLead.sources)).toBe(0);
+    expect(byLead.recorded()?.provenance.dev_mode).toBe(true);
+    expect(byLead.recorded()?.provenance.dev_mode_by).toBe('helper');
+
+    const byOwner = marked();
+    const owner = testIo(byOwner.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], owner, byOwner.sources)).toBe(0);
+    expect(byOwner.recorded()?.provenance.dev_mode).toBeUndefined();
+    expect(byOwner.recorded()?.provenance.dev_mode_by).toBeUndefined();
   });
 
   test('the lead can restart another seat from its recorded pane, including from the lobby', async () => {

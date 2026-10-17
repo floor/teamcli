@@ -20,8 +20,13 @@ export type RegistryTeam = {
    *  launches under `x`, and the registry must address the panes where they are. */
   session?: string;
   /** The run had dev mode on: the caller gate was folded into a warning. The record keeps the
-   *  mark in its provenance while the write stands, and a run without it takes the mark off. */
+   *  mark in its provenance while the write stands. A run without the mark takes it off only
+   *  when it is the owner's: the finding the mark raises is the owner's to answer. */
   devMode?: boolean;
+  /** The run is the owner's, at a terminal outside herdr. Only its write in force takes an
+   *  earlier dev-mode mark off the record; a seat's, a lead's or a delegate's write in force
+   *  leaves the mark where it is, for the owner's own register or relaunch. */
+  owner?: boolean;
 };
 
 /** How a seat's agent ends: `stopped` comes back to the same agent, `retired` never does. */
@@ -90,12 +95,13 @@ function recordProjectLead(input: RegistryTeam, teamId: string): void {
  * A seat launched in `pane`: its agent is registered when the (team, seat) has none, else it is
  * re-pointed (same id, new pane, running). The signing triple, the lab, the cli and the launch
  * line are the launch's own, so a reload that changes the model rewrites them on the same agent.
- * The run's provenance is stated too: `register` and `up` say with the write whether they ran
- * under dev mode — and, when they did, the `by` caller they were run by, so a record the owner
- * registered and a folded run re-wrote names the caller that run admitted, not the owner — and
- * the writers that have none to state (`add`, `restart`, `reload` have no dev mode) carry no
- * `devMode`, which takes a mark an earlier run left off the record: the record speaks for the
- * last write of it.
+ * The run's provenance is stated too: every launch-command writer that can run with dev mode on
+ * (`register`, `up`, `add`, `restart`) says with the write whether it did — and, when it did,
+ * the `by` caller it was run by, so a record the owner registered and a folded run re-wrote
+ * names the caller that run admitted, not the owner — and `reload`, the launch-command writer
+ * with no dev mode to state, writes one in force. A write in force takes an earlier mark off
+ * the record only when the owner makes it; anyone else's leaves the mark for the owner's own
+ * register or relaunch to answer.
  * Returns the agent's id, or the note to log.
  */
 export function registerLaunch(
@@ -116,10 +122,17 @@ export function registerLaunch(
     const reach = { team: teamId, seat: seat.name, session: input.session ?? team.session, pane, address: known?.reach.address ?? null };
     const signing = { model: seat.model, version: seat.version, role: seat.role };
     const devMode = input.devMode === true;
+    // A write's provenance: a dev-mode run states its mark and the caller it admitted; a run in
+    // force takes an earlier mark off only when the owner makes it. Another caller's write in
+    // force changes nothing about the mark — a seat's `reload` or a lead's `restart` is routine,
+    // and it does not answer the finding the mark raises.
+    const provenance = devMode
+      ? { dev_mode: true, dev_mode_by: by }
+      : input.owner === true ? { dev_mode: false } : undefined;
     const agent = known
       ? updateAgent(home, known.id, {
         signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
-        provenance: { dev_mode: devMode, ...(devMode ? { dev_mode_by: by } : {}) }, ...seatHandle,
+        ...(provenance === undefined ? {} : { provenance }), ...seatHandle,
       })
       : registerAgent(home, {
         name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launcher: null, launch: seat.launch,

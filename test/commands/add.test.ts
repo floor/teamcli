@@ -10,6 +10,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
+import { readAgents } from '../../src/registry/agents.ts';
 import { readLedger, storePath, writeApproval } from '../../src/store/store.ts';
 import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { rulesFilePath } from '../../src/launch/rules-file.ts';
@@ -229,6 +230,20 @@ describe('team add', () => {
     expect(readState(join(project, '.agents')).sessions.acme?.seats.worker?.stage).toBe('ready');
     const loaded = loadTeamFile(project, { home });
     expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
+  });
+
+  test('a dev-mode add records the mark and the caller it admitted', async () => {
+    const made = world();
+    const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runAdd(['worker'], io, sources(made))).toBe(0);
+    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs it; this call is helper; dev mode continues\n');
+    // The launch's write says the run was folded and who it admitted: the record a later
+    // `team check` reads names the helper, and the owner's own write is what takes it off.
+    const record = readAgents(home).find((agent) => agent.reach.seat === 'worker');
+    expect(record?.provenance.dev_mode).toBe(true);
+    expect(record?.provenance.dev_mode_by).toBe('helper');
+    expect(record?.provenance.registered_by).toBe('helper');
   });
 
   test('a dry run previews a launch-line refusal, creates nothing, and edits nothing', async () => {

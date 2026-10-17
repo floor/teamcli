@@ -404,6 +404,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       running: runningSeats,
       seat: declared,
       caller: who,
+      owner: caller.kind === 'owner',
+      devMode: io.env.TEAMCLI_DEV_MODE === '1',
       now: sources.now,
       launch: sources.upLaunch,
       readMachine: sources.machine,
@@ -588,6 +590,8 @@ function hostOf(input: {
   running: Running[];
   seat: Seat;
   caller: string;
+  owner: boolean;
+  devMode: boolean;
   now(): Date;
   launch: Launch;
   readMachine?: (root: string) => Machine;
@@ -727,7 +731,7 @@ function hostOf(input: {
         // The registry: a relaunch keeps the seat's agent and re-points it to the new pane.
         if (name === seat.name) {
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
