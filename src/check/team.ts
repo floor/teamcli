@@ -164,6 +164,17 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // exit: check.state
     return 2;
   }
+  // The live read comes before the repair: the check refuses when herdr cannot answer, and a run
+  // that refuses must have changed nothing. The read is the state's own seats for the file's
+  // seats — the leftovers the repair drops are never among them — so the comparison below reads
+  // the same live session either way.
+  const recorded = whole.sessions[session] ?? emptySession();
+  const live = sources.live(session, team, recorded);
+  if (!live) {
+    io.stderr('team check: herdr doesn\'t answer; is it installed and running?\n');
+    // exit: check.herdr
+    return 2;
+  }
   // The state's leftovers, read before anything is compared: a record for a seat the file no
   // longer declares, and a session the file does not name with no seat of the team in it. They
   // are named as differences below; with the owner's `--repair` they are dropped first, so the
@@ -183,12 +194,6 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     stale = staleState(team, session, whole);
   }
   const state = whole.sessions[session] ?? emptySession();
-  const live = sources.live(session, team, state);
-  if (!live) {
-    io.stderr('team check: herdr doesn\'t answer; is it installed and running?\n');
-    // exit: check.herdr
-    return 2;
-  }
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
@@ -264,9 +269,11 @@ type Stale = { seats: StaleSeat[]; sessions: string[] };
  * with the file's own: a record for a name the file no longer declares names no pane of this
  * team's, and only a temporary seat — which the file never lists — keeps its record. Every other
  * session the state holds is a leftover unless a seat of the team lives in it: a name the file
- * declares, or a temporary seat the file never lists. What herdr is running is not read: the
- * state's own claims are the subject, and a pane herdr no longer lists is still a pane the state
- * claims.
+ * declares, or a temporary seat the file never lists. The file's own session and the addressed
+ * session are never leftovers themselves: the first is where the team runs, and the second is the
+ * session this run is about — `--session` aims the check at it, so the repair must not drop the
+ * record it is reading. What herdr is running is not read: the state's own claims are the subject,
+ * and a pane herdr no longer lists is still a pane the state claims.
  */
 function staleState(team: TeamFile, session: string, whole: State): Stale {
   const declared = new Set(team.seats.map((seat) => seat.name));
@@ -277,7 +284,7 @@ function staleState(team: TeamFile, session: string, whole: State): Stale {
   }
   const sessions: string[] = [];
   for (const [name, held] of Object.entries(whole.sessions)) {
-    if (name === team.session) continue;
+    if (name === team.session || name === session) continue;
     if (Object.entries(held.seats).some(([seatName, seat]) => seatOfFile(seatName, seat, declared))) continue;
     sessions.push(name);
   }

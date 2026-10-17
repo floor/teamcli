@@ -6,7 +6,7 @@
 // caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck, type CheckSources } from '../src/check/team.ts';
@@ -134,7 +134,7 @@ function checkSources(w: World, over: Partial<CheckSources> = {}): CheckSources 
 
 function check(
   w: World,
-  args: { repair?: boolean; file?: boolean } = {},
+  args: { repair?: boolean; file?: boolean; session?: string } = {},
   caller: typeof OWNER | typeof LEAD = OWNER,
   over: Partial<CheckSources> = {},
 ): { code: number; out: string; err: string } {
@@ -144,6 +144,7 @@ function check(
       // A seat aims no flags: its check finds the team file from where it stands.
       ...(args.file === false ? {} : { file: '.agents/team.yaml' }),
       ...(args.repair ? { repair: true } : {}),
+      ...(args.session !== undefined ? { session: args.session } : {}),
     },
     io,
     checkSources(w, over),
@@ -256,5 +257,44 @@ describe('a state seat the file no longer declares', () => {
     expect(r.out).not.toContain('session "moved"');
     expect(r.out).toContain('repaired: the state\'s session "held" holds no seat of the team; its record is dropped');
     expect(Object.keys(readState(w.dir).sessions).sort()).toEqual(['acme', 'moved']);
+  });
+});
+
+describe('the session the run addresses', () => {
+  test('--session aims the check at it, and --repair never calls it a leftover nor drops it', async () => {
+    const w = world();
+    seed(w);
+    await register(w, ['lead', '--pane', PANE]);
+    // The addressed session holds only a record the file no longer declares. Without the skip,
+    // the sessions pass calls the session itself a leftover, and the repair drops the very record
+    // the check is reading.
+    updateState(w.dir, (state) => {
+      state.sessions.alt = { seats: { helper: { stage: 'ready', pane: 'w2:p1', workspace: 'w2' } }, worktrees: {} };
+    });
+
+    const r = check(w, { repair: true, session: 'alt' });
+
+    expect(r.out).not.toContain('session "alt"');
+    // The records inside the addressed session are still compared with the file: the departed
+    // seat is dropped from it, and the session itself stands.
+    expect(r.out).toContain('repaired: helper: a state seat not in the file claimed pane w2:p1; its record is dropped');
+    expect(readState(w.dir).sessions.alt).toEqual({ seats: {}, worktrees: {} });
+  });
+});
+
+describe('herdr silent', () => {
+  test('--repair waits for the live read: a check that refuses has dropped nothing', () => {
+    const w = world();
+    seed(w);
+
+    const r = check(w, { repair: true }, OWNER, { live: () => null });
+
+    expect(r.code).toBe(2);
+    expect(r.err).toBe("team check: herdr doesn't answer; is it installed and running?\n");
+    expect(r.out).toBe('');
+    // The leftovers are still there, and nothing was logged as dropped.
+    expect(seats(w)).toEqual(['helper', 'runner']);
+    expect(Object.keys(readState(w.dir).sessions).sort()).toEqual(['acme', 'gone-one', 'gone-two']);
+    expect(existsSync(join(w.dir, LOG_FILE))).toBe(false);
   });
 });

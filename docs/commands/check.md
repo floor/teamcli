@@ -39,9 +39,13 @@ named when the record expects one) and `the state records the session "<name>", 
 team is in it`. The file is the truth: neither record is ever guessed back into the file, and the
 one repair is `team check --repair`, the owner's own write, which drops exactly those records from
 the state. A record for a temporary seat is never one of these — [`team add`](add.md) `--temporary`
-never writes a temporary seat into the file, and its record is the only place it exists. Herdr is
-not read for either: a pane herdr no longer lists is still a pane the state claims, and a session
-herdr runs is still a leftover when no seat of the team is in it.
+never writes a temporary seat into the file, and its record is the only place it exists. Nor is the
+session this run reads, the file's own or the one `--session` names: one is where the team runs,
+the other is what the run is about, and `--repair` never drops the record the check is reading.
+Herdr is not consulted about any of this: a pane herdr no longer lists is still a pane the state claims,
+and a session herdr runs is still a leftover when no seat of the team is in it. The repair still
+waits for the live read: a check whose herdr cannot answer refuses with `check.herdr`, exit 2, and
+drops nothing.
 
 ## Synopsis
 
