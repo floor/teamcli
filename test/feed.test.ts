@@ -276,10 +276,10 @@ describe('team send history log & team feed', () => {
 
     const jsonIo = testIo(root);
     expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
-    const jsonLine = JSON.parse(jsonIo.out) as Record<string, unknown>;
-    expect(jsonLine.to).toBe('lead');
-    expect(jsonLine.spec).toBe('zeus@acme');
-    expect(jsonLine.resolved).toBe('agt_0123456789ab');
+    const jsonDoc = JSON.parse(jsonIo.out) as { events: Record<string, unknown>[] };
+    expect(jsonDoc.events[0]?.to).toBe('lead');
+    expect(jsonDoc.events[0]?.spec).toBe('zeus@acme');
+    expect(jsonDoc.events[0]?.resolved).toBe('agt_0123456789ab');
 
     // A line that wrote neither keeps the shape it always had.
     appendHistory('acme', root, home, {
@@ -293,7 +293,8 @@ describe('team send history log & team feed', () => {
     });
     const plainIo = testIo(root);
     expect(await runFeed(['--limit', '1', '--json'], plainIo, { home })).toBe(0);
-    expect(Object.keys(JSON.parse(plainIo.out) as Record<string, unknown>).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts', 'via']);
+    const plainDoc = JSON.parse(plainIo.out) as { events: Record<string, unknown>[] };
+    expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts', 'via']);
   });
 
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {

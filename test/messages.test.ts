@@ -279,8 +279,11 @@ difference: lead/m1 does not verify: the record is not a message
     const result = await run();
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
+    const seats = ['builder', 'builder-2', 'builder-9', 'builder-10', 'builder-100'];
+    const rows = seats.map((seat) => `  m1  harness  ${seat.padEnd(11)}  0s ago  shown`).join('\n');
+    const bodies = seats.map((seat) => `${seat}/m1:\nbody from ${seat}\n`).join('\n');
     expect(result.out).toBe(
-      ['builder', 'builder-2', 'builder-9', 'builder-10', 'builder-100'].map((seat) => `body from ${seat}\n`).join(''),
+      `team acme, session "acme"\n  ID  FROM     TO           SENT    STATUS\n${rows}\n\n${bodies}\n5 message(s)\n`,
     );
   });
 
