@@ -84,9 +84,11 @@ that proceeds is attributed in the log before its effects, as
 | `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | the usage, and exit 0 |
 
-The temporary seat's name is the `--like` seat's, with `-tmp-` and the next free seat number. Numbers
-are written at two digits by default (`worker-tmp-01`) and compared as numbers, so a name from an
-older width still holds its place: 9 is followed by 10, and 99 by 100.
+The temporary seat's name is the `--like` seat's, with `-tmp-` and the next free seat number. The
+number is written in the width and separator the advised `seat-numbering` setting resolves for the
+team — two digits and `-` by default (`worker-tmp-01`), or a width of 1 to 4 digits, or `auto` for
+the number's own digits, with the separator the setting names. Numbers are compared as numbers, so
+a name from an older width still holds its place: 9 is followed by 10, and 99 by 100.
 
 `--until` accepts one of two ends, and nothing else.
 

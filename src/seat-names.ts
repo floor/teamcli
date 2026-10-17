@@ -2,14 +2,16 @@
 // `builder-10`, `builder-100`). The number is read by pattern and compared as a number wherever
 // names are ordered or minted, so 9 sorts before 10 at any width and the next free number is the
 // next integer, never the next string. The width and separator are the `seat-numbering` setting's
-// (2- by default); the setting's resolver lands with it, and every helper here takes the value it
-// resolves rather than assuming a width.
+// (2- by default): `seatNumberingInForce` resolves it for a team, and every helper here takes the
+// value it resolves rather than assuming a width.
+
+import { SEAT_NUMBERING_DEFAULT, type SeatNumbering } from './settings/inherit.ts';
 
 /** How a seat number is written: its width, or `auto` for as many digits as the number needs. */
-export type SeatNumbering = { width: number | 'auto'; separator: string };
+export type { SeatNumbering } from './settings/inherit.ts';
 
 /** `2-`: two digits, the separator `-`. The default until a file or a policy says otherwise. */
-export const DEFAULT_SEAT_NUMBERING: SeatNumbering = { width: 2, separator: '-' };
+export const DEFAULT_SEAT_NUMBERING: SeatNumbering = SEAT_NUMBERING_DEFAULT;
 
 /** A name's numbered tail: the stem before the separator, the number, and its digits as written
  *  (`builder-01` gives the stem `builder`, the number 1 and the digits `01`). */

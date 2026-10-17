@@ -16,7 +16,8 @@ import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
-import { nextFreeSeatNumber } from '../seat-names.ts';
+import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
+import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, seatIsStopped } from '../file/lines.ts';
@@ -419,7 +420,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const original = readFileSync(path, 'utf8');
   const asked = args.rest[0] ?? '';
   const built = temporary
-    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base)
+    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
     : declaredSeat(asked, original, team, sources.home, sources.fs);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
@@ -1039,7 +1040,7 @@ function declaredSeat(
 
 function temporarySeat(
   values: Record<string, string>, current: string, approved: TeamFile, state: SessionState, agents: readonly HerdrAgent[],
-  root: string, base: string | null,
+  root: string, base: string | null, home: string, now: Date,
 ): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string; id: string } {
   const like = approved.seats.find((item) => item.name === values.like);
   if (!like) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(values.like)}` };
@@ -1066,7 +1067,7 @@ function temporarySeat(
   const worktree = task ? state.worktrees[task] : undefined;
   if (task && !worktree) return { id: 'add.worktree-missing', error: `no worktree named ${JSON.stringify(task)} is recorded` };
   if (worktree?.setup === 'failed') return { id: 'add.worktree-failed', error: `worktree ${task} has a failed setup; team worktree remove ${task}` };
-  const name = temporaryName(like.name, approved, state, agents);
+  const name = temporaryName(like.name, approved, state, agents, seatNumberingInForce({ home, root, team: approved, now }));
   return {
     name,
     edited: current,
@@ -1082,14 +1083,14 @@ function temporarySeat(
 
 /**
  * The temporary seat's name: the like seat's own name, `-tmp`, and the next free seat number in
- * the numbering's width and separator — `worker-tmp-01` at the default, which is the value this
- * call passes until the `seat-numbering` setting resolves one. The number is read as a number, so
- * a `worker-tmp-1` minted by an older build still holds 1 and the next name is `worker-tmp-02`; a
- * name already running in the session or listed by herdr holds its number too.
+ * the numbering in force — the `seat-numbering` setting's width and separator (`worker-tmp-01`
+ * at the shipped default). The number is read as a number, so a `worker-tmp-1` minted under an
+ * older width still holds 1 and the next name is `worker-tmp-02`; a name already running in the
+ * session or listed by herdr holds its number too.
  */
-function temporaryName(like: string, team: TeamFile, state: SessionState, agents: readonly HerdrAgent[]): string {
+function temporaryName(like: string, team: TeamFile, state: SessionState, agents: readonly HerdrAgent[], numbering: SeatNumbering): string {
   const used = new Set([...team.seats.map((seat) => seat.name), ...Object.keys(state.seats), ...agents.map((agent) => agent.name ?? '')]);
-  return nextFreeSeatNumber(`${like}-tmp`, used);
+  return nextFreeSeatNumber(`${like}-tmp`, used, numbering);
 }
 
 function parseUntil(value: string): Until | null {

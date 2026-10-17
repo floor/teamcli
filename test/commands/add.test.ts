@@ -16,6 +16,7 @@ import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
@@ -121,6 +122,14 @@ function approve(text: string = FILE): void {
     loaded.team.seats,
     home,
   );
+}
+
+/** The team's signed word on the seat numbering, written into the file the run reads and then
+ *  approved over it — the policy is part of the text the approval covers. */
+function setNumbering(value: string): void {
+  const written = writePolicySet(home, { level: 'team', target: project, teamRoot: project, name: 'seat-numbering', value }, { now: NOW });
+  if (!written.ok) throw new Error(written.why);
+  approve(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8'));
 }
 
 function doctor(): DoctorSources {
@@ -254,6 +263,30 @@ describe('team add', () => {
     const ioAgain = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], ioAgain, sources(again))).toBe(0);
     expect(again.creates).toEqual(['worker-tmp-02']);
+  });
+
+  test('a width 3 seat-numbering at the team level writes the temporary name at that width', async () => {
+    setNumbering('3-');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], io, sources(made))).toBe(0);
+    expect(made.creates).toEqual(['worker-tmp-001']);
+    // The taken number is 1, so the next mint is 2 at the same width.
+    const again = world();
+    const ioAgain = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], ioAgain, sources(again))).toBe(0);
+    expect(again.creates).toEqual(['worker-tmp-002']);
+  });
+
+  test('an auto seat-numbering writes the number at its own width after the declared separator, and an older width still holds its number', async () => {
+    // The file holds worker-tmp-1 under the hyphen: number 1 is taken whatever separator the
+    // setting writes, so the next mint is 2 — written plain, with no padding under `auto`.
+    approve(FILE.replace('name: scribe', 'name: worker-tmp-1'));
+    setNumbering('auto.');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['--temporary', '--like', 'worker', '--until', 'result:notes/out.md'], io, sources(made))).toBe(0);
+    expect(made.creates).toEqual(['worker-tmp.2']);
   });
 
   test('a dev-mode add records the mark and the caller it admitted', async () => {
