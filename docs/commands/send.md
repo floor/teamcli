@@ -56,8 +56,9 @@ down — it reaches this terminal and no file. The daily log keeps the seat and 
 
 The outcome is always confirmed — one of `delivered`, `answered`, `held`, `not-submitted`, `timeout`,
 `unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
-with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster
-and the seats of the other teams of the caller's entity, each of those as `<seat>@<team>`.
+with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster,
+each seat's human name as its `@<nickname>` address, and the seats of the other teams of the
+caller's entity, each of those as `<seat>@<team>` (a human name there as `<nickname>@<team>`).
 Broadcast is not in this build. Any seat's shell can run it — agy, grok, codex or claude — and it is the only path
 by which one agent types into another seat's pane: agents do not send keys through herdr.
 
@@ -110,33 +111,46 @@ writes no drop file and types nothing; it appends one line to
 | `agt_<12 hex>` | one agent by its id, from the agent registry |
 | `<seat>@<team>` | a seat in a named team — whoever its registry record holds now; `<team>` is a team id, a project or a session |
 | `<nickname>@<team>` | the seat that human name belongs to, in a named team — a nickname confers nothing: its seat talks and is judged by its own record |
-| `@<team>` | the team's lead: the seat its file marks `leads: true`. A team with no lead is refused — there is no one to deliver to; a roster marking two leads is refused naming both |
-| `<seat>` or `<nickname>` | a seat of the caller's own team, by its name or its human name |
+| `lead@<team>` | the team's lead: the seat its file marks `leads: true`, never a seat merely named `lead`. A team with no lead is refused — there is no one to deliver to; a roster marking two leads is refused naming both |
+| `@<nickname>` | the seat carrying that human name: the caller's team first, then the other teams of the caller's entity (from a folder that is no team, every team the registry holds). Exactly one match sends; several are refused, each named by the `<nickname>@<team>` spelling that picks it; none is refused, pointing at `team send --list` |
+| `<seat>` or `<nickname>` | a seat of the caller's own team, by its name or its human name. From a folder that is no team, a bare name is refused with the forms that need none — never a `team init` suggestion |
 
 A role is never an address: `coordinator@api` names nobody even when a seat of that team holds
 the role `coordinator`. Every form resolves to one seat's registry record before any rule runs,
 and the admission rule judges that record's seat — a nickname added or removed never changes who
 may reach whom. A spec that two entries answer — one seat's name and another seat's nickname of
-the same team — is refused naming both and sending nothing. A team-level address is refused the
-same way when the roster marks two leads; a roster with no lead is refused because there is no
-one to deliver to, and the refusal names both repairs: `team send --list` to name a seat, or
-`leads` on one seat to give the team a lead. A `<seat>@<team>` and a nickname
-resolve only through the team's roster; when the roster has no line for it, the agent records are
-asked by the same seat name, so a registry whose roster has not caught up still addresses the seat.
+the same team — is refused naming both and sending nothing. A `lead@<team>` naming a roster that
+marks two leads is refused the same way; a roster with no lead is refused because there is no one
+to deliver to, and the refusal names both repairs: `team send --list` to name a seat, or `leads`
+on one seat to give the team a lead.
+
+`lead` is reserved for that address. A file written before 0.5.0 may still declare a seat of the
+name: it loads, answers its bare name in its own team, and `team check` notes it — its repair is
+`team rename lead <new-name>` — while `lead@<team>` always reaches the seat that holds `leads`.
+No new seat and no nickname may take the word.
+
+A nickname is unique inside its team, and two teams may share one: `@<nickname>` asks the
+caller's own team first and then the entity's other teams, and a name more than one of them
+answers is refused with each address that would pick one. A `<seat>@<team>` or
+`<nickname>@<team>` resolves through the named team's roster only; when the roster has no line
+for it, the agent records are asked by the same seat name, so a registry whose roster has not
+caught up still addresses the seat.
 
 The registries — `~/.config/team/agents/<id>.yaml` and `~/.config/team/teams.yaml` — are the
 address. The live herdr read is the fallback for a record that carries no pane yet, by the seat's
 name in the record's session. A plain seat the registry cannot answer keeps the declared-seat
 path: the caller's team file and its placement rules. A spec that names nobody is refused, and
 the refusal names what was not found. A target in another team is reached directly, and its drop
-lands under that team's own `.agents`. `--list` prints a target in another team in the same
-spelling, `<seat>@<team>`, for every seat the registry holds there. A listed row parses as it
-stands; whether this caller may send to it is the admission rule's answer, judged when the send
+lands under that team's own `.agents` — full addresses work from any folder, a folder that is no
+team included; only a bare name needs one. `--list` prints a target in another team in the same
+spelling, `<seat>@<team>`, for every seat the registry holds there, and a human name as
+`@<nickname>` in the file's own roster and `<nickname>@<team>` in another's. A listed row parses
+as it stands; whether this caller may send to it is the admission rule's answer, judged when the send
 runs. An agent's id is assigned once and never reused; its name is display only
 ([the registries](../concepts/registry.md)).
 
 A history line keeps the address beside the seat it resolved to: when the caller wrote a form
-rather than the seat's own name — a nickname, a `<nickname>@<team>`, `@<team>`, an agent id — the
+rather than the seat's own name — a `@<nickname>`, a `<nickname>@<team>`, `lead@<team>`, an agent id — the
 line adds `spec`, the address exactly as written, and `resolved`, the seat's registry id
 (`agt_…`). `to` is the seat either way. A plain seat of the caller's own team names itself, and
 its line carries no `spec`.
@@ -258,7 +272,7 @@ line on stderr and has none.
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
-| listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat(s)` on stdout; `NICKNAME` is `-` without one, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` and `<nickname>@<team>` in `NICKNAME` |
+| listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat(s)` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
@@ -383,7 +397,7 @@ exit 0
 `--list` prints the addressable seats — the same roster `team status` reads — each with the
 project its team sits in: the registry's grouping when the machine has one, the file's own
 `project:` name otherwise. A seat whose file writes a `nickname:` carries that human name in
-`NICKNAME`, and `-` where it writes none.
+`NICKNAME` as its `@<nickname>` address, and `-` where it writes none.
 The other teams of the file's entity follow, their seats spelled `<seat>@<team>` and their human
 names `<nickname>@<team>`; this fixture world holds one team, so the rows below are the file's
 own. It sends nothing:
@@ -391,9 +405,9 @@ own. It sends nothing:
 ```console
 $ team send --list ; echo "exit $?"
 team beacon, session "beacon"
-  SEAT           NICKNAME   ROLE         PROJECT  REACH
-  claude-keeper  agamemnon  coordinator  beacon   socket
-  gpt-reviewer   -          reviewer     beacon   typed
+  SEAT           NICKNAME    ROLE         PROJECT  REACH
+  claude-keeper  @agamemnon  coordinator  beacon   socket
+  gpt-reviewer   -           reviewer     beacon   typed
 2 seat(s)
 exit 0
 ```
@@ -413,7 +427,7 @@ $ team send --list --json ; echo "exit $?"
   "seats": [
     {
       "name": "claude-keeper",
-      "nickname": "agamemnon",
+      "nickname": "@agamemnon",
       "cli": "claude-code",
       "role": "coordinator",
       "project": "beacon",

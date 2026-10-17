@@ -3256,7 +3256,7 @@ scene('ask-show.invocation', async (place) =>
 
 scene('send.usage', async (place) => show(await sent(place, [], owner, sendHost(place)), 'a seat and a message are required'));
 scene('send.configuration', async (place) =>
-  show(await sent(place, ['lead', '--file', 'missing.yaml'], owner, sendHost(place)), 'no team file'));
+  show(await sent(place, ['lead', '--file', 'missing.yaml'], owner, sendHost(place)), 'lead needs a team'));
 scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');

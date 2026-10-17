@@ -256,10 +256,10 @@ describe('cross-team sends inside an entity', () => {
     refused(await send({ team: 'api', seat: 'api-lead' }, 'hermes@beta'));
   });
 
-  test('the bare-team form resolves to the team\'s lead, and another entity\'s lead is out of reach', async () => {
-    admitted(await send({ team: 'web', seat: 'web-lead' }, '@api'));
-    admitted(await send({ team: 'acme', seat: 'coord' }, '@api'));
-    refused(await send({ team: 'api', seat: 'api-lead' }, '@data'));
+  test('the lead address resolves to the team\'s lead, and another entity\'s lead is out of reach', async () => {
+    admitted(await send({ team: 'web', seat: 'web-lead' }, 'lead@api'));
+    admitted(await send({ team: 'acme', seat: 'coord' }, 'lead@api'));
+    refused(await send({ team: 'api', seat: 'api-lead' }, 'lead@data'));
   });
 });
 
@@ -274,7 +274,7 @@ describe('cross-team --list', () => {
     // never show; every name in the name column is a spec the resolver takes as it stands.
     expect(reading.out).toBe(
       [
-        'api-lead  claude-code  guide  api  zeus',
+        'api-lead  claude-code  guide  api  @zeus',
         'api-helper  claude-code  coordinator  api',
         'coord@acme  claude-code  facilitator  acme',
         'acme-helper@acme  claude-code  builder  acme',
@@ -311,7 +311,7 @@ describe('cross-team --list', () => {
     expect(doc.seats.length).toBe(6);
     expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', nickname: null, cli: 'claude-code', role: 'builder', stopped: true, project: 'acme' });
     expect(byName.get('web-lead@web')).toEqual({ name: 'web-lead@web', nickname: null, cli: 'claude-code', role: 'guide', stopped: false, project: 'web' });
-    expect(byName.get('api-lead')).toEqual({ name: 'api-lead', nickname: 'zeus', cli: 'claude-code', role: 'guide', stopped: false, project: 'api' });
+    expect(byName.get('api-lead')).toEqual({ name: 'api-lead', nickname: '@zeus', cli: 'claude-code', role: 'guide', stopped: false, project: 'api' });
     expect(byName.has('data-lead@data')).toBe(false);
   });
 });

@@ -428,7 +428,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
 | `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
-| `send.configuration` | `send` | 2 | the team file can't be read | `team send worker hello --file missing.yaml` |
+| `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |

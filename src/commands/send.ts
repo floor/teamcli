@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
@@ -25,7 +25,7 @@ import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
-import { isRegistrySpec, resolveTarget, type Target } from '../send/resolve.ts';
+import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { type DeliveryLeg, type SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
@@ -223,6 +223,128 @@ type Aim = {
   cross: boolean;
 };
 
+type TeamLoad = ReturnType<typeof loadTeamFile>;
+type LoadedTeam = Extract<TeamLoad, { ok: true }>;
+
+/** Both halves of `team send` share these before a message exists: the team file, the caller's
+ *  placement, the registry's answer and the refusals a spec gets, and — for a full address
+ *  written from outside any team's folder — the receiving team's own file, read in the file's
+ *  place. */
+type Prologue = {
+  team: TeamFile;
+  root: string;
+  dir: string;
+  fileTeamId: string;
+  loaded: LoadedTeam;
+  caller: Caller;
+  who: string;
+  from: string;
+  standing: SeatStanding;
+  hit: Target | null;
+};
+
+/** A run the prologue ended before a message existed: the question is which refusal, not the
+ *  sentence — the call site writes it with the same helper the rest of `send` uses, so the run
+ *  reads exactly as it did when the prologue wrote it itself. */
+type Ended =
+  | { ended: 'configuration'; message: string }
+  | { ended: 'refused'; dir: string | null; who: string; reason: string };
+
+/** A folder that is no team at all: not inside a repository, or inside one that holds no team
+ *  file. A link has its own refusal, and a file that exists but does not load still reads. */
+function noTeamFolder(errors: ReadonlyArray<{ message: string }>): boolean {
+  return errors.length > 0
+    && errors.every((problem) => problem.message === NOT_A_REPO || problem.message.startsWith('no team file here'));
+}
+
+/** The one sentence a bare name from outside a team's folder gets: it has no team to resolve in,
+ *  and the forms that need none. Never a `team init` suggestion. */
+function needsTeam(spec: string): string {
+  return `${spec} needs a team: run it inside a team's folder, or write ${spec}@<team> (team send --list shows the addresses)`;
+}
+
+/**
+ * The steps both halves of `team send` walk before a message exists. Inside a team's folder the
+ * caller's own file is the reading. Outside one, a full address — an agent id, a `@<nickname>`,
+ * or a `<seat|nickname>@<team>` — is still the registry's to answer, the records name their
+ * teams' roots, and the receiving team's file is loaded and read in its place; a bare name has
+ * no team to resolve in and is refused with `needsTeam`'s sentence.
+ */
+function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
+  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  if (!loaded.ok) {
+    if (noTeamFolder(loaded.errors)) {
+      const parsed = parseSpec(seatName);
+      if ('error' in parsed) return { ended: 'configuration', message: parsed.error };
+      if (parsed.kind === 'seat') return { ended: 'configuration', message: needsTeam(seatName) };
+      return homeless(io, host, seatName);
+    }
+    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
+    return { ended: 'configuration', message: message || 'the team file cannot be read' };
+  }
+  const { team, root } = loaded;
+  const dir = dirname(loaded.path);
+  // The id the registry writes for this team: the live file's own identity, the team a sender
+  // the store holds no record for is judged in.
+  const fileTeamId = teamIdOf(root);
+  // The address is resolved first: the registry answers an agent id, a `seat@team` (team spelled
+  // by id, project or session), a `@nickname`, or a plain seat it holds an agent for, and the
+  // live herdr read is the fallback for a record that carries no pane. A spec that names nobody
+  // is refused by its own answer; a plain seat the registry cannot answer keeps the
+  // declared-seat path below. The live read the resolution may fall back to is the host's, one
+  // reader for the session's agents, so a fake host answers it in tests.
+  const judged = judgeCallerIn(io, dir, team);
+  const { caller } = judged;
+  const who = logWho(caller, team);
+  const from = caller.kind === 'seat' ? caller.name : 'owner';
+  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  // An ambiguous spec is refused wherever it is written, not only when it looks like a registry
+  // spec: the declared-seat path below must never pick one of the two seats the registry named.
+  if ('error' in resolved && (resolved.kind === 'ambiguous' || isRegistrySpec(seatName))) {
+    return { ended: 'refused', dir, who, reason: resolved.error };
+  }
+  const hit = 'error' in resolved ? null : resolved;
+  const standing = standingOf(dir, judged.session, caller);
+  return { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit };
+}
+
+/**
+ * A full address from a folder that is no team: the registry names the receiving team's root, so
+ * its own file is loaded and the caller — the owner, the only caller this path admits, since
+ * every other caller is judged by its team's file and there is none here — stands in it for the
+ * read. Every refusal this path writes has no team log to write to: it is reported, not logged.
+ */
+function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
+  const caller = callerOf(io);
+  if (caller.kind !== 'owner') {
+    return { ended: 'refused', dir: null, who: describeCaller(caller), reason: 'a send from outside a team\'s folder is the owner\'s; run it inside a team\'s folder' };
+  }
+  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  if ('error' in resolved) return { ended: 'refused', dir: null, who: 'owner', reason: resolved.error };
+  const loaded = loadTeamFile(resolved.team.root, { home: host.home });
+  if (!loaded.ok) {
+    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
+    const why = `${seatName}: the team "${resolved.team.project}" has a registry record, but its team file cannot be read (${resolved.team.root})`;
+    return { ended: 'configuration', message: message === '' ? why : `${why}: ${message}` };
+  }
+  const { team, root } = loaded;
+  const dir = dirname(loaded.path);
+  const fileTeamId = teamIdOf(root);
+  const judged = judgeCallerIn(io, dir, team);
+  return {
+    team,
+    root,
+    dir,
+    fileTeamId,
+    loaded,
+    caller: judged.caller,
+    who: logWho(judged.caller, team),
+    from: 'owner',
+    standing: standingOf(dir, judged.session, judged.caller),
+    hit: resolved,
+  };
+}
+
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
@@ -271,34 +393,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     timeoutS = seconds;
   }
 
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
-  if (!loaded.ok) {
-    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
-    return configuration(io, message || 'the team file cannot be read', report);
+  const pro = prologue(io, host, seatName);
+  if ('ended' in pro) {
+    if (pro.ended === 'configuration') return configuration(io, pro.message, report);
+    return refuse(io, pro.dir, pro.who, pro.reason, host, report);
   }
-  const { team, root } = loaded;
-  const dir = dirname(loaded.path);
-  // The id the registry writes for this team: the live file's own identity, the team a sender
-  // the store holds no record for is judged in.
-  const fileTeamId = teamIdOf(root);
-
-  // The address is resolved first: the registry answers an agent id, a `seat@team` (team spelled
-  // by id, project or session) or a plain seat it holds an agent for, and the live herdr read is
-  // the fallback for a record that carries no pane. A spec that names nobody is refused by its
-  // own answer; a plain seat the registry cannot answer keeps the declared-seat path below.
-  // The live read the resolution may fall back to is the host's, one reader for the session's
-  // agents, so a fake host answers it in tests.
-  const judged = judgeCallerIn(io, dir, team);
-  const { caller } = judged;
-  const who = logWho(caller, team);
-  const from = caller.kind === 'seat' ? caller.name : 'owner';
-  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
-  // An ambiguous spec is refused wherever it is written, not only when it looks like a registry
-  // spec: the declared-seat path below must never pick one of the two seats the registry named.
-  if ('error' in resolved && (resolved.kind === 'ambiguous' || isRegistrySpec(seatName))) {
-    return refuse(io, dir, who, resolved.error, host, report);
-  }
-  const hit = 'error' in resolved ? null : resolved;
+  const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
 
   // The authority rule, `admitSend` over the registry's records, default deny, judging the
   // resolved target when there is one. A sender the store holds no record for is judged as the
@@ -312,7 +412,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // and on the pane the state records for that seat (`admissionOf`'s identity check) — never by
   // session and seat name alone. All of it runs before the message is read and before any seat
   // is probed.
-  const standing = standingOf(dir, judged.session, caller);
   let to: Aim;
   let admission: Admission;
   if (hit === null) {
@@ -343,8 +442,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       session: hit.agent.reach.session,
       cli: hit.agent.cli,
       address: hit.agent.reach.address,
-      // The form the caller wrote, kept beside the seat it resolved to: a nickname, a seat or
-      // nickname at a team, `@team`, or an agent id. A plain seat names itself and adds nothing.
+      // The form the caller wrote, kept beside the seat it resolved to: a `@<nickname>`, a seat
+      // or nickname at a team, `lead@<team>`, or an agent id. A plain seat names itself and adds nothing.
       sentAs: seatName === hit.agent.reach.seat ? null : { spec: seatName, resolved: hit.agent.id },
       dir: cross ? join(hit.team.root, '.agents') : dir,
       project: hit.team.project,
@@ -569,26 +668,12 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   }
   if (body.trim() === '') return usage(io, 'the message is empty', report);
 
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
-  if (!loaded.ok) {
-    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
-    return configuration(io, message || 'the team file cannot be read', report);
+  const pro = prologue(io, host, seatName);
+  if ('ended' in pro) {
+    if (pro.ended === 'configuration') return configuration(io, pro.message, report);
+    return refuse(io, pro.dir, pro.who, pro.reason, host, report);
   }
-  const { team, root } = loaded;
-  const dir = dirname(loaded.path);
-  const fileTeamId = teamIdOf(root);
-  const judged = judgeCallerIn(io, dir, team);
-  const { caller } = judged;
-  const who = logWho(caller, team);
-  const from = caller.kind === 'seat' ? caller.name : 'owner';
-  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
-  // An ambiguous spec is refused wherever it is written, not only when it looks like a registry
-  // spec: the declared-seat path below must never pick one of the two seats the registry named.
-  if ('error' in resolved && (resolved.kind === 'ambiguous' || isRegistrySpec(seatName))) {
-    return refuse(io, dir, who, resolved.error, host, report);
-  }
-  const hit = 'error' in resolved ? null : resolved;
-  const standing = standingOf(dir, judged.session, caller);
+  const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
   let to: Aim;
   let admission: Admission;
   if (hit === null) {
@@ -617,8 +702,8 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       session: hit.agent.reach.session,
       cli: hit.agent.cli,
       address: hit.agent.reach.address,
-      // The form the caller wrote, kept beside the seat it resolved to: a nickname, a seat or
-      // nickname at a team, `@team`, or an agent id. A plain seat names itself and adds nothing.
+      // The form the caller wrote, kept beside the seat it resolved to: a `@<nickname>`, a seat
+      // or nickname at a team, `lead@<team>`, or an agent id. A plain seat names itself and adds nothing.
       sentAs: seatName === hit.agent.reach.seat ? null : { spec: seatName, resolved: hit.agent.id },
       dir: cross ? join(hit.team.root, '.agents') : dir,
       project: hit.team.project,
@@ -950,9 +1035,11 @@ function dryRun(io: Io, dir: string, who: string, seat: string, what: string, ho
   return 0; // exit: send.dry-run
 }
 
-/** One `--list` row: the name to type, the seat's human name as an address (bare in this team,
- *  `<nickname>@<team>` in another), its CLI, its role, the project its team sits in, and
- *  whether its seat is stopped. A seat of another team reads `<seat>@<team>` in the name. */
+/** One `--list` row: the name to type, the seat's human name as an address (`@<nickname>` in its
+ *  own team, `<nickname>@<team>` in another), its CLI, its role, the project its team sits in,
+ *  and whether its seat is stopped. A seat of another team reads `<seat>@<team>` in the name; a
+ *  nickname reads `@<nickname>` in its own team and `<nickname>@<team>` in another, so every human
+ *  name the listing prints is an address too. */
 type SeatRow = { name: string; nickname: string | null; cli: string; role: string; stopped: boolean; project: string; reach: 'socket' | 'typed' };
 
 /** `--list`: the file's seats and its entity's other teams' seats, nothing sent and no caller
@@ -977,7 +1064,9 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   // dials nothing, so it claims no live address; a stopped seat renders `stopped` in its place.
   const seats: SeatRow[] = loaded.team.seats.map((seat) => ({
     name: seat.name,
-    nickname: seat.nickname ?? null,
+    // The `@<nickname>` form: every row the listing prints is a spec the resolver takes as it
+    // stands, and a bare nickname would not be one outside the caller's team.
+    nickname: seat.nickname === undefined ? null : `@${seat.nickname}`,
     cli: seat.cli,
     role: seat.role,
     project,
@@ -1495,9 +1584,11 @@ function notSubmitted(io: Io, dir: string, who: string, seat: string, result: De
   return 1; // exit: send.not-submitted
 }
 
-/** A refusal: the message was not written, and the reason says why. Exit 1, always. */
-function refuse(io: Io, dir: string, who: string, reason: string, host: SendHost, report: Report): number {
-  logLine(dir, 'send', who, `refused: ${reason}`, host.now());
+/** A refusal: the message was not written, and the reason says why. Exit 1, always. Outside a
+ *  team's folder there is no team log to append to (`dir` is null), so the refusal is reported
+ *  and not written down. */
+function refuse(io: Io, dir: string | null, who: string, reason: string, host: SendHost, report: Report): number {
+  if (dir !== null) logLine(dir, 'send', who, `refused: ${reason}`, host.now());
   if (report.json) writeJsonError(io, 'send.refused', `refused: ${reason}`);
   else io.stderr(`team send: refused: ${reason}\n`);
   return 1; // exit: send.refused

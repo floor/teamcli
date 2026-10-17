@@ -36,9 +36,9 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
-  /** The address the caller wrote, when it was not the resolved seat's own name: a nickname, a
-   *  `<seat|nickname>@<team>`, `@<team>`, or an agent id. It lets a reader see what was addressed
-   *  beside `to`, the seat it resolved to. */
+  /** The address the caller wrote, when it was not the resolved seat's own name: a `@<nickname>`,
+   *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id. It lets a reader see what was
+   *  addressed beside `to`, the seat it resolved to. */
   spec?: string;
   /** The registry id (`agt_…`) the spec resolved to, written with `spec`; the canonical form
    *  records and scripts use. */

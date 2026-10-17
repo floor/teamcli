@@ -11,8 +11,8 @@ Each completed `team send` run (`delivered`, `answered`, `held`, `not-submitted`
     {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>",...]}
 
 The last five fields are optional. `spec` is the address the sender wrote when it was a form
-rather than the seat's own name — a nickname, a `<seat|nickname>@<team>`, `@<team>`, or an agent
-id — and `resolved` is the registry id (`agt_…`) that address resolved to; the two are written
+rather than the seat's own name — a `@<nickname>`, a `<seat|nickname>@<team>`, `lead@<team>`, or
+an agent id — and `resolved` is the registry id (`agt_…`) that address resolved to; the two are written
 together, and `to` is that seat either way. `ms` is the whole milliseconds from send to outcome,
 written when the send measured it, and `via` is the path the message actually travelled — `typed`
 (a composer trigger) or `socket` (a frame) — absent when it never left the sender. `failed` names

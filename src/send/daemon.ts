@@ -99,9 +99,9 @@ export type DaemonSendRequest = {
    *  <reason>`: the daemon writes the history line this send ends in, and the failures travel
    *  with it. Absent when the walk had none. */
   failed?: string[];
-  /** The address the caller wrote, when it was not the resolved seat's own name — a nickname, a
-   *  `<seat|nickname>@<team>`, `@<team>`, or an agent id — and the registry id it resolved to.
-   *  The history line keeps both beside `to`, the seat. */
+  /** The address the caller wrote, when it was not the resolved seat's own name — a `@<nickname>`,
+   *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id — and the registry id it resolved
+   *  to. The history line keeps both beside `to`, the seat. */
   spec?: string;
   resolved?: string;
 };
