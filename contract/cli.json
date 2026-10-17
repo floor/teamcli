@@ -2071,6 +2071,12 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--session",
               "repeatable": false,
               "takesValue": true
@@ -2087,7 +2093,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team worktree list [--session <name>] [--file <path>]"
+            "team worktree list [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
@@ -2101,6 +2107,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -2140,7 +2152,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]"
+            "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
@@ -2160,6 +2172,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -2187,14 +2205,14 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
+            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]",
-        "team worktree list [--session <name>] [--file <path>]",
-        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
+        "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]",
+        "team worktree list [--session <name>] [--file <path>] [--json]",
+        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
       ]
     }
   ],

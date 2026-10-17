@@ -775,12 +775,84 @@ export const PROC_OUTPUT_SCHEMA: CommandSchemaSpec = {
   oneOf: [PROC_ACTION_BRANCH, PROC_LIST_BRANCH],
 };
 
+/** The `team.worktree` action envelope, on `new` and `remove`. */
+const WORKTREE_ACTION_BRANCH: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['schema', 'format', 'dry_run', 'status', 'action_summary', 'project', 'session', 'action', 'task'],
+  properties: {
+    schema: schemaTagFragment('team.worktree', 1),
+    format: { type: 'integer', const: 1 },
+    dry_run: { type: 'boolean' },
+    status: { type: 'string', enum: ['created', 'removed', 'record-gone'] },
+    action_summary: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    action: { type: 'string', enum: ['new', 'remove'] },
+    task: { type: 'string', minLength: 1 },
+    branch: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+  },
+};
+
+/** The `team.worktree` reading document, on `list`. */
+const WORKTREE_LIST_BRANCH: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['schema', 'format', 'project', 'session', 'notice', 'worktrees', 'notes', 'summary'],
+  properties: {
+    schema: schemaTagFragment('team.worktree', 1),
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    notice: { type: ['string', 'null'] },
+    worktrees: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['task', 'branch', 'path', 'session', 'seat', 'exists'],
+        properties: {
+          task: { type: 'string', minLength: 1 },
+          branch: { type: 'string', minLength: 1 },
+          path: { type: 'string', minLength: 1 },
+          session: { type: 'string', minLength: 1 },
+          seat: { type: ['string', 'null'] },
+          exists: { type: 'boolean' },
+        },
+      },
+    },
+    notes: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    summary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['worktrees'],
+      properties: {
+        worktrees: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team worktree` (`schema/worktree.schema.json`). */
+export const WORKTREE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.worktree',
+  fileName: 'worktree.schema.json',
+  title: 'team worktree --json output',
+  properties: {},
+  oneOf: [WORKTREE_ACTION_BRANCH, WORKTREE_LIST_BRANCH],
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,
   PROC_OUTPUT_SCHEMA,
+  WORKTREE_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,
   DOCTOR_OUTPUT_SCHEMA,

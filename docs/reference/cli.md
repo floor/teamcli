@@ -1161,9 +1161,9 @@ Hidden: no
 
 Usage:
 
-    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
-    team worktree list [--session <name>] [--file <path>]
-    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
+    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
+    team worktree list [--session <name>] [--file <path>] [--json]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
 ### Flags
 
@@ -1182,7 +1182,7 @@ Hidden: no
 
 Usage:
 
-    team worktree list [--session <name>] [--file <path>]
+    team worktree list [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
@@ -1190,6 +1190,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1203,7 +1204,7 @@ Hidden: no
 
 Usage:
 
-    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]
+    team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
@@ -1211,6 +1212,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--kind` | yes | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
@@ -1228,7 +1230,7 @@ Hidden: no
 
 Usage:
 
-    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]
+    team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
@@ -1237,6 +1239,7 @@ Usage:
 | `--branch` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
