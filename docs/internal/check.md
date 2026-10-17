@@ -194,9 +194,9 @@ owner's. With nothing to act on it is `team check: nothing wrong`.
 
 A `--repair` run that dropped records prints one `repaired: <what was dropped>` line per record before
 the answer — `repaired: <seat>: a state seat not in the file claimed pane <pane>; its record is
-dropped` and `repaired: the state's session "<name>" is not running; its record is dropped` — and
-each line is written to the project's log under `check` and the owner's label. The drop runs
-before the comparison, so a check whose only findings were the leftovers answers
+dropped` and `repaired: the state's session "<name>" holds no seat of the team; its record is
+dropped` — and each line is written to the project's log under `check` and the owner's label. The
+drop runs before the comparison, so a check whose only findings were the leftovers answers
 `team check: nothing wrong`, exit 0.
 
 Under either answer stand the one line that names what the check cannot see and, under it, the
