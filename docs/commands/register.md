@@ -36,7 +36,8 @@ agent session.
 ## What it reads and writes
 
 Reads the team file, the session's record in `.agents/team.state.json`, herdr (the session's state
-and its agents), the pane's processes, and the pane's text through the seat's own CLI profile.
+and its agents), the pane's processes, the pane's text through the seat's own CLI profile, and the
+team registry's record of this team, for its roster.
 
 Writes `.agents/team.state.json` — the seat's record: its id, `stage: ready`, the CLI, the pane, the
 workspace, the process identity read from the pane, the agent session herdr reports, and the
@@ -46,6 +47,14 @@ reaches it at included: the pane's live session socket, read and recorded the wa
 it. A record that names another pane, or
 no pane at all, is never overwritten from here: stopping the team and starting it again is the
 owner's own act.
+
+A run that finds the seat already recorded on that pane writes nothing — save one line: where the
+registry holds a record of the team and its roster does not list the seat, the roster line is
+written, exactly as a launch writes it. The roster is the seat's identity for the permission bridge
+(`src/permissions/who.ts`): a seat the roster does not list has no record there whatever the file
+declares, and every gate wired to the bridge refuses it what the file says it holds. A roster that
+already lists the seat, and a team the registry holds no record of — the bridge reads the file's own
+declaration then — are both left alone.
 
 ## Who may run it
 
@@ -63,6 +72,8 @@ owner's own act.
 | --- | --- | --- |
 | the seat's record was written | `<seat>: registered — pane <pane>; nothing was launched` | 0 |
 | the seat was already recorded on that pane | `<seat>: already registered — pane <pane>; nothing was written` | 0 |
+| the seat was already recorded, and the team registry's roster does not list it | `<seat>: already registered — pane <pane>; the team registry's roster did not list it, and was written` | 0 |
+| the seat was already recorded and the roster does not list it, under `--dry-run` | `<seat>: already registered — pane <pane>; the team registry's roster would be written` | 0 |
 | `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched` | 0 |
 | the run was refused | `team register: <reason>` | 1 |
 | the invocation or the team file can't be read | `team register: <problem>`, with the usage for the invocation | 2 |

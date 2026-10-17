@@ -28,6 +28,7 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
+import { rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { registerLaunch } from '../registry/sync.ts';
@@ -388,7 +389,29 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // sidebar lines are re-applied from the file, so a label or display that drifted is put
     // back where the seat stands. A dry run paints nothing.
     if (!dry) relabel(out, sources, session, seat, found, name);
-    out.stdout(`${plainLine(name)}: already registered — pane ${plainLine(found.pane)}; nothing was written\n`);
+    // The one record this path can still owe: the team registry's roster line. Where the
+    // registry holds a record of the team, the permission bridge (`src/permissions/who.ts`)
+    // reads that roster as the record of who its seats are — a seat the roster does not list
+    // has no record there whatever the file declares, so every gate wired to the bridge refuses
+    // the seat what the approved file says it holds. The line is written exactly as a launch
+    // writes it (`src/registry/sync.ts`). A roster that already lists the seat is read and left
+    // alone, and so is a team the registry holds no record of: the bridge reads the file's own
+    // declaration then, and nothing is missing.
+    const roster = rosterOf(sources.home, root);
+    const unlisted = roster !== null && !roster.some((line) => line.seat === name);
+    let wroteRoster = false;
+    if (unlisted && !dry) {
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(walked), session }, seat, found.pane, held.id);
+      if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, sources.now());
+      else {
+        wroteRoster = true;
+        logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${found.pane}`, sources.now());
+      }
+    }
+    const ended = `already registered — pane ${plainLine(found.pane)}`;
+    if (wroteRoster) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written\n`);
+    else if (unlisted && dry) out.stdout(`${plainLine(name)}: ${ended}; the team registry's roster would be written\n`);
+    else out.stdout(`${plainLine(name)}: ${ended}; nothing was written\n`);
     // exit: register.already
     return 0;
   }

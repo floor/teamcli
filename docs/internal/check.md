@@ -91,7 +91,18 @@ and open nothing: the target is the file the caller's own place finds.
   accepted) or the relaunch beside it. The record is the launch's own declaration: a read cannot
   change it and the check writes nothing here; the drift is re-recorded by `team register`, a
   reload or the next launch. A team the registry holds no record for reads as before, and a
-  screen the reader cannot name a model from is never wrong.
+  screen the reader cannot name a model from is never wrong;
+- the team registry's record of this team (`~/.config/team/teams.yaml`), for its roster
+  ([the registries](../concepts/registry.md)): a seat the state records ready, running on the pane
+  it recorded, that the roster does not list is a difference — `<seat>: ready and running, and the
+  team registry's roster does not list it`, repaired with `team register <seat>`. The roster line
+  is the seat's identity for the permission bridge (`src/permissions/who.ts`): where the registry
+  holds a record of the team, the roster it holds is the record of who its seats are, and a seat
+  the roster does not list has no record there whatever the file declares. A team the registry
+  holds no record of is not this difference — the bridge falls back to the file's own declaration
+  then — and neither is a seat still launching: the line is written when the seat reaches ready.
+  The roster is read the way the bridge reads it, so a registry that cannot be read reads as no
+  record of the team here and the difference is not raised on it.
 
 It writes nothing at all — not the state, not the store, not the `last_valid` copy `status`
 keeps beside the file it read — for every caller, the owner included.
