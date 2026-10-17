@@ -5,6 +5,10 @@
 # answers no `--version` (`Error: unknown flag: --version`, exit 1), which is what `doctor`
 # runs, so its version reads unread for this CLI.
 #
+# The ready screen is the session table: its first line reads
+# ` > Search sessions or type / to use`. A new session's task box asks
+# `What do you want Jules to work on?` under the ` Type the task description` label.
+#
 # The TUI has no standing session: every brief is a new remote session, created through the
 # TUI's own screens, so `rules: prepend` rides the rules with each brief a send types, and
 # the compose module walks the screens (`jules-compose.ts`).
