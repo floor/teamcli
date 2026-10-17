@@ -2,10 +2,10 @@
 // The label's own line follows the observed word (src/labels/observe.ts); the comparison lives in
 // src/status/compare.ts's modelOf, so `team status`, `team check` and `team seats` report it
 // with the restart-or-correct repair, and the file is never rewritten. When the file declares no
-// effort and the CLI profile names no default effort, a seen word is not a drift; when only the
-// effort drifts, the line names the effort alone (`<seat>: effort <seen>, file says <effort>`),
-// never echoing the model in another word order. A screen that prints no word leaves the file's
-// word standing, so only a word actually seen can differ.
+// effort, a seen word is not a drift; when only the effort drifts, the line names the effort
+// alone (`<seat>: effort <seen>, file says <effort>`), never echoing the model in another word
+// order. A screen that prints no word leaves the file's word standing, so only a word actually
+// seen can differ.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';

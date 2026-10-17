@@ -641,9 +641,8 @@ function modelOf(
   // What the pane shows against what the file promises, effort included: the word the screen
   // prints is the observed one, and a screen printing none leaves the file's word standing —
   // the rule the label's own line follows — so only a word actually seen can differ from it.
-  // When the file declares no effort and the CLI profile names no default effort, a seen word
-  // is not a drift. When only the effort drifts, the line names the effort alone so it never
-  // echoes the model in another word order.
+  // When the file declares no effort, a seen word is not a drift. When only the effort drifts,
+  // the line names the effort alone so it never echoes the model in another word order.
   const seen = observedEffort(seat.cli, screen);
   const modelDrifts = modelDiffers(running, seat);
   const effortDrifts = seen !== undefined && seat.effort !== undefined && seen !== seat.effort;
