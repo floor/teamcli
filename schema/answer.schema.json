@@ -101,6 +101,12 @@
         }
       }
     },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "seat": {
       "type": "string",
       "minLength": 1

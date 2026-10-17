@@ -97,6 +97,12 @@
         }
       }
     },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "seats": {
       "type": "array",
       "items": {

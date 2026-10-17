@@ -97,6 +97,12 @@
         }
       }
     },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "action": {
       "type": "string",
       "enum": [
