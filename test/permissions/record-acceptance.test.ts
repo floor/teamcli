@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { grantsDir } from '../../src/grant.ts';
 import {
+  DIALOGS_TRUST,
   GRANT_CAPABILITIES,
   activeGrants,
   readGrants,
@@ -204,6 +205,15 @@ describe('an unknown capability name is refused, never judged', () => {
         expect(decision).toMatchObject({ effect: 'deny', rule: 'not-in-map' });
         expect(decision.why).toContain("gates no command the Kernel's table does not name");
       }
+    }
+  });
+
+  test('the owner setting is a record word, not a command: no row admits anyone to it', () => {
+    expect(isCapability(DIALOGS_TRUST)).toBe(false);
+    expect(COMMAND_GATES[DIALOGS_TRUST]).toBeUndefined();
+    for (const caller of [OWNER, seat(), null] as const) {
+      const decision = resolvePermission(caller, { id: TEAM }, DIALOGS_TRUST, [], TARGET);
+      expect(decision).toMatchObject({ effect: 'deny', rule: 'not-in-map' });
     }
   });
 

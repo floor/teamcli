@@ -574,6 +574,13 @@ describe('the owner-only edits are not dev-mode gates', () => {
     on.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runGrant(['lead', '--scope', 'up'], on, { home })).toBe(1);
     expect(on.err).toBe(off.err);
+
+    // The standing form is the same gate, and `dialogs.trust` is no exception: the mode never
+    // turns the owner's setting on for an agent.
+    const setting = testIo(root, UNPLACED);
+    setting.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runGrant(['@team', '--capabilities', 'dialogs.trust'], setting, { home })).toBe(1);
+    expect(setting.err).toBe(off.err);
   });
 
   test('delegate refuses an unplaced caller with the mode unset and with it set', async () => {

@@ -20,6 +20,11 @@ In the second form the capability list is comma-separated, from the closed vocab
 and without duplicates. A seat names a registered agent of this project's team, and the record
 carries that agent's id, never the seat name; `@team` names the project's registered team. A team
 grant never carries `grant`, `create`, `agree` or `leads`; naming one is refused with the rule.
+The list may also carry the owner setting `dialogs.trust`, on a `@team` grant only: it lets the
+team's lead answer a folder-trust dialog (`team answer`, and the polled wait in `team up`), and
+`team status` and `team check` offer that repair. It is not a command, the map admits no one to
+it, and a seat grant naming it is refused with the rule. [team revoke](revoke.md) ends it like
+any other standing grant, at the next dialog.
 `--scope` here is a comma-separated list of absolute paths, each inside the project root; without
 it the scope is the project root itself. `--expires` is a readable timestamp; without it the
 grant does not expire. `--name` sets the record's file name; without it the name is

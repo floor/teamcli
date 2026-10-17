@@ -31,7 +31,8 @@ A bare `<name>` appends a signed revocation record naming that standing grant's 
 generation — the pair that identifies the record — into the grants folder in the owner's home;
 the grant file itself is never edited. The revocation takes effect at the next gate check, and
 never restores an older record: a later grant under the same name is a new record this revocation
-does not touch. A record already revoked is an unchanged no-op. A revocation is always its own
+does not touch. Revoking a team grant that carries the `dialogs.trust` setting turns trust
+answering off at the next dialog. A record already revoked is an unchanged no-op. A revocation is always its own
 file: a record name that is the grant's own, or another grant's stem, is refused before anything
 is written, so a revocation never overwrites a grant.
 

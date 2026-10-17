@@ -9,7 +9,9 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { grantsDir } from '../../src/grant.ts';
-import { activeGrants, covers, planRevocation, readGrants, writeGrant, writeRevocation, type GrantRequest } from '../../src/permissions/grants.ts';
+import { activeGrants, covers, planGrant, planRevocation, readGrants, writeGrant, writeRevocation, type GrantRequest } from '../../src/permissions/grants.ts';
+import { dialogsTrustInForce } from '../../src/permissions/dialogs-trust.ts';
+import { teamIdOf } from '../../src/registry/teams.ts';
 import { registerAgent, updateAgent } from '../../src/registry/agents.ts';
 
 const TEAM = 'aaaaaaaaaaaa';
@@ -286,6 +288,56 @@ describe('revocation: its own appended record', () => {
     expect(readGrants(world.home).grants).toEqual([record]);
     expect(readGrants(world.home).revocations).toEqual([]);
     expect(activeGrants(world.home, NOON)).toEqual([record]);
+  });
+
+  test('a team grant carrying dialogs.trust is in force for its team id alone, and a seat grant never carries it', () => {
+    const world = makeWorld();
+    const root = join(world.base, 'acme');
+    const other = join(world.base, 'other');
+    mkdirSync(root, { recursive: true });
+    mkdirSync(other, { recursive: true });
+    const teamId = teamIdOf(root);
+
+    const written = granted(world, { name: 'team-trust', kind: 'team', grantee: teamId, capabilities: ['dialogs.trust'], roots: [root], scope: [root] }, NOON);
+    expect(written.capabilities).toEqual(['dialogs.trust']);
+    expect(dialogsTrustInForce(world.home, root, NOON)).toBe(true);
+    // Another team's root is another id: the record says nothing about it.
+    expect(dialogsTrustInForce(world.home, other, NOON)).toBe(false);
+
+    // The setting is a team's: a seat grant naming it is refused with the rule, and nothing is written.
+    const seatPlan = planGrant(world.home, request(world, { name: 'seat-trust', kind: 'seat', capabilities: ['dialogs.trust'], roots: [root] }));
+    expect(seatPlan.ok).toBe(false);
+    if (!seatPlan.ok) {
+      expect(seatPlan.why).toContain('a seat grant never carries `dialogs.trust`');
+      expect(seatPlan.why).toContain("it is a team setting, and the record names the team's id");
+    }
+    expect(writeGrant(world.home, request(world, { name: 'seat-trust', kind: 'seat', capabilities: ['dialogs.trust'], roots: [root] })).ok).toBe(false);
+    expect(readGrants(world.home).grants.map((grant) => grant.name)).toEqual(['team-trust']);
+  });
+
+  test('a revocation of the team grant ends dialogs.trust at the next read; the grant stays readable', () => {
+    const world = makeWorld();
+    const root = join(world.base, 'acme');
+    mkdirSync(root, { recursive: true });
+    const record = granted(world, { name: 'team-trust', kind: 'team', grantee: teamIdOf(root), capabilities: ['dialogs.trust'], roots: [root], scope: [root] }, NOON);
+    expect(dialogsTrustInForce(world.home, root, NOON)).toBe(true);
+
+    expect(writeRevocation(world.home, { name: 'revoke-team-trust', grant: record.name, generation: record.generation }, { now: NOON }).ok).toBe(true);
+    expect(dialogsTrustInForce(world.home, root, NOON)).toBe(false);
+    expect(readGrants(world.home).grants).toEqual([record]);
+  });
+
+  test('an expired team grant turns dialogs.trust off at its expiry, and a renewal is a new record', () => {
+    const world = makeWorld();
+    const root = join(world.base, 'acme');
+    mkdirSync(root, { recursive: true });
+    granted(
+      world,
+      { name: 'team-trust', kind: 'team', grantee: teamIdOf(root), capabilities: ['dialogs.trust'], roots: [root], scope: [root], expires: '2026-10-17T13:00:00.000Z' },
+      NOON,
+    );
+    expect(dialogsTrustInForce(world.home, root, new Date('2026-10-17T12:59:59.000Z'))).toBe(true);
+    expect(dialogsTrustInForce(world.home, root, new Date('2026-10-17T13:00:00.000Z'))).toBe(false);
   });
 
   test('a revocation whose record name another grant holds is refused at plan time; both files stay whole', () => {

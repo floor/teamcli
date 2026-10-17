@@ -9,6 +9,7 @@
 //       "grantee": "agt_0123456789ab",     // a team id for a team grant
 //       "kind": "seat",                    // written, never inferred from the id's shape
 //       "capabilities": ["gate", "merge"], // from the closed, version-pinned vocabulary below
+//                                          // (`dialogs.trust` is a team-only owner setting)
 //       "scope": ["/Users/x/Code/acme"],   // always concrete: the declared roots when none is given
 //       "issued": "2026-10-17T02:00:00.000Z",
 //       "expires": null,                   // optional; checked at every use
@@ -55,6 +56,19 @@ export const GRANT_VOCABULARY_VERSION = 1;
 /** The operational capabilities a grant may carry — the only names a grant may use (the
  *  command-to-vocabulary map's last row). */
 export const GRANT_CAPABILITIES = ['write', 'read', 'review', 'gate', 'merge', 'deploy', 'act-as', 'use-broker'] as const;
+
+/** The owner's setting a team grant may carry: `dialogs.trust` lets the team's lead answer a
+ *  folder-trust dialog. It is not a command — the map holds no row for it — and never a seat
+ *  word: the record names the team's id, and the gate reads it fresh at every dialog. */
+export const DIALOGS_TRUST = 'dialogs.trust';
+
+/** Every setting word a grant record may carry, beside the capabilities. A setting is a word of
+ *  the signed record and never a command. */
+export const GRANT_SETTINGS = [DIALOGS_TRUST] as const;
+
+/** The whole closed vocabulary of a record: the operational capabilities and the owner's
+ *  settings. The command map reads only {@link GRANT_CAPABILITIES}. */
+export const GRANT_WORDS = [...GRANT_CAPABILITIES, ...GRANT_SETTINGS] as const;
 
 /** Never on a team grant: administrative or capability-bearing names, refused at write with the
  *  reason named. A seat grant may not carry them either — they are outside the grantable
@@ -400,8 +414,11 @@ function grantProblem(home: string, request: GrantRequest, now: Date): string | 
     if (request.kind === 'team' && (TEAM_GRANT_FORBIDDEN as readonly string[]).includes(capability)) {
       return `a team grant never carries \`${capability}\`: the four administrative names (${TEAM_GRANT_FORBIDDEN.join(', ')}) are refused on a team grant`;
     }
-    if (!(GRANT_CAPABILITIES as readonly string[]).includes(capability)) {
-      return `"${capability}" is not a grantable capability: the vocabulary is closed (${GRANT_CAPABILITIES.join(', ')})`;
+    if (request.kind !== 'team' && (GRANT_SETTINGS as readonly string[]).includes(capability)) {
+      return `a seat grant never carries \`${capability}\`: it is a team setting, and the record names the team's id`;
+    }
+    if (!(GRANT_WORDS as readonly string[]).includes(capability)) {
+      return `"${capability}" is not a grantable capability: the vocabulary is closed (${GRANT_WORDS.join(', ')})`;
     }
   }
   if (request.expires !== undefined && request.expires !== null) {
@@ -445,8 +462,9 @@ function grantFrom(stem: string, record: Record<string, unknown>, key: KeyObject
   if (kind === 'seat' ? !isAgentId(grantee) : !TEAM_ID_PATTERN.test(grantee)) return null;
   if (!Array.isArray(fields.capabilities) || fields.capabilities.length === 0) return null;
   const capabilities = fields.capabilities;
-  if (!capabilities.every((value) => typeof value === 'string' && (GRANT_CAPABILITIES as readonly string[]).includes(value))) return null;
+  if (!capabilities.every((value) => typeof value === 'string' && (GRANT_WORDS as readonly string[]).includes(value))) return null;
   if (kind === 'team' && capabilities.some((value) => (TEAM_GRANT_FORBIDDEN as readonly string[]).includes(value as string))) return null;
+  if (kind !== 'team' && capabilities.some((value) => (GRANT_SETTINGS as readonly string[]).includes(value as string))) return null;
   if (!Array.isArray(fields.scope) || !fields.scope.every((value) => typeof value === 'string' && value !== '')) return null;
   if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
   if (fields.expires !== null && (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires)))) return null;
