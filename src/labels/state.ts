@@ -2,7 +2,8 @@
 // seat is doing, best source first —
 //
 //   1. the CLI's own signal: the pane's screen, read against the seat's CLI — working, or idle
-//      at its prompt, or a screen that is neither (a dialog, a question, an error): blocked;
+//      at its prompt, or a screen that is neither (a dialog, a question, an error, a composer
+//      holding unsent text): blocked;
 //   2. herdr's own screen status;
 //   3. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
 //      fresh means working, and it outranks an idle word from the screen or from herdr;
@@ -73,7 +74,10 @@ export function seatState(
   const withinWindow = age <= limits.trace_window_seconds * 1000;
   if (screen !== undefined) {
     if (screen.kind === 'working') return { state: 'working', source: 'cli', blind: false };
-    if (screen.kind === 'idle' || screen.kind === 'unsent') {
+    // A composer holding unsent text is not idle: nothing can be typed into it until its owner
+    // clears or sends the line, so the seat is blocked — and a fresh trace never hides that.
+    if (screen.kind === 'unsent') return { state: 'blocked', source: 'cli', blind: false };
+    if (screen.kind === 'idle') {
       if (withinWindow) return { state: 'working', source: 'trace', blind: false };
       return { state: 'idle', source: 'cli', blind: false };
     }
