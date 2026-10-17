@@ -118,6 +118,16 @@ test('an argument a project view does not take is refused', async () => {
   expect(await runProjects(['--json', 'extra'], ioJson, sourcesOf([project()]))).toBe(2);
   expect(ioJson.err).toBe('');
   assertJsonErrorShape(ioJson.out, { id: 'projects.invocation', messageContains: 'unexpected "extra"' });
+
+  const ioNope = testIo('/anywhere');
+  expect(await runProjects(['--nope', '--json'], ioNope, sourcesOf([project()]))).toBe(2);
+  expect(ioNope.err).toBe('');
+  assertJsonErrorShape(ioNope.out, { id: 'projects.invocation', messageContains: 'unknown option --nope' });
+
+  const ioInline = testIo('/anywhere');
+  expect(await runProjects(['--json=1'], ioInline, sourcesOf([project()]))).toBe(2);
+  expect(ioInline.err).toBe('');
+  assertJsonErrorShape(ioInline.out, { id: 'projects.invocation', messageContains: 'unknown option --json' });
 });
 
 test('a registry that cannot be read is the command\'s own line, exit 1', async () => {

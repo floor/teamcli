@@ -7,7 +7,7 @@ import { agentList, sessionList, type HerdrSession } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { findTeamFile, type FoundTeam } from '../list/find.ts';
-import { jsonEnvelope, ttyStyle, writeJsonError, type TtyStyle } from '../output/index.ts';
+import { hasJsonFlag, jsonEnvelope, ttyStyle, writeJsonError, type TtyStyle } from '../output/index.ts';
 import { readTeams, teamsFile } from '../registry/teams.ts';
 import { isSeatId, readState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
@@ -696,7 +696,7 @@ export default list;
 
 export async function runList(argv: string[], io: Io, sources: ListSources = realListSources()): Promise<number> {
   const args = readArgs(argv, [], ['all', 'seats', 'watch', 'json']);
-  const json = args.flags.has('json') || argv.includes('--json');
+  const json = hasJsonFlag(argv);
   const contradictory = args.flags.has('watch') && args.flags.has('json');
   // An argument this command cannot use stops it before anything outside it is read.
   const early = args.error !== undefined || contradictory;
@@ -728,7 +728,7 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
   const entity = registry === null ? null : (args.rest[0] ?? null);
   const registryText = (teams: RegistryTeam[]): { text: string; empty: boolean } => {
     const rows = registryRowsOf(teams, ask(() => sources.sessions(), null), sources, all, entity);
-    if (rows.length === 0) return { text: json ? jsonOf([]) : 'no teams\n', empty: true };
+    if (rows.length === 0) return { text: json ? jsonOf([]) : 'no teams\n0 team(s)\n', empty: true };
     return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats, style), empty: false };
   };
   if (watching) {
@@ -745,10 +745,10 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
           body = 'herdr is not running\n';
         } else if (showSeats) {
           const rows = seatRowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : tableWithSeats(rows, style);
+          body = rows.length === 0 ? (all ? 'no sessions\n0 session(s)\n' : 'no running sessions\n0 session(s)\n') : tableWithSeats(rows, style);
         } else {
           const rows = rowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : table(rows, style);
+          body = rows.length === 0 ? (all ? 'no sessions\n0 session(s)\n' : 'no running sessions\n0 session(s)\n') : table(rows, style);
         }
       }
       if (io.stdoutIsTTY) {
@@ -775,7 +775,7 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
       }
       const rows = showSeats ? seatRowsOf(listed, sources, all) : rowsOf(listed, sources, all);
       empty = rows.length === 0;
-      if (empty) text = json ? jsonOf([]) : all ? 'no sessions\n' : 'no running sessions\n';
+      if (empty) text = json ? jsonOf([]) : all ? 'no sessions\n0 session(s)\n' : 'no running sessions\n0 session(s)\n';
       else if (showSeats) text = json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[], style);
       else text = json ? jsonOf(rows) : table(rows, style);
     }

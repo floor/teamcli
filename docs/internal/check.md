@@ -28,8 +28,10 @@ name with no seat of the team in it. Both are leftovers, and both are named:
 
     difference: <seat>: a state seat not in the file claims pane <pane>
       repair: drop its record from the state (team check --repair)
+      who: the owner
     difference: the state records the session "<name>", and no seat of the team is in it
       repair: drop its record from the state (team check --repair)
+      who: the owner
 
 A record with no pane reads `<seat>: a state seat not in the file`, without the pane clause. The
 repair is never an edit of the file and never a guess at which record is right: the commands that
@@ -55,7 +57,7 @@ anything, so a refused run has changed nothing.
 The repair is the owner's alone. A caller that passes the gate but is not the owner meets
 `team check: --repair is the owner's` and exit 1, as it does for the two aimed flags; nothing is
 written. A `--repair` run whose drop leaves nothing else to act on is a clean check — the `repaired:`
-lines, then `team check: nothing wrong`, exit 0. A state write that fails throws, as every
+lines, then `0 difference(s)`, exit 0. A state write that fails throws, as every
 command's state write does, and the run is `team.command-threw`'s.
 
 ## Who the check answers
@@ -170,48 +172,42 @@ owner's `--repair` write that drops the leftovers named above.
 
 ## Output
 
-One line per finding, its repair under it, then the closing count; a note, where the file earns
-one, prints above the findings. The check prints no seat table and no budget block:
+The report opens with the context line (`team <project>, session "<session>"`), followed by any
+deprecation warnings from the file (`warning: the file, line <n>: <message>; repair: <repair>`),
+any `repaired:` lines, any `note:` lines (collapsed with `(x<n>)` when repeated), each finding's
+three-line `difference:` / `  repair:` / `  who:` block, and the closing summary line. The check
+prints no seat table and no budget block:
 
+    team beacon, session "beacon"
     note: main/w9:p3's delegate entry names approve, which no command acts on since team approve was removed; drop it from the file
     difference: claude-beacon is in the file and is not running
       repair: the owner runs team up
-    team check: 1 difference(s), 1 for the owner
+      who: the owner
+    1 difference(s), 1 for the owner
 
 The note is earned by a `delegates` entry still naming `approve`: `team approve` was removed,
 and the word stays accepted only so a file that already names it loads unchanged. It is a note
 and not a finding — in neither the closing count nor the exit code, so a file whose only note is
-this one still answers `team check: nothing wrong`, and the repair it asks for is the file:
+this one still answers `0 difference(s)`, and the repair it asks for is the file:
 one word shorter.
 
-The closing line counts the differences and, after a comma, how many of their repairs are the
-owner's. With nothing to act on it is `team check: nothing wrong`.
+The closing line counts the differences and, when any are the owner's, how many after a comma
+(`<n> difference(s), <k> for the owner`, or `<n> difference(s)` when none are the owner's). With
+nothing to act on it is `0 difference(s)`.
 
 A `--repair` run that dropped records prints one `repaired: <what was dropped>` line per record before
-the answer — `repaired: <seat>: a state seat not in the file claimed pane <pane>; its record is
+the notes and differences — `repaired: <seat>: a state seat not in the file claimed pane <pane>; its record is
 dropped` and `repaired: the state's session "<name>" holds no seat of the team; its record is
 dropped` — and each line is written to the project's log under `check` and the owner's label. The
 drop runs before the comparison, so a check whose only findings were the leftovers answers
-`team check: nothing wrong`, exit 0.
+`0 difference(s)`, exit 0.
 
-Under either answer stand the one line that names what the check cannot see and, under it, the
-grants decision record's block of what 0.5.0 must not pretend — its list, in its words
-(`decided-grants-minimum-2026-10-17`, "What 0.5.0 must not pretend, said plainly"): the limits
-this release does not close, said where the check runs rather than left to be discovered.
+Under `--json`, the check writes a single JSON document on `stdout` with `schema: { name: "team.check", version: 1 }`, `format: 1`, `project`, `session`, `warnings`, `repaired`, `notes`, `differences` (`{ what, repair, who }`), and `summary` (`{ differences, owner_differences }`). Any invocation or gate refusal under `--json` writes a `team.error` JSON envelope (`schema/error.schema.json`) on `stdout` with `stderr` empty.
 
-    not known: work sent and unread, a lead waiting on a seat, a landing not recorded
-    what 0.5.0 must not pretend:
-      Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
-      Standing grants with an expiry, not leases
-      No two-granter agreement, no `agree`, no `create` bounds
-      No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
-      No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
-      No policy object yet (amendment 02)
-
-The readers are agents too, so this text is the contract: one `difference:` line per finding,
-its `  repair:` line under it, the closing count line, the `note:` line for each note the file
-earns (above the findings), the `repaired:` line for each record a `--repair` dropped, the `not known:` line, and the block under both answers. A finding never quotes a seat's screen text beyond the profile's fixed
-words for the kind of screen it is.
+In 0.5.0, the `what 0.5.0 must not pretend:` block moved to `team doctor` and `team --about`
+(see [`docs/reference/output.md`](../reference/output.md) §2.3); `team check` no longer prints
+`not known:` or `what 0.5.0 must not pretend:` at the end of every run. A finding never quotes a
+seat's screen text beyond the profile's fixed words for the kind of screen it is.
 
 ## Examples, moved here whole
 
@@ -255,19 +251,14 @@ seats:
     launch: claude --model claude-opus-5-5
 ```
 
-The team runs as the file and the state say, so there is nothing to act on:
+The team runs as the file and the state say, so there is nothing to act on (beyond the file's
+legacy `coordinator:` deprecation warning):
 
 ```console
 $ team check ; echo "exit $?"
-team check: nothing wrong
-not known: work sent and unread, a lead waiting on a seat, a landing not recorded
-what 0.5.0 must not pretend:
-  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
-  Standing grants with an expiry, not leases
-  No two-granter agreement, no `agree`, no `create` bounds
-  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
-  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
-  No policy object yet (amendment 02)
+team beacon, session "beacon"
+warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+0 difference(s)
 exit 0
 ```
 
@@ -275,36 +266,26 @@ A seat of the team runs it too, and reads the same answer:
 
 ```console caller=claude-beacon
 $ team check ; echo "exit $?"
-team check: nothing wrong
-not known: work sent and unread, a lead waiting on a seat, a landing not recorded
-what 0.5.0 must not pretend:
-  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
-  Standing grants with an expiry, not leases
-  No two-granter agreement, no `agree`, no `create` bounds
-  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
-  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
-  No policy object yet (amendment 02)
+team beacon, session "beacon"
+warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+0 difference(s)
 exit 0
 ```
 
 With the herdr session down, both seats are in the file and not running — the summary counts
-them, and one repair is the owner's:
+them, and both repairs are the owner's:
 
 ```console herdr=absent
 $ team check ; echo "exit $?"
+team beacon, session "beacon"
+warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
 difference: claude-keeper is in the file and is not running
   repair: the owner runs team up
+  who: the owner
 difference: claude-beacon is in the file and is not running
   repair: the owner runs team up
-team check: 2 difference(s), 2 for the owner
-not known: work sent and unread, a lead waiting on a seat, a landing not recorded
-what 0.5.0 must not pretend:
-  Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt
-  Standing grants with an expiry, not leases
-  No two-granter agreement, no `agree`, no `create` bounds
-  No read scoping (§3, every disclosure is a `read`), no `act-as`, no `use-broker`, no `deploy` gating
-  No constraint program beyond the one-`leads` cardinality and launch-time mutual exclusion (§5)
-  No policy object yet (amendment 02)
+  who: the owner
+2 difference(s), 2 for the owner
 exit 1
 ```
 

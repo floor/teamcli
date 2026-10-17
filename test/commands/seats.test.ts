@@ -311,6 +311,16 @@ describe('team seats', () => {
     expect(await runSeats(['--file', file, '--json'], ioNotice, statusSources)).toBe(0);
     const parsedNotice = assertMatchesOutputSchema<SeatsJson>(ioNotice.out, SEATS_OUTPUT_SCHEMA);
     expect(parsedNotice.notice).toContain('team.yaml is invalid');
+
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const ioBad = testIo(dir, { kind: 'owner' });
+      expect(await runSeats([...argv], ioBad, statusSources)).toBe(2);
+      expect(ioBad.err).toBe('');
+      assertJsonErrorShape(ioBad.out, { id: 'seats.invocation', messageContains, repair: null });
+    }
   });
 
   test('--json carries each seat’s state and state_source, and blind only where it applies', async () => {

@@ -26,6 +26,16 @@ test('a positional argument exits 2 and the session list is not read', async () 
   expect(await runList(['--json', 'extra'], ioJson, quiet)).toBe(2);
   expect(ioJson.err).toBe('');
   assertJsonErrorShape(ioJson.out, { id: 'list.invocation', messageContains: 'unexpected "extra"', repair: null });
+
+  const ioNope = testIo('/anywhere');
+  expect(await runList(['--nope', '--json'], ioNope, quiet)).toBe(2);
+  expect(ioNope.err).toBe('');
+  assertJsonErrorShape(ioNope.out, { id: 'list.invocation', messageContains: 'unknown option --nope', repair: null });
+
+  const ioInline = testIo('/anywhere');
+  expect(await runList(['--json=1'], ioInline, quiet)).toBe(2);
+  expect(ioInline.err).toBe('');
+  assertJsonErrorShape(ioInline.out, { id: 'list.invocation', messageContains: 'unknown option --json', repair: null });
 });
 
 test('empty results go to stdout and leave stderr empty', async () => {
@@ -36,7 +46,7 @@ test('empty results go to stdout and leave stderr empty', async () => {
 
   const none = testIo('/anywhere');
   expect(await runList([], none, quiet)).toBe(0);
-  expect(none.out).toBe('no running sessions\n');
+  expect(none.out).toBe('no running sessions\n0 session(s)\n');
   expect(none.err).toBe('');
 
   const json = testIo('/anywhere');

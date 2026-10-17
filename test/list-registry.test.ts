@@ -171,7 +171,7 @@ test('the one word filters by entity; a word no entity has is an empty list', as
   expect(((JSON.parse(run.out) as { rows: RegistryRow[] }).rows).map((row) => row.team)).toEqual(['acme']);
 
   const none = await listed(['acme2'], sources([ACME, BEACON]));
-  expect(none).toEqual({ code: 0, out: 'no teams\n', err: '' });
+  expect(none).toEqual({ code: 0, out: 'no teams\n0 team(s)\n', err: '' });
   const json = await listed(['--json', 'acme2'], sources([ACME, BEACON]));
   expect(json.code).toBe(0);
   expect(json.err).toBe('');
@@ -234,7 +234,7 @@ test('a registry that reads but names no team still shows what discovery found, 
       source: 'discovered',
     },
   ]);
-  expect(await listed([], sources([], { sessions: () => null }))).toEqual({ code: 0, out: 'no teams\n', err: '' });
+  expect(await listed([], sources([], { sessions: () => null }))).toEqual({ code: 0, out: 'no teams\n0 team(s)\n', err: '' });
 });
 
 test('no registry to read: discovery alone, and a positional is still not this command\'s', async () => {
@@ -323,7 +323,7 @@ test('home with a registry file: the record and its team file are read from disk
     const bare = join(base, 'bare');
     mkdirSync(bare, { recursive: true });
     const none = await listed([], { ...realListSources(bare), sessions: () => [] });
-    expect(none.out).toBe('no running sessions\n');
+    expect(none.out).toBe('no running sessions\n0 session(s)\n');
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

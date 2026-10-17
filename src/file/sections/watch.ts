@@ -88,7 +88,11 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
     const numbers = node.kind === 'seq' ? node.items.map((item) => (item.kind === 'scalar' ? item.value : null)) : null;
     if (numbers && numbers.every((n): n is number => typeof n === 'number' && n > 0 && n <= 100)) quotaMarks = numbers;
     else check.fail(node.line, 'watch.quota_marks must be a list of percentages, such as [50, 75, 90]');
-    check.warnings.push({ line: node.line, message: 'watch.quota_marks is now budgets.marks, and is still read' });
+    check.warnings.push({
+      line: node.line,
+      message: 'watch.quota_marks is now budgets.marks, and is still read',
+      repair: 'move `watch.quota_marks` to `budgets.marks` in .agents/team.yaml',
+    });
   }
   return {
     legacyMarks: Boolean(marks),

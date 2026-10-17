@@ -282,6 +282,16 @@ describe('team doctor --login', () => {
     expect(badIo.err).toBe('');
     assertJsonErrorShape(badIo.out, { id: 'doctor.invocation', messageContains: 'unexpected "extra"', repair: null });
 
+    const nopeIo = testIo(dir);
+    expect(await runDoctor(['--nope', '--json'], nopeIo, fakeSources())).toBe(2);
+    expect(nopeIo.err).toBe('');
+    assertJsonErrorShape(nopeIo.out, { id: 'doctor.invocation', messageContains: 'unknown option --nope', repair: null });
+
+    const inlineIo = testIo(dir);
+    expect(await runDoctor(['--json=1'], inlineIo, fakeSources())).toBe(2);
+    expect(inlineIo.err).toBe('');
+    assertJsonErrorShape(inlineIo.out, { id: 'doctor.invocation', messageContains: 'unknown option --json', repair: null });
+
     const missingIo = testIo(dir);
     expect(await runDoctor(['--file', join(dir, 'missing.yaml'), '--json'], missingIo, fakeSources())).toBe(2);
     expect(missingIo.err).toBe('');

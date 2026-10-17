@@ -279,9 +279,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...current.warnings.map((w) => ({
       line: w.line || undefined,
       message: w.message,
-      repair: w.message.includes('`coordinator:`')
-        ? "set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml"
-        : undefined,
+      ...(w.repair !== undefined ? { repair: w.repair } : {}),
     })),
     ...(current.deprecations ?? []).map((deprecation) => ({
       line: deprecation.line || undefined,

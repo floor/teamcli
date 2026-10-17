@@ -796,13 +796,13 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
   return findings;
 }
 
-import { contextLine, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { contextLine, hasJsonFlag, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { NOT_PRETENDED } from '../permissions/must-not-pretend.ts';
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, ['session', 'file'], ['login', 'json']);
-  const json = argv.includes('--json');
+  const json = hasJsonFlag(argv);
   if (args.error || args.rest.length) {
     const why = plainText(args.error ?? `unexpected "${args.rest[0]}"`);
     if (json) {

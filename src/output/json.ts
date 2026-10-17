@@ -62,6 +62,21 @@ export function toJsonDifference(diff: OutputDifference): JsonDifference {
 }
 
 /**
+ * Returns `true` when `argv` contains `--json` or `--json=<value>` at any position.
+ *
+ * Used before a command's argument parser runs so that:
+ * - an earlier unknown option (`team <cmd> --nope --json`) still writes the `team.error`
+ *   JSON envelope on `stdout` with empty `stderr`,
+ * - a malformed `--json=<value>` (`team <cmd> --json=1`) also routes its invocation refusal
+ *   through the `team.error` JSON envelope, and
+ * - `team check` never treats `--json` / `--json=…` as a spelling-breaker that flips
+ *   dispatch back to the old 0.3.3 `team check <file> --by <seat>` spelling.
+ */
+export function hasJsonFlag(argv: readonly string[]): boolean {
+  return argv.some((arg) => arg === '--json' || arg.startsWith('--json='));
+}
+
+/**
  * Wraps a JSON payload with the top-level `schema: { name, version }` tag.
  * `schema` is placed first in key order and cannot be overwritten by a payload key named `schema`.
  */

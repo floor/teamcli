@@ -77,9 +77,6 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   }
   const { team, dir } = current;
   if (current.notice) out.stdout(`${plainText(current.notice)}\n`);
-  for (const warning of current.warnings) {
-    out.stderr(`team hold: warning, line ${warning.line}: ${plainText(warning.message)}\n`);
-  }
   const { caller, session } = judgeCallerIn(io, dir, team);
   const verdict = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
   if (verdict.kind !== 'ok') {

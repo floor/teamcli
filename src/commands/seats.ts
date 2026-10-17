@@ -8,6 +8,7 @@ import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import {
   contextLine,
+  hasJsonFlag,
   renderTable,
   ttyStyle,
   writeJson,
@@ -55,6 +56,7 @@ export const realSeatsSources: SeatsSources = {
   branch: (path) => realStatusSources.branch(path),
   standing: (root) => realStatusSources.standing(root),
   now: () => realStatusSources.now(),
+  home: realStatusSources.home,
   wait: waitOrStop,
 };
 
@@ -311,7 +313,7 @@ export function renderSeatsTable(rows: SeatRegistryRow[], indent = '', style: Tt
 
 export async function runSeats(argv: string[], io: Io, sources: SeatsSources = realSeatsSources): Promise<number> {
   const args = readArgs(argv, ['session', 'file'], ['all', 'watch', 'json']);
-  const json = args.flags.has('json');
+  const json = hasJsonFlag(argv);
   const watching = args.flags.has('watch');
   if (args.error || args.rest.length || (watching && json)) {
     const why = args.error
