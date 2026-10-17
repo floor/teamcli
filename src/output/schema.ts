@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
+import { DIFFERENCE_WHO_VALUES } from './text.ts';
 
 export interface CommandSchemaSpec {
   /** Schema identifier, e.g. `'team.status'` or `'team.error'`. */
@@ -17,6 +18,23 @@ export interface CommandSchemaSpec {
   properties: Record<string, JsonSchema>;
   /** Optional `oneOf` / `anyOf` branches when a command has multiple `--json` shapes (e.g. team vs `--project`). */
   oneOf?: readonly JsonSchema[];
+}
+
+export interface ActionSchemaSpec {
+  /** Schema identifier, e.g. `'team.add'` or `'team.up'`. */
+  name: string;
+  /** File name under `schema/`, e.g. `'add.schema.json'`. */
+  fileName: string;
+  /** Human-readable title for the JSON Schema. */
+  title: string;
+  /** Schema integer version; defaults to `1`. */
+  version?: number;
+  /** Allowed `status` values for this action command (e.g. `['ready', 'dry-run']`). */
+  statuses?: readonly string[];
+  /** Additional required top-level properties beyond `format`, `dry_run`, `status`, `action_summary`. */
+  required?: readonly string[];
+  /** Command-specific properties merged alongside the base action envelope properties. */
+  properties?: Record<string, JsonSchema>;
 }
 
 /** Reusable JSON Schema fragment for the top-level `schema: { name, version }` tag. */
@@ -42,7 +60,7 @@ export const DIFFERENCE_SCHEMA_FRAGMENT: JsonSchema = {
     repair: { type: 'string', minLength: 1 },
     who: {
       type: 'string',
-      enum: ['owner', 'lead', 'owner or lead', 'seat', 'any'],
+      enum: [...DIFFERENCE_WHO_VALUES],
     },
   },
 };
@@ -57,6 +75,47 @@ export const SUMMARY_SCHEMA_FRAGMENT: JsonSchema = {
     owner_differences: { type: 'integer', minimum: 0 },
   },
 };
+
+/** Reusable JSON Schema fragment for a `--dry-run` plan step (`{ step, detail, seat?, prefix? }`). */
+export const PLAN_STEP_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['step', 'detail'],
+  properties: {
+    step: { type: 'string', minLength: 1 },
+    detail: { type: 'string', minLength: 1 },
+    seat: { type: ['string', 'null'] },
+    prefix: { type: 'string', enum: ['+', '!', 'skip'] },
+  },
+};
+
+/** Builds a `CommandSchemaSpec` for an action command (`ActionResultBase` + command-specific fields). */
+export function buildActionSchemaSpec(spec: ActionSchemaSpec): CommandSchemaSpec {
+  const baseRequired = ['format', 'dry_run', 'status', 'action_summary'];
+  const extraRequired = (spec.required ?? []).filter((key) => !baseRequired.includes(key));
+  return {
+    name: spec.name,
+    fileName: spec.fileName,
+    title: spec.title,
+    ...(spec.version !== undefined ? { version: spec.version } : {}),
+    required: [...baseRequired, ...extraRequired],
+    properties: {
+      format: { type: 'integer', const: 1 },
+      dry_run: { type: 'boolean' },
+      status: spec.statuses && spec.statuses.length > 0
+        ? { type: 'string', enum: [...spec.statuses] }
+        : { type: 'string', minLength: 1 },
+      action_summary: { type: 'string', minLength: 1 },
+      project: { type: ['string', 'null'] },
+      session: { type: ['string', 'null'] },
+      plan: {
+        type: 'array',
+        items: PLAN_STEP_SCHEMA_FRAGMENT,
+      },
+      ...(spec.properties ?? {}),
+    },
+  };
+}
 
 /** Build a Draft 2020-12 JSON Schema object for a command's `--json` output. */
 export function buildCommandOutputSchema(spec: CommandSchemaSpec): JsonSchema {
@@ -129,6 +188,7 @@ export const ERROR_OUTPUT_SCHEMA: CommandSchemaSpec = {
         id: { type: 'string', minLength: 1 },
         message: { type: 'string', minLength: 1 },
         repair: { type: ['string', 'null'] },
+        rule: { type: ['string', 'null'] },
       },
     },
   },

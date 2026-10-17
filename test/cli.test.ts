@@ -15,11 +15,19 @@ function io(): Io & { out: string; err: string } {
   return state;
 }
 
-test('--version prints the package version', async () => {
+test('--version prints the package version and --about prints version, licence, docs link, and NOT_PRETENDED', async () => {
   const run = io();
   expect(await main(['--version'], run)).toBe(0);
   expect(run.out.trim()).toBe(version());
   expect(version()).toMatch(/^\d+\.\d+\.\d+/);
+
+  const about = io();
+  expect(await main(['--about'], about)).toBe(0);
+  expect(about.err).toBe('');
+  expect(about.out).toContain(`team ${version()}`);
+  expect(about.out).toContain('licence: MIT');
+  expect(about.out).toContain('what 0.5.0 must not pretend:');
+  expect(about.out).toContain('Integrity, not authority: every gate 0.5.0 ships holds against a mistake, not against an attempt');
 });
 
 test('--help prints the usage and exits 0; no command exits 2', async () => {

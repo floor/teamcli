@@ -2,7 +2,7 @@ import type { Io } from '../io.ts';
 
 /**
  * Semantic terminal styling for plain output. Every helper is a no-op when
- * `enabled` is false (non-TTY stdout or `NO_COLOR` set in the environment).
+ * `enabled` is false (non-TTY stream, `NO_COLOR` set and non-empty, or `--json` active).
  */
 export interface TtyStyle {
   readonly enabled: boolean;
@@ -11,8 +11,19 @@ export interface TtyStyle {
   green(text: string): string;
   yellow(text: string): string;
   red(text: string): string;
-  /** Colour a seat or finding state word (`working`, `idle`, `done`, `missing`, `stopped`, etc.). */
+  /** Colour a seat or finding state/severity word (`working`, `idle`, `done`, `missing`, `stopped`, `ok`, `warn`, `MISS`, `--`, etc.). */
   styleState(state: string): string;
+}
+
+export type TtySource =
+  | (Pick<Io, 'stdoutIsTTY' | 'stderrIsTTY' | 'env'> & { readonly json?: boolean })
+  | boolean;
+
+export interface TtyOptions {
+  /** Which output stream to check for TTY status; defaults to `'stdout'`. */
+  readonly stream?: 'stdout' | 'stderr';
+  /** When `true`, forces `PLAIN_STYLE` (`--json` output never carries ANSI escapes). */
+  readonly json?: boolean;
 }
 
 const PLAIN_STYLE: TtyStyle = {
@@ -38,11 +49,12 @@ const ANSI_STYLE: TtyStyle = {
   red: (text) => wrap('\x1b[31m', '\x1b[39m', text),
   styleState(state) {
     const trimmed = state.trim();
-    if (trimmed === 'stopped' || trimmed === '-') return ANSI_STYLE.dim(state);
+    if (trimmed === 'stopped' || trimmed === '-' || trimmed === '--') return ANSI_STYLE.dim(state);
     if (
       trimmed === 'missing'
       || trimmed === 'wrong name'
       || trimmed === 'miss'
+      || trimmed === 'MISS'
       || trimmed.startsWith('restored, not launched by team')
       || trimmed.includes('(blind)')
     ) {
@@ -76,12 +88,17 @@ const ANSI_STYLE: TtyStyle = {
 
 /**
  * Whether ANSI colour is active for this `io` (or explicit boolean).
- * Colour is emitted only on an interactive TTY when `NO_COLOR` is unset or empty.
+ * Colour is emitted only on an interactive TTY for the chosen stream (`stdout` by default,
+ * or `stderr` when `opts?.stream === 'stderr'`) when `NO_COLOR` is unset or empty and
+ * `--json` is not active.
  */
-export function ttyStyle(source?: Pick<Io, 'stdoutIsTTY' | 'env'> | boolean): TtyStyle {
+export function ttyStyle(source?: TtySource, opts?: TtyOptions): TtyStyle {
+  if (opts?.json === true) return PLAIN_STYLE;
   if (typeof source === 'boolean') return source ? ANSI_STYLE : PLAIN_STYLE;
   if (!source) return PLAIN_STYLE;
+  if (source.json === true) return PLAIN_STYLE;
   const noColor = source.env?.NO_COLOR;
   if (noColor !== undefined && noColor !== '') return PLAIN_STYLE;
-  return source.stdoutIsTTY === true ? ANSI_STYLE : PLAIN_STYLE;
+  const isTty = opts?.stream === 'stderr' ? source.stderrIsTTY === true : source.stdoutIsTTY === true;
+  return isTty ? ANSI_STYLE : PLAIN_STYLE;
 }

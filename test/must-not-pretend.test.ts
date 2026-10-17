@@ -168,21 +168,23 @@ describe('team check says what 0.5.0 must not pretend', () => {
   });
 });
 
-describe('team status closes its reading with the record\'s line', () => {
-  test('a clean reading: the footer stands after the count, the last line of the reading', async () => {
+describe('team status omits the footer on every run; team --about prints NOT_PRETENDED', () => {
+  test('a clean status reading ends with the summary count and omits the footer', async () => {
     const ran = await status(running());
     expect(ran.code).toBe(0);
     expect(ran.err).toBe('');
-    expect(ran.out).toEndWith(`0 difference(s)\n${INTEGRITY_NOT_AUTHORITY}\n`);
+    expect(ran.out).toEndWith('0 difference(s)\n');
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 
-  test('a reading with differences: the footer stands under the count still', async () => {
+  test('a status reading with differences ends with the summary count and omits the footer', async () => {
     const ran = await status(down);
     expect(ran.code).toBe(1);
-    expect(ran.out).toEndWith(`2 difference(s), 2 for the owner\n${INTEGRITY_NOT_AUTHORITY}\n`);
+    expect(ran.out).toEndWith('2 difference(s), 2 for the owner\n');
+    expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 
-  test('the document is untouched: the footer is the plain reading\'s alone', async () => {
+  test('the JSON document is untouched', async () => {
     const ran = await status(running(), '--json');
     expect(ran.code).toBe(0);
     expect(ran.out).not.toContain('Integrity, not authority');

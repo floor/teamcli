@@ -1,5 +1,5 @@
 import type { Io } from '../io.ts';
-import { whoOfDifference, type DifferenceWho, type OutputDifference } from './text.ts';
+import { whoOfDifference, type DifferenceWho, type OutputDifference, type PlanStep } from './text.ts';
 
 /** Top-level schema identifier required on every 0.5.0 `--json` document. */
 export interface OutputSchemaTag {
@@ -7,14 +7,16 @@ export interface OutputSchemaTag {
   version: number;
 }
 
-export type JsonEnvelope<T extends Record<string, unknown>> = {
+export type JsonEnvelope<T extends Record<string, unknown>> = Omit<T, 'schema'> & {
   schema: OutputSchemaTag;
-} & T;
+};
 
 export interface JsonErrorPayload {
   id: string;
   message: string;
   repair: string | null;
+  /** Optional permission resolver rule id (`PermissionRule` from `src/permissions/resolve.ts`, e.g. `'no-record'`, `'owner-only'`, `'owner-or-leads'`, `'outside-envelope'`). */
+  rule?: string | null;
 }
 
 export interface JsonErrorEnvelope {
@@ -28,6 +30,28 @@ export interface JsonDifference {
   who: DifferenceWho;
 }
 
+/**
+ * Shared base fields for action commands (`up`, `down`, `add`, `remove`, `restart`,
+ * `reload`, `register`, `answer`, `init`, `grant`, `delegate`, `revoke`, `worktree`, etc.)
+ * under `--json` and `--dry-run --json`.
+ *
+ * Uses `action_summary` (string) rather than `summary` so `summary` remains unambiguously
+ * the `{ differences, owner_differences }` object on reading envelopes.
+ */
+export interface ActionResultBase {
+  format: 1;
+  dry_run: boolean;
+  status: string;
+  action_summary: string;
+  project?: string | null;
+  session?: string | null;
+  plan?: readonly PlanStep[];
+}
+
+export type ActionEnvelope<T extends Record<string, unknown> = Record<string, never>> = JsonEnvelope<
+  ActionResultBase & T
+>;
+
 /** Normalizes a difference for JSON output, including `what`, `repair`, and `who`. */
 export function toJsonDifference(diff: OutputDifference): JsonDifference {
   return {
@@ -37,15 +61,19 @@ export function toJsonDifference(diff: OutputDifference): JsonDifference {
   };
 }
 
-/** Wraps a JSON payload with the top-level `schema: { name, version }` tag. */
+/**
+ * Wraps a JSON payload with the top-level `schema: { name, version }` tag.
+ * `schema` is placed first in key order and cannot be overwritten by a payload key named `schema`.
+ */
 export function jsonEnvelope<T extends Record<string, unknown>>(
   schemaName: string,
   payload: T,
   version = 1,
 ): JsonEnvelope<T> {
+  const { schema: _ignored, ...rest } = payload as T & { schema?: unknown };
   return {
     schema: { name: schemaName, version },
-    ...payload,
+    ...(rest as Omit<T, 'schema'>),
   };
 }
 
@@ -60,12 +88,13 @@ export function writeJson<T extends Record<string, unknown>>(
   io.stdout(`${JSON.stringify(doc, null, 2)}\n`);
 }
 
-/** Builds a structured `--json` error document (`{"schema": {"name": "team.error", "version": 1}, "error": {"id", "message", "repair"}}`). */
+/** Builds a structured `--json` error document (`{"schema": {"name": "team.error", "version": 1}, "error": {"id", "message", "repair", "rule?"}}`). */
 export function jsonError(
   id: string,
   message: string,
   repair: string | null = null,
   version = 1,
+  rule?: string | null,
 ): JsonErrorEnvelope {
   return {
     schema: { name: 'team.error', version },
@@ -73,6 +102,7 @@ export function jsonError(
       id,
       message,
       repair,
+      ...(rule !== undefined ? { rule } : {}),
     },
   };
 }
@@ -84,6 +114,7 @@ export function writeJsonError(
   message: string,
   repair: string | null = null,
   version = 1,
+  rule?: string | null,
 ): void {
-  io.stdout(`${JSON.stringify(jsonError(id, message, repair, version), null, 2)}\n`);
+  io.stdout(`${JSON.stringify(jsonError(id, message, repair, version, rule), null, 2)}\n`);
 }
