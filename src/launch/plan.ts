@@ -124,6 +124,9 @@ export type Op =
       do: 'gone';
       seat: string;
       pane: string;
+      /** The seat's CLI, for a profile herdr cannot report: the pane's own process then says
+       *  whether it left, since herdr never lists that pane. */
+      cli?: string;
       seconds: number;
       closeUnasked?: boolean;
       workspace?: string;
@@ -873,7 +876,7 @@ export function downPlan(input: DownInput): Step[] {
     steps.push({
       kind: 'wait',
       text: `until ${seat.name}'s pane is back at its shell (${profile.exitTimeout} s at most); on a time-out it is left as it is`,
-      do: { do: 'gone', seat: seat.name, pane: seat.pane, seconds: profile.exitTimeout, ...asked },
+      do: { do: 'gone', seat: seat.name, pane: seat.pane, cli: profile.cli, seconds: profile.exitTimeout, ...asked },
     });
     steps.push({
       kind: 'run',

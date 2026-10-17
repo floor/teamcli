@@ -105,6 +105,7 @@ describe('checkLogin with fake command results', () => {
       rulesOption: null,
       rulesMode: 'message',
       standingRules: [],
+      herdrStatus: 'reliable',
       loginCheck: null,
       loginHint: 'custom login',
       exit: '/exit',

@@ -564,6 +564,7 @@ function inspectSeat(
     foreground: sources.foreground(session, agent.pane),
     shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
     processNames: profile?.processNames ?? [],
+    cli: declared.cli,
   });
   const holdsExit = where === 'unsent'
     && profile !== null

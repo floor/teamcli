@@ -1246,11 +1246,24 @@ export async function executePlan(
         break;
       }
       case 'gone': {
+        // A profile herdr cannot report is never in the agent list, so the list would answer
+        // "gone" before the key was pressed. The pane's own foreground process is the reading
+        // there: no process of the CLI's names is the seat left. An unreadable pane is not a
+        // departure, exactly as the launch's shell wait treats it.
+        const profile = op.cli ? profileFor(op.cli) : null;
+        const processNames = profile?.processNames ?? [];
         const gone = await until(
           op.seconds,
           2000,
           host,
-          () => host.agentPanes(session)?.includes(op.pane) === false,
+          () => {
+            if (profile?.herdrStatus !== 'unreliable') {
+              return host.agentPanes(session)?.includes(op.pane) === false;
+            }
+            const foreground = host.foreground?.(session, op.pane) ?? null;
+            if (foreground === null) return false;
+            return !reportedLiveAgent(foreground, processNames);
+          },
           sharedSleep,
           () => stopped,
         );

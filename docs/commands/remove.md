@@ -51,6 +51,10 @@ A caller other than the owner meeting a seat herdr reports idle or done that is 
 seat out of the team and leaves its pane running: nothing typed, the workspace left open, the
 pane's agent renamed so it no longer answers the seat's name.
 
+A seat whose profile says herdr cannot report it (`herdr_status: unreliable`) is free when the
+profile's own screen reads idle, so the owner's removal stops it on its profile's exit key as it
+stops any free seat.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |

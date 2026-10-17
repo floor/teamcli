@@ -196,15 +196,22 @@ export function paneStillRunning(foreground: readonly string[] | null, processNa
 export function stateOfPane(
   status: string,
   screen: Screen,
-  pane: { foreground: readonly string[] | null; shellBack: boolean | null; processNames: readonly string[] },
+  pane: { foreground: readonly string[] | null; shellBack: boolean | null; processNames: readonly string[]; cli?: string },
 ): DownSeat['state'] {
   if (pane.shellBack === true && pane.processNames.length > 0 && !paneStillRunning(pane.foreground, pane.processNames)) {
     return 'exited';
   }
-  return stateOf(status, screen);
+  return stateOf(status, screen, pane.cli);
 }
 
-export function stateOf(status: string, screen: Screen): DownSeat['state'] {
+/** Whether herdr reports this CLI's agent status faithfully. A profile that says it does not is
+ *  read from its screen alone: herdr reports those CLIs as no agent, or `unknown`, while they
+ *  run, so its word cannot free a seat or hold one. */
+function herdrUnreliable(cli: string | undefined): boolean {
+  return cli !== undefined && profileFor(cli)?.herdrStatus === 'unreliable';
+}
+
+export function stateOf(status: string, screen: Screen, cli?: string): DownSeat['state'] {
   if (screen.kind === 'unsent') return 'unsent';
   // A framed exit question already on screen was left by an earlier stop. This run did not ask
   // it, so it is blocked: no key is sent, and `--abandon` closes it only as it closes every
@@ -214,6 +221,10 @@ export function stateOf(status: string, screen: Screen): DownSeat['state'] {
   // `--wait` waits for it, and it is never typed into.
   if (screen.kind === 'working') return 'working';
   if (screen.kind === 'unknown') return 'unknown';
+  // A profile herdr cannot report faithfully is read from its screen: the profile's own module
+  // read the seat as idle, which is its prompt. Every other screen kind above keeps its word —
+  // a working turn or a dialog is never made less cautious by this reading.
+  if (screen.kind === 'idle' && herdrUnreliable(cli)) return 'free';
   if (status === 'idle' || status === 'done') return 'free';
   if (status === 'working' || status === 'blocked') return status;
   return 'unknown';
@@ -250,7 +261,10 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   // The caller check that precedes every key: the CLI itself must be the pane's foreground
   // process at the key, not when the seat was read.
   const live = () => reportedLiveAgent(io.foreground(), names);
+  // A profile herdr cannot report faithfully is at rest when its own screen reads idle; the
+  // screen check below each call is the reading there, and it stays the gate for every key.
   const resting = () => {
+    if (herdrUnreliable(cli)) return true;
     const status = io.status();
     return status === 'idle' || status === 'done';
   };
@@ -402,7 +416,10 @@ export async function keyExit(io: ExitIo, cli: string, keys: readonly string[]):
   // The caller check that precedes every key: the CLI itself must be the pane's foreground
   // process at the key, not when the seat was read.
   const live = () => reportedLiveAgent(io.foreground(), names);
+  // The same reading as `typeExit`: a profile whose herdr status is unreliable is at rest at
+  // its own idle screen, and the screen check right after this one is what gates the key.
   const resting = () => {
+    if (herdrUnreliable(cli)) return true;
     const status = io.status();
     return status === 'idle' || status === 'done';
   };
@@ -883,6 +900,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           foreground: sources.foreground(session, agent.pane),
           shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
           processNames: profileFor(cli)?.processNames ?? [],
+          cli,
         });
         return state === 'working';
       });
@@ -968,6 +986,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       foreground: sources.foreground(session, agent.pane),
       shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
       processNames: profile?.processNames ?? [],
+      cli,
     });
     // An unsent box that holds exactly the profile's exit text — an earlier run typed it and
     // never confirmed it — is named as such either way: the profile's one clearing key decides
@@ -1183,6 +1202,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         });
       },
       classify: () => 'unknown',
+      // The departure wait of a profile herdr cannot report reads the pane's own process: herdr
+      // never lists such a pane, so its agent list would say "gone" before the key was pressed.
+      foreground: (sessionName, pane) => sources.foreground(sessionName, pane),
       sleep: sources.sleep ?? launch.sleep,
       now: () => now().getTime(),
       allow: () => null,

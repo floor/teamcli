@@ -538,7 +538,7 @@ describe('team up, live', () => {
     };
     // Herdr's agent list: every launched pane but the jules one, which appears only once named.
     const listed = made.launch.agentPanes.bind(made.launch);
-    made.launch.agentPanes = () => listed().filter((pane) => pane !== julesPane || renamed.has(pane));
+    made.launch.agentPanes = (session) => (listed(session) ?? []).filter((pane) => pane !== julesPane || renamed.has(pane));
     const rename = made.launch.renameAgent.bind(made.launch);
     made.launch.renameAgent = (session, pane, name) => {
       renamed.add(pane);
@@ -5436,6 +5436,48 @@ describe('team down, live', () => {
     expect(io.out).toContain('deepseek-acme: stopped\n');
     // The close op is `down`'s own purpose, announced by its plan; the line and the log name the seat and the fact.
     expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain('deepseek-acme: stopped');
+  });
+
+  test('a jules seat herdr reports unknown is free at its idle table, and stops on ctrl+c', async () => {
+    // herdr 0.7.1 reports a jules pane as no agent, and `unknown` after the rename. The profile
+    // says its herdr status is unreliable, so the screen module's idle table is the reading: the
+    // seat is free, one ctrl+c is pressed at that table, and the pane's own process says it left.
+    const julesIdle = readFileSync(join(import.meta.dir, '../fixtures/jules/0.1.42/idle.txt'), 'utf8');
+    writeFileSync(
+      join(root, '.agents/team.yaml'),
+      makeExample(
+        base,
+        root,
+        EXAMPLE
+          + '\n  - role: implementer\n'
+          + '    name: jules-acme\n'
+          + '    cli: jules\n'
+          + '    vendor: google\n'
+          + '    model: Jules\n'
+          + '    version: "0.1.42"\n'
+          + '    launch: jules\n',
+      ),
+    );
+    await approve();
+    liveSeat = 'jules-acme';
+    const run = harness(readScreen('jules', julesIdle), 'unknown');
+    run.setBox(julesIdle);
+    let sent = false;
+    run.launch.sendKey = (_session, _pane, key) => {
+      run.keys.push(key);
+      sent = true;
+      return true;
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runDown(FILE, io, run.sourcesOf({
+      status: () => 'unknown',
+      foreground: () => (sent ? ['zsh'] : ['jules']),
+    }));
+    expect(code).toBe(0);
+    expect(run.keys).toEqual(['ctrl+c']);
+    expect(run.closed).toEqual(['w3']);
+    expect(run.stopped).toEqual(['acme-web']);
+    expect(io.out).toContain('jules-acme: stopped\n');
   });
 
   test('clears the session it stopped, in the same run, and says so in one line', async () => {

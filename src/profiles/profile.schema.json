@@ -38,6 +38,10 @@
       "minItems": 1,
       "description": "optional: rules the profile carries for every seat of this CLI, over the team file's; they ride with the file's rules in every delivery"
     },
+    "herdr_status": {
+      "enum": ["reliable", "unreliable"],
+      "description": "optional: whether herdr reports this CLI's agent status faithfully; with unreliable, a screen the profile reads idle counts as free whatever herdr says"
+    },
     "login": {
       "type": "object",
       "additionalProperties": false,

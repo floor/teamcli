@@ -30,6 +30,11 @@ rules: prepend
 # cannot be undone. The profile never sends it, and this line rides every brief the seat gets.
 standing_rules:
   - Never delete a Jules session.
+# herdr 0.7.1 reports a jules pane as no agent, or `unknown`, while the TUI runs (captured: a
+# pane whose `pane process-info` listed `jules` was absent from `agent list`, and its status
+# stayed `unknown` after the rename). The screen module is the reading there: an idle table
+# counts as free, and nothing waits on a word herdr cannot give.
+herdr_status: unreliable
 login:
   hint: jules login
 # One ctrl+c at the table quits: pressed at the table, a read 1.5s later showed the shell.

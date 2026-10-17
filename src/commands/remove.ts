@@ -428,7 +428,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     if (!temporary && declared === undefined && caller.kind !== 'owner' && only) {
       const liveCwd = sources.foregroundCwd ? sources.foregroundCwd(session, only.pane) : null;
       const screen = sources.screen(session, only.pane, recorded?.cli ?? '', liveCwd);
-      const where = stateOf(only.status, screen);
+      const where = stateOf(only.status, screen, recorded?.cli ?? '');
       if (where === 'working' || only.status === 'working') {
         busy = `${name} is working; left as it is (run this again once herdr reports the seat idle or done)`;
       } else if (only.status === 'idle' || only.status === 'done') {
@@ -487,6 +487,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       foreground: sources.foreground(session, agent.pane),
       shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
       processNames: profile?.processNames ?? [],
+      cli,
     });
     const holdsExit = where === 'unsent' && profile !== null
       && profile.exit !== null
@@ -566,6 +567,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         foreground: sources.foreground(session, agent.pane),
         shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
         processNames: profile?.processNames ?? [],
+        cli,
       });
       const exitInBox = where === 'unsent' && profile !== null && profile.exitClear !== null && profile.exit !== null
         && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
@@ -819,6 +821,8 @@ export async function stopRunning(input: {
       return listed.filter((pane) => paneStillRunning(sources.foreground(sessionName, pane), names));
     },
     classify: () => 'unknown',
+    // The departure wait of a profile herdr cannot report reads the pane's own process.
+    foreground: (sessionName, pane) => sources.foreground(sessionName, pane),
     sleep: sources.sleep ?? launch.sleep,
     now: () => sources.now().getTime(),
     allow: () => null,

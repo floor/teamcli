@@ -245,8 +245,11 @@ box, the create confirmation — with the CLI's `Session created:` line as the d
 names only the repo of the seat's own folder: the module proves the chooser collapsed on it before
 it types, and refuses when the account's list does not hold it. One `ctrl+c` at the table quits,
 and the profile sends no other exit key; it never sends the table's `ctrl+d` delete, and the rules
-every jules seat receives carry `Never delete a Jules session.` herdr reports a jules pane's agent
-status unknown, so readiness is read from the screen.
+every jules seat receives carry `Never delete a Jules session.` herdr reports a jules pane as no
+agent, and its status unknown, so the profile says `herdr_status: unreliable`: readiness is read
+from the screen, a pane herdr has not listed is named by its own process, and `down`, `restart`
+and `remove` treat the idle table as free where they would otherwise wait on a word herdr cannot
+give.
 
 Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
 under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor
