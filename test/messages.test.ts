@@ -373,6 +373,17 @@ difference: lead/m1 does not verify: the record is not a message
     expect(invocation.err).toBe('');
     assertJsonErrorShape(invocation.out, { id: 'messages.invocation', messageContains: 'unexpected' });
 
+    // --json read from raw argv: the parser's own error must not lose the structured face.
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const bad = await runJson([...argv]);
+      expect(bad.code).toBe(2);
+      expect(bad.err).toBe('');
+      assertJsonErrorShape(bad.out, { id: 'messages.invocation', messageContains });
+    }
+
     const notARepo = await runJson(['--json'], base);
     expect(notARepo.code).toBe(2);
     expect(notARepo.err).toBe('');

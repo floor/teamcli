@@ -354,6 +354,18 @@ describe('team mcp invocation', () => {
     expect(rc).toBe(2);
     expect(err).toBe('');
     assertJsonErrorShape(out, { id: 'mcp.invocation', messageContains: 'unexpected "extra"', repair: null });
+
+    // --json read from raw argv: the parser's own error must not lose the structured face.
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['status', '--json=1'], 'unknown option --json'],
+    ] as const) {
+      const bad = new Fake();
+      const result = await run([...argv], bad);
+      expect(result.rc).toBe(2);
+      expect(result.err).toBe('');
+      assertJsonErrorShape(result.out, { id: 'mcp.invocation', messageContains, repair: null });
+    }
   });
 
   test('the walk test’s contract: usage lines carry both subcommands and --json', () => {

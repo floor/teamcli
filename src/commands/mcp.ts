@@ -17,6 +17,7 @@ import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { lobbyDir } from '../lobby/gate.ts';
 import {
+  hasJsonFlag,
   renderFinding,
   renderTable,
   SEVERITY_LABELS,
@@ -1066,9 +1067,12 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
 
 export async function runMcp(argv: string[], io: Io, sources: McpSources = realSources): Promise<number> {
   const args = readArgs(argv, [], ['json']);
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const json = hasJsonFlag(argv);
   const sub = args.rest[0];
   const fail = (message: string): number => {
-    if (args.flags.has('json')) {
+    if (json) {
       writeJsonError(io, 'mcp.invocation', message, null);
     } else {
       io.stderr(`team mcp: ${message}\n\n${USAGE}`);
@@ -1081,8 +1085,8 @@ export async function runMcp(argv: string[], io: Io, sources: McpSources = realS
     return fail(sub === undefined ? 'a subcommand is required: status or doctor' : `unknown subcommand ${JSON.stringify(sub)}`);
   }
   if (args.rest.length > 1) return fail(`unexpected ${JSON.stringify(args.rest[1] as string)}`);
-  if (sub === 'status') return runMcpStatus(io, args.flags.has('json'), sources);
-  return runMcpDoctor(io, args.flags.has('json'), sources);
+  if (sub === 'status') return runMcpStatus(io, json, sources);
+  return runMcpDoctor(io, json, sources);
 }
 
 export const mcp: Command = (argv, io) => runMcp(argv, io, realSources);

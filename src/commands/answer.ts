@@ -17,7 +17,7 @@ import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
-import { contextLine, writeJson, writeJsonError } from '../output/index.ts';
+import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, keyOf, labelMatches, versionMatches, type TrustRecord } from '../profiles/trust-answer.ts';
@@ -120,7 +120,9 @@ export default answer;
 
 export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promise<number> {
   const args = readArgs(argv, ['session', 'file'], ['json']);
-  const json = args.flags.has('json');
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const json = hasJsonFlag(argv);
   const seatName = args.rest[0];
   const dialog = args.rest[1];
   if (args.error || args.rest.length !== 2 || !seatName || dialog !== 'trust') {

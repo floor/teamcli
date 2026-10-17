@@ -245,4 +245,15 @@ test('--json refusals are the structured error envelope, with stderr empty', asy
   expect(await runAskShow(['--json'], invocationIo)).toBe(2);
   expect(invocationIo.err).toBe('');
   assertJsonErrorShape(invocationIo.out, { id: 'ask-show.invocation', messageContains: 'a request id' });
+
+  // --json read from raw argv: the parser's own error must not lose the structured face.
+  for (const [argv, messageContains] of [
+    [['--nope', '--json', VECTOR.requestId], 'unknown option --nope'],
+    [['--json=1', VECTOR.requestId], 'unknown option --json'],
+  ] as const) {
+    const badIo = testIo(dir);
+    expect(await runAskShow([...argv], badIo, IN_TIME)).toBe(2);
+    expect(badIo.err).toBe('');
+    assertJsonErrorShape(badIo.out, { id: 'ask-show.invocation', messageContains });
+  }
 });

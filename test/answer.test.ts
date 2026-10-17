@@ -1477,6 +1477,21 @@ describe('team answer', () => {
       error: { id: 'answer.usage', message: 'a seat and trust are required', repair: null },
     });
 
+    // --json read from raw argv: the parser's own error must not lose the structured face.
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const badIo = testIo(root, { kind: 'owner' });
+      expect(await runAnswer([...argv], badIo, fake(home, root, '', 'cursor'))).toBe(2);
+      expect(badIo.err).toBe('');
+      const doc = JSON.parse(badIo.out);
+      expect(doc.schema).toEqual({ name: 'team.error', version: 1 });
+      expect(doc.error.id).toBe('answer.usage');
+      expect(doc.error.message).toContain(messageContains);
+      expect(doc.error.repair).toBeNull();
+    }
+
     writeFileSync(join(dir, 'team.yaml'), 'format: 1\n');
     const bad = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, '--json', 'lead', 'trust'], bad, fake(home, root, '', 'cursor'))).toBe(2);

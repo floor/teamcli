@@ -26,7 +26,7 @@ import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import type { Agent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { contextLine, renderDryRunPlan, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
+import { contextLine, hasJsonFlag, renderDryRunPlan, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { resolveTarget } from '../send/resolve.ts';
 import { appendRoute, readRouteAddress, ROUTES_FILE, type RouteAddress, type RouteRecord } from '../send/routes.ts';
 import { storePath } from '../store/store.ts';
@@ -66,7 +66,9 @@ type Report = { json: boolean };
 
 export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, [], ['json', 'dry-run']);
-  const report: Report = { json: args.flags.has('json') };
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const report: Report = { json: hasJsonFlag(argv) };
   if (args.error) return usage(io, args.error, report);
   const detached = detachedRefusal(callerOf(io));
   if (detached !== undefined) {

@@ -554,6 +554,17 @@ describe('route: the address the native channel answers', () => {
     expect(usageIo.err).toBe('');
     assertJsonErrorShape(usageIo.out, { id: 'route.usage', messageContains: 'a seat, a seat@team or an agent id is required' });
 
+    // --json read from raw argv: the parser's own error must not lose the structured face.
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const badIo = testIo(w.root, OWNER);
+      expect(await runRoute([...argv], badIo, host(w))).toBe(2);
+      expect(badIo.err).toBe('');
+      assertJsonErrorShape(badIo.out, { id: 'route.usage', messageContains });
+    }
+
     const detachedIo = testIo(w.root, { kind: 'owner-no-tty' });
     expect(await runRoute(['lead', '--json'], detachedIo, host(w))).toBe(1);
     expect(detachedIo.err).toBe('');

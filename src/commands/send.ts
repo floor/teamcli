@@ -10,7 +10,7 @@ import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, 
 import type { Command, Io } from '../io.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
-import { contextLine, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
+import { contextLine, hasJsonFlag, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
@@ -217,7 +217,10 @@ type Aim = {
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
-  const report: Report = { json: args.flags.has('json'), seat: seatName ?? null, sent: null, project: null, session: null };
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const json = hasJsonFlag(argv);
+  const report: Report = { json, seat: seatName ?? null, sent: null, project: null, session: null };
   if (args.error) return usage(io, args.error, report);
   const detached = detachedRefusal(callerOf(io));
   if (detached !== undefined) {
@@ -229,7 +232,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (args.flags.has('list')) return listSeats(io, host, report);
   // The native half of the channel: nothing is delivered here, so the seat is named by
   // `--record` and the rest of the line is the record's own options, judged on their own.
-  if (args.values.record !== undefined) return recordRun(args, io, host);
+  if (args.values.record !== undefined) return recordRun(args, io, host, json);
   // Send to outcome is measured from here, past the refusals that read nothing (a refused run
   // reads no clock): this command's own handling, the same span the daemon measures from its
   // handler. The host's clock, not the wall clock: a fixed clock in a test or the docs runner
@@ -503,9 +506,9 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string): string {
  * records with the grant store last (the prologue below is `runSend`'s own, step for step). A
  * native delivery must not become a way around the rules — only around the transport.
  */
-function recordRun(args: Args, io: Io, host: SendHost): number {
+function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   const seatName = args.values.record as string;
-  const report: Report = { json: args.flags.has('json'), seat: seatName, sent: null, project: null, session: null };
+  const report: Report = { json, seat: seatName, sent: null, project: null, session: null };
   const channel = args.values.channel;
   const msRaw = args.values.ms;
   const file = args.values.file;

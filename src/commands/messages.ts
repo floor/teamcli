@@ -11,6 +11,7 @@ import type { Command, Io } from '../io.ts';
 import {
   contextLine,
   formatRelativeTime,
+  hasJsonFlag,
   renderDifferences,
   renderNotes,
   renderTable,
@@ -300,7 +301,9 @@ function bodyLines(body: string): string[] {
  */
 export async function runMessages(argv: string[], io: Io, sources: MessagesSources = realSources): Promise<number> {
   const args = readArgs(argv, [], ['json']);
-  const json = args.flags.has('json');
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const json = hasJsonFlag(argv);
   if (args.error || args.rest.length) {
     const problem = args.error ?? `unexpected "${args.rest[0]}"`;
     if (json) {

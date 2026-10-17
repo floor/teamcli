@@ -6,7 +6,7 @@ import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import type { Command, Io } from '../io.ts';
-import { writeJson, writeJsonError } from '../output/index.ts';
+import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 
 export const USAGE = `Usage: team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]
 
@@ -76,7 +76,9 @@ export function markerMac(key: Buffer, body: MarkerBody): string {
 
 export async function runAskShow(argv: string[], io: Io, now: Date = new Date()): Promise<number> {
   const args = readArgs(argv, ['ask', 'marker', 'key'], ['json']);
-  const json = args.flags.has('json');
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const json = hasJsonFlag(argv);
   if (args.error) return invocation(io, args.error, json);
   const requestId = args.rest[0];
   if (args.rest.length !== 1 || requestId === undefined || !REQUEST_ID.test(requestId)) {

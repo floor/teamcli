@@ -771,6 +771,17 @@ describe('team send: --json documents', () => {
     expect(io.err).toBe('');
     const doc = assertJsonErrorShape(io.out, { id: 'send.usage', repair: null });
     expect(doc.error.message).toBe('a seat and a message are required');
+
+    // --json read from raw argv: the parser's own error must not lose the structured face.
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const badIo = owner(root);
+      expect(await runSend([...argv], badIo, fake(sockets))).toBe(2);
+      expect(badIo.err).toBe('');
+      assertJsonErrorShape(badIo.out, { id: 'send.usage', messageContains, repair: null });
+    }
   });
 
   test('an unreachable seat is a document too', async () => {
