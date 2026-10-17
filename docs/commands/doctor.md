@@ -59,7 +59,7 @@ trust:
 workspace:
   mode: shared
 
-budgets:                       # owner-only; the checks run from the live file
+budgets:                       # owner-only; the budgets in force are the live file's
   accounts:
     openai: { kind: subscription, reserve: 10%, sources: [check], check: .agents/openai-quota }
 

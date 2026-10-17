@@ -73,9 +73,12 @@ one does.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| a skeleton was written, or the recorded copy was restored | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
+| a skeleton was written | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.` | 0 |
+| the recorded copy was restored | `Restored .agents/team.yaml from the copy you last approved on this machine.` | 0 |
 | refused: not the owner, the file is tracked or already there, or there is nothing to restore | `team init: <reason>` | 1 |
 | it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
+
+Every plain run prints the privacy paragraph after that line, a blank line between them.
 
 `--json` prints one `team.init` document instead: `file` (`.agents/team.yaml`), `restored`
 (`false` for a skeleton, `true` for the recorded copy), the outcome as `status` (`wrote` or

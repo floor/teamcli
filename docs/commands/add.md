@@ -59,8 +59,8 @@ delegated `add` is a same-copy seat and nothing else: the one seat it may start 
 already holds, its stanza hash for hash as the live file writes it, so the add writes neither the
 file nor the record. `--temporary`, `--like`, `--until`, `--worktree`, `--session`
 and `--file` stay the owner's, and so does any add that would edit the file or the record —
-restoring a seat the file no longer holds, clearing `stopped: true`, or naming a stanza the
-record does not hold, which would extend or change the file. A `--file` or `--session`
+clearing `stopped: true`, or naming a stanza the record does not hold, which would extend or
+change the file. A `--file` or `--session`
 a non-owner aims is the gate's too, once the file names a delegate: the gate refuses it before the
 flagged file or the flag's session is read, on the eligibility of the default live file alone —
 the flagged file is never opened. With no `delegates` section the run is refused by the rule
