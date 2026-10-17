@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../../src/approve/command.ts';
@@ -474,8 +474,20 @@ describe('team up, live', () => {
     const launches = made.runs.filter(({ command }) => command.includes('--append-system-prompt'));
     expect(launches).toHaveLength(3);
     for (const { command } of launches) {
-      expect(command).toEndWith(`${CLOSING_OPTION}'`);
+      // The rules stay whole, and the seat's own state hook rides after them on a settings file
+      // this run wrote, aimed at that seat's state file.
+      expect(command).toContain(`--append-system-prompt '`);
+      expect(command).toContain(`\n${CLOSING_OPTION}' --settings ${join(root, '.agents', 'hooks')}/`);
       expect(command).not.toContain('reply ready and wait for your brief');
+      const settingsPath = command.slice(command.lastIndexOf(' --settings ') + ' --settings '.length);
+      expect(settingsPath).toMatch(/\/\.agents\/hooks\/[A-Za-z0-9._-]+\.json$/);
+      expect(existsSync(settingsPath)).toBe(true);
+      expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
+      expect(readFileSync(settingsPath, 'utf8')).toContain('UserPromptSubmit');
+    }
+    // What the record keeps is the file's line, never the typed one with the hook's flag.
+    for (const seat of Object.values(seats)) {
+      expect(seat.launch_line ?? '').not.toContain('--settings');
     }
     expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain('watch: started');
   });

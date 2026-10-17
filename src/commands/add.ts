@@ -35,6 +35,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -615,6 +616,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             ...(launchProblemDetail ? { launchProblemDetail } : {}),
           }],
           watchAlive: true,
+          cliHooks: plannedCliHooks(dir, [planned]),
         });
         out.stdout(plainText(formatPlan(preview)));
       } else {
@@ -713,6 +715,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       sessionRunning: live === 'running',
       seats: [seatForPlan],
       watchAlive: true,
+      cliHooks: plannedCliHooks(dir, [seatForPlan]),
     });
     out.stdout(plainText(formatPlan(preview)));
     // exit: add.dry-run
@@ -780,8 +783,17 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true });
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and launches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, [planSeat]);
+    const installed = installCliHooks(dir, [planSeat]);
     const who = describeCaller(caller);
+    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
+      logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+    }
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed });
+    // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
+    resetCliHookState(dir, [planSeat.name]);
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', devMode: io.env.TEAMCLI_DEV_MODE === '1', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,

@@ -217,6 +217,25 @@ describe('up --dry-run', () => {
     expect(plan[0]).toMatchObject({ argv: ['team watch --session a'] });
   });
 
+  test('a state hook the run installed rides at the end of the line it would print', () => {
+    const plan = upPlan({
+      root: '/work/acme-web',
+      session: 'acme-web',
+      sessionRunning: true,
+      seats: [seat('worker'), seat('grok-acme', { cli: 'grok', launch: 'grok' })],
+      cliHooks: {
+        worker: '/work/acme-web/.agents/hooks/worker.json',
+        'grok-acme': '/work/acme-web/.agents/hooks/grok-acme.json',
+      },
+    });
+    const commands = plan.flatMap((step) => (step.kind === 'run' ? [step.argv.at(-1) ?? ''] : []));
+    expect(commands).toContain(
+      'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules. --settings /work/acme-web/.agents/hooks/worker.json',
+    );
+    // The map is by seat, and only a CLI that reads the file is ever named one.
+    expect(commands.some((command) => command.includes('grok') && command.includes('--settings'))).toBe(false);
+  });
+
   test('never holds a command that answers, closes or deletes', () => {
     const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: false, seats: [seat('one'), seat('two')] });
     const verbs = plan.flatMap((step) => {

@@ -48,6 +48,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -1131,6 +1132,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
   // this file, or read another one, the resolved path is recorded for the process.
   const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
+  // The seats' own state hooks: a settings file per seat, named at the end of its launch line.
+  // A dry run plans the map it would write; the real run writes the files below, before the
+  // plan is built, and a seat whose file did not land launches exactly as the file declares.
+  const hookSeats = () => seats.map(({ name, cli, launch }) => ({ name, cli, launch }));
+  let cliHooks = plannedCliHooks(dir, hookSeats());
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   const buildPlan = () => upPlan({
@@ -1143,6 +1149,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     watchAlive,
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
+    cliHooks,
   });
 
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
@@ -1274,7 +1281,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
     stampGrantedTrust();
+    // The settings files land before the plan types a line, so every launch carries its flag. A
+    // seat whose file did not land is said once, in the log, and its launch is the plain line.
+    const installed = installCliHooks(dir, hookSeats());
+    for (const name of Object.keys(cliHooks)) {
+      if (installed[name] === undefined) {
+        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
+      }
+    }
+    cliHooks = installed;
     const plan = buildPlan();
+    // A relaunch starts from no reading at all: the `working` a killed turn left behind says
+    // nothing about the seat this run starts.
+    resetCliHookState(dir, plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : [])));
 
     // Every launch uses the limits declared in the live file, with or without a stored approval.
     const ceilings = ceilingsOf(team);

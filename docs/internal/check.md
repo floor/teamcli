@@ -72,17 +72,23 @@ and open nothing: the target is the file the caller's own place finds.
   or one naming another project — is not counted, and a team that declares no lead reads no
   sibling at all. A check with no home reads no registry;
 - the seat's own reading, the pair [`team seats`](../commands/seats.md) prints as STATE and SOURCE
-  (`src/labels/state.ts`): the word and where it came from, best source first — the pane's screen,
-  herdr's word, the seat's newest trace, its process — save one exception: a trace inside the window
-  (`state_trace_window_seconds`, 2m shipped) beats an idle word, from the screen or from herdr, and
-  only a trace with its own clock counts as fresh — a commit, an ack, a message that reached the
-  seat (a send the seat did not take — `unreachable`, `not-submitted`, `held`, `timeout` — is no
-  trace: it would read a seat as working because someone failed to reach it, and clear a blind
-  seat's flag without a sign the seat moved). A tool row read
-  off a screen carries no clock of its own and is never weighed as recency (it is kept for
-  display), so a seat whose last commit, ack or message is that fresh reads `working` while its
-  prompt shows; a working screen, a blocked screen — a composer holding unsent text included —
-  and the certainties (`held`, `unreachable`, `done`) never yield to it. `done` from the file's
+  (`src/labels/state.ts`): the word and where it came from, best source first — a screen waiting on
+  someone (a dialog, a question, an error, a composer holding unsent text), the CLI's own state hook
+  where its launch installed one, the pane's screen, herdr's word, the seat's newest trace, its
+  process — save one exception: a trace inside the window (`state_trace_window_seconds`, 2m
+  shipped) beats an idle word, from the hook, the screen or herdr, and only a trace with its own
+  clock counts as fresh — a commit, an ack, a message that reached the seat (a send the seat did not
+  take — `unreachable`, `not-submitted`, `held`, `timeout` — is no trace: it would read a seat as
+  working because someone failed to reach it, and clear a blind seat's flag without a sign the seat
+  moved). A tool row read off a screen carries no clock of its own and is never weighed as recency
+  (it is kept for display), so a seat whose last commit, ack or message is that fresh reads
+  `working` while its prompt shows; a working screen, a blocked screen — a composer holding unsent
+  text included — and the certainties (`held`, `unreachable`, `done`) never yield to it. The hook
+  (`cli-hook`) is a per-launch settings file, written under the project's `.agents/`, that the CLI
+  loads for two command hooks — a turn start and a turn end — and the state file it keeps there is
+  read for a day: a fresh `working` reads working, a fresh `idle` idle, and an older reading or one
+  this version cannot parse is no reading, so the screen answers again. A blocked screen outranks
+  the hook, which cannot see a dialog the CLI stopped at after its last turn ended. `done` from the file's
   `stopped` or from a retained record stands only while herdr names no agent for the seat: a live
   agent is the observation, and a file's `stopped` beside a running seat is a difference of its
   own, never the state. A process the comparison calls `restored, not launched by team` is

@@ -23,6 +23,7 @@ import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -218,13 +219,25 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         reload: { detail },
       },
     };
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and relaunches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, [planned]);
+    const installed = installCliHooks(dir, [planned]);
+    if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
+      logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
+        sources.now ? sources.now() : new Date());
+    }
     const steps = upPlan({
       session,
       root,
       seats: [planned],
       sessionRunning: true,
       startWatch: false,
+      cliHooks: installed,
     });
+    // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
+    // run starts.
+    resetCliHookState(dir, [planned.name]);
     const launch = sources.launch;
     const now = sources.now ?? (() => new Date());
     let closed = false;
@@ -271,6 +284,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const prior = current.seats[next] ?? { stage: patch.stage };
           const { waiting: written, effort, createdWorkspace: _created, ...rest } = patch;
           const stored: SeatState = { ...prior, ...rest };
+          // The record keeps the file's own launch line, never the executed one: the state hooks'
+          // `--settings` rides on the command the pane runs, not on what the seat declared.
+          const launch_line = (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
+          if (launch_line) stored.launch_line = launch_line;
           if (written === null) delete stored.waiting;
           else if (written) stored.waiting = written;
           if (effort === null) delete stored.effort;

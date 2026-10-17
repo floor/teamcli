@@ -276,6 +276,12 @@ export interface UpInput {
    * is spawned. Absent when that flagless watch already reads the file.
    */
   watchFile?: string;
+  /**
+   * The per-launch settings file each seat's CLI loads for its state hooks, by seat name, when
+   * the run installed them. Absent on a dry run that has not written anything yet; a dry run
+   * plans the map it would install and prints the line the real run would type.
+   */
+  cliHooks?: Readonly<Record<string, string>>;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -541,7 +547,7 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}) },
       });
     }
-    const command = launchCommand(profile, seat.launch, seat.rules);
+    const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name]);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
