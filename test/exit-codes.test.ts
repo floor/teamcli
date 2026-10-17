@@ -1937,6 +1937,7 @@ scene('up.grant-another-pane', async (place) => {
 scene('up.grant-scope', async (place) => {
   approve(place, GRANT_DOWN);
   recordLead(place, 'w1:p1');
+  unlisted(place);
   return show(await up(place, [], leadSeat, upSources(place)), 'deny');
 });
 scene('up.grant-flag', async (place) => {
@@ -2891,6 +2892,17 @@ async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSe
 function recordLead(place: Place, pane = 'w1:p1'): void {
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane };
+  });
+}
+
+/** The registry's record of this team, holding no line for the lead: the map's row refuses it,
+ *  and the file's grant is the path. */
+function unlisted(place: Place): void {
+  upsertTeam(place.home, teamIdOf(place.root), {
+    project: 'acme',
+    session: 'acme',
+    root: place.root,
+    roster: [{ agent: 'agt_000000000000', seat: 'worker', role: 'implementer' }],
   });
 }
 

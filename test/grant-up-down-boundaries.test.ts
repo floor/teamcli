@@ -18,6 +18,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { canonicalLanding } from '../src/file/paths.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { LOG_FILE, emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
@@ -118,6 +119,19 @@ function record(seats: Record<string, { pane: string; workspace: string }>): voi
         { stage: 'ready' as const, pane: seat.pane, workspace: seat.workspace },
       ])),
     };
+  });
+}
+
+/** The registry's record of this team, holding no line for the lead: the map's record does not
+ *  admit it, so the file's `grant` is the path the scenes that call this judge. An unregistered
+ *  team would fall back to the file's declaration, and the orchestrator's own row would admit
+ *  it: the grant is only the fallback for a caller the row refused. */
+function unlisted(): void {
+  upsertTeam(home, teamIdOf(root), {
+    project: 'acme',
+    session: 'alpha',
+    root,
+    roster: [{ agent: 'agt_bbbbbbbbbbbb', seat: 'worker', role: 'implementer' }],
   });
 }
 
@@ -407,6 +421,7 @@ describe('the placement walk decides the granted seat', () => {
 describe('the scope the approval signed', () => {
   test('up is refused when the grant lists no `up`', async () => {
     setup({ scope: ['down'] });
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -494,6 +509,7 @@ describe('the approval the grant rides on', () => {
   test('an edited grant admits the granted seat, and doctor does not name approve', async () => {
     setup();
     writeFileSync(join(dir, 'team.yaml'), teamText({ scope: ['up', 'down', 'approve'] }));
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -534,6 +550,7 @@ describe('the approval the grant rides on', () => {
 
 describe('the owner-only flags', () => {
   test('up refuses --file before the flagged path is read', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -544,6 +561,7 @@ describe('the owner-only flags', () => {
   });
 
   test('up refuses --session before the named session is read', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -648,6 +666,7 @@ describe('the seats a granted down keeps', () => {
 
 describe('the audit line', () => {
   test('a dry granted up writes no audit line', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
     const { sources, trace, session } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
@@ -659,6 +678,7 @@ describe('the audit line', () => {
   });
 
   test('a granted up writes its line through the real writer', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
     const { sources, trace } = upTrace();
     delete (sources as { logGranted?: unknown }).logGranted;
@@ -687,6 +707,7 @@ describe('the audit line', () => {
   });
 
   test('a granted up that would repair the orchestrator\'s seat closes nothing of it', async () => {
+    unlisted();
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);
