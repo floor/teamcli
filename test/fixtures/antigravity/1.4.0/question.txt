@@ -1,0 +1,23 @@
+
+  [0m[1m[38;5;12mAntigravity CLI 1.4.0[0m
+  [0m[38;5;<account>               (<plan>         )[0m
+  [0m[38;5;8mGemini 4 Argon (Medium)[0m
+  [0m[38;5;8m<workspace>                     [0m
+
+[0m[38;5;8m──────────────────────────────────────────────────[0m
+[0m[1m[38;5;4m> Use your question tool to ask me which I prefer:[0m
+[0m[1m[38;5;4m  alpha or beta. The options are alpha and beta.[0m
+
+[0m[1m[38;5;3m?[0m Which do you prefer: alpha or beta?
+
+[0m[1m[38;5;3mQuestion[0m
+[0m[38;5;8m─────────────────────────────────────────────────────[0m
+
+[0m[1mQuestion 1/1: Which do you prefer: alpha or beta?[0m
+
+[0m[38;5;12m> 1. alpha[0m
+  2. beta
+  3. Write-in...
+
+  [0m[1m[38;5;12m↑/↓[0m[38;5;8m Navigate · [0m[1m[38;5;12menter[0m[38;5;8m Select · [0m[1m[38;5;12mesc[0m[38;5;8m Skip[0m
+[0m[38;5;8mesc to cancel                 [0m[2mGemini 4 Argon · medium[0m
