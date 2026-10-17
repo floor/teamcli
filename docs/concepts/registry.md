@@ -53,14 +53,17 @@ nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is `team-cli`. A 
 project is first written and never moves: a rename writes `name`. The team file's `in_project`
 writes this record — the name, the entity and the team IDs — and a team that sets
 `project_lead: true` beside it supplies `lead` on every launch: the agent of that team's own lead
-seat, so a mark that moves in the file moves the record with it. A team the registry names in two
-projects is refused by [`team check`](../commands/check.md), which names both.
+seat, so a mark that moves in the file moves the record with it. A file that stops claiming
+`project_lead`, or stops naming the project, clears the lead it set — only while the lead on record
+is one of that team's agents — so an agent the team no longer leads with is not left admitted as
+the project's lead. A team the registry names in two projects is refused by
+[`team check`](../commands/check.md), which names both.
 
 | Field | Meaning |
 | --- | --- |
 | `name` | the display name — what people and team files call the project (`TeamCLI`) |
 | `entity` | the entity the project belongs to |
-| `lead` | the project lead, by agent ID — never a seat or a role name: the agent of the lead seat (`leads: true`) of the one team whose file sets `project_lead: true` beside `in_project`, re-resolved on that team's every launch; a lead seat with no agent yet leaves it `null` |
+| `lead` | the project lead, by agent ID — never a seat or a role name: the agent of the lead seat (`leads: true`) of the one team whose file sets `project_lead: true` beside `in_project`, re-resolved on that team's every launch and cleared when that team drops the mark or leaves; a lead seat with no agent yet leaves it `null` |
 | `teams` | the team IDs the project groups |
 | `provenance` | who registered the record, and when it was registered and last updated |
 

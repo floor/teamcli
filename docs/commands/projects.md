@@ -7,7 +7,10 @@ lead, and the IDs of the teams that sit in it. The lead is an agent ID — never
 name. It comes from the lead team: a team says it leads the project it sits in with
 `project_lead: true` beside `in_project:`, one team per project, and the record's lead is the agent
 of that team's own lead seat — the seat its file marks with `leads: true` — re-resolved on every
-launch, so a mark that moves in the file moves the record with it.
+launch, so a mark that moves in the file moves the record with it. A file that stops claiming
+`project_lead`, or stops naming the project, clears the lead it set — only while the lead on record
+is one of that team's agents — so an agent the team no longer leads with is not left admitted as
+the project's lead.
 
 The hierarchy is entity, then project, then team, then seat, and the project level is where
 settings start: they inherit entity, then project, then team, then seat — a lower level may

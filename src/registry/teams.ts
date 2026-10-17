@@ -230,12 +230,18 @@ function projectJoin(home: string, teamId: string, name: string, entity: string 
   projectLeave(home, teamId, id);
 }
 
-/** The team leaves every project that names it except `keep` (null: every one). */
+/** The team leaves every project that names it except `keep` (null: every one). The project it
+ *  leaves also loses its lead when the lead on record is one of this team's agents: that id came
+ *  from this team's lead seat, so it goes with the team's place in the project rather than
+ *  staying admitted as a lead after its team left. Another team's lead is left alone. */
 function projectLeave(home: string, teamId: string, keep: string | null): void {
+  const roster = getTeam(home, teamId)?.roster ?? [];
   for (const held of projects.list(home)) {
     const id = held.id as string;
     if (id === keep || !held.teams.includes(teamId)) continue;
-    projects.upsertProject(home, id, { teams: held.teams.filter((team) => team !== teamId) });
+    const patch: projects.ProjectPatch = { teams: held.teams.filter((team) => team !== teamId) };
+    if (held.lead !== null && roster.some((line) => line.agent === held.lead)) patch.lead = null;
+    projects.upsertProject(home, id, patch);
   }
 }
 
