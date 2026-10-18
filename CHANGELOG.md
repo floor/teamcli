@@ -7,11 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Known limits
+### Added
 
-- No team can override the general seat brief yet: it is TeamCLI's built-in default, shipped in
-  the package, and every team receives that text. A registry-held definition, overridable by an
-  entity or a project, is deferred to 0.5.2.
+- **The `drop` leg, and human seats.** A receiving seat's delivery order may name `drop`: the walk
+  writes the typed leg's own 0600 drop file and types nothing at all — no trigger line, no socket
+  frame, no daemon round trip, no pane read — so a receiver that watches its own drop folder finds
+  the message there. Its console line is `delivered (dropped)`, its history line says `via: drop`,
+  and the JSON channel is `drop`; the leg joins the vocabulary and the default order after
+  `typed`, so any level may name it and a seat that declares nothing is typed exactly as before.
+  The typed leg stays terminal, and the watch's drop-folder readers follow only typed-leg markers,
+  so a drop-leg file is never typed, retried or announced. A dry run names only the legs it can
+  reach: the phrase stops at the first terminal typed leg, and names only the drop channel when
+  `drop` leads. A seat the team file marks `human: true` walks no typing leg at all: the typed
+  trigger and the native frame are skipped with each one's reason recorded, the walk falls to the
+  drop leg — added to the walk when the order in force leaves it out — so the message still
+  arrives in the drop file and the pane is never touched; `--wait` is refused for such a seat, and
+  the watch types no retry, nudge, work drop or ring there, giving a held drop up with the reason
+  instead.
+
+- **The native leg, as a handoff.** When the recipient's CLI carries the cross-session channel and
+  the sender's own file declares `cli: claude-code`, a send to the native leg becomes a handoff:
+  the run resolves the recipient live, admits the pair, writes one pending record (0600, a
+  temporary file renamed into place), and prints the exact `to:` target, the body and the
+  `team send --confirm <id>` line, exiting 0 with status `native`. The sender makes the call;
+  `--confirm` takes the record by rename before it writes the one history line (`delivered`,
+  `via: native`, the span from the handoff to the confirm) and clears it, so a second confirm
+  finds none. The confirm reads the recipient's visible 40 lines for the handoff's nonce
+  (`nv-<8 hex>`): the window that shows it records `delivered`, and its absence — or a nonce
+  already scrolled off — records `sent (unconfirmed)`. An unconfirmed handoff past ten minutes is
+  claimed by a running watch on the sender's team, recorded `native: unconfirmed after 10m`, and
+  handed to the remaining legs of the recipient's order — a live inbox takes the body, the drop
+  leg leaves it in the drop file, or the typed leg types its trigger — so a late `--confirm`
+  finds no record and nothing is delivered twice. A handoff that cannot resolve the recipient's
+  live pane or its socket falls back to the typed drop, and a record that cannot be written
+  refuses. Without a running watch, an unconfirmed record does not fall back and is swept after
+  24 hours.
+
+- **`team mcp serve`, and the `mcp-inbox` leg.** `team mcp serve --seat <seat>` runs the MCP server
+  a seat's launch line starts: two tools over that seat's own drop folder, the seat and session
+  fixed at launch, an id a lowercase UUID only, and a receipt written before the body leaves; a
+  folder path that is a link at any step refuses service rather than being followed, and the
+  listener marker carries the server's pid while it runs, removed at exit only while it still
+  names that pid. A send to a seat whose listener is live takes the `mcp-inbox` leg: it writes the
+  same 0600 drop file into the seat's inbox and types nothing; the receipt its `inbox_read`
+  leaves makes the outcome `delivered (read)` — the seat read the message, never a claim that it
+  acted on it — and a wait that ends without one records `sent (unconfirmed)`, exit 0, the file
+  being the message safely on disk. A marker absent, malformed, dead or naming another seat,
+  session or root is `mcp-inbox: no live inbox listener`, and the walk moves on. A receipt that
+  lands after the sender has gone is promoted by the watch — one `delivered (read)` history line,
+  nothing typed — and a message still unread ten minutes after the send is handed to the retry,
+  which types its trigger once and records `mcp-inbox: no receipt within 10m`; a typed record
+  always goes before an inbox one, so an inbox message never delays a held send's retry.
+  `team feed` shows one row per message when its outcome moves: the latest line once, in its
+  chronological place, keeping the address the send recorded when the later line has none, and a
+  `--follow` pass still prints the update.
+
+- **The inbox registered with each CLI, and read each turn.** A seat's launch registers the server
+  where a measured route exists: a codex launch line carries the registration itself, with no
+  file written into the seat's folder; a gemini or grok seat's launch runs that CLI's own
+  `mcp add -s project`, the file it writes being the CLI's own project settings; and a cursor
+  seat's launch merges the server into its project MCP config and carries the approval flag, so
+  the CLI loads what team registered for it. The server names the seat it launched for, and the
+  session it serves is the team file's in the seat's folder. Where that folder is a git work tree
+  that does not ignore a file the registration would write, registration is refused, the seat
+  still launches on its drop and typed legs, and its line carries the reason. A seat whose CLI
+  carries the server is asked, in its rules, to call `inbox_check` at the start of each turn and
+  `inbox_read` for each message, then act on what it read.
+
+### Changed
+
+- The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
+  unsent, working, question, permission and exit — are captured as fixtures, the trust dialog is
+  unchanged and its model row under the footer is gone again, and the launch test's boundary moves
+  to 1.4.3.
+
+### Fixed
+
+- `team doctor` names a launch record that carries the pane's process identity and no seat id —
+  the one `team seats` shows as `-` in its ID column — with the sibling note and the same repair
+  as the process note (`team register <seat>`), and a lead's own seat draws neither note.
+
+- A watch retry never types a held line into a pane back at its shell: it reads the pane's process
+  identity under the seat's lock and refuses the same state the typed leg and the daemon refuse —
+  no line typed, no Enter, the reason said — and the drop file stays for a person to send again.
 
 ## [0.5.0] - 2026-10-18
 
@@ -57,8 +135,8 @@ commands read them.
   or `refused`. A send walks the receiving seat's delivery order — `native`, `mcp-inbox`, then
   `typed` when no level of the seat's chain changes it: the entity, the project's registry
   record, the team file's `delivery_order` and the seat's own each may drop a leg or reorder the
-  ones it keeps, never add one — and this build carries no `mcp-inbox` leg and opens no socket,
-  so every delivery it makes goes by the typed leg, and each leg the walk could not take is
+  ones it keeps, never add one — and 0.5.0 carried no `mcp-inbox` leg and opened no socket, so
+  every delivery it made went by the typed leg, and each leg the walk could not take was
   recorded `unavailable` on the history line. A plain send gives the seat the body whole in a
   mode-0600 drop file and types one short trigger line naming it — the body is never typed, and
   never split — for every seat, Claude Code's included: a socket write to a busy session can land
