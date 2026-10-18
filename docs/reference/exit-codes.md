@@ -73,6 +73,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.detached` | `answer` | 1 | a run with no terminal | `team answer lead trust` |
 | `answer.file-owner` | `answer` | 1 | --file is the owner's | `team answer lead trust --file .agents/team.yaml` |
 | `answer.folder` | `answer` | 1 | the dialog's folder is not the lobby's exact trust entry | `team answer lead trust` |
+| `answer.human` | `answer` | 1 | the seat is a human's pane; no dialog key is pressed and no rules line is typed | `team answer lead trust` |
 | `answer.label` | `answer` | 1 | the trust choice is not the recorded one | `team answer lead trust` |
 | `answer.no-pane` | `answer` | 1 | the state records no pane for the caller's seat | `team answer lead trust` |
 | `answer.policy` | `answer` | 1 | the dialogs.trust grant is not in force | `team answer lead trust` |

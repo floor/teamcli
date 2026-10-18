@@ -2482,6 +2482,10 @@ scene('answer.file-owner', async (place) => {
   write(place, TWO);
   return show(await answered(place, ['lead', 'trust', '--file', '.agents/team.yaml'], other, answerHost(place, '')), "--file is the owner's");
 });
+scene('answer.human', async (place) => {
+  write(place, TWO.replace('    stopped: true\n', '    human: true\n'));
+  return show(await answered(place, ['worker', 'trust'], owner, answerHost(place, '')), "worker: the pane is a human's");
+});
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
