@@ -49,6 +49,9 @@ describe('the default routing table', () => {
   test('a refusal reaches the owner only', () => {
     expect(EVENT_ROUTING_DEFAULTS['team.policy-refused']).toEqual(['owner']);
     expect(EVENT_ROUTING_DEFAULTS['team.policy-changed']).toEqual(['lead', 'subject', 'owner']);
+    // A broken record and a denied identity are refusals too: a rule was broken, not work advanced.
+    expect(EVENT_ROUTING_DEFAULTS['record.invalid']).toEqual(['owner']);
+    expect(EVENT_ROUTING_DEFAULTS['security.refused']).toEqual(['owner']);
   });
 
   test("the lead's raise reaches the owner and nobody else", () => {
@@ -86,12 +89,14 @@ describe('the default routing table', () => {
 });
 
 describe('privileged kinds', () => {
-  test('the release kinds cover grant and policy records and a seat at a prompt', () => {
-    expect(PRIVILEGED_KINDS).toEqual(['team.grant-*', 'team.policy-*', 'seat.at-prompt']);
+  test('the release kinds cover grant and policy records, a seat at a prompt, and the two refusals', () => {
+    expect(PRIVILEGED_KINDS).toEqual(['team.grant-*', 'team.policy-*', 'seat.at-prompt', 'record.invalid', 'security.refused']);
     expect(isPrivilegedKind('team.grant-issued')).toBe(true);
     expect(isPrivilegedKind('team.policy-changed')).toBe(true);
     expect(isPrivilegedKind('team.policy-refused')).toBe(true);
     expect(isPrivilegedKind('seat.at-prompt')).toBe(true);
+    expect(isPrivilegedKind('record.invalid')).toBe(true);
+    expect(isPrivilegedKind('security.refused')).toBe(true);
     expect(isPrivilegedKind('seat.blocked')).toBe(false);
     expect(isPrivilegedKind('message.delivered')).toBe(false);
   });
@@ -161,6 +166,8 @@ describe("the owner's immediacy list (Amendment 01 §10)", () => {
       'team.policy-refused',
       'release.ready',
       'decision.needed',
+      'record.invalid',
+      'security.refused',
     ]);
 
     // The owner's prompt kinds ring; a prompt that is not one waits for the digest.
@@ -178,6 +185,11 @@ describe("the owner's immediacy list (Amendment 01 §10)", () => {
     // The lead's raise is a decision moment: it rings, not batches.
     expect(isOwnerAtOnce('release.ready')).toBe(true);
     expect(isOwnerAtOnce('decision.needed')).toBe(true);
+
+    // A refusal rings: a record that does not verify and a denied identity are the owner's
+    // at once, never batched into the digest.
+    expect(isOwnerAtOnce('record.invalid')).toBe(true);
+    expect(isOwnerAtOnce('security.refused')).toBe(true);
 
     // Everything else in the policy's owner traffic is routine.
     expect(isOwnerAtOnce('seat.blocked')).toBe(false);
@@ -248,6 +260,23 @@ describe('the privileged self-subscription refusal', () => {
     expect(decision.ok).toBe(false);
     if (decision.ok) throw new Error('unreachable');
     expect(decision.rule).toBe('privileged-self-subscription');
+  });
+
+  test('a seat may not add itself as a recipient of either refusal', () => {
+    for (const kind of ['record.invalid', 'security.refused'] as const) {
+      const decision = checkRoutingWrite(
+        write({
+          kind,
+          actor: seat('agt_seat1'),
+          change: { add: [{ seat: 'agt_seat1' }] },
+          inherited: EVENT_ROUTING_DEFAULTS[kind] ?? [],
+        }),
+      );
+      expect(decision.ok).toBe(false);
+      if (decision.ok) continue;
+      expect(decision.rule).toBe('privileged-self-subscription');
+      expect(decision.kind).toBe(kind);
+    }
   });
 
   test('a seat adding another seat is refused under the owner-only rule, not the self rule', () => {

@@ -86,6 +86,10 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   // owner alone and the watch delivers it at once (`DEFAULT_OWNER_AT_ONCE_KINDS`).
   'release.ready': ['owner'],
   'decision.needed': ['owner'],
+  // Refusals that name a broken record or a denied identity: owner-only, like the policy
+  // refusal, because a rule was broken rather than work advanced.
+  'record.invalid': ['owner'],
+  'security.refused': ['owner'],
   // Retention is operational, not governance: a dropped range is declared to the lead and the
   // operator, and the record itself is in the log every reader already verifies.
   'team.event-log-dropped': ['lead', 'operator'],
@@ -95,10 +99,18 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
 export const EVENT_KINDS: readonly string[] = Object.keys(EVENT_ROUTING_DEFAULTS);
 
 /**
- * The kinds privileged from the start: a grant record's life, a policy record's life, and a seat
- * at a prompt. `team.policy-refused` matches `team.policy-*` and is raised by the bus itself.
+ * The kinds privileged from the start: a grant record's life, a policy record's life, a seat
+ * at a prompt, and the two refusals that name a broken record or a denied identity
+ * (`record.invalid`, `security.refused`). `team.policy-refused` matches `team.policy-*` and is
+ * raised by the bus itself.
  */
-export const PRIVILEGED_KINDS: readonly string[] = ['team.grant-*', 'team.policy-*', 'seat.at-prompt'];
+export const PRIVILEGED_KINDS: readonly string[] = [
+  'team.grant-*',
+  'team.policy-*',
+  'seat.at-prompt',
+  'record.invalid',
+  'security.refused',
+];
 
 /**
  * The setting's name, levels and owner sovereignty: the list grows only by the owner's act, at

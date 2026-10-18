@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
+import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -476,7 +477,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   let admission: Admission;
   if (hit === null) {
     const placement = placementProblemOf(caller, standing);
-    if (placement) return refuse(io, dir, who, placement, host, report);
+    if (placement) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'placement', seatName, host.now());
+      return refuse(io, dir, who, placement, host, report);
+    }
     // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
     // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
     const configured =
@@ -484,14 +488,21 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
     const seat = configured === undefined ? seatName : configured.name;
     admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
-    if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
+    if (!admission.ok) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
+      return refuse(io, dir, who, admission.why, host, report);
+    }
     if (!configured) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
-    if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
+    if (!admission.ok) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
+      return refuse(io, dir, who, admission.why, host, report);
+    }
     // A resolved spec is addressed by its record: its session and its CLI, under the receiving
     // team's own folder; across teams this run's daemon is skipped, so the send is reached
     // directly. The pane is the live read's, by the seat's name (`findAgent`), never the
@@ -995,7 +1006,10 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   let admission: Admission;
   if (hit === null) {
     const placement = placementProblemOf(caller, standing);
-    if (placement) return refuse(io, dir, who, placement, host, report);
+    if (placement) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'placement', seatName, host.now());
+      return refuse(io, dir, who, placement, host, report);
+    }
     // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
     // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
     const configured =
@@ -1003,14 +1017,21 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
     const seat = configured === undefined ? seatName : configured.name;
     admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
-    if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
+    if (!admission.ok) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
+      return refuse(io, dir, who, admission.why, host, report);
+    }
     if (!configured) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
-    if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
+    if (!admission.ok) {
+      raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
+      return refuse(io, dir, who, admission.why, host, report);
+    }
     // A resolved spec is addressed by its record: its session and its CLI, under the receiving
     // team's own folder. Nothing is delivered here, so no pane is read.
     const cross = hit.team.root !== root;
@@ -2093,6 +2114,34 @@ function socketPathFor(host: SendHost, to: Aim, pane: string): { path: string; r
   if (processes === null) return null;
   const path = socketOf(host, processes);
   return path === null ? null : { path, recorded: false };
+}
+
+/** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
+ *  caller's seat, the seat it addressed and the folder the call stood in — never the message. */
+function raiseSecurityRefusal(
+  team: TeamFile,
+  root: string,
+  home: string,
+  dir: string,
+  caller: Caller,
+  rule: 'placement' | 'admission',
+  target: string | null,
+  now: Date,
+): void {
+  raiseRefusalEvent({
+    project: team.project,
+    root,
+    home,
+    session: team.session,
+    kind: 'security.refused',
+    rule,
+    object: {
+      ...(target === null ? {} : { id: target }),
+      ...(caller.kind === 'seat' ? { seat: caller.name } : caller.kind === 'owner' ? { seat: 'owner' } : {}),
+      path: dir,
+    },
+    now,
+  });
 }
 
 /**

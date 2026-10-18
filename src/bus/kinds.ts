@@ -86,6 +86,9 @@ export const EVENT_KINDS = [
   // needed. Owner-routed by default and delivered at once; no seat is in the audience.
   'release.ready',
   'decision.needed',
+  // Refusals: a record that does not verify, and a caller whose identity the rules deny.
+  'record.invalid',
+  'security.refused',
   // Operational: retention declares the sequence range it dropped, so a reader, a reconcile
   // pass and a gap-resync see a declared drop rather than an unexplained hole.
   'team.event-log-dropped',
@@ -113,8 +116,8 @@ export type OwnerPromptKind = (typeof OWNER_PROMPT_KINDS)[number];
 const OWNER_PROMPT_SET: ReadonlySet<string> = new Set<string>(OWNER_PROMPT_KINDS);
 
 /** Built-in privileged event kinds (Amendment 01 §4.4): `team.grant-*`, `team.policy-*`,
- *  and `seat.at-prompt`. The owner may grow this set via `privileged-kinds`; no level below
- *  the owner may remove any of them or self-subscribe to one. */
+ *  `seat.at-prompt`, `record.invalid` and `security.refused`. The owner may grow this set via
+ *  `privileged-kinds`; no level below the owner may remove any of them or self-subscribe to one. */
 export const DEFAULT_PRIVILEGED_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
   'team.grant-issued',
@@ -122,6 +125,8 @@ export const DEFAULT_PRIVILEGED_KINDS: readonly EventKind[] = [
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
+  'record.invalid',
+  'security.refused',
 ];
 
 export function isPrivilegedKind(kind: EventKind, extraPrivileged?: readonly string[]): boolean {
@@ -131,8 +136,9 @@ export function isPrivilegedKind(kind: EventKind, extraPrivileged?: readonly str
 
 /** Events delivered to the owner at once rather than batched into a summary (Amendment 01 §10):
  *  `seat.at-prompt` of the owner's kinds, `seat.unreachable` and `seat.done` of the lead's seat,
- *  every roster, grant and policy event, and the lead's own `team raise` line — a release ready
- *  or a decision needed, which the owner answers rather than reads later in a digest. */
+ *  every roster, grant and policy event, the lead's own `team raise` line — a release ready
+ *  or a decision needed, which the owner answers rather than reads later in a digest — and the
+ *  two refusals. */
 export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
   'seat.unreachable',
@@ -147,6 +153,8 @@ export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
   'team.policy-refused',
   'release.ready',
   'decision.needed',
+  'record.invalid',
+  'security.refused',
 ];
 
 const OWNER_AT_ONCE_SET: ReadonlySet<EventKind> = new Set<EventKind>(DEFAULT_OWNER_AT_ONCE_KINDS);

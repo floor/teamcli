@@ -8,6 +8,7 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readEvents } from '../src/bus/log.ts';
 import type { Caller } from '../src/caller.ts';
 import { plantRecord, recordDir } from '../src/commands/messages.ts';
 import { runReply, USAGE, type ReplyHost } from '../src/commands/reply.ts';
@@ -372,6 +373,44 @@ describe('who and which record', () => {
     const result = await run([SENT, 'hello'], { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
     expect(result.code).toBe(1);
     expect(result.err).toBe(`team reply: ghost: it is not a declared seat; the file's seats are lead, worker, helper; nothing was written\n`);
+
+    // The owner hears the denied admission as its rule and object — the caller's seat, the
+    // seat it addressed, the folder — and never the reply text.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'security.refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'admission',
+      seat: 'lead',
+      subject: 'ghost',
+      reason: join(root, '.agents'),
+    });
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain('hello');
+  });
+
+  test('a seat on another pane cannot close the thread it answers', async () => {
+    place('lead', 'w9:p9');
+    sentTo('lead', SENT, { from: 'worker' });
+    const result = await run([SENT, '--close'], { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('is not this call on its own pane and session');
+
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'security.refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'placement',
+      seat: 'lead',
+      reason: join(root, '.agents'),
+    });
+    expect(refused[0]!.payload.subject).toBeUndefined();
   });
 
   test('a caller with no terminal is refused', async () => {

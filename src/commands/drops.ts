@@ -17,6 +17,7 @@ import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
+import { raiseRefusalEvent } from '../bus/refusals.ts';
 import {
   anotherPaneRefusal,
   callerVerdict,
@@ -332,8 +333,24 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     let refusal: string | null = null;
     for (const message of waiting.slice(0, DROP_READ_BATCH)) {
       const got = readMessage({ dropDir, root: loaded.root, seat: seatName, session: readSession }, message.id, sources.home);
-      if (got.ok) bodies.push(got.body);
-      else refusal ??= got.reason;
+      if (got.ok) {
+        bodies.push(got.body);
+      } else {
+        if (got.refusal !== undefined) {
+          // The owner hears the rule and the object — the record's id, its seat and its path —
+          // and never the record's content.
+          raiseRefusalEvent({
+            project: loaded.team.project,
+            root: loaded.root,
+            home: sources.home,
+            session: readSession,
+            kind: 'record.invalid',
+            rule: got.refusal.rule,
+            object: { id: got.refusal.id, seat: got.refusal.seat, path: got.refusal.path },
+          });
+        }
+        refusal ??= got.reason;
+      }
     }
     if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
     if (bodies.length === 0 && refusal !== null) {

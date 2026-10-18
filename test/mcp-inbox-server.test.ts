@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readEvents } from '../src/bus/log.ts';
 import { runMcp } from '../src/commands/mcp.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
@@ -42,7 +43,9 @@ ${rows}
 type Place = { root: string; home: string; dropDir(name: string): string; cleanup(): void };
 
 function place(seats: readonly string[] = ['lead', 'worker']): Place {
-  const root = mkdtempSync(join(tmpdir(), 'team-inbox-'));
+  // The refusal event names the record's real path, and a temporary directory is a symlink
+  // under /var on macOS: the fixture's root is resolved once, so both sides name the same file.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-')));
   mkdirSync(join(root, '.agents'));
   // The message key lives under this home, never the one of the machine running the suite.
   mkdirSync(join(root, 'home'), { mode: 0o700 });
@@ -350,7 +353,9 @@ describe('team mcp serve', () => {
     } finally {
       at.cleanup();
     }
-  });
+    // The same spawn exits in about 0.13 s from a plain script on this machine, and takes
+    // about 4 s under the test runner: the scene asserts the process's output, not its speed.
+  }, 20_000);
 });
 
 describe('an inbox read serves only a record it verified', () => {
@@ -383,6 +388,24 @@ describe('an inbox read serves only a record it verified', () => {
       // Nothing was shown, so the message is still unread and the check still names it.
       const listed = JSON.parse(replies[1]!.result.content[0].text) as { unread: { id: string }[] };
       expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+
+      // The owner hears the refusal as its rule and object — the id, the seat and the path —
+      // and never either body: neither the sender's nor the tamperer's.
+      const events = readEvents('acme', at.root, at.home);
+      expect(events.ok).toBe(true);
+      if (!events.ok) return;
+      const refused = events.events.filter((event) => event.payload.kind === 'record.invalid');
+      expect(refused).toHaveLength(1);
+      expect(refused[0]!.payload).toMatchObject({
+        session: SESSION,
+        rule: 'signature',
+        seat: 'lead',
+        subject: LEAD_ID,
+        reason: join(at.dropDir('lead'), LEAD_ID),
+      });
+      const shown = JSON.stringify(refused[0]!.payload);
+      expect(shown).not.toContain('the body the sender wrote');
+      expect(shown).not.toContain('the body a tamperer wants');
     } finally {
       at.cleanup();
     }
@@ -402,6 +425,21 @@ describe('an inbox read serves only a record it verified', () => {
       expect(existsSync(receiptPath(at.dropDir('lead'), UNSIGNED_ID))).toBe(false);
       const listed = JSON.parse(replies[1]!.result.content[0].text) as { unread: { id: string }[] };
       expect(listed.unread.map((one) => one.id)).toEqual([UNSIGNED_ID]);
+
+      // A file that is not a signed record is a shape refusal, and its body stays out.
+      const events = readEvents('acme', at.root, at.home);
+      expect(events.ok).toBe(true);
+      if (!events.ok) return;
+      const refused = events.events.filter((event) => event.payload.kind === 'record.invalid');
+      expect(refused).toHaveLength(1);
+      expect(refused[0]!.payload).toMatchObject({
+        session: SESSION,
+        rule: 'shape',
+        seat: 'lead',
+        subject: UNSIGNED_ID,
+        reason: join(at.dropDir('lead'), UNSIGNED_ID),
+      });
+      expect(JSON.stringify(refused[0]!.payload)).not.toContain('the body nobody signed');
     } finally {
       at.cleanup();
     }

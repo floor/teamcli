@@ -237,6 +237,13 @@ export function isOwnerAddressed(
  *  detail. Whitespace is folded: the mailbox body is one line. */
 export function ownerDeliveryText(event: EventPayload): string {
   if (event.to === 'owner' && event.reason !== undefined) return clip(event.reason);
+  if (event.kind === 'record.invalid' || event.kind === 'security.refused') {
+    // A refusal names its rule and the object it names — the record id and where it stands, or
+    // the seat a denied call was addressed to — and never a body.
+    const where = event.seat === undefined ? '' : ` ${event.seat}`;
+    const object = [event.subject, event.reason].filter((part) => part !== undefined && part !== '').join(' ');
+    return clip(`${event.kind}${where}: ${event.rule ?? 'refused'}${object === '' ? '' : ` (${object})`}`);
+  }
   const where = event.seat === undefined ? '' : ` ${event.seat}`;
   const why = event.prompt ?? event.rule ?? event.reason;
   const detail = why === undefined ? '' : `: ${why}`;

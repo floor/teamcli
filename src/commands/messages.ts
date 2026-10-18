@@ -11,6 +11,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
+import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import {
@@ -601,6 +602,18 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         status: 'refused',
       });
       differences.push({ what: result.text, repair: repairOf(candidate, result, parsedLike), who: 'any seat' });
+      // The refusal is raised to the owner as its rule and object — the record's id, its seat
+      // and its path — and never its content.
+      raiseRefusalEvent({
+        project: loaded.team.project,
+        root,
+        home: sources.home,
+        session,
+        kind: 'record.invalid',
+        rule: result.kind,
+        object: { id: candidate.id, seat: candidate.seat, path: mailboxPath(candidate) },
+        now,
+      });
       continue;
     }
     rows.push({
