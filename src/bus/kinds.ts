@@ -9,6 +9,7 @@
 // `team.policy-refused` to the owner.
 import {
   EVENT_ROUTING_DEFAULTS,
+  EVENT_ROUTING_LEVELS,
   EVENT_THRESHOLDS,
   growPrivilegedKinds,
   isPrivilegedKind as isPolicyPrivilegedKind,
@@ -139,11 +140,29 @@ export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
 
 const OWNER_AT_ONCE_SET: ReadonlySet<EventKind> = new Set<EventKind>(DEFAULT_OWNER_AT_ONCE_KINDS);
 
+/**
+ * The owner's immediacy list as a setting (OD-20261018-05, Amendment 01 §10): the kinds the
+ * Runtime pushes at once, while everything else is batched into the pass's summary. It is the
+ * owner's and no other level may write it. The release default is the reviewed list; the build
+ * carries the descriptor, and the policy layer reads the value in force, as it does for the event
+ * thresholds — the delivery never hard-codes the list.
+ */
+export const OWNER_AT_ONCE_SETTING = {
+  name: 'owner-at-once',
+  levels: EVENT_ROUTING_LEVELS,
+  ownerSovereign: true,
+  defaults: DEFAULT_OWNER_AT_ONCE_KINDS,
+} as const;
+
 export function isOwnerAtOnce(
   kind: EventKind,
   context?: { seat?: string; leadSeats?: ReadonlySet<string>; prompt?: string },
+  atOnceKinds?: readonly EventKind[],
 ): boolean {
-  if (!OWNER_AT_ONCE_SET.has(kind)) return false;
+  const kinds = atOnceKinds === undefined || atOnceKinds === DEFAULT_OWNER_AT_ONCE_KINDS
+    ? OWNER_AT_ONCE_SET
+    : new Set<EventKind>(atOnceKinds);
+  if (!kinds.has(kind)) return false;
   if (kind === 'seat.at-prompt' && context?.prompt !== undefined) {
     return OWNER_PROMPT_SET.has(context.prompt);
   }
