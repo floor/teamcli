@@ -23,7 +23,7 @@ const SETTINGS = [
   { what: 'hook window', key: STATE_THRESHOLDS.hook_working_seconds.name, policy: 'state-hook-working-seconds', fallback: 120 },
   { what: 'idle lead', key: STATE_THRESHOLDS.idle_lead_seconds.name, policy: 'liveness-idle-lead-seconds', fallback: 300 },
   { what: 'idle owner', key: STATE_THRESHOLDS.idle_owner_seconds.name, policy: 'liveness-idle-owner-seconds', fallback: 900 },
-  { what: 'delivery order', key: DELIVERY_ORDER.name, policy: 'delivery-order', fallback: DELIVERY_LEGS },
+  { what: 'delivery order', key: DELIVERY_ORDER.name, policy: 'delivery-order', fallback: DELIVERY_ORDER.fallback },
 ] as const;
 
 /** The catalogue policy a spec names, once the fold has put it there. */
@@ -50,6 +50,17 @@ describe('the settings are catalogue policies', () => {
     for (const setting of SETTINGS) {
       expect(getPolicySpec(setting.policy)?.defaultValue).toEqual(setting.fallback);
     }
+  });
+
+  test('the delivery order ships mcp-inbox, then drop, then typed', () => {
+    // The literal the release ships. The catalogue default and the setting's fallback are both
+    // this value, so comparing them to each other would pin nothing.
+    expect(DELIVERY_ORDER.fallback).toEqual(['mcp-inbox', 'drop', 'typed']);
+  });
+
+  test('the delivery legs are the full vocabulary, wider than the default order', () => {
+    expect(DELIVERY_LEGS).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
+    for (const leg of DELIVERY_ORDER.fallback) expect(DELIVERY_LEGS).toContain(leg);
   });
 
   test('the five liveness windows are all in scope', () => {
