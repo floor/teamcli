@@ -32,7 +32,7 @@ import { markTaken } from '../send/taken.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { SETTING_LEVELS, type DeliveryLeg, type SettingLevel } from '../settings/inherit.ts';
+import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -634,7 +634,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         // SendMessage carries the message. Any other sender gets the skip, as before. A handoff
         // that cannot name a live address hands the send to the leg after this one.
         if (callerNative) {
-          const fallback = fallbackAfterNative(order, rawChain, at);
+          const fallback = fallbackAfterNative(walk, at);
           const off = handOff(team.project, root, from, to, body, admission, fallback, host);
           if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
           if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
@@ -773,21 +773,10 @@ function stampHandoffNonce(body: string, nonce: string): string {
 /** The legs of the recipient's `delivery_order` that stand after `native`: when a handoff is
  *  not confirmed within the 10m window, `team watch` walks these legs in order. */
 function fallbackAfterNative(
-  order: readonly DeliveryLeg[],
-  rawChain: Partial<Record<SettingLevel, readonly (DeliveryLeg | PendingNativeFallbackLeg)[] | undefined>>,
+  walk: readonly DeliveryLeg[],
   at: number,
 ): readonly PendingNativeFallbackLeg[] {
-  for (let i = SETTING_LEVELS.length - 1; i >= 0; i -= 1) {
-    const level = SETTING_LEVELS[i];
-    const declared = level !== undefined ? rawChain[level] : undefined;
-    if (declared !== undefined && declared.includes('drop')) {
-      const idx = declared.indexOf('native');
-      if (idx >= 0) {
-        return declared.slice(idx + 1).filter((leg): leg is PendingNativeFallbackLeg => leg !== 'native');
-      }
-    }
-  }
-  return order.slice(at + 1).filter((leg): leg is Exclude<DeliveryLeg, 'native'> => leg !== 'native');
+  return walk.slice(at + 1).filter((leg): leg is Exclude<DeliveryLeg, 'native'> => leg !== 'native');
 }
 
 function handOff(

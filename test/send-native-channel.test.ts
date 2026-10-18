@@ -835,3 +835,54 @@ test('expiry typed leg refuses to type when the recipient pane process identity 
   expect(said).toEqual(['lead: the pane no longer holds the process team launched for this seat; nothing was typed']);
 });
 
+test('a [native, drop] fallback and a human-marked seat never type into the pane across send and watch expiry', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, {
+    native: pane,
+    newId: () => ID,
+    delivery: { seat: ['native', 'drop'] },
+  });
+
+  // Dry run with [native, drop] names the drop fallback with nothing typed.
+  const dryIo = helperCaller(made.root);
+  expect(await runSend(['lead', 'hello', '--dry-run'], dryIo, host)).toBe(0);
+  expect(dryIo.out).toContain(
+    'lead: dry-run: claude-code via the native handoff (your own SendMessage, then --confirm), falling back to a 0600 drop file, with nothing typed into the pane; nothing was written',
+  );
+
+  // Without a socket, handOff returns fallback and the walk continues straight to drop with zero pane writes.
+  const sendIo = helperCaller(made.root);
+  expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(0);
+  expect(sendIo.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+  expect(pane.typed).toEqual([]);
+  expect(pane.enters).toBe(0);
+
+  // If a pending handoff expires while the seat is marked human: true, watch expiry skips typed and drops the file.
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const id2 = '22222222-2222-4222-8222-222222222222';
+  const hostDefault = fake(made, { native: pane, newId: () => id2 });
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), hostDefault)).toBe(0);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
+  const leadSeat = scene.team.seats.find((s) => s.name === 'lead');
+  if (leadSeat) leadSeat.human = true;
+
+  await expirePendingNative(scene);
+
+  expect(watchPane.typed).toEqual([]);
+  expect(watchPane.enters).toBe(0);
+  expect(said).toEqual([
+    `lead: a native handoff from helper was unconfirmed after 10m; delivered (dropped ${String(HANDOFF_BODY.length)} characters)`,
+  ]);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries[1]?.via).toBe('drop');
+  expect(history.ok && history.entries[1]?.failed).toEqual([
+    'native: unconfirmed after 10m',
+    'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+    "typed: the pane is a human's, and nothing is typed into it",
+  ]);
+});
