@@ -102,6 +102,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `broker.source` | `broker` | 1 | the team file declares no task source, or one the broker does not serve | `team broker` |
 | `broker.invocation` | `broker` | 2 | the invocation can't be read | `team broker extra` |
 | `broker.not-a-repo` | `broker` | 2 | not inside a git repository | `team broker` |
+| `bus.started` | `bus` | 0 | the bus started and served on .agents/bus.sock | `team bus` |
+| `bus.stopped` | `bus` | 0 | the bus served until it was stopped | `team bus` |
+| `bus.refused` | `bus` | 1 | the caller is not the owner at a terminal outside herdr, a bus is already running or starting, or the socket could not be bound | `team bus` |
+| `bus.configuration` | `bus` | 2 | not inside a git repository or the team file cannot be read | `team bus` |
+| `bus.usage` | `bus` | 2 | the invocation cannot be read | `team bus extra` |
 | `check.ok` | `check` | 0 | nothing needs acting on | `team check` |
 | `check.repaired` | `check` | 0 | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | `team check --repair` |
 | `check.file-owner` | `check` | 1 | --file is the owner's | `team check --file .agents/team.yaml` |

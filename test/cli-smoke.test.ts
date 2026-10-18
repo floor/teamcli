@@ -48,6 +48,7 @@ const allCommandNames = Array.from(
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   answer: 'types an answer into a live herdr pane dialog',
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
+  bus: 'starts a long-running local event bus server on .agents/bus.sock',
   hold: 'mutates .agents/state.json to place or clear a team hold',
   init: 'writes .agents/team.yaml and registers the project on disk',
   lock: 'mutates project lock state to acquire a named lock',

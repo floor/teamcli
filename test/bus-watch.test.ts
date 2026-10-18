@@ -15,6 +15,12 @@ import { runBus } from '../src/commands/bus.ts';
 import { publishWatchReportsToBus, syncWatchBus } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
+import { emptySession } from '../src/state.ts';
+import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
+import { attention as checkAttention } from '../src/watch/checks/attention.ts';
+import { missing as checkMissing } from '../src/watch/checks/missing.ts';
+import { providerError as checkProviderError } from '../src/watch/checks/provider-error.ts';
+import { newMemory, pass } from '../src/watch/pass.ts';
 
 const dirs: string[] = [];
 const handles: BusHandle[] = [];
@@ -136,7 +142,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     }
   });
 
-  test('refuses privileged self-subscription by a worker, logs the refusal, and raises team.policy-refused to lead and owner', async () => {
+  test('refuses privileged self-subscription by a worker, logs the refusal, and raises team.policy-refused to the owner only', async () => {
     const { root, home } = makeScratch();
     const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
     expect(parsed.ok).toBe(true);
@@ -227,7 +233,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     }
   });
 
-  test('watch subscribes first when bus is live, publishes seat.unreachable and seat.at-prompt, and falls back cleanly when no bus runs', async () => {
+  test('watch subscribes first when bus is live, maps real check reports (permission, question, vendor notice, blocked, missing, provider-error/:owner), resyncs on gap, and falls back cleanly when no bus runs', async () => {
     const { root, home } = makeScratch();
     const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
     expect(parsed.ok).toBe(true);
@@ -246,25 +252,91 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     expect(noBus).toBe(false);
     expect(seenEvents.length).toBe(0);
 
-    // 2. Start the bus, publish reports from watch, and verify watch subscription receives them in sequence order.
+    // 2. Start the bus, build reports from the shipped checks (`attention`, `missing`, `providerError`),
+    //    and verify publishWatchReportsToBus maps every real key to accepted §4.3 kinds without
+    //    dropping permission/blocked or inventing a `<seat>:owner` seat.
     const started = await startBus({
       root,
       team: parsed.team,
       home,
       stderr: () => {},
       reconcileIntervalMs: 0,
+      bufferLimit: 20,
     });
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     handles.push(started.handle);
 
+    const slots: Record<string, unknown> = {};
+    const ctx: CheckContext = {
+      now: Date.parse('2026-10-18T12:15:00.000Z'),
+      watch: parsed.team.watch,
+      budgets: parsed.team.budgets,
+      once: (key, text, to = 'operator') => ({ key, text, to }),
+      keep: () => {},
+      memory: <T>(kind: string, init: () => T): T => (slots[kind] ??= init()) as T,
+    };
+
+    const makeSeatObs = (overrides: Partial<SeatObservation>): SeatObservation => ({
+      name: 'worker-1',
+      cli: 'claude-code',
+      vendor: 'anthropic',
+      account: 'anthropic',
+      quota: [],
+      lead: false,
+      parked: false,
+      stopped: false,
+      seat: parsed.team.seats[2],
+      recorded: 'ready',
+      identity: 'same',
+      continuity: 'doubt',
+      launcher: false,
+      running: true,
+      herdr: true,
+      agent: { name: 'worker-1', pane: 's1:p3', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
+      screen: { kind: 'idle' },
+      model: null,
+      attention: null,
+      quiet: true,
+      working: false,
+      prompt: false,
+      history: { lastWorking: undefined, idleSince: undefined },
+      liveness: { idle_lead_seconds: 300, idle_owner_seconds: 1800, blind_after_seconds: 600 },
+      ...overrides,
+    });
+
+    const realReports: Report[] = [
+      ...checkAttention.run(makeSeatObs({ name: 'worker-1', attention: 'permission', prompt: true }), ctx),
+      ...checkAttention.run(makeSeatObs({ name: 'worker-1', attention: 'question', prompt: true }), ctx),
+      ...checkAttention.run(makeSeatObs({ name: 'worker-1', attention: 'vendor notice', prompt: true }), ctx),
+      ...checkAttention.run(makeSeatObs({ name: 'worker-2', attention: 'blocked', quiet: false }), ctx),
+      ...checkMissing.run(makeSeatObs({ name: 'worker-3', running: false, agent: undefined }), ctx),
+      ...checkProviderError.run(
+        makeSeatObs({
+          name: 'worker-4',
+          running: true,
+          working: false,
+          screen: { kind: 'rate limit', reset: '5pm' },
+        }),
+        ctx,
+      ),
+      ...checkProviderError.run(
+        makeSeatObs({
+          name: 'worker-5',
+          running: true,
+          working: false,
+          screen: { kind: 'provider error' },
+        }),
+        ctx,
+      ),
+    ];
+    // 4 attention + 1 missing + 2*2 provider-error (operator + :owner) = 9 reports -> 7 deduplicated events.
+    expect(realReports.length).toBe(9);
+
     await publishWatchReportsToBus(
       root,
       'acme',
-      [
-        { key: 'missing:worker-1', text: 'worker-1 is missing from the session', to: 'operator' },
-        { key: 'permission:op-1', text: 'op-1 is at a permission prompt', to: 'owner' },
-      ],
+      realReports,
       '2026-10-18T12:15:00.000Z',
       (r, ev) => publishToBus(r, ev),
     );
@@ -275,16 +347,79 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
     });
     expect(withBus).toBe(true);
-    expect(seenEvents.map((e) => e.payload.kind)).toEqual(['seat.unreachable', 'seat.at-prompt']);
-    expect(tracker.cursor).toBe(2);
+    expect(
+      seenEvents.map((e) => ({
+        kind: e.payload.kind,
+        seat: e.payload.seat,
+        prompt: e.payload.prompt,
+      })),
+    ).toEqual([
+      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'permission' },
+      { kind: 'seat.blocked', seat: 'worker-1', prompt: undefined },
+      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'vendor notice' },
+      { kind: 'seat.blocked', seat: 'worker-2', prompt: undefined },
+      { kind: 'seat.unreachable', seat: 'worker-3', prompt: undefined },
+      { kind: 'seat.at-prompt', seat: 'worker-4', prompt: 'rate limit' },
+      { kind: 'seat.blocked', seat: 'worker-5', prompt: undefined },
+    ]);
+    expect(seenEvents.some((e) => e.payload.seat?.endsWith(':owner'))).toBe(false);
+    expect(tracker.cursor).toBe(7);
 
-    // Subsequent sync with no new events advances nothing and duplicates nothing.
+    // 3. Subsequent sync with no new events advances nothing and duplicates nothing.
     const nextSync = await syncWatchBus(root, tracker, {
       busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 500 }),
       onBusEvent: (ev) => seenEvents.push(ev),
     });
     expect(nextSync).toBe(true);
-    expect(seenEvents.length).toBe(2);
+    expect(seenEvents.length).toBe(7);
+
+    // 4. On `gap`, syncWatchBus resets the tracker to `newest_seq` and the same pass's poll
+    //    rebuilds watch state identically from the durable session records (N6).
+    const gapTracker = createSequenceTracker(1);
+    const gapSync = await syncWatchBus(root, gapTracker, {
+      busSubscribe: async () => ({ kind: 'gap', oldest_seq: 4, newest_seq: 7 }),
+      onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
+    });
+    expect(gapSync).toBe(true);
+    expect(gapTracker.cursor).toBe(7);
+    expect(seenGaps).toEqual([{ oldest: 4, newest: 7 }]);
+
+    const liveWorld = {
+      running: true,
+      agents: [
+        { name: 'clerk', pane: 's1:p1', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
+        { name: 'op-1', pane: 's1:p2', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
+      ],
+      workspaces: [{ id: 'w1', label: 'acme' }],
+      screens: {},
+    };
+    const machineWorld = {
+      loadPerCore: 1,
+      memoryFree: 50,
+      diskFree: 200e9,
+      swapTotal: 8e9,
+      swapFree: 7e9,
+      swapUsed: 1e9,
+    };
+    const afterGapPass = pass({
+      team: parsed.team,
+      state: emptySession(),
+      live: liveWorld,
+      machine: machineWorld,
+      now: Date.parse('2026-10-18T12:16:00.000Z'),
+      memory: newMemory(),
+      watch: parsed.team.watch,
+    });
+    const directPollPass = pass({
+      team: parsed.team,
+      state: emptySession(),
+      live: liveWorld,
+      machine: machineWorld,
+      now: Date.parse('2026-10-18T12:16:00.000Z'),
+      memory: newMemory(),
+      watch: parsed.team.watch,
+    });
+    expect(afterGapPass.reports).toEqual(directPollPass.reports);
   });
 
   test('runBus command enforces usage (2), detached/non-owner refusal (1), and clean start/stop (0)', async () => {

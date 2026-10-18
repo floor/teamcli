@@ -41,14 +41,24 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     dropMessage(seatDir, 'drop-1.read', '{"ok":true}');
     dropMessage(seatDir, 'drop-1.replied', '{"ok":true}');
 
-    // 2. Held send with `.pending` marker.
+    // 2. Held send with `.pending` marker past held_threshold_seconds (15m old >= 600s).
     dropMessage(seatDir, 'drop-2', 'from the owner — admitted by: the owner\n\nheld drop 2');
     markPending(seatDir, {
       id: 'drop-2',
       from: 'owner',
       to: 'worker-1',
       body: 'from the owner — admitted by: the owner\n\nheld drop 2',
-      ts: '2026-10-18T12:05:00.000Z',
+      ts: '2026-10-18T11:55:00.000Z',
+    });
+
+    // 3. Fresh held send with `.pending` marker before held_threshold_seconds (2m old < 600s).
+    dropMessage(seatDir, 'drop-3', 'from the owner — admitted by: the owner\n\nfresh held drop 3');
+    markPending(seatDir, {
+      id: 'drop-3',
+      from: 'owner',
+      to: 'worker-1',
+      body: 'from the owner — admitted by: the owner\n\nfresh held drop 3',
+      ts: '2026-10-18T12:08:00.000Z',
     });
 
     const first = reconcilePass({
@@ -68,8 +78,10 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(kindsAndIds).toContain('message.replied:drop-1:replied');
     expect(kindsAndIds).toContain('message.arrived:drop-2');
     expect(kindsAndIds).toContain('message.held:drop-2:held');
+    expect(kindsAndIds).toContain('message.arrived:drop-3');
+    expect(kindsAndIds).not.toContain('message.held:drop-3:held');
 
-    // Second pass with no disk changes raises 0 new events (idempotent).
+    // Second pass 1 minute later (drop-3 still < 10m old) raises 0 new events (idempotent).
     const second = reconcilePass({
       project: 'acme',
       root,
@@ -81,10 +93,22 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     if (!second.ok) return;
     expect(second.raised.length).toBe(0);
 
+    // Third pass once drop-3 crosses held_threshold_seconds raises only message.held:drop-3:held.
+    const third = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:20:00.000Z'),
+    });
+    expect(third.ok).toBe(true);
+    if (!third.ok) return;
+    expect(third.raised.map((r) => `${r.payload.kind}:${r.payload.record_id}`)).toEqual(['message.held:drop-3:held']);
+
     const log = readEvents('acme', root, home);
     expect(log.ok).toBe(true);
     if (!log.ok) return;
-    expect(log.events.length).toBe(first.raised.length);
+    expect(log.events.length).toBe(first.raised.length + third.raised.length);
   });
 
   test('reconciles signed .agents/messages/<seat> records, .read.json receipts, messages.jsonl history, and seat states', () => {

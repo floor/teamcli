@@ -1037,43 +1037,86 @@ export async function publishWatchReportsToBus(
   ts: string,
   publish: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>,
 ): Promise<void> {
+  const publishedInPass = new Set<string>();
   for (const report of reports) {
     const colon = report.key.indexOf(':');
     if (colon < 0) continue;
     const prefix = report.key.slice(0, colon);
-    const seat = report.key.slice(colon + 1);
+    const rawSeat = report.key.slice(colon + 1);
+    const seat = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
     if (seat === '') continue;
-    if (prefix === 'missing') {
-      await publish(root, {
+
+    let event: EventAppendInput | null = null;
+    if (prefix === 'missing' || prefix === 'never-started' || prefix === 'gone') {
+      event = {
         ts,
         kind: 'seat.unreachable',
         session,
-        record_id: `watch:${report.key}:${ts}`,
+        record_id: `watch:${prefix}:${seat}:${ts}`,
         seat,
         subject: seat,
         reason: report.text,
-      }).catch(() => {});
-    } else if (prefix === 'permission' || prefix === 'question' || prefix === 'vendor notice') {
-      await publish(root, {
+      };
+    } else if (prefix === 'permission' || (prefix === 'blocked' && report.text.includes('permission prompt'))) {
+      event = {
         ts,
         kind: 'seat.at-prompt',
         session,
-        record_id: `watch:${report.key}:${ts}`,
+        record_id: `watch:permission:${seat}:${ts}`,
         seat,
         subject: seat,
-        prompt: prefix,
+        prompt: 'permission',
         reason: report.text,
-      }).catch(() => {});
-    } else if (prefix === 'provider-error') {
-      await publish(root, {
+      };
+    } else if (prefix === 'blocked' || prefix === 'question') {
+      event = {
         ts,
-        kind: 'seat.provider-error',
+        kind: 'seat.blocked',
         session,
-        record_id: `watch:${report.key}:${ts}`,
+        record_id: `watch:${prefix}:${seat}:${ts}`,
         seat,
         subject: seat,
         reason: report.text,
-      }).catch(() => {});
+      };
+    } else if (prefix === 'vendor notice' || prefix === 'vendor') {
+      event = {
+        ts,
+        kind: 'seat.at-prompt',
+        session,
+        record_id: `watch:vendor-notice:${seat}:${ts}`,
+        seat,
+        subject: seat,
+        prompt: 'vendor notice',
+        reason: report.text,
+      };
+    } else if (prefix === 'provider-error') {
+      if (report.text.includes('rate limit')) {
+        event = {
+          ts,
+          kind: 'seat.at-prompt',
+          session,
+          record_id: `watch:provider-error:${seat}:${ts}`,
+          seat,
+          subject: seat,
+          prompt: 'rate limit',
+          reason: report.text,
+        };
+      } else {
+        event = {
+          ts,
+          kind: 'seat.blocked',
+          session,
+          record_id: `watch:provider-error:${seat}:${ts}`,
+          seat,
+          subject: seat,
+          reason: report.text,
+        };
+      }
     }
+
+    if (event === null) continue;
+    if (publishedInPass.has(event.record_id)) continue;
+    publishedInPass.add(event.record_id);
+    await publish(root, event).catch(() => {});
   }
 }

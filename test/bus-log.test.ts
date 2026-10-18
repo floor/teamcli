@@ -43,11 +43,15 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBeGreaterThanOrEqual(25);
+    expect(EVENT_KINDS.length).toBe(25);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
     expect(isEventKind('seat.at-prompt')).toBe(true);
     expect(isEventKind('not.a.kind')).toBe(false);
+    expect(isEventKind('seat.started')).toBe(false);
+    expect(isEventKind('seat.provider-error')).toBe(false);
+    expect(isEventKind('team.up')).toBe(false);
+    expect(isEventKind('team.grant-added')).toBe(false);
 
     for (const kind of DEFAULT_PRIVILEGED_KINDS) {
       expect(isPrivilegedKind(kind)).toBe(true);
@@ -58,10 +62,14 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('seat.at-prompt');
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('team.policy-refused');
     expect(isOwnerAtOnce('seat.at-prompt')).toBe(true);
+    expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'permission' })).toBe(true);
+    expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'vendor notice' })).toBe(true);
+    expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'rate limit' })).toBe(true);
+    expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'question' })).toBe(false);
     expect(isOwnerAtOnce('seat.unreachable', { seat: 'clerk', leadSeats: new Set(['clerk']) })).toBe(true);
     expect(isOwnerAtOnce('seat.unreachable', { seat: 'worker-1', leadSeats: new Set(['clerk']) })).toBe(false);
 
-    expect(DEFAULT_RECONCILE_INTERVAL_SECONDS).toBeGreaterThan(0);
+    expect(DEFAULT_RECONCILE_INTERVAL_SECONDS).toBe(120);
     expect(DEFAULT_SUBSCRIBER_BUFFER_LIMIT).toBeGreaterThan(0);
   });
 
@@ -104,15 +112,36 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
     );
     expect([...arrived]).toEqual(['worker-1']);
 
-    const prompt = recipientsForEvent(
-      { kind: 'seat.at-prompt', seat: 'worker-1' },
+    const permPrompt = recipientsForEvent(
+      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'permission' },
       team,
       { 'seat.at-prompt': ['auditor'] },
     );
-    expect(prompt.has('clerk')).toBe(true);
-    expect(prompt.has('op-1')).toBe(true);
-    expect(prompt.has('owner')).toBe(true);
-    expect(prompt.has('auditor')).toBe(true);
+    expect([...permPrompt].sort()).toEqual(['auditor', 'clerk', 'op-1', 'owner']);
+
+    const questionPrompt = recipientsForEvent(
+      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'question' },
+      team,
+    );
+    expect([...questionPrompt].sort()).toEqual(['clerk', 'op-1']);
+
+    const unreachableWorker = recipientsForEvent(
+      { kind: 'seat.unreachable', seat: 'worker-1' },
+      team,
+    );
+    expect([...unreachableWorker].sort()).toEqual(['clerk', 'op-1']);
+
+    const unreachableLead = recipientsForEvent(
+      { kind: 'seat.unreachable', seat: 'clerk' },
+      team,
+    );
+    expect([...unreachableLead].sort()).toEqual(['clerk', 'op-1', 'owner']);
+
+    const gate = recipientsForEvent(
+      { kind: 'work.gate', seat: 'worker-1', subject: 'worker-1' },
+      team,
+    );
+    expect([...gate]).toEqual(['clerk']);
   });
 });
 
@@ -181,9 +210,10 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
     const { root, home } = makeScratch();
     const res = appendEvent('acme', root, home, {
       ts: '2026-10-18T12:00:00.000Z',
-      kind: 'team.up',
+      kind: 'team.seat-added',
       session: 'acme',
-      record_id: 'up-1',
+      record_id: 'seat-add-1',
+      seat: 'worker-1',
     });
     expect(res.ok).toBe(true);
     const path = eventLogPath('acme', root, home);
@@ -194,7 +224,7 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
           v: 1,
           seq: 2,
           ts: '2026-10-18T12:00:01.000Z',
-          kind: 'team.grant-added',
+          kind: 'team.grant-issued',
           session: 'acme',
           record_id: 'forged-1',
         },

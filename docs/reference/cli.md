@@ -129,6 +129,25 @@ Usage:
 
 None.
 
+## `bus`
+
+Hidden: no
+
+Usage:
+
+    team bus
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `check`
 
 Hidden: no
