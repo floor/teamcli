@@ -11,7 +11,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { readSendGrants } from '../src/send/grants.ts';
 import { updateState } from '../src/state.ts';
-import { testIo } from './helpers.ts';
+import { recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T12:00:00.000Z');
 
@@ -179,7 +179,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     expect(out()).toBe('team acme, session "acme"\nnative: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'native');
     const path = join(drops, readdirSync(drops)[0] as string);
-    expect(readFileSync(path, 'utf8')).toBe(
+    expect(recordBody(path)).toBe(
       `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: an owner-signed grant naming send (helpers-to-reviewer)\n\na note`,
     );
   });

@@ -701,7 +701,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
 function writeWorkDrop(
   dir: string, session: string, seat: string, body: string,
 ): { trigger: string } | { error: string } {
-  const id = randomUUID();
+  // A work nudge is not a message: its name says so, and the receive side reads only records.
+  const id = `work-${randomUUID()}`;
   const dropDir = join(dir, 'send-drops', session, seat);
   // Checked before the write, as `team send` does: a path that will not fit is not written.
   if (triggerLine(join(dropDir, id)) === null) {

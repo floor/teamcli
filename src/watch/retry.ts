@@ -72,12 +72,12 @@ function heldWords(drop: PendingDrop): string {
 }
 
 /** The drop is out of retries: forget the marker and say where the message is, so it can be
- *  delivered by hand or sent again. A drop whose file is gone has nothing left to name — read
+ *  delivered by hand or sent again. A record whose file is gone has nothing left to name — read
  *  from the disk, so an age-out does not name a file that was moved away. */
 function giveUp(scene: RetryScene, dropDir: string, drop: PendingDrop, why: string, dropGone = false): void {
   clearPending(dropDir, drop.id);
   const gone = dropGone || !existsSync(join(dropDir, drop.id));
-  const tail = gone ? 'send it again' : `the drop file is at ${join(dropDir, drop.id)}; send it again`;
+  const tail = gone ? 'send it again' : `the record is at ${join(dropDir, drop.id)}; send it again`;
   scene.say(`${drop.to}: ${heldWords(drop)} was not delivered (${why}); ${tail}`, true);
 }
 

@@ -196,7 +196,7 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the id admission admitted, and the rule.
     const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
@@ -206,6 +206,8 @@ describe('team send history log & team feed', () => {
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
       outcome: 'delivered',
+      // The thread is the first message's id; a first message is its own thread's id.
+      thread: sentDoc.ids.sent,
       ms: 0,
       via: 'typed',
       // The walk landed on the typed leg through both legs ahead of it: the native leg only the
@@ -294,7 +296,7 @@ describe('team send history log & team feed', () => {
     const plainIo = testIo(root);
     expect(await runFeed(['--limit', '1', '--json'], plainIo, { home })).toBe(0);
     const plainDoc = JSON.parse(plainIo.out) as { events: Record<string, unknown>[] };
-    expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'status', 'to', 'ts', 'via']);
   });
 
   test('one message is one row: a later receipt replaces the unconfirmed line it updates', async () => {

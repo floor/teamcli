@@ -19,7 +19,7 @@ import { historyPath } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
 import { updateState } from '../src/state.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, recordBody, testIo } from './helpers.ts';
 
 const OWNER = { kind: 'owner' as const };
 const AGENT_ID = /^agt_[0-9a-f]{12}$/;
@@ -559,11 +559,12 @@ function sendHost(w: World, session: string, seats: Record<string, { pane: strin
   };
 }
 
-/** The drop the trigger names: the typed line's whitespace-free token that is a path. */
+/** The record the trigger names: the typed line's whitespace-free token that is a path, and
+ *  the signed record's body. */
 function dropOf(typed: string): { path: string; text: string } {
   const word = typed.split(/\s+/).find((part) => part.startsWith('/'));
   if (!word) throw new Error(`no absolute path in the typed trigger: ${typed}`);
-  return { path: word, text: readFileSync(word, 'utf8') };
+  return { path: word, text: recordBody(word) };
 }
 
 describe('the whole command on a registry-resolved spec', () => {

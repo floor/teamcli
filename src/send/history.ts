@@ -37,6 +37,35 @@ export type HistoryOutcome =
   | 'answered'
   | 'timeout';
 
+/**
+ * A message's status, derived from the receipts beside its record and moving forward only
+ * (`src/send/record.ts` reads them). The attempt outcomes above are not statuses: a send that
+ * was held, timed out or found no reachable leg still leaves a record whose status is `sent`
+ * until a receipt says otherwise.
+ */
+export type MessageStatus = 'sent' | 'held' | 'delivered' | 'read' | 'replied';
+
+/** The statuses in the one order they move; a later receipt is the one that stands. */
+export const STATUS_ORDER: readonly MessageStatus[] = ['sent', 'held', 'delivered', 'read', 'replied'];
+
+/** The status a history line's own outcome implies, when no receipt is at hand (the feed's
+ *  `--json` reading). Only the outcome words that name a status map to one; every attempt
+ *  outcome maps to `sent`, the record's status until a receipt lands. */
+export function statusOfOutcome(outcome: string): MessageStatus {
+  switch (outcome) {
+    case 'delivered (read)':
+      return 'read';
+    case 'delivered':
+      return 'delivered';
+    case 'held':
+      return 'held';
+    case 'answered':
+      return 'replied';
+    default:
+      return 'sent';
+  }
+}
+
 export type HistoryEntry = {
   ts: string;
   from: string;
@@ -63,6 +92,10 @@ export type HistoryEntry = {
    *  delivered send whose box cleared before herdr's status or the transcript showed the seat act,
    *  and `taken but never acted on` when the watch's later look found no sign either. */
   note?: string;
+  /** The thread the message belongs to: the first message's id, on every line a send writes. */
+  thread?: string;
+  /** On a reply's line, the id of the record it answers. */
+  in_reply_to?: string;
 };
 
 export type HistoryWrite =
@@ -201,6 +234,8 @@ export function appendHistory(project: string, root: string, home: string, entry
   if (entry.via !== undefined) record.via = entry.via;
   if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
   if (entry.note !== undefined) record.note = entry.note;
+  if (entry.thread !== undefined) record.thread = entry.thread;
+  if (entry.in_reply_to !== undefined) record.in_reply_to = entry.in_reply_to;
   return appendStoreLine(project, root, home, HISTORY_FILE, record);
 }
 
@@ -334,6 +369,12 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   }
   if (typeof obj.note === 'string' && obj.note !== '') {
     entry.note = obj.note;
+  }
+  if (typeof obj.thread === 'string' && obj.thread !== '') {
+    entry.thread = obj.thread;
+  }
+  if (typeof obj.in_reply_to === 'string' && obj.in_reply_to !== '') {
+    entry.in_reply_to = obj.in_reply_to;
   }
   return entry;
 }

@@ -1,0 +1,327 @@
+// The signed message record: the one file a send writes for a message, and the receipts beside
+// it that give the message its status.
+//
+// Draft 3 (§3.1): one signed record per message, written whole into the recipient's folder,
+// carrying both registry ids and the admitting rule on it. The id is the record's name; a second
+// record of one id is dropped by the receiver. The transport tree stays
+// `<root>/.agents/send-drops/<session>/<seat>` and the file at `<id>` is the record — the raw drop
+// body it replaced is gone. The signature is the checkout's message key, over `MESSAGE_DOMAIN`
+// and the canonical payload, so a record rewritten without the key is refused. Every process on
+// this machine runs as the owner-user: the signature is evidence of who wrote a record, not a
+// wall against the process that runs it.
+//
+// Status is derived, never edited (§3.3). Each status is a receipt record beside the message,
+// signed with `RECEIPT_DOMAIN` and written only by the receiving side; `statusOf` reads them in
+// the one order the status moves — `held`, `delivered`, `read`, `replied` — and a late receipt
+// changes nothing. The attempt outcomes (`not-submitted`, `timeout`, `unreachable`, `refused`)
+// are outcomes, never statuses, and are not read here.
+import { type KeyObject } from 'node:crypto';
+import { join } from 'node:path';
+import { heldAt } from '../launch/rules-file.ts';
+import { messageKeyOf, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
+import { readNoFollow, type MessageStatus } from './history.ts';
+import { dropMessage } from './native.ts';
+
+/** The `kind` a message record's payload carries. A receipt carries `receipt`. */
+export const RECORD_KIND = 'message';
+
+/**
+ * One message record's signed payload. The two registry ids are `null` only where the registry
+ * holds none — the owner, or a seat the store has no record for yet; the rule that admitted the
+ * pair is always named.
+ */
+export type RecordPayload = {
+  kind: typeof RECORD_KIND;
+  /** The record's name, minted by the sender and never reused. */
+  id: string;
+  /** The recipient seat's name, and the registry id it resolved to, when it has one. */
+  to: string;
+  to_id: string | null;
+  /** The receiving checkout and team session the record is bound to. */
+  root: string;
+  session: string;
+  /** When the sender wrote it, ISO. */
+  at: string;
+  /** The whole message, sender header included — what every transport carries and every history line keeps. */
+  body: string;
+  /** The sender: a seat's name, or `owner`. */
+  from: string;
+  from_id: string | null;
+  /** The rule that admitted the pair, as the send judged it. */
+  rule: string;
+  /** The first message's id; a first message is its own thread's id. */
+  thread: string;
+  /** The id of the record this one answers, on a reply only. */
+  in_reply_to?: string;
+};
+
+export type SignedRecord = { payload: RecordPayload; signature: string };
+
+/** The statuses a receipt can record. `sent` is the absence of a receipt, never written. */
+export type ReceiptStatus = Exclude<MessageStatus, 'sent'>;
+
+/** The statuses in the one order they move; a later receipt is the one that stands. */
+export const RECEIPT_STATUSES: readonly ReceiptStatus[] = ['held', 'delivered', 'read', 'replied'];
+
+export type ReceiptPayload = {
+  kind: 'receipt';
+  status: ReceiptStatus;
+  id: string;
+  to: string;
+  root: string;
+  session: string;
+  at: string;
+};
+
+export type SignedReceipt = { payload: ReceiptPayload; signature: string };
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
+}
+
+/** An id that can name one file in a folder: no separator, no traversal, no NUL. */
+export function recordNameOk(id: string): boolean {
+  return id !== '' && id !== '.' && id !== '..' && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
+}
+
+/**
+ * The payload a message record carries, or null when the value is not one this version writes.
+ * `thread` and the admitting rule are required: every record carries them, and a file without
+ * them is not the record a send of this version wrote.
+ */
+export function recordPayloadOf(value: unknown): RecordPayload | null {
+  if (!isRecordValue(value)) return null;
+  if (value.kind !== RECORD_KIND) return null;
+  for (const field of ['id', 'to', 'root', 'session', 'at', 'body', 'from', 'rule', 'thread'] as const) {
+    if (!nonEmpty(value[field])) return null;
+  }
+  if (!recordNameOk(value.id as string)) return null;
+  if (!Number.isFinite(Date.parse(value.at as string))) return null;
+  for (const field of ['from_id', 'to_id'] as const) {
+    if (value[field] !== null && !nonEmpty(value[field])) return null;
+  }
+  if (value.from_id === undefined || value.to_id === undefined) return null;
+  if (value.in_reply_to !== undefined && !nonEmpty(value.in_reply_to)) return null;
+  const payload: RecordPayload = {
+    kind: RECORD_KIND,
+    id: value.id as string,
+    to: value.to as string,
+    to_id: value.to_id as string | null,
+    root: value.root as string,
+    session: value.session as string,
+    at: value.at as string,
+    body: value.body as string,
+    from: value.from as string,
+    from_id: value.from_id as string | null,
+    rule: value.rule as string,
+    thread: value.thread as string,
+  };
+  if (value.in_reply_to !== undefined) payload.in_reply_to = value.in_reply_to as string;
+  return payload;
+}
+
+/** The whole signed envelope: `{payload, signature}` and nothing else. */
+export function signedRecordOf(value: unknown): SignedRecord | null {
+  if (!isRecordValue(value)) return null;
+  if (!nonEmpty(value.signature)) return null;
+  const payload = recordPayloadOf(value.payload);
+  if (payload === null) return null;
+  return { payload, signature: value.signature };
+}
+
+/** The receipt payload, or null when the value is not one this version writes. */
+export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
+  if (!isRecordValue(value)) return null;
+  if (value.kind !== 'receipt') return null;
+  if (typeof value.status !== 'string' || !RECEIPT_STATUSES.includes(value.status as ReceiptStatus)) return null;
+  for (const field of ['id', 'to', 'root', 'session', 'at'] as const) {
+    if (!nonEmpty(value[field])) return null;
+  }
+  if (!Number.isFinite(Date.parse(value.at as string))) return null;
+  return {
+    kind: 'receipt',
+    status: value.status as ReceiptStatus,
+    id: value.id as string,
+    to: value.to as string,
+    root: value.root as string,
+    session: value.session as string,
+    at: value.at as string,
+  };
+}
+
+export function signedReceiptOf(value: unknown): SignedReceipt | null {
+  if (!isRecordValue(value)) return null;
+  if (!nonEmpty(value.signature)) return null;
+  const payload = receiptPayloadOf(value.payload);
+  if (payload === null) return null;
+  return { payload, signature: value.signature };
+}
+
+/** The record's path: the folder `team send` writes to, and the id as the file's name. */
+export function recordFile(dropDir: string, id: string): string {
+  return join(dropDir, id);
+}
+
+/** A receipt's path beside its message: `<id>.<status>.json`. */
+export function receiptFile(dropDir: string, id: string, status: ReceiptStatus): string {
+  return join(dropDir, `${id}.${status}.json`);
+}
+
+/** Signs a payload with the checkout's message key. The key is created on the first sign. */
+export function signRecord(payload: RecordPayload, home: string): SignedRecord {
+  const key = messageKeyOf(home);
+  return { payload, signature: signDomain(MESSAGE_DOMAIN, payload as unknown as Json, key) };
+}
+
+export function verifyRecord(record: SignedRecord, key: KeyObject): boolean {
+  return verifyDomain(MESSAGE_DOMAIN, record.payload as unknown as Json, record.signature, key);
+}
+
+export function signReceiptPayload(payload: ReceiptPayload, home: string): SignedReceipt {
+  const key = messageKeyOf(home);
+  return { payload, signature: signDomain(RECEIPT_DOMAIN, payload as unknown as Json, key) };
+}
+
+export function verifyReceipt(receipt: SignedReceipt, key: KeyObject): boolean {
+  return verifyDomain(RECEIPT_DOMAIN, receipt.payload as unknown as Json, receipt.signature, key);
+}
+
+export type RecordWrite = { ok: true; path: string; existing?: true } | { ok: false; reason: string };
+
+/**
+ * Writes the record whole — a temporary file at mode 0600 in the record's own folder, renamed
+ * onto the id's name — and never replaces a file already at that name: an id names one record,
+ * and a second write is the receiver's duplicate to drop, not the sender's to overwrite.
+ */
+export function writeRecord(dropDir: string, record: SignedRecord): RecordWrite {
+  const id = record.payload.id;
+  if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
+  const path = recordFile(dropDir, id);
+  if (heldAt(path).kind !== 'missing') return { ok: false, reason: 'a record already holds that id' };
+  try {
+    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+  } catch {
+    return { ok: false, reason: 'the record could not be written' };
+  }
+  return { ok: true, path };
+}
+
+/**
+ * Writes the record unless its id already names a record in this folder; a record already there
+ * is the message the id names and is left untouched. Any other file at that name is a refusal:
+ * the id would name two different things.
+ */
+export function ensureRecord(dropDir: string, record: SignedRecord): RecordWrite {
+  const path = recordFile(dropDir, record.payload.id);
+  const held = heldAt(path);
+  if (held.kind === 'missing') return writeRecord(dropDir, record);
+  if (held.kind !== 'file') return { ok: false, reason: 'a file that is not a record already holds that id' };
+  const text = readNoFollow(path);
+  if (text === null) return { ok: false, reason: 'a file that is not a record already holds that id' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, reason: 'a file that is not a record already holds that id' };
+  }
+  const found = signedRecordOf(parsed);
+  if (found === null || found.payload.id !== record.payload.id) {
+    return { ok: false, reason: 'a file that is not a record already holds that id' };
+  }
+  return { ok: true, path, existing: true };
+}
+
+export type RecordRead = { ok: true; record: SignedRecord | null } | { ok: false; reason: string };
+
+/** One record by path, or why it cannot be read. A missing file is `record: null`. */
+export function readRecord(path: string, expectedId?: string): RecordRead {
+  const held = heldAt(path);
+  if (held.kind === 'missing') return { ok: true, record: null };
+  if (held.kind === 'link') return { ok: false, reason: 'a symbolic link was found and not followed' };
+  if (held.kind === 'fifo') return { ok: false, reason: 'a FIFO was found and not followed' };
+  if (held.kind !== 'file') return { ok: false, reason: 'the record is not a regular file' };
+  if (process.getuid !== undefined && held.uid !== process.getuid()) return { ok: false, reason: "another user's file" };
+  const text = readNoFollow(path);
+  if (text === null) return { ok: false, reason: 'the record could not be read' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, reason: 'the record is not JSON' };
+  }
+  const record = signedRecordOf(parsed);
+  if (record === null) return { ok: false, reason: 'the record is not one this version wrote' };
+  if (expectedId !== undefined && record.payload.id !== expectedId) {
+    return { ok: false, reason: `the record's id is ${record.payload.id}, not ${expectedId}` };
+  }
+  return { ok: true, record };
+}
+
+export type StatusContext = { to: string; root: string; session: string };
+
+/**
+ * Whether the receipt at `path` is this message's `status` receipt: the id, seat, checkout and
+ * session on it match, and the message key signed it. A receipt for another message or checkout
+ * is not counted, and an unreadable one changes nothing.
+ */
+export function receiptHolds(
+  path: string,
+  id: string,
+  status: ReceiptStatus,
+  context: StatusContext,
+  key: KeyObject,
+): boolean {
+  const held = heldAt(path);
+  if (held.kind !== 'file') return false;
+  if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
+  const text = readNoFollow(path);
+  if (text === null) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const receipt = signedReceiptOf(parsed);
+  if (receipt === null) return false;
+  const payload = receipt.payload;
+  if (payload.id !== id || payload.status !== status) return false;
+  if (payload.to !== context.to || payload.session !== context.session) return false;
+  if (payload.root !== context.root) return false;
+  return verifyReceipt(receipt, key);
+}
+
+/**
+ * The message's status, derived from the receipts beside it and moving forward only: the highest
+ * receipt that verifies stands, and no file present is `sent`. A status is never edited onto the
+ * record itself.
+ */
+export function statusOf(dropDir: string, id: string, context: StatusContext, key: KeyObject): MessageStatus {
+  let status: MessageStatus = 'sent';
+  for (const candidate of RECEIPT_STATUSES) {
+    if (receiptHolds(receiptFile(dropDir, id, candidate), id, candidate, context, key)) status = candidate;
+  }
+  return status;
+}
+
+/**
+ * Writes one status receipt beside its message. Receipts are write-once: a status already
+ * recorded is not rewritten (`held` again is not a new fact), and an existing file at the path
+ * is left untouched.
+ */
+export function writeReceipt(dropDir: string, receipt: SignedReceipt): RecordWrite {
+  const id = receipt.payload.id;
+  if (!recordNameOk(id)) return { ok: false, reason: 'the receipt id cannot be a file name' };
+  const path = receiptFile(dropDir, id, receipt.payload.status);
+  if (heldAt(path).kind !== 'missing') return { ok: true, path, existing: true };
+  try {
+    dropMessage(dropDir, `${id}.${receipt.payload.status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+  } catch {
+    return { ok: false, reason: 'the receipt could not be written' };
+  }
+  return { ok: true, path };
+}

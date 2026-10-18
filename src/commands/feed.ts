@@ -12,6 +12,7 @@ import {
   readAllHistories,
   readHistory,
   readNoFollow,
+  statusOfOutcome,
   type HistoryEntry,
 } from '../send/history.ts';
 import { storePath } from '../store/store.ts';
@@ -31,7 +32,7 @@ Options:
   --audit <path>   include Desk or bridge audit JSONL lines from <path>
   --briefs <dir>   include <from>-to-<to>.md brief files from <dir>
   --follow         keep reading as new lines arrive, across log rotations
-  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, spec?, resolved?, ms?, via?, failed?}]})
+  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, status, thread?, in_reply_to?, spec?, resolved?, ms?, via?, failed?}]})
 
 Exits 0 when the feed is printed, 1 when the history log can't be read, 2 when the invocation or team file can't be read.
 `;
@@ -551,6 +552,10 @@ function oneOutcomePerId(entries: readonly HistoryEntry[]): HistoryEntry[] {
     }
     if (kept.spec === undefined && entry.spec !== undefined) kept.spec = entry.spec;
     if (kept.resolved === undefined && entry.resolved !== undefined) kept.resolved = entry.resolved;
+    // The thread and the record a reply answers are on every line the send of this version
+    // writes; an older line for the same id carries neither, and the newer line's values stand.
+    if (kept.thread === undefined && entry.thread !== undefined) kept.thread = entry.thread;
+    if (kept.in_reply_to === undefined && entry.in_reply_to !== undefined) kept.in_reply_to = entry.in_reply_to;
   }
   return order.reverse().map((id) => latest.get(id)!);
 }
@@ -575,6 +580,9 @@ function eventJson(entry: HistoryEntry): Record<string, unknown> {
     body: entry.body,
     id: entry.id,
     outcome: entry.outcome,
+    // The line's derived status (§3.3): the outcome folded into the one scale a message moves
+    // along. Attempt outcomes — `timeout`, `not-submitted`, `unreachable` — fold to `sent`.
+    status: statusOfOutcome(entry.outcome),
   };
   // Present only when the send recorded them, so older readers see the same object.
   if (entry.spec !== undefined) obj.spec = entry.spec;
@@ -583,6 +591,8 @@ function eventJson(entry: HistoryEntry): Record<string, unknown> {
   if (entry.via !== undefined) obj.via = entry.via;
   if (entry.failed !== undefined) obj.failed = entry.failed;
   if (entry.note !== undefined) obj.note = entry.note;
+  if (entry.thread !== undefined) obj.thread = entry.thread;
+  if (entry.in_reply_to !== undefined) obj.in_reply_to = entry.in_reply_to;
   return obj;
 }
 
@@ -596,13 +606,19 @@ function printContext(io: Io, scope: Scope): void {
   scope.printed = true;
 }
 
+/** The DETAIL cell: a reply says which record it answers before its body, so a thread reads as
+ *  one conversation even where its lines are pages apart. */
+function detailOf(entry: HistoryEntry): string {
+  return entry.in_reply_to === undefined ? entry.body : `re ${entry.in_reply_to}: ${entry.body}`;
+}
+
 /** One batch of events: the context line when it has not opened the run yet, the four-column
  *  table, and the batch's count. `--follow` prints one batch per pass that brought new events. */
 function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): void {
   printContext(io, scope);
   const lines = renderTable({
     headers: ['TIME', 'KIND', 'SEAT', 'DETAIL'],
-    rows: entries.map((entry) => [timeOf(entry.ts), kindOf(entry), `${entry.from} -> ${entry.to}`, entry.body]),
+    rows: entries.map((entry) => [timeOf(entry.ts), kindOf(entry), `${entry.from} -> ${entry.to}`, detailOf(entry)]),
     indent: scope.context === null ? '' : '  ',
     style: ttyStyle(io, { json: false }),
   });

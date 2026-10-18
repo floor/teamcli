@@ -25,7 +25,7 @@ import { triggerLine } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { claudeBox, testIo } from './helpers.ts';
+import { claudeBox, recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T05:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -172,7 +172,7 @@ describe('the sending paths never dial while the socket is off', () => {
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     const path = dropped(w.root, 'lead');
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
     const trigger = triggerLine(path);
     if (trigger === null) throw new Error('the drop path did not fit a trigger line');
     expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);

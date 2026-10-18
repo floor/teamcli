@@ -22,7 +22,7 @@ import {
 import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
 import type { RetryScene } from '../src/watch/retry.ts';
-import { testIo, type TestIo } from './helpers.ts';
+import { recordBody, testIo, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
@@ -79,7 +79,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops);
   expect(files.length).toBe(1);
-  expect(readFileSync(join(drops, files[0] as string), 'utf8')).toBe(filed('hello'));
+  expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
 
 test('--wait to a claude-code seat is refused: no frame, no drop, nothing typed', async () => {
@@ -127,10 +127,14 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     message: HANDOFF_BODY,
     ids: { sent: ID, reply: null },
   });
-  // Nothing was delivered by the handoff: no frame, no trigger, no drop file.
+  // Nothing was delivered by the handoff: no frame, no trigger. The signed record the native
+  // leg transports is already in the recipient's folder, so `team messages` can read the
+  // message before the sender's own SendMessage carries the line.
   expect(host.frames).toEqual([]);
   expect(pane.typed).toEqual([]);
-  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  const drops = join(made.dir, 'send-drops', 'acme', 'lead');
+  expect(readdirSync(drops)).toEqual([ID]);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   // One pending record, the caller's own, at 0600 — and no history line yet.
   const path = pending(made);
   expect(existsSync(path)).toBe(true);
@@ -181,6 +185,7 @@ test('the confirm with the nonce in the fake transcript records delivered and cl
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'delivered',
       ms: 0,
       via: 'native',
@@ -234,6 +239,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'native',
@@ -280,6 +286,7 @@ test('a nonce from another handoff in the recipient transcript does not count as
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'native',
@@ -332,6 +339,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       to: 'lead',
       body: HELPER_BODY,
       id: expect.any(String),
+      thread: expect.any(String),
       outcome: 'delivered',
       ms: 0,
       via: 'typed',
@@ -391,6 +399,7 @@ test('a registry-resolved spec keeps to_id, spec and resolved through the handof
       resolved: leadAgent.id,
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'delivered',
       ms: 0,
       via: 'native',
@@ -575,7 +584,7 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
   const files = readdirSync(drops);
   expect(files).toEqual([ID]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
-  expect(readFileSync(join(drops, ID), 'utf8')).toBe(HANDOFF_BODY);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
 
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
@@ -585,6 +594,7 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'delivered',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
       via: 'drop',
@@ -626,13 +636,14 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
   expect(watchPane.typed).toEqual([]);
   expect(watchPane.enters).toBe(0);
   expect(readdirSync(dir).filter((name) => !name.startsWith('.') && !name.endsWith('.pending'))).toEqual([ID]);
-  expect(readFileSync(join(dir, ID), 'utf8')).toBe(HANDOFF_BODY);
+  expect(recordBody(join(dir, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(dir, `${ID}.pending`), 'utf8'))).toEqual({
     id: ID,
     from: 'helper',
     to: 'lead',
     body: HANDOFF_BODY,
     ts: expiredAt.toISOString(),
+    thread: ID,
     tries: 0,
     leg: 'mcp-inbox',
   });
@@ -648,6 +659,7 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'sent (unconfirmed)',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
       via: 'mcp-inbox',
@@ -709,7 +721,10 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   await expirePendingNative(watchScene(made, insideAt).scene);
   await expirePendingNative(watchScene(made, new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS)).scene);
   expect(existsSync(pending(made))).toBe(true);
-  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  // The handoff wrote its signed record; the watch's passes have written no second file.
+  const drops = dropDir(made.dir, 'lead');
+  expect(readdirSync(drops)).toEqual([ID]);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
 
   // Confirm inside the window records native delivery; a subsequent watch pass past 10m sees no
   // pending record and triggers no fallback.
@@ -721,7 +736,8 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   const pastWindow = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 60_000);
   await expirePendingNative(watchScene(made, pastWindow).scene);
 
-  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  expect(readdirSync(drops)).toEqual([ID]);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -730,6 +746,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'delivered',
       ms: 300_000,
       via: 'native',
@@ -756,7 +773,7 @@ test('expiry typed leg refuses a pane back at its shell with no drop file and no
   expect(existsSync(pending(made))).toBe(false);
   expect(watchPane.typed).toEqual([]);
   expect(watchPane.enters).toBe(0);
-  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
   expect(said).toEqual(['lead: the seat is back at its shell; nothing was typed']);
 
   const history = readHistory('acme', made.root, made.home);
@@ -767,6 +784,7 @@ test('expiry typed leg refuses a pane back at its shell with no drop file and no
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'unreachable',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
       failed: [
@@ -894,7 +912,7 @@ test('expiry typed leg refuses to type when the recipient pane process identity 
   expect(processSessions).toEqual(['other']);
   expect(typedSessions).toEqual([]);
   expect(enterSessions).toEqual([]);
-  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
   expect(said).toEqual(['lead: the pane no longer holds the process team launched for this seat; nothing was typed']);
 });
 

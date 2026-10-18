@@ -29,7 +29,8 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, TAKEN_REASON, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
-import { dropMessage, triggerLine } from '../send/native.ts';
+import { triggerLine } from '../send/native.ts';
+import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
 import {
   dropTaken,
   listPendingNative,
@@ -88,15 +89,37 @@ function paneIdentityProblem(
   return null;
 }
 
-function writeDropFile(toDir: string, session: string, seat: string, id: string, body: string): string {
-  const dropsRoot = join(toDir, 'send-drops');
-  const sessionDir = join(dropsRoot, session);
-  const dropDir = join(sessionDir, seat);
+/**
+ * The signed record a fallback leg transports, rebuilt from the handoff. The send wrote it under
+ * this id before it handed off; one missing from the folder — a pending native record an older
+ * build left — is written here, and an existing record is left untouched: it is the message, and
+ * the handoff's own copy is the same message.
+ */
+function writeRecordFile(record: PendingNative, home: string): string {
+  const dropsRoot = join(record.root, '.agents', 'send-drops');
+  const sessionDir = join(dropsRoot, record.session);
+  const dropDir = join(sessionDir, record.to);
   mkdirSync(dropDir, { recursive: true });
   chmodSync(dropsRoot, 0o700);
   chmodSync(sessionDir, 0o700);
   chmodSync(dropDir, 0o700);
-  return dropMessage(dropDir, id, body);
+  const payload: RecordPayload = {
+    kind: 'message',
+    id: record.id,
+    to: record.to,
+    to_id: record.to_id,
+    root: record.root,
+    session: record.session,
+    at: record.ts,
+    body: record.body,
+    from: record.from,
+    from_id: record.from_id,
+    rule: record.rule,
+    thread: record.thread ?? record.id,
+  };
+  const written = ensureRecord(dropDir, signRecord(payload, home));
+  if (!written.ok) throw new Error(written.reason);
+  return written.path;
 }
 
 async function expireOne(
@@ -149,7 +172,7 @@ async function expireOne(
       }
       try {
         try {
-          writeDropFile(toDir, record.session, record.to, record.id, record.body);
+          writeRecordFile(record, home);
         } catch {
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
@@ -162,6 +185,7 @@ async function expireOne(
           to: record.to,
           body: record.body,
           ts: scene.now.toISOString(),
+          thread: record.thread ?? record.id,
           leg: 'mcp-inbox',
         });
         appendHistory(record.project, record.root, home, {
@@ -171,6 +195,7 @@ async function expireOne(
           ...sentAs,
           body: record.body,
           id: record.id,
+          thread: record.thread ?? record.id,
           outcome: 'sent (unconfirmed)',
           ms: elapsedMs,
           via: 'mcp-inbox',
@@ -195,7 +220,7 @@ async function expireOne(
       }
       try {
         try {
-          writeDropFile(toDir, record.session, record.to, record.id, record.body);
+          writeRecordFile(record, home);
         } catch {
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
@@ -207,6 +232,7 @@ async function expireOne(
           ...sentAs,
           body: record.body,
           id: record.id,
+          thread: record.thread ?? record.id,
           outcome: 'delivered',
           ms: elapsedMs,
           via: 'drop',
@@ -255,6 +281,7 @@ async function expireOne(
               ...sentAs,
               body: record.body,
               id: record.id,
+              thread: record.thread ?? record.id,
               outcome: 'unreachable',
               ms: elapsedMs,
               failed: [...failures],
@@ -266,7 +293,7 @@ async function expireOne(
         }
         let dropPath: string;
         try {
-          dropPath = writeDropFile(toDir, record.session, record.to, record.id, record.body);
+          dropPath = writeRecordFile(record, home);
         } catch {
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
@@ -300,6 +327,7 @@ async function expireOne(
                 ...sentAs,
                 body: record.body,
                 id: record.id,
+                thread: record.thread ?? record.id,
                 outcome: 'delivered',
                 ms: elapsedMs,
                 ...(isTaken ? { note: TAKEN_REASON } : {}),
@@ -327,6 +355,7 @@ async function expireOne(
               ...sentAs,
               body: record.body,
               id: record.id,
+              thread: record.thread ?? record.id,
               outcome: result.outcome,
               ms: elapsedMs,
               failed: [...failures],
@@ -348,6 +377,7 @@ async function expireOne(
             ...sentAs,
             body: record.body,
             id: record.id,
+            thread: record.thread ?? record.id,
             outcome: 'held',
             ms: elapsedMs,
             failed: [...failures],
@@ -369,6 +399,7 @@ async function expireOne(
           ...sentAs,
           body: record.body,
           id: record.id,
+          thread: record.thread ?? record.id,
           outcome: 'unreachable',
           ms: elapsedMs,
           failed: [...failures],
@@ -388,6 +419,7 @@ async function expireOne(
     ...sentAs,
     body: record.body,
     id: record.id,
+    thread: record.thread ?? record.id,
     outcome: 'unreachable',
     ms: elapsedMs,
     failed: [...failures],
