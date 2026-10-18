@@ -162,7 +162,9 @@ export const realWatchSources: WatchSources = {
   paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
   watchCommand,
-  busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'watch', cursor }, { deadlineMs: 500 }),
+  // The bus identity of the owner's delivery path (§4.5): the watch reads what the policy routes
+  // to `owner` and what the raising side addresses to `owner`. It is never a seat name.
+  busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'owner', cursor }, { deadlineMs: 500 }),
   busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
 };
 
@@ -306,6 +308,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const { dir } = first;
 
   const placed = callerOf(io, session);
+
+  // Owner delivery (§4.5) is the owner's own path. This process is that path when the owner
+  // check that admits owner-only actions admits it, when it runs in an agentless pane — the
+  // pane `up` starts the watch in — or when it is the watch this session recorded. A watch a
+  // seat started in its own pane runs its passes and polls; it never subscribes with the
+  // owner's identity.
+  const ownerPath = isOwner(placed) || placed.kind === 'pane' || grant !== undefined;
 
   // A seat that starts the session's only watch must not be able to drop the operator's nudge
   // or the operator's desktop notices. The owner's own `--no-notify` still cannot silence a
@@ -492,7 +501,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             now: sources.now,
             alreadyTold: (text) => ownerTold.has(text),
           });
-      const busConnected = !foreign && sources.busSubscribe !== undefined
+      const busConnected = !foreign && ownerPath && sources.busSubscribe !== undefined
         ? await syncWatchBus(root, busTracker, sources, memory, owner === undefined ? undefined : (record) => {
             const outcome = owner.onEvent(record.payload);
             if (outcome.error !== undefined) {
