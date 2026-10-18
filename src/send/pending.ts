@@ -454,8 +454,9 @@ export function listPendingNative(project: string, root: string, home: string): 
     const id = name.slice(0, -'.json'.length);
     if (!PENDING_ID.test(id)) continue;
     const filePath = join(dir, name);
-    if (heldAt(filePath).kind !== 'file') continue;
-    if (process.getuid !== undefined && heldAt(filePath).uid !== process.getuid()) continue;
+    const held = heldAt(filePath);
+    if (held.kind !== 'file') continue;
+    if (process.getuid !== undefined && held.uid !== process.getuid()) continue;
     const text = readNoFollow(filePath);
     if (text === null) continue;
     try {

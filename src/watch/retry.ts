@@ -35,6 +35,7 @@ import { readScreen } from './screen.ts';
 export type RetrySources = {
   screen(pane: string, session: string): string | null;
   status(pane: string, session: string): string | null;
+  processes?(pane: string, session: string): PaneProcesses | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   sleep(ms: number): Promise<void>;

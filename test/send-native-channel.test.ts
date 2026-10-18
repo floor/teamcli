@@ -511,6 +511,8 @@ test('the 24h sweep keeps records younger than or at 24h, deletes records older 
   expect(existsSync(pendingPath('acme', made.root, made.home, idYounger))).toBe(false);
 });
 
+const IDLE_SCREEN = '────────\n❯ \n────────';
+
 function watchScene(made: World, now: Date, pane = scripted(['idle', 'working'])): { scene: RetryScene; pane: ReturnType<typeof scripted>; said: string[] } {
   const loaded = loadTeamFile(made.root, { home: made.home });
   if (!loaded.ok) throw new Error('failed to load team file');
@@ -522,12 +524,14 @@ function watchScene(made: World, now: Date, pane = scripted(['idle', 'working'])
     home: made.home,
     team: loaded.team,
     live: {
-      agents: [{ name: 'lead', pane: 'w1:p1', status: 'idle' }],
-      screens: { 'w1:p1': 'idle prompt' },
+      running: true,
+      agents: [{ name: 'lead', agent: 'claude', workspace: 'w1', pane: 'w1:p1', cwd: made.root, status: 'idle' }],
+      workspaces: [],
+      screens: { 'w1:p1': IDLE_SCREEN },
     },
     ownPane: null,
     sources: {
-      screen: () => 'idle prompt',
+      screen: () => IDLE_SCREEN,
       status: () => 'idle',
       typeText: (_id, text) => pane.typeText('acme', _id, text),
       pressEnter: (_id) => pane.pressEnter('acme', _id),
@@ -668,5 +672,166 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
       via: 'native',
     },
   ]);
+});
+
+test('expiry typed leg refuses a pane back at its shell with no drop file and no pane write', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  expect(existsSync(pending(made))).toBe(true);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
+  scene.sources.processes = () => ({ shell: 50001, foreground: [50001] });
+  await expirePendingNative(scene);
+
+  expect(existsSync(pending(made))).toBe(false);
+  expect(watchPane.typed).toEqual([]);
+  expect(watchPane.enters).toBe(0);
+  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  expect(said).toEqual(['lead: the seat is back at its shell; nothing was typed']);
+
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: expiredAt.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      outcome: 'unreachable',
+      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
+      failed: [
+        'native: unconfirmed after 10m',
+        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+      ],
+    },
+  ]);
+});
+
+test('cross-team expiry binds typing and read-back to record.session and verifies pane process identity', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  const path = pending(made);
+  const rec = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  rec.session = 'other';
+  rec.pane = 'w2:p9';
+  writeFileSync(path, `${JSON.stringify(rec)}\n`, { mode: 0o600 });
+
+  // Record launched identity on the recipient session (`other`) so expiry verifies process identity.
+  updateState(made.dir, (state) => {
+    state.sessions.other = {
+      seats: { lead: { stage: 'ready', pane: 'w2:p9', launched: { shell: 111, cli: [222] } } },
+      worktrees: {},
+    };
+  });
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const typedSessions: string[] = [];
+  const enterSessions: string[] = [];
+  const statusSessions: string[] = [];
+  const screenSessions: string[] = [];
+  const processSessions: string[] = [];
+  let statusCalls = 0;
+
+  const { scene, said } = watchScene(made, expiredAt);
+  scene.sources = {
+    screen: (_id, sess) => {
+      screenSessions.push(sess ?? 'default');
+      return IDLE_SCREEN;
+    },
+    status: (_id, sess) => {
+      statusSessions.push(sess ?? 'default');
+      return statusCalls++ < 2 ? 'idle' : 'working';
+    },
+    typeText: (_id, _text, sess) => {
+      typedSessions.push(sess ?? 'default');
+      return true;
+    },
+    pressEnter: (_id, sess) => {
+      enterSessions.push(sess ?? 'default');
+      return true;
+    },
+    processes: (_id, sess) => {
+      processSessions.push(sess ?? 'default');
+      return { shell: 111, foreground: [222] };
+    },
+    sleep: async () => {},
+  };
+
+  await expirePendingNative(scene);
+
+  // Every read and write targeted `other`, never `acme` (`scene.session`).
+  expect(processSessions).toEqual(['other']);
+  expect(typedSessions).toEqual(['other']);
+  expect(enterSessions).toEqual(['other']);
+  expect(statusSessions.every((s) => s === 'other')).toBe(true);
+  expect(screenSessions.every((s) => s === 'other')).toBe(true);
+  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; delivered on fallback']);
+});
+
+test('expiry typed leg refuses to type when the recipient pane process identity was replaced', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  const path = pending(made);
+  const rec = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  rec.session = 'other';
+  rec.pane = 'w2:p9';
+  writeFileSync(path, `${JSON.stringify(rec)}\n`, { mode: 0o600 });
+
+  updateState(made.dir, (state) => {
+    state.sessions.other = {
+      seats: { lead: { stage: 'ready', pane: 'w2:p9', launched: { shell: 111, cli: [222] } } },
+      worktrees: {},
+    };
+  });
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const typedSessions: string[] = [];
+  const enterSessions: string[] = [];
+  const processSessions: string[] = [];
+  const { scene, said } = watchScene(made, expiredAt);
+  scene.sources = {
+    screen: () => IDLE_SCREEN,
+    status: () => 'idle',
+    typeText: (_id, _text, sess) => {
+      typedSessions.push(sess ?? 'default');
+      return true;
+    },
+    pressEnter: (_id, sess) => {
+      enterSessions.push(sess ?? 'default');
+      return true;
+    },
+    processes: (_id, sess) => {
+      processSessions.push(sess ?? 'default');
+      return { shell: 111, foreground: [999] };
+    },
+    sleep: async () => {},
+  };
+
+  await expirePendingNative(scene);
+
+  expect(processSessions).toEqual(['other']);
+  expect(typedSessions).toEqual([]);
+  expect(enterSessions).toEqual([]);
+  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  expect(said).toEqual(['lead: the pane no longer holds the process team launched for this seat; nothing was typed']);
 });
 

@@ -787,7 +787,7 @@ function fallbackAfterNative(
       }
     }
   }
-  return order.slice(at + 1).filter((leg): leg is PendingNativeFallbackLeg => leg !== 'native');
+  return order.slice(at + 1).filter((leg): leg is Exclude<DeliveryLeg, 'native'> => leg !== 'native');
 }
 
 function handOff(
