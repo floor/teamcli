@@ -2,23 +2,33 @@
 //
 // `team send` writes one message per file, whole and 0600, into
 // `<root>/.agents/send-drops/<session>/<seat>/<uuid>`. The MCP inbox adds nothing to the message:
-// a listener marker says a server is there, and one receipt `<id>.read.json` says a message was
-// read by an `inbox_read` call. The drop file is still the message; both sidecars are conveniences
-// written with the same atomic 0600 rename the drop gets. A read parses the record and verifies
-// its signature with the checkout's message key before it writes the receipt or shows a body: a
-// tampered or unsigned file is refused, so the receipt never proves a read of something the
-// server could not authenticate.
+// a listener marker says a server is there, and an `inbox_read` call writes the same signed status
+// receipt `team messages` writes — `<id>.read.json`, `status: read`, signed with the checkout's
+// message key — so every reader of a status agrees on what the file is. The drop file is still the
+// message; both sidecars are conveniences written with the same atomic 0600 rename the drop gets.
+// A read parses the record and verifies its signature with the message key before it writes the
+// receipt or shows a body: a tampered or unsigned file is refused, so the receipt never proves a
+// read of something the server could not authenticate.
 //
 // Path rules, which the server never relaxes: the seat and session are the launch's, never a tool
 // argument's; the folder is checked step by step so a link at `.agents`, `send-drops`, the
 // session or the seat refuses service; an id is a lowercase UUID and nothing else, so no id can
 // name a path; a drop or receipt that is a link is refused, never followed.
 import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
-import { readRecord, receiptFile, verifyRecord } from '../send/record.ts';
+import {
+  isRead,
+  readRecord,
+  receiptFile,
+  signReceiptPayload,
+  verifyRecord,
+  writeReceipt,
+  type ReceiptPayload,
+  type StatusContext,
+} from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
@@ -58,17 +68,6 @@ export type InboxListener = {
   cli: string;
   pid: number;
   ts: string;
-};
-
-/** What an `inbox_read` call leaves beside the message: the proof the call happened. */
-export type InboxReceipt = {
-  v: 1;
-  id: string;
-  seat: string;
-  session: string;
-  tool: 'inbox_read';
-  ts: string;
-  pid: number;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` and the marker's `ts` are there when
@@ -233,23 +232,25 @@ function markerOf(dropDir: string, id: string): { from?: string; ts?: string } {
 }
 
 /**
- * Every message waiting in this seat's own folder: a UUID-named regular file with no receipt
- * beside it. Oldest first. Anything else in the folder — a link, a marker, a directory — is not a
- * message and is skipped; a receipt that is a link is skipped too, since it proves nothing.
+ * Every message waiting in this seat's own folder: a UUID-named regular file with no signed read
+ * receipt beside it. Oldest first. Anything else in the folder — a link, a marker, a directory —
+ * is not a message and is skipped; a receipt the message key did not sign proves nothing, so the
+ * message still waits.
  */
-export function listUnread(dropDir: string): InboxMessage[] {
+export function listUnread(dropDir: string, context: StatusContext, home: string): InboxMessage[] {
   let names: string[];
   try {
     names = readdirSync(dropDir);
   } catch {
     return [];
   }
+  const key = messageKeyState(home);
   const messages: InboxMessage[] = [];
   for (const name of names) {
     if (!MESSAGE_ID.test(name)) continue;
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
-    if (heldAt(receiptPath(dropDir, name)).kind !== 'missing') continue;
+    if (key.kind === 'key' && isRead(dropDir, name, context, key.key)) continue;
     let size = 0;
     let mtime: number;
     try {
@@ -287,12 +288,12 @@ export type InboxTarget = { dropDir: string; root: string; seat: string; session
  * signature, an absent key and a record bound elsewhere are all refused with no body and no
  * receipt written. The id is a lowercase UUID; no other string reaches the filesystem.
  */
-export function readMessage(target: InboxTarget, id: string, pid: number, home: string): InboxRead {
+export function readMessage(target: InboxTarget, id: string, home: string): InboxRead {
   if (!MESSAGE_ID.test(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = join(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const receipt = heldAt(receiptPath(target.dropDir, id));
-  if (receipt.kind !== 'missing' && receipt.kind !== 'file') {
+  const atReceipt = heldAt(receiptPath(target.dropDir, id));
+  if (atReceipt.kind !== 'missing' && atReceipt.kind !== 'file') {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
   const looked = readRecord(at, id);
@@ -315,31 +316,33 @@ export function readMessage(target: InboxTarget, id: string, pid: number, home: 
   if (!verifyRecord(looked.record, key.key)) {
     return { ok: false, reason: `message ${JSON.stringify(id)} does not verify against this message key` };
   }
-  const record: InboxReceipt = { v: 1, id, seat: target.seat, session: target.session, tool: 'inbox_read', ts: new Date().toISOString(), pid };
-  try {
-    dropMessage(target.dropDir, basename(receiptPath(target.dropDir, id)), `${JSON.stringify(record)}\n`);
-  } catch {
-    return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
-  }
+  // The signed status receipt `team messages` also writes: one shape under one name, so `statusOf`,
+  // `team drops` and the watch all read it. It is write-once — a second read finds it there and
+  // changes nothing, and no read can move the status backward.
+  const receipt: ReceiptPayload = {
+    kind: 'receipt',
+    status: 'read',
+    id,
+    to: target.seat,
+    root: target.root,
+    session: target.session,
+    at: new Date().toISOString(),
+  };
+  const written = writeReceipt(target.dropDir, signReceiptPayload(receipt, home));
+  if (!written.ok) return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
   return { ok: true, body: payload.body };
 }
 
 /**
- * Whether `<id>.read.json` is there and names this id, seat and session: the receipt an `inbox_read`
- * call wrote before it returned the body. A link is never followed, and a receipt that does not
- * parse or does not name this message proves nothing — the send must not report a read it cannot
- * point at.
+ * Whether the message carries a signed read (or replied) receipt that verifies with the checkout's
+ * message key: the one proof an `inbox_read` or a `team messages` read leaves before the body is
+ * shown. A file at a receipt's name that does not parse, that was not signed by this key, or that
+ * names another message, seat, checkout or session proves nothing — the send must not report a
+ * read it cannot point at.
  */
-export function receiptHeld(dropDir: string, id: string, seat: string, session: string): boolean {
-  const text = readNoFollow(receiptPath(dropDir, id));
-  if (text === null || text === '') return false;
-  try {
-    const parsed = JSON.parse(text) as Partial<InboxReceipt>;
-    return parsed.v === 1 && parsed.id === id && parsed.seat === seat
-      && parsed.session === session && parsed.tool === 'inbox_read';
-  } catch {
-    return false;
-  }
+export function receiptHeld(dropDir: string, id: string, context: StatusContext, home: string): boolean {
+  const key = messageKeyState(home);
+  return key.kind === 'key' && isRead(dropDir, id, context, key.key);
 }
 
 /**
@@ -350,18 +353,18 @@ export function receiptHeld(dropDir: string, id: string, seat: string, session: 
 export async function awaitReceipt(
   dropDir: string,
   id: string,
-  seat: string,
-  session: string,
+  context: StatusContext,
+  home: string,
   timeoutMs: number,
   pollMs = INBOX_POLL_MS,
 ): Promise<boolean> {
-  if (receiptHeld(dropDir, id, seat, session)) return true;
+  if (receiptHeld(dropDir, id, context, home)) return true;
   const deadline = Date.now() + timeoutMs;
   for (let left = deadline - Date.now(); left > 0; left = deadline - Date.now()) {
     await new Promise((resolve) => {
       setTimeout(resolve, Math.min(pollMs, left));
     });
-    if (receiptHeld(dropDir, id, seat, session)) return true;
+    if (receiptHeld(dropDir, id, context, home)) return true;
   }
   return false;
 }

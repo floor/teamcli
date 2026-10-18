@@ -1006,7 +1006,7 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
   expect(watchPane.typed).toEqual([]);
   expect(watchPane.enters).toBe(0);
   expect(readdirSync(dir).filter((name) => !name.startsWith('.') && !name.endsWith('.pending'))).toEqual([ID]);
-  expect(readFileSync(join(dir, ID), 'utf8')).toBe(HANDOFF_BODY);
+  expect(recordBody(join(dir, ID))).toBe(HANDOFF_BODY);
   expect(existsSync(join(dir, `${ID}.pending`))).toBe(false);
   expect(said).toEqual([
     `lead: a native handoff from helper was unconfirmed after 10m; delivered (dropped ${String(HANDOFF_BODY.length)} characters)`,
@@ -1020,6 +1020,7 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       to: 'lead',
       body: HANDOFF_BODY,
       id: ID,
+      thread: ID,
       outcome: 'delivered',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
       via: 'drop',

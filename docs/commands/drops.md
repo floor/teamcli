@@ -10,7 +10,9 @@ into a notification.
 
 A receipt beside a drop says it was handed over, and a drop with one is read and not listed:
 the seat's inbox server writes `<id>.read.json` when an `inbox_read` call returns the message,
-the same sidecar name `team messages` gives its read receipt.
+and it is the same signed status receipt `team messages` writes, signed with the checkout's
+message key. `team drops` verifies it; a file at that name the key did not sign, or one naming
+another message, seat, checkout or session, proves nothing and the drop is still listed.
 
 ## Synopsis
 

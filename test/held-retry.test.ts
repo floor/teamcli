@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { listDrops } from '../src/commands/drops.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
@@ -28,10 +28,11 @@ import {
   readPending,
   type PendingDrop,
 } from '../src/send/pending.ts';
-import { signRecord } from '../src/send/record.ts';
+import { signRecord, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
+import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
-import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage, receiptPath } from '../src/mcp/inbox.ts';
+import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage } from '../src/mcp/inbox.ts';
 import { promoteInboxDrops, retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
 import { claudeBox, recordBody, testIo } from './helpers.ts';
@@ -203,7 +204,7 @@ function seedInbox(at: SeedWorld, session: string, seat: string, id: string, bod
  *  so the record's shape — and its verification — is the server's own. */
 function readInbox(at: SeedWorld, id: string, seat: string, session: string): void {
   const dropDir = join(at.dir, 'send-drops', session, seat);
-  const read = readMessage({ dropDir, root: realpathSync(at.root), seat, session }, id, 4242, at.home);
+  const read = readMessage({ dropDir, root: realpathSync(at.root), seat, session }, id, at.home);
   if (!read.ok) throw new Error(read.reason);
 }
 
@@ -518,13 +519,17 @@ describe('promoteInboxDrops', () => {
     const said: string[] = [];
 
     // Waiting, the drop is what team drops lists.
-    const waiting = listDrops(dropDir);
+    const keyState = messageKeyState(made.home);
+    if (keyState.kind !== 'key') throw new Error('the fixture wrote no message key');
+    const key = keyState.key;
+    const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
+    const waiting = listDrops(dropDir, key, context);
     expect(waiting.kind === 'ok' && waiting.rows.map((row) => row.id)).toEqual([INBOX_E]);
 
     // The inbox read writes the one receipt both readings know by name: the drop is no longer
     // waiting for the seat, and the watch turns the same receipt into the sender's history line.
     readInbox(made, INBOX_E, 'lead', 'acme');
-    expect(listDrops(dropDir)).toEqual({ kind: 'ok', rows: [] });
+    expect(listDrops(dropDir, key, context)).toEqual({ kind: 'ok', rows: [] });
 
     promoteInboxDrops({
       dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
@@ -547,9 +552,16 @@ describe('promoteInboxDrops', () => {
 
     // The receipt exists under the same id, but its record names another seat's read. It is not
     // this inbox's own proof, so the marker stands and nothing is written down.
-    dropMessage(dropDir, basename(receiptPath(dropDir, INBOX_B)), `${JSON.stringify({
-      v: 1, id: INBOX_B, seat: 'helper', session: 'acme', tool: 'inbox_read', ts: NOW.toISOString(), pid: 4242,
-    })}\n`);
+    const foreign = writeReceipt(dropDir, signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: INBOX_B,
+      to: 'helper',
+      root: realpathSync(made.root),
+      session: 'acme',
+      at: NOW.toISOString(),
+    }, made.home));
+    expect(foreign.ok).toBe(true);
     promoteInboxDrops({
       dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
       live: { running: true, agents: [], workspaces: [], screens: {} },

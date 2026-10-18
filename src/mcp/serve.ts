@@ -119,7 +119,13 @@ function callTool(params: unknown, serving: Serving): unknown {
     if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
       return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
     }
-    return toolText(JSON.stringify({ unread: listUnread(serving.dropDir) }));
+    return toolText(JSON.stringify({
+      unread: listUnread(
+        serving.dropDir,
+        { to: serving.seat, root: serving.root, session: serving.session },
+        serving.home,
+      ),
+    }));
   }
   if (name === 'inbox_read') {
     const id = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).id : undefined;
@@ -130,7 +136,6 @@ function callTool(params: unknown, serving: Serving): unknown {
     const read = readMessage(
       { dropDir: serving.dropDir, root: serving.root, seat: serving.seat, session: serving.session },
       id,
-      process.pid,
       serving.home,
     );
     if (!read.ok) return toolError(read.reason);

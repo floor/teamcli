@@ -41,6 +41,7 @@ import {
 } from '../store/keys.ts';
 import {
   receiptFile as recordReceiptFile,
+  receiptHolds,
   recordFile,
   signedRecordOf,
   signReceiptPayload,
@@ -244,22 +245,21 @@ function candidates(root: string, session: string): Candidate[] {
   return [...recordCandidates(root, session), ...legacyCandidates(root)];
 }
 
-/** Whether the record at `candidate` already has a verifying read receipt. */
+/** Whether the record at `candidate` already has a verifying read receipt: the one receipt module's
+ *  answer, shared with the inbox, `team drops` and the watch. */
 function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject): boolean {
   const path = recordReceiptFile(
     recordDir(root, candidate.session ?? session, candidate.seat),
     candidate.id,
     'read' as ReceiptStatus,
   );
-  const held = lstatSync(path, { throwIfNoEntry: false });
-  if (held === undefined || !held.isFile()) return false;
-  const parsed = readJson(path);
-  if (!isRecord(parsed) || !isRecord(parsed.payload) || !text(parsed.signature)) return false;
-  const payload = parsed.payload;
-  if (payload.kind !== 'receipt' || payload.status !== 'read') return false;
-  if (payload.id !== candidate.id || payload.to !== candidate.seat || payload.session !== (candidate.session ?? session)) return false;
-  if (!text(payload.root) || !samePath(payload.root, root)) return false;
-  return verifyDomain(RECEIPT_DOMAIN, payload as Json, parsed.signature, key);
+  return receiptHolds(
+    path,
+    candidate.id,
+    'read',
+    { to: candidate.seat, root, session: candidate.session ?? session },
+    key,
+  );
 }
 
 /**

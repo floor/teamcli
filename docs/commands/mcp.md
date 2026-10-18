@@ -11,10 +11,11 @@ generation, certificate minting — is not in this build yet.
 The third subcommand, `team mcp serve`, is the other direction: one seat's inbox, spoken to the
 CLI that started it as a Model Context Protocol server over stdin and stdout. Its stdout carries
 JSON-RPC lines only. It reads only that seat's own drop folder, writes one listener marker while
-it runs, and writes one receipt per message it returns; it never writes the message itself. A
-read parses the message's signed record and verifies its signature with the checkout's message
-key before anything is shown: a tampered or unsigned file is refused with a tool error and no
-receipt, so a receipt only ever proves a read of a record the server authenticated.
+it runs, and writes one receipt per message it returns — the signed status receipt `team
+messages` writes — and it never writes the message itself. A read parses the message's signed
+record and verifies its signature with the checkout's message key before anything is shown: a
+tampered or unsigned file is refused with a tool error and no receipt, so a receipt only ever
+proves a read of a record the server authenticated.
 
 A seat's launch registers the server with its CLI where a run measured a route. A codex seat's
 launch line carries the registration itself — two `-c` values naming the server and this

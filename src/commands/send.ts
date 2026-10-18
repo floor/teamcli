@@ -1637,7 +1637,7 @@ async function deliverInbox(
     // for the watch's later pass. A receipt clears it; `sent (unconfirmed)` leaves it on disk.
     markPending(dropDir, { ...entry, leg: 'mcp-inbox' });
     const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-    if (await awaitReceipt(dropDir, msgId, seatName, session, grace)) {
+    if (await awaitReceipt(dropDir, msgId, { to: seatName, root, session }, host.home, grace)) {
       clearPending(dropDir, msgId);
       logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
       appendHistory(project, root, host.home, { ...entry, outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'mcp-inbox', ...failed });
