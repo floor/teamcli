@@ -36,9 +36,11 @@ cannot leave that receipt is refused, so the server never hands over a body it d
 receipt is the signed status receipt `team messages` also writes: `{payload: {kind, status, id, to,
 root, session, at}, signature}`, signed with the checkout's message key, so the inbox, `team
 drops`, `team messages` and the watch all verify the same file rather than trusting its presence.
-It is write-once per status, so a second read adds nothing and a late read never lowers a receipt
-already on disk. That receipt is the whole evidence this leg produces, and it says the seat *read*
-the message, not that it acted on it: the status a send can honestly report from it is
+It is write-once per status — a signed receipt already at the name is never rewritten, so a second
+read adds nothing and a late read never lowers a receipt already on disk — and a file at that name
+the message key did not sign is replaced by the signed receipt, so a planted file cannot keep a
+message at `sent` forever. That receipt is the whole evidence this leg produces, and it says the
+seat *read* the message, not that it acted on it: the status a send can honestly report from it is
 `delivered (read)`.
 
 While it runs, the server keeps `.inbox-listener` in the seat's own drop folder — `{v, seat,

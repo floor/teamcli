@@ -509,7 +509,7 @@ difference: lead/m1 does not verify: the record is not a message
       root: scene.found,
       session: 'acme',
       at: '2026-10-04T09:05:00.000Z',
-    }, home));
+    }, home), home);
     expect(replied.ok).toBe(true);
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('replied');
 

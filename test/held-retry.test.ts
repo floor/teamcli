@@ -560,7 +560,7 @@ describe('promoteInboxDrops', () => {
       root: realpathSync(made.root),
       session: 'acme',
       at: NOW.toISOString(),
-    }, made.home));
+    }, made.home), made.home);
     expect(foreign.ok).toBe(true);
     promoteInboxDrops({
       dir: made.dir, session: 'acme', root: made.root, home: made.home, team,

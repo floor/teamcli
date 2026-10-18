@@ -228,13 +228,13 @@ describe('the status derived from the receipts beside a message', () => {
     try {
       const key = messageKeyOf(s.home);
       for (const status of RECEIPT_STATUSES) {
-        const written = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status }), s.home));
+        const written = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status }), s.home), s.home);
         if (!written.ok) throw new Error(written.reason);
         expect(statSync(written.path).mode & 0o777).toBe(0o600);
         expect(statusOf(s.dropDir, payload().id, context, key)).toBe(status);
       }
       // A late `held` does not move the status back.
-      writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'held' }), s.home));
+      writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'held' }), s.home), s.home);
       expect(statusOf(s.dropDir, payload().id, context, key)).toBe('replied');
     } finally {
       s.done();
@@ -244,7 +244,7 @@ describe('the status derived from the receipts beside a message', () => {
   test('the receipt file carries its status in its name', () => {
     const s = scratch();
     try {
-      const written = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'read' }), s.home));
+      const written = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'read' }), s.home), s.home);
       if (!written.ok) throw new Error(written.reason);
       expect(written.path).toBe(receiptFile(s.dropDir, payload().id, 'read'));
       expect(written.path.endsWith('.read.json')).toBe(true);
@@ -266,7 +266,7 @@ describe('the status derived from the receipts beside a message', () => {
         { root: '/scratch/other-root' },
       ];
       for (const wrong of wrongs) {
-        writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'delivered', ...wrong }), s.home));
+        writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'delivered', ...wrong }), s.home), s.home);
         expect(statusOf(s.dropDir, payload().id, context, key)).toBe('sent');
       }
     } finally {
@@ -278,7 +278,7 @@ describe('the status derived from the receipts beside a message', () => {
     const s = scratch();
     const other = scratch();
     try {
-      writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'delivered' }), other.home));
+      writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'delivered' }), other.home), other.home);
       expect(statusOf(s.dropDir, payload().id, context, messageKeyOf(s.home))).toBe('sent');
       expect(statusOf(s.dropDir, payload().id, context, messageKeyOf(other.home))).toBe('delivered');
     } finally {
@@ -290,15 +290,43 @@ describe('the status derived from the receipts beside a message', () => {
   test('a receipt is write-once: the status already recorded is not rewritten', () => {
     const s = scratch();
     try {
-      const first = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'delivered' }), s.home));
+      const first = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'delivered' }), s.home), s.home);
       if (!first.ok) throw new Error(first.reason);
       const before = readFileSync(first.path, 'utf8');
       const second = writeReceipt(
         s.dropDir,
         signReceiptPayload(receipt({ status: 'delivered', at: '2026-10-18T09:00:00.000Z' }), s.home),
+        s.home,
       );
       expect(second).toMatchObject({ ok: true, existing: true });
       expect(readFileSync(first.path, 'utf8')).toBe(before);
+    } finally {
+      s.done();
+    }
+  });
+
+  test('a file at a receipt\'s name that does not verify is replaced; a signed one is never', () => {
+    const s = scratch();
+    try {
+      const path = receiptFile(s.dropDir, payload().id, 'read');
+      // A file that proves nothing — unsigned, unreadable — must not keep the status at `sent`
+      // forever: the signed receipt replaces it.
+      writeFileSync(path, 'not a receipt');
+      expect(statusOf(s.dropDir, payload().id, context, messageKeyOf(s.home))).toBe('sent');
+      const written = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'read' }), s.home), s.home);
+      if (!written.ok) throw new Error(written.reason);
+      expect(written.path).toBe(path);
+      expect('existing' in written).toBe(false);
+      expect(statusOf(s.dropDir, payload().id, context, messageKeyOf(s.home))).toBe('read');
+      // The signed receipt now at the name is the read that happened first, and is not rewritten.
+      const before = readFileSync(path, 'utf8');
+      const second = writeReceipt(
+        s.dropDir,
+        signReceiptPayload(receipt({ status: 'read', at: '2026-10-18T09:30:00.000Z' }), s.home),
+        s.home,
+      );
+      expect(second).toMatchObject({ ok: true, existing: true });
+      expect(readFileSync(path, 'utf8')).toBe(before);
     } finally {
       s.done();
     }

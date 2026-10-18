@@ -328,7 +328,7 @@ export function readMessage(target: InboxTarget, id: string, home: string): Inbo
     session: target.session,
     at: new Date().toISOString(),
   };
-  const written = writeReceipt(target.dropDir, signReceiptPayload(receipt, home));
+  const written = writeReceipt(target.dropDir, signReceiptPayload(receipt, home), home);
   if (!written.ok) return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
   return { ok: true, body: payload.body };
 }
