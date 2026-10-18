@@ -28,7 +28,7 @@ outside herdr, signed under `team-policy-v1\n`, and logged to `.agents/team.log`
 
 | Outcome | Output | Exit |
 | --- | --- | --- |
-| effective policies listed, updated, or planned | table of effective policies or `policy: set|unset …` | 0 |
+| effective policies listed, updated, or planned | table of effective policies or `policy: set\|unset …` | 0 |
 | non-owner attempted set/unset, lower level loosened a higher level, or source failed verification | `team policy: <problem>` | 1 |
 | invalid invocation, file, policy name, or value | `team policy: <problem>` | 2 |
 

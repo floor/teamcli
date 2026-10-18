@@ -36,7 +36,7 @@ The JSON documents, by outcome:
 | Outcome | Document |
 | --- | --- |
 | answered | `{"schema":{"name":"team.answer","version":1},"format":1,"dry_run":false,"status":"answered","action_summary":"<seat>: answered trust (<folder>)","project":"<project>","session":"<session>","seat":"<seat>","pane":"<pane>","dialog":"trust","state":"ready","folder":"<folder>"}` |
-| refused, recovery, usage, configuration | `{"schema":{"name":"team.error","version":1},"error":{"id":"<answer.* row>","message":"<message>","repair":<string|null>}}` |
+| refused, recovery, usage, configuration | `{"schema":{"name":"team.error","version":1},"error":{"id":"<answer.* row>","message":"<message>","repair":<string\|null>}}` |
 
 `error.id` is the contract row for the refusal site (`answer.recovery` on a run that did not complete, `answer.usage` and `answer.configuration` on a bad invocation or file), and `error.message` is the sentence above without a `team answer: ` prefix. `error.repair` is a repair string where one applies — `answer.detached` carries `run team answer from a terminal outside herdr` — and `null` elsewhere. A recovery retry whose record carries no folder prints the summary without the parenthetical.
 
