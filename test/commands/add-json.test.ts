@@ -240,14 +240,14 @@ describe('team add --json', () => {
     expect(io.err).toBe('');
     const doc = assertJsonErrorShape(io.out, { id: 'add.caller', messageContains: 'only the owner or a standing grant' });
     expect(made.creates).toEqual([]);
-    // The repair names a command the owner runs: this run's --json is not part of it.
-    expect(doc.error.repair).toBe('the owner runs `team add …` from a terminal outside herdr');
+    // The repair names the command a delegate runs, or the owner's: this run's --json is not part of it.
+    expect(doc.error.repair).toBe('an approved delegate runs `team add …` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr');
     expect(doc.error.repair).not.toContain('--json');
 
     // The dry answer's line is the command itself, without the dry run's own flag.
     const dry = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
     expect(await runAdd(['worker', '--dry-run'], dry, sources(world()))).toBe(1);
-    expect(dry.out).toContain('! to unblock: the owner runs `team add worker` from this folder');
+    expect(dry.out).toContain('! to unblock: an approved delegate runs `team add worker`');
     expect(dry.out).not.toContain('--dry-run`');
   });
 
