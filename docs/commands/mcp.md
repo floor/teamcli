@@ -105,4 +105,5 @@ state: up
 exit 0
 ```
 
-Rationale, behaviour, refusals and known limits: [docs/internal/mcp.md](../internal/mcp.md).
+Rationale, behaviour, refusals and known limits: [docs/internal/mcp.md](../internal/mcp.md),
+and the inbox leg's per-CLI routes, bounds and evidence rule: [docs/internal/mcp-inbox.md](../internal/mcp-inbox.md).
