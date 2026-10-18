@@ -1,8 +1,9 @@
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { runAuthorityEdit, type AuthorityEdit, type AuthorityEditOptions } from '../authority-edit.ts';
+import { grantsDir } from '../grant.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { plainText } from '../launch/plain.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
 import { runStandingRevoke, standingGrantNamed } from '../permissions/manage.ts';
 
@@ -33,7 +34,12 @@ export async function runRevoke(argv: string[], rawIo: Io, options: AuthorityEdi
     ? standingGrantNamed(home, target)
     : null;
   if (args.error !== undefined || (edit === undefined && standing === null)) {
-    const why = args.error ?? 'name grant, or delegate and its session/pane';
+    // A bare word no record holds says which word was typed, and where the standing grants are
+    // read from: the record files' own names are the names `team revoke <name>` takes.
+    const named = target !== undefined && args.rest.length === 1 && target !== 'grant' && target !== 'delegate'
+      ? `no grant or delegate is named "${plainLine(target)}"; \`ls ${grantsDir(home)}\` shows the standing grants`
+      : undefined;
+    const why = args.error ?? named ?? 'name grant, or delegate and its session/pane';
     if (json) {
       writeJsonError(rawIo, 'revoke.invocation', plainText(why), null);
     } else {
