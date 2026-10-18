@@ -140,6 +140,7 @@ function world() {
   const panes = new Map<string, { text: string; agent: boolean }>();
   const events: string[] = [];
   const renames: string[] = [];
+  const read = new Set<string>();
   let clock = NOW.getTime();
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
@@ -172,7 +173,15 @@ function world() {
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
     agents: () => [],
-    paneText: (_session, pane) => panes.get(pane)?.text ?? '',
+    // The first look at a pane's screen: the idle wait's first read. Recorded so the scene
+    // can tell a concurrent mount (every launch before any look) from a serial one.
+    paneText(_session, pane) {
+      if (!read.has(pane)) {
+        read.add(pane);
+        events.push(`read:${pane}@${at()}`);
+      }
+      return panes.get(pane)?.text ?? '';
+    },
     foreground: () => ['claude'],
     sleep: async (ms) => {
       events.push(`sleep:${ms}@${at()}`);
@@ -295,14 +304,17 @@ describe('a granted agent mounts the team with no approval record', () => {
     expect(made.renames.slice().sort()).toEqual(['lead', 'builder-1', 'builder-2', 'tester-1', 'tester-2'].sort());
     // The five seats and the watch's own pane, which the same run starts.
     expect(made.launch.agentPanes('acme')).toHaveLength(6);
-    // Concurrent: every seat's launch began before any seat was named — no seat
-    // waited behind another seat's start. The sixth launch is the watch's pane,
-    // started after the seats are named.
-    const firstRename = made.events.findIndex((line) => line.startsWith('rename:'));
+    // Concurrent: every seat's launch began before any seat's pane was first read at its
+    // prompt — no seat waited behind another seat's start. Each pane is named at create now,
+    // so the renames come first; the sixth launch is the watch's pane, still started after
+    // the seats are named.
+    const reads = made.events.map((line, at) => (line.startsWith('read:') ? at : -1)).filter((at) => at >= 0);
+    const renamesAt = made.events.map((line, at) => (line.startsWith('rename:') ? at : -1)).filter((at) => at >= 0);
     const launches = made.events.map((line, at) => (line.startsWith('launch:') ? at : -1)).filter((at) => at >= 0);
     expect(launches).toHaveLength(6);
-    expect(firstRename).toBeGreaterThan(launches[4]!);
-    expect(firstRename).toBeLessThan(launches[5]!);
+    expect(reads.length).toBeGreaterThanOrEqual(5);
+    expect(reads[0]).toBeGreaterThan(launches[4]!);
+    expect(renamesAt.at(-1)).toBeLessThan(launches[5]!);
     // Ready inside the budget on the clock the mount itself reports.
     expect(made.clock - NOW.getTime()).toBeLessThan(30_000);
     // No record was written anywhere: the mount never created an approval store.

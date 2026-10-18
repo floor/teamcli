@@ -130,10 +130,8 @@ describe('parallel launch window boundaries', () => {
     ];
 
     let t = 0;
-    let active = 0;
-    let maxActive = 0;
     const launchedAt = new Map<string, number>();
-    const renamedAt = new Map<string, number>();
+    const settledAt = new Map<string, number>();
     const { out, err, sink: s } = sink(false);
     const records = progressWriter(s);
     const logged: { who: string; what: string }[] = [];
@@ -144,16 +142,10 @@ describe('parallel launch window boundaries', () => {
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
       paneRun: (_session, pane) => {
         launchedAt.set(pane, t);
-        active++;
-        maxActive = Math.max(maxActive, active);
         return true;
       },
       typeLine: () => true,
-      renameAgent: (_session, _pane, name) => {
-        renamedAt.set(name, t);
-        active--;
-        return true;
-      },
+      renameAgent: () => true,
       closeWorkspace: () => true,
       stopSession: () => true,
       kill: () => true,
@@ -168,7 +160,11 @@ describe('parallel launch window boundaries', () => {
       },
       now: () => t,
       allow: () => null,
-      record: () => {},
+      // A seat's own ready record: the moment it settled and gave its slot back. Its output
+      // stays deferred to the file-order flush, so `final` cannot time the slot.
+      record: (seat, change) => {
+        if ((change as { stage?: unknown }).stage === 'ready') settledAt.set(seat, t);
+      },
       running: () => {},
       drop: () => {},
       say: () => {},
@@ -181,15 +177,16 @@ describe('parallel launch window boundaries', () => {
     const report = await executePlan(plan, 'acme', host, { concurrency: 2 });
     expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['a'] });
     expect(t).toBe(30000);
-    expect(maxActive).toBe(2);
-    // a and b took the two slots at once; c entered only after b settled, d after c.
+    // a and b took the two slots at once; c entered only after b settled, d only after c and
+    // while a still held its own slot to the deadline. With a's slot held throughout, that
+    // ordering is the proof the window never widened past two.
     expect(launchedAt.get('a-pane')).toBe(0);
     expect(launchedAt.get('b-pane')).toBe(0);
-    expect(launchedAt.get('c-pane')!).toBeGreaterThan(renamedAt.get('b')!);
-    expect(launchedAt.get('d-pane')!).toBeGreaterThan(renamedAt.get('c')!);
+    expect(launchedAt.get('c-pane')!).toBeGreaterThan(settledAt.get('b')!);
+    expect(launchedAt.get('d-pane')!).toBeGreaterThan(settledAt.get('c')!);
     // Every seat settled within a's wait — the run's whole cost is the straggler's own deadline,
     // with nothing added after it for the seats the window moved through behind it.
-    expect(renamedAt.get('d')!).toBeLessThanOrEqual(30000);
+    expect(settledAt.get('d')!).toBeLessThanOrEqual(30000);
     expect(out.join('')).toBe('a: left out: timeout\nb: ready\nc: ready\nd: ready\n');
     expect(err.join('')).toBe(
       '  timed out after 30 s waiting for its idle prompt; the screen last read working; left at launched\n'
@@ -422,10 +419,7 @@ describe('parallel launch window boundaries', () => {
         return true;
       },
       typeLine: () => true,
-      renameAgent: (_session, _pane, name) => {
-        outWhen.push({ seat: name, printed: out.length });
-        return true;
-      },
+      renameAgent: () => true,
       closeWorkspace: () => true,
       stopSession: () => true,
       kill: () => true,
@@ -436,7 +430,10 @@ describe('parallel launch window boundaries', () => {
       },
       now: () => t,
       allow: () => null,
-      record: () => {},
+      // The seat's own ready record: the moment it settled. Its output stays deferred.
+      record: (seat, change) => {
+        if ((change as { stage?: unknown }).stage === 'ready') outWhen.push({ seat, printed: out.length });
+      },
       running: () => {},
       drop: () => {},
       say: () => {},
@@ -509,17 +506,18 @@ describe('parallel launch window boundaries', () => {
     const report = await executePlan(plan, 'acme', host);
     expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [] });
     // No seat's create ran until the seat before it had settled: a's whole launch, then b's,
-    // then c's, in file order with no interleaving.
+    // then c's, in file order with no interleaving. Each pane is named at create now, so its
+    // rename event comes before its own launch.
     expect(events).toEqual([
       'create:a@0',
+      'rename:a@0',
       'launch:a-pane@0',
-      'rename:a@2000',
       'create:b@2000',
+      'rename:b@2000',
       'launch:b-pane@2000',
-      'rename:b@4000',
       'create:c@4000',
+      'rename:c@4000',
       'launch:c-pane@4000',
-      'rename:c@6000',
     ]);
     expect(t).toBe(6000);
     expect(out.join('')).toBe('a: ready\nb: ready\nc: ready\n');
@@ -620,6 +618,7 @@ function approve(root: string, file: string, home: string, text: string): void {
 function launchWorld(): { launch: Launch; order: string[] } {
   const order: string[] = [];
   const panes = new Map<string, { text: string; agent: boolean }>();
+  const read = new Set<string>();
   let session: 'absent' | 'running' = 'absent';
   let n = 0;
   let clock = NOW.getTime();
@@ -650,7 +649,16 @@ function launchWorld(): { launch: Launch; order: string[] } {
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
     agents: () => [],
-    paneText: (_session, pane) => panes.get(pane)?.text ?? '',
+    // The first look at a pane's screen: the seat's idle wait. Recorded so the scenes can tell
+    // a serial mount (the first seat's wait is read before the second workspace exists) from
+    // an overlapping one (both seats launched before either wait looked).
+    paneText(_session, pane) {
+      if (!read.has(pane)) {
+        read.add(pane);
+        order.push(`read:${pane}`);
+      }
+      return panes.get(pane)?.text ?? '';
+    },
     foreground: () => ['claude'],
     sleep: async (ms) => {
       clock += ms;
@@ -696,8 +704,10 @@ describe('the serial opt-out on the up command', () => {
     const code = await runUp(['--serial', '--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
     expect(io.err).toContain('watch: started\n');
-    // Serial: the operator's workspace exists only after the coordinator is renamed.
+    // Serial: the operator's workspace exists only after the coordinator is named, and only
+    // after the coordinator's wait has read its pane — it settled before the second seat began.
     expect(made.order.indexOf('rename:claude-coordinator-acme')).toBeLessThan(made.order.indexOf('create:operator'));
+    expect(made.order.indexOf('read:w1:p1')).toBeLessThan(made.order.indexOf('create:operator'));
   });
 
   test('the same machine without the flag overlaps the two seats', async () => {
@@ -712,9 +722,10 @@ describe('the serial opt-out on the up command', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    // Parallel: both workspaces were made before either seat was named — the contrast that
-    // shows the flag above is what forced the order, not the fixture.
-    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('rename:claude-coordinator-acme'));
-    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('rename:claude-operator-acme'));
+    // Parallel: both workspaces were made and their panes launched before either seat's wait
+    // read a pane — the contrast that shows the flag above is what forced the order, not the
+    // fixture.
+    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('read:w1:p1'));
+    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('read:w2:p1'));
   });
 });

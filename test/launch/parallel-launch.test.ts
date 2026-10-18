@@ -387,6 +387,7 @@ describe('parallel launch execution', () => {
     let activeWaits = 0;
     let maxActiveWaits = 0;
     let launchedCount = 0;
+    const launchedPanes = new Set<string>();
     const { out, sink: s } = sink(false);
     const records = progressWriter(s);
 
@@ -394,15 +395,18 @@ describe('parallel launch execution', () => {
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
-      paneRun: () => {
+      paneRun: (_session, pane) => {
+        launchedPanes.add(pane);
         launchedCount++;
         activeWaits++;
         if (activeWaits > maxActiveWaits) maxActiveWaits = activeWaits;
         return true;
       },
       typeLine: () => true,
-      renameAgent: () => {
-        activeWaits--;
+      // A pane is now named at create, before it runs; only a rename after the launch ends a
+      // seat's slot in the window.
+      renameAgent: (_session, pane) => {
+        if (launchedPanes.delete(pane)) activeWaits--;
         return true;
       },
       closeWorkspace: () => true,
@@ -573,7 +577,8 @@ describe('parallel launch execution', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 1 });
-    expect(renamed).toEqual([]);
+    // The pane is named once, at create; the wait's ready return skips the post-pause rename.
+    expect(renamed).toEqual(['seat-1']);
     expect(delivered).toEqual([]);
     expect(stages).not.toContain('named');
     expect(stages.at(-1)).toBe('ready');
