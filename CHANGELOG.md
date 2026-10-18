@@ -228,6 +228,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity under the seat's lock and refuses the same state the typed leg and the daemon refuse —
   no line typed, no Enter, the reason said — and the drop file stays for a person to send again.
 
+- `team reload` says and logs a seat it leaves out. A close re-read that refuses the seat (moved,
+  working, replaced process, unsent box) and a rules line whose read-back fails each print
+  `<seat>: left out: <reason>` in `up`'s words and write the same line to the log, where the run
+  used to say nothing; a rules line this run typed that cannot be read back is cleared with the
+  profile's clearing key, the key `up` sends, and its record says the line was cleared and names
+  `run up again`. A ready seat still prints only the run's one success line.
+
 ### Known limits
 
 - The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
