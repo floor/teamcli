@@ -96,9 +96,15 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
 
   expect(code).toBe(0);
   expect(JSON.parse(io.out)).toEqual({
-    seat: 'lead',
+    schema: { name: 'team.send', version: 1 },
+    format: 1,
+    dry_run: false,
     status: 'native',
-    exit: 0,
+    action_summary: 'lead: native: nothing was sent; make the call with your own SendMessage, then record it',
+    project: 'acme',
+    session: 'acme',
+    seat: 'lead',
+    channel: 'native',
     to: address,
     confirm: `team send --confirm ${ID}`,
     message: HELPER_BODY,
@@ -127,7 +133,8 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
   const plainIo = helperCaller(made.root);
   expect(await runSend(['lead', 'hello'], plainIo, host)).toBe(0);
   expect(plainIo.out).toBe(
-    'lead: native: nothing was sent; make the call with your own SendMessage, then record it\n' +
+    'team acme, session "acme"\n' +
+      'lead: native: nothing was sent; make the call with your own SendMessage, then record it\n' +
       `to: ${address}\n` +
       `message:\n${HELPER_BODY}\n` +
       `team send --confirm ${ID}\n`,
@@ -147,7 +154,7 @@ test('the confirm writes the one history line and clears the record; a second co
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('lead: confirmed (native, 0 ms)\n');
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: confirmed (native, 0 ms)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -169,6 +176,23 @@ test('the confirm writes the one history line and clears the record; a second co
   expect(again.err).toContain('no pending native record holds that id');
   const after = readHistory('acme', made.root, made.home);
   expect(after.ok && after.entries.length).toBe(1);
+
+  // Under --json, --confirm emits the team.send action document.
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  const confirmJsonIo = helperCaller(made.root);
+  expect(await runSend(['--confirm', ID, '--json'], confirmJsonIo, host)).toBe(0);
+  expect(JSON.parse(confirmJsonIo.out)).toEqual({
+    schema: { name: 'team.send', version: 1 },
+    format: 1,
+    dry_run: false,
+    status: 'confirmed',
+    action_summary: 'lead: confirmed (native, 0 ms)',
+    project: 'acme',
+    session: 'acme',
+    seat: 'lead',
+    channel: 'native',
+    ids: { sent: ID, reply: null },
+  });
 });
 
 test('only the sender that printed the handoff confirms it, and a dry run writes nothing', async () => {
@@ -181,7 +205,7 @@ test('only the sender that printed the handoff confirms it, and a dry run writes
 
   const dry = helperCaller(made.root);
   expect(await runSend(['--confirm', ID, '--dry-run'], dry, host)).toBe(0);
-  expect(dry.out).toBe('lead: would record (native, 0 ms); nothing was written\n');
+  expect(dry.out).toBe('team acme, session "acme"\nlead: would record (native, 0 ms); nothing was written\n');
   expect(existsSync(pending(made))).toBe(true);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([]);

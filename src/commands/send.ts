@@ -806,13 +806,22 @@ function handOff(
 function handed(io: Io, dir: string, who: string, seat: string, record: PendingNative, host: SendHost, report: Report): number {
   report.sent = record.id;
   const line = `team send --confirm ${record.id}`;
+  const summary = `${seat}: native: nothing was sent; make the call with your own SendMessage, then record it`;
   logLine(dir, 'send', who, `${seat}: native handoff ${record.id} (${record.address})`, host.now());
   if (report.json) {
-    io.stdout(document({ seat, status: 'native', exit: 0, to: record.address, confirm: line, message: record.body, ids: { sent: record.id, reply: null } }));
+    writeAction(io, report, {
+      status: 'native',
+      summary,
+      channel: 'native',
+      to: record.address,
+      confirm: line,
+      message: record.body,
+    });
   } else {
     const body = record.body.endsWith('\n') ? record.body : `${record.body}\n`;
+    openText(io, report);
     io.stdout(
-      `${seat}: native: nothing was sent; make the call with your own SendMessage, then record it\n` +
+      `${summary}\n` +
         `to: ${record.address}\n` +
         `message:\n${body}` +
         `${line}\n`,
@@ -1010,6 +1019,8 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   if (read.record === null) return refuse(io, dir, who, `${id}: no pending native record holds that id; nothing was recorded`, host, report);
   const record = read.record;
   report.seat = record.to;
+  report.project = record.project;
+  report.session = record.session;
   const senderHere = caller.kind === 'owner' ? record.from === 'owner' : caller.kind === 'seat' && caller.name === record.from;
   if (!senderHere) {
     return refuse(io, dir, who, `${id}: it was printed for ${record.from}, and this call is ${from}; nothing was recorded`, host, report);
@@ -1047,10 +1058,13 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
 
 /** The confirm wrote the one history line the handoff promised. Exit 0, always. */
 function confirmed(io: Io, seat: string, ms: number, id: string, report: Report): number {
+  report.sent = id;
+  const summary = `${seat}: confirmed (native, ${String(ms)} ms)`;
   if (report.json) {
-    io.stdout(document({ seat, status: 'confirmed', exit: 0, ids: { sent: id, reply: null } }));
+    writeAction(io, report, { status: 'confirmed', summary, channel: 'native' });
   } else {
-    io.stdout(`${seat}: confirmed (native, ${String(ms)} ms)\n`);
+    openText(io, report);
+    io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.confirmed
 }
@@ -2140,15 +2154,20 @@ function configuration(io: Io, message: string, report: Report): number {
 /** The one action document's own fields: the frame is `writeAction`'s. `summary` is the closing
  *  line the plain run prints last, so the two faces say the same thing once. */
 type ActionFields = {
-  status: 'delivered' | 'answered' | 'recorded' | 'dry-run';
+  status: 'delivered' | 'answered' | 'recorded' | 'native' | 'confirmed' | 'dry-run';
   summary: string;
   dryRun?: boolean;
-  /** The leg that carried the send: `socket`, `typed`, `drop`, or `native` for a record. */
+  /** The leg that carried the send: `socket`, `typed`, `drop`, or `native` for a record or handoff. */
   channel?: 'socket' | 'typed' | 'drop' | 'native' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
   /** The reply frame's own id, on an answered wait. */
   replyId?: string | null;
+  /** The native handoff: the exact SendMessage target, the body it carries, and the line that
+   *  records the delivery — present on the handoff alone. */
+  to?: string;
+  confirm?: string;
+  message?: string;
   plan?: readonly PlanStep[];
 };
 
@@ -2164,6 +2183,9 @@ function writeAction(io: Io, report: Report, fields: ActionFields): void {
     session: report.session,
     seat: report.seat,
     ...(fields.channel !== undefined ? { channel: fields.channel } : {}),
+    ...(fields.to !== undefined ? { to: fields.to } : {}),
+    ...(fields.confirm !== undefined ? { confirm: fields.confirm } : {}),
+    ...(fields.message !== undefined ? { message: fields.message } : {}),
     ids: { sent: report.sent, reply: fields.replyId ?? null },
     ...(fields.reply !== undefined ? { reply: fields.reply } : {}),
     ...(fields.plan !== undefined ? { plan: [...fields.plan] } : {}),
@@ -2176,22 +2198,4 @@ function openText(io: Io, report: Report): void {
   if (report.project !== null && report.session !== null) {
     io.stdout(`${contextLine(report.project, report.session)}\n`);
   }
-}
-
-/** The native handoff and confirm JSON document (`handed` and `confirmed`). */
-function document(fields: {
-  seat: string | null;
-  status: 'native' | 'confirmed';
-  exit: 0;
-  to?: string;
-  confirm?: string;
-  message?: string;
-  ids: { sent: string | null; reply: string | null };
-}): string {
-  const out: Record<string, unknown> = { seat: fields.seat, status: fields.status, exit: fields.exit };
-  if (fields.to !== undefined) out.to = fields.to;
-  if (fields.confirm !== undefined) out.confirm = fields.confirm;
-  if (fields.message !== undefined) out.message = fields.message;
-  out.ids = fields.ids;
-  return `${JSON.stringify(out)}\n`;
 }
