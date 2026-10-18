@@ -82,7 +82,7 @@ function liveScene(over: Partial<Record<string, { status?: string; screen?: stri
 }
 
 describe('watch idle reports (once per period by default, repeat on request)', () => {
-  test('default: a seat idle for three hours yields one lead report (at idle_first), one owner report (at idle_owner), and one nudge', () => {
+  test('default: a seat idle for three hours yields one lead report (at idle_first), one owner report (at idle_owner), and one work drop', () => {
     const file = valid(defaultExample);
     expect(file.watch.idleRepeat).toBeUndefined();
 
@@ -92,24 +92,22 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     });
 
     const reports: string[] = [];
-    let nudges = 0;
+    let drops = 0;
 
     // Simulate 3 hours (180 minutes) with a pass every 2 minutes (interval: 120s):
     for (let minute = 0; minute <= 180; minute += 2) {
       const now = minute * MIN;
       const result = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now, memory });
       for (const r of result.reports) reports.push(r.text);
-      if (result.nudge) nudges++;
+      drops += result.work.length;
     }
 
-    // Exactly one lead report (at 5m), one owner report (at 15m) and one nudge across the 3 hours.
+    // Exactly one lead report (at 5m), one owner report (at 15m) and one drop across the 3 hours.
     expect(reports).toEqual([
       'deepseek-acme has been idle since the watch started',
       'deepseek-acme has been idle since the watch started — reported to the owner',
     ]);
-    expect(nudges).toBe(1);
-    expect(memory.pending).toEqual([]);
-    expect(memory.pendingSince).toBeNull();
+    expect(drops).toBe(1);
   });
 
   test('a new period reports again: idle -> reported -> works -> idle again -> reported again after idle_first', () => {
@@ -123,25 +121,25 @@ describe('watch idle reports (once per period by default, repeat on request)', (
       machine: fine, now: 0, memory,
     });
     expect(p0.reports).toEqual([]);
-    expect(p0.nudge).toBeNull();
+    expect(p0.work).toEqual([]);
 
-    // 10m: idle_first (5m) already reached -> reports and nudges
+    // 10m: idle_first (5m) already reached -> the report, and the work drop that reaches the seat
     const p10 = pass({
       team: file, watch: file.watch, state: emptySession(),
       live: liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } }),
       machine: fine, now: 10 * MIN, memory,
     });
     expect(p10.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
-    expect(p10.nudge).not.toBeNull();
+    expect(p10.work).toEqual([{ pane: 'w3:p1', seat: 'deepseek-acme', cli: 'claude-code', body: NUDGE_TEXT }]);
 
-    // 14m: still quiet, idle_owner (15m) not reached -> no repeat
+    // 14m: still quiet, idle_owner (15m) not reached -> no repeat, and no second drop
     const p14 = pass({
       team: file, watch: file.watch, state: emptySession(),
       live: liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } }),
       machine: fine, now: 14 * MIN, memory,
     });
     expect(p14.reports).toEqual([]);
-    expect(p14.nudge).toBeNull();
+    expect(p14.work).toEqual([]);
 
     // 20m: deepseek works mid-turn!
     const p20 = pass({
@@ -150,7 +148,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
       machine: fine, now: 20 * MIN, memory,
     });
     expect(p20.reports).toEqual([]);
-    expect(p20.nudge).toBeNull();
+    expect(p20.work).toEqual([]);
 
     // 24m: deepseek goes idle again (4 minutes since work)
     const p24 = pass({
@@ -167,7 +165,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
       machine: fine, now: 30 * MIN, memory,
     });
     expect(p30.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle for 10 minutes']);
-    expect(p30.nudge).not.toBeNull();
+    expect(p30.work.map((item) => item.seat)).toEqual(['deepseek-acme']);
 
     // 50m: past idle_owner (15m since work at 20m) -> the owner is told, once for this period
     const p50 = pass({
@@ -176,7 +174,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
       machine: fine, now: 50 * MIN, memory,
     });
     expect(p50.reports).toEqual([{ key: 'idle-owner:deepseek-acme', text: 'deepseek-acme has been idle for 30 minutes — reported to the owner', to: 'owner' }]);
-    expect(p50.nudge).toBeNull();
+    expect(p50.work).toEqual([]);
   });
 
   test('"idle since the watch started" is reported once in a run of three hours', () => {
@@ -197,7 +195,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     expect(count).toBe(1);
   });
 
-  test('no nudge without a new report: pending list does not grow and fallback is not produced for delivered report', () => {
+  test('the report never reaches a seat: the idle seat gets only its work drop and its body is the fixed line', () => {
     const file = valid(defaultExample);
     const memory = newMemory();
     const live = liveScene({
@@ -208,15 +206,15 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     for (let minute = 0; minute <= 180; minute += 2) {
       const now = minute * MIN;
       const result = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now, memory });
-      expect(result.fallback).toBeNull();
-      if (minute > 10) {
-        expect(result.nudge).toBeNull();
-        expect(memory.pending).toEqual([]);
+      for (const drop of result.work) {
+        // What the seat is asked to read is the fixed watch line, never a report's text.
+        expect(drop.body).toBe(NUDGE_TEXT);
+        for (const report of result.reports) expect(drop.body).not.toContain(report.text);
       }
     }
   });
 
-  test('an idle seat is nudged on the pass that reports it, and a repeat does not duplicate pending', () => {
+  test('an idle seat is reached on the pass that reports it, once per period unless idle_repeat is set', () => {
     const brisk = valid(defaultExample.replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m'));
     const memory = newMemory();
     const live = liveScene({
@@ -228,76 +226,11 @@ describe('watch idle reports (once per period by default, repeat on request)', (
 
     const p1 = pass({ team: brisk, watch: brisk.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });
     expect(p1.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
-    expect(p1.nudge).toEqual({
-      pane: 'w3:p1',
-      seat: 'deepseek-acme',
-      cli: 'claude-code',
-      text: NUDGE_TEXT,
-      pending: ['deepseek-acme has been idle since the watch started'],
-    });
-    expect(memory.pending).toEqual([]);
+    expect(p1.work).toEqual([{ pane: 'w3:p1', seat: 'deepseek-acme', cli: 'claude-code', body: NUDGE_TEXT }]);
 
     const p3 = pass({ team: brisk, watch: brisk.watch, state: emptySession(), live, machine: fine, now: 3 * MIN, memory });
     expect(p3.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
-    expect(p3.nudge?.pending).toEqual(['deepseek-acme has been idle since the watch started']);
-    expect(memory.pending).toEqual([]);
-  });
-
-  test('a box holding exactly the watch\'s line, that this process never typed, is not free', () => {
-    // The reviewer's case: the line is one fixed public constant, so a person or an agent who
-    // typed it themselves holds a box that reads exactly like a leftover of the watch's. The
-    // text proves nothing: with no record in this process of typing it, the box is its owner's,
-    // and the pass raises no nudge into it.
-    const file = valid(defaultExample
-      .replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m')
-      .replace('  unsent_after: 1m', '  unsent_after: 1h'));
-    const memory = newMemory();
-    const nudgeBox = `${RULE}\n❯ ${NUDGE_TEXT}\n${RULE}\n${STATUS}\n`;
-    const live = liveScene({
-      'deepseek-acme': { status: 'idle', screen: nudgeBox },
-    });
-    pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 0, memory });
-    const p1 = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });
-    expect(p1.nudge).toBeNull();
-    expect(memory.pending).toEqual(['deepseek-acme has been idle since the watch started']);
-  });
-
-  test('a box holding the line this process recorded typing is free: the pass raises the nudge', () => {
-    // The same box, after this process typed the line itself and its Enter never went out. The
-    // pass acts on the record of the typing, in this pane — and on nothing else.
-    const file = valid(defaultExample
-      .replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m')
-      .replace('  unsent_after: 1m', '  unsent_after: 1h'));
-    const memory = newMemory();
-    memory.ownNudge = { pane: 'w3:p1', text: NUDGE_TEXT };
-    const nudgeBox = `${RULE}\n❯ ${NUDGE_TEXT}\n${RULE}\n${STATUS}\n`;
-    const live = liveScene({
-      'deepseek-acme': { status: 'idle', screen: nudgeBox },
-    });
-    pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 0, memory });
-    const p1 = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });
-    expect(p1.nudge).toEqual({
-      pane: 'w3:p1',
-      seat: 'deepseek-acme',
-      cli: 'claude-code',
-      text: NUDGE_TEXT,
-      pending: ['deepseek-acme has been idle since the watch started'],
-    });
-  });
-
-  test('a box holding any other text is not free, and the pass raises no nudge', () => {
-    const file = valid(defaultExample
-      .replace('  idle_first: 5m', '  idle_first: 1m\n  idle_repeat: 2m')
-      .replace('  unsent_after: 1m', '  unsent_after: 1h'));
-    const memory = newMemory();
-    const otherBox = `${RULE}\n❯ Brief: take the next task from the queue\n${RULE}\n${STATUS}\n`;
-    const live = liveScene({
-      'deepseek-acme': { status: 'idle', screen: otherBox },
-    });
-    pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 0, memory });
-    const p1 = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 1 * MIN, memory });
-    expect(p1.nudge).toBeNull();
-    expect(memory.pending).toEqual(['deepseek-acme has been idle since the watch started']);
+    expect(p3.work).toEqual([{ pane: 'w3:p1', seat: 'deepseek-acme', cli: 'claude-code', body: NUDGE_TEXT }]);
   });
 
   test('idle_repeat: 20m set repeats every 20 minutes (assert against sequence)', () => {
@@ -310,19 +243,19 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     });
 
     const reportTimes: number[] = [];
-    const nudgeTimes: number[] = [];
+    const dropTimes: number[] = [];
 
     for (let minute = 0; minute <= 180; minute += 2) {
       const now = minute * MIN;
       const result = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now, memory });
       if (result.reports.length > 0) reportTimes.push(minute);
-      if (result.nudge) nudgeTimes.push(minute);
+      if (result.work.length > 0) dropTimes.push(minute);
     }
 
     // The lead at idle_first (5m), then every idle_repeat (20m); the owner once, at idle_owner
-    // (15m). An owner report raises no nudge: nothing enters the pending list for it.
+    // (15m). The work drop follows the lead's cadence: the owner's escalation is not a drop.
     expect(reportTimes).toEqual([6, 16, 26, 46, 66, 86, 106, 126, 146, 166]);
-    expect(nudgeTimes).toEqual([6, 26, 46, 66, 86, 106, 126, 146, 166]);
+    expect(dropTimes).toEqual([6, 26, 46, 66, 86, 106, 126, 146, 166]);
   });
 
   test('idle_repeat validation: smallest (1s) and largest (1000h) values pass, zero and negative refused', () => {

@@ -1,6 +1,6 @@
 // `watch.nudge` is sent to each idle worker on the idle cadence, through the drop file `team send`
-// uses. The report line is that body when the file omits the key. A missing approval does not
-// stop it. A lead, a dialog and unsent text are not targets.
+// uses. The fixed watch line is that body when the file omits the key. A missing approval does
+// not stop it. A lead, a dialog and unsent text are not targets.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -84,7 +84,7 @@ describe('watch.nudge', () => {
     expect(again.work.map((item) => item.seat).sort()).toEqual(['deepseek-acme', 'deepseek-acme-2']);
   });
 
-  test('an omitted nudge sends the report line, once per idle stretch when idle_repeat is off', () => {
+  test('an omitted nudge sends the fixed watch line, once per idle stretch when idle_repeat is off', () => {
     const text = raw.replace(/  idle_repeat: 20m[^\n]*\n/, '');
     const memory = newMemory();
     const live = scene({ 'deepseek-acme': { status: 'idle', screen: idle } });
@@ -128,48 +128,6 @@ describe('watch.nudge', () => {
     expect(at(raw, memory, 12 * MIN, free).work.map((item) => item.seat)).toEqual(['deepseek-acme']);
   });
 
-  test('a report nudge ties on how long each seat has been free, and the lower seat number wins', () => {
-    // Two free workers stamped at the same instant: the tie-break is the seat's number, so
-    // builder-9 is nudged before builder-10 — the string order would pick builder-10.
-    const numbered = raw.replace(
-      /\n  - role: implementer\n    name: codex-acme[\s\S]*$/,
-      `
-  - role: implementer
-    name: builder-9
-    cli: claude-code
-    vendor: deepseek
-    model: DeepSeek Flash
-    version: "V4.1"
-    display: DeepSeek V4.1 Flash
-    launch: team-deepseek
-  - role: implementer
-    name: builder-10
-    cli: claude-code
-    vendor: deepseek
-    model: DeepSeek Flash
-    version: "V4.1"
-    display: DeepSeek V4.1 Flash
-    launch: team-deepseek
-`,
-    );
-    const team = teamOf(numbered);
-    const agents: HerdrAgent[] = [
-      agent('claude-coordinator-acme', 'lead', 'working'),
-      agent('builder-9', 'nine', 'idle'),
-      agent('builder-10', 'ten', 'idle'),
-    ];
-    const live: Live = {
-      running: true,
-      agents,
-      workspaces: agents.map((one) => ({ id: one.workspace, label: one.name ?? '' })),
-      screens: { 'lead:pane': busy, 'nine:pane': idle, 'ten:pane': idle },
-    };
-    const memory = newMemory();
-    memory.pending = ['a report for the operator'];
-    const result = pass({ team, watch: team.watch, state: emptySession(), live, machine: fine, now: 10 * MIN, memory });
-    expect(result.nudge?.seat).toBe('builder-9');
-    expect(result.nudge?.pane).toBe('nine:pane');
-  });
 });
 
 describe('team watch writes the drop', () => {

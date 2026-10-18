@@ -1,10 +1,9 @@
-// The watch types a nudge into an idle seat's pane itself. The boundaries of that typing, at the
-// pass and at the command: a working seat, a seat holding text, a dialog, a question or a shell is
-// never typed into; a lead, a parked or stopped seat and a temporary one are never the seat the
-// nudge means; the pane is the seat's live one, never a renamed stranger's; the thresholds hold —
-// the fallback fires once at nudge_wait and a delivered nudge never repeats; and `up` starts the
-// watch in a workspace of its own, never over a live one, while a second watch is refused and the
-// recorded pid runs.
+// The watch never types a report into a seat: a report for the operator stays in the log and the
+// desktop notification, however many seats are free. What the watch does type for a seat — the
+// work drop's trigger and the wake line for a waiting message — is bounded here: a lead, a
+// parked, stopped or temporary seat is never a target; the pane is the seat's live one, never a
+// renamed stranger's; and `up` starts the watch in a workspace of its own, never over a live one,
+// while a second watch is refused and the recorded pid runs.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -89,77 +88,52 @@ function live(over: Partial<Record<string, { status?: string; screen?: string }>
   return { running: true, agents, workspaces: agents.map((one) => ({ id: one.workspace, label: one.name ?? '' })), screens };
 }
 
-// The report that asks for a nudge, in every scene below: the coordinator's question. Its word is
-// the operator's to act on, and the nudge it raises is typed into a worker, never back into it.
-const blocked = live();
+// The report that stays in the log in every scene below: the coordinator's question. Its word is
+// the operator's to act on, and it is never typed into a seat.
 const ASKED = 'claude-coordinator-acme asked a question: the operator\'s to act on';
 
-function nudgeOf(team: TeamFile, scene: Live, memory: ReturnType<typeof newMemory>, now: number) {
-  return pass({ team, watch: team.watch, state: emptySession(), live: scene, machine: fine, now, memory }).nudge;
+function at(team: TeamFile, scene: Live, memory: ReturnType<typeof newMemory>, now: number, state = emptySession()) {
+  return pass({ team, watch: team.watch, state, live: scene, machine: fine, now, memory });
 }
 
-describe('the seat the nudge is typed into', () => {
-  test('a working seat is never the nudge; the idle seat beside it is', () => {
+describe('the report the watch never types into a seat', () => {
+  test('an operator report with free builders nudges no builder', () => {
+    // Both workers sit free at empty prompts, and the coordinator's question is the operator's
+    // alone: the pass has nothing to type for them — no work drop is due yet, and no wake line.
     const scene = live({
-      'deepseek-acme': { status: 'working', screen: busy },
-      'deepseek-acme-2': { status: 'idle', screen: idle },
-    });
-    expect(nudgeOf(teamOf(example), scene, newMemory(), 0)).toEqual({
-      pane: 'w4:p1', seat: 'deepseek-acme-2', cli: 'claude-code', text: NUDGE_TEXT, pending: [ASKED],
-    });
-  });
-
-  test('the seat idle longest is chosen; a tie goes to the name', () => {
-    // Both idle from the start: nothing tells them apart, and the name decides.
-    const tied = live({
       'deepseek-acme': { status: 'idle', screen: idle },
       'deepseek-acme-2': { status: 'idle', screen: idle },
     });
-    expect(nudgeOf(teamOf(example), tied, newMemory(), 0)?.seat).toBe('deepseek-acme');
-    // The second seat stopped working a pass before the first: it is idle the longer.
     const memory = newMemory();
-    nudgeOf(teamOf(example), live(), memory, 0);
-    nudgeOf(teamOf(example), live({
-      'deepseek-acme': { status: 'working', screen: busy },
-      'deepseek-acme-2': { status: 'idle', screen: question },
-    }), memory, MIN);
-    const later = live({
-      'deepseek-acme': { status: 'idle', screen: idle },
-      'deepseek-acme-2': { status: 'idle', screen: idle },
-    });
-    expect(nudgeOf(teamOf(example), later, memory, 2 * MIN)?.seat).toBe('deepseek-acme-2');
-  });
+    const first = at(teamOf(example), scene, memory, 0);
+    expect(first.reports.map((report) => report.text)).toEqual([ASKED]);
+    expect(first.work).toEqual([]);
+    expect(first.ring).toBeNull();
 
-  test('an idle lead is never the nudge: nothing is typed, and the fallback fires once, at nudge_wait and never before', () => {
+    // Ten minutes on, each free builder is reached by its own work drop on the idle cadence —
+    // the fixed line, never the report's text.
+    const later = at(teamOf(example), scene, memory, 10 * MIN);
+    expect(later.work.map((item) => item.seat).sort()).toEqual(['deepseek-acme', 'deepseek-acme-2']);
+    expect(later.work.every((item) => item.body === NUDGE_TEXT)).toBe(true);
+  });
+});
+
+describe('the seat a work drop reaches', () => {
+  test('a parked seat and a stopped seat get no drop; the file seat beside them does', () => {
+    const scene = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
+    for (const text of [parkedDeepseek, stoppedDeepseek]) {
+      const team = teamOf(text);
+      const memory = newMemory();
+      at(team, scene, memory, 0);
+      expect(at(team, scene, memory, 10 * MIN).work.map((item) => item.seat)).not.toContain('deepseek-acme');
+    }
+    const team = teamOf(example);
     const memory = newMemory();
-    // The operator sits idle at an empty prompt — free to any eye but the watch's, which never
-    // types into a lead; every worker works.
-    expect(pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: blocked, machine: fine, now: 0, memory }).nudge).toBeNull();
-    const before = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: blocked, machine: fine, now: 10 * MIN - 1000, memory });
-    expect(before.nudge).toBeNull();
-    expect(before.fallback).toBeNull();
-    const at = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: blocked, machine: fine, now: 10 * MIN, memory });
-    expect(at.nudge).toBeNull();
-    expect(at.fallback).toBe(`no idle seat could be nudged for 10 minutes; 1 report wait: ${ASKED}`);
-    // The fallback said it, the report was answered for, and neither repeats.
-    const again = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: blocked, machine: fine, now: 12 * MIN, memory });
-    expect(again.nudge).toBeNull();
-    expect(again.fallback).toBeNull();
+    at(team, scene, memory, 0);
+    expect(at(team, scene, memory, 10 * MIN).work.map((item) => item.seat)).toContain('deepseek-acme');
   });
 
-  test('a parked seat at an empty prompt is never the nudge; unparked, the same scene is typed into', () => {
-    const scene = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
-    expect(nudgeOf(teamOf(parkedDeepseek), scene, newMemory(), 0)).toBeNull();
-    expect(nudgeOf(teamOf(example), scene, newMemory(), 0)?.seat).toBe('deepseek-acme');
-  });
-
-  test('a stopped seat started by hand is never the nudge; running, the same scene is typed into', () => {
-    const scene = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
-    expect(nudgeOf(teamOf(stoppedDeepseek), scene, newMemory(), 0)).toBeNull();
-    expect(nudgeOf(teamOf(example), scene, newMemory(), 0)?.seat).toBe('deepseek-acme');
-  });
-
-  test('a temporary seat is never the nudge; the file\'s own seat is', () => {
+  test('a temporary seat is never given a drop; the file\'s own seat is', () => {
     const state = emptySession();
     state.seats['deepseek-tmp'] = {
       stage: 'ready', pane: 'w9:p1', workspace: 'w9',
@@ -168,84 +142,51 @@ describe('the seat the nudge is typed into', () => {
     const withTemp = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
     withTemp.agents.push(agent('deepseek-tmp', 'w9', 'idle'));
     withTemp.screens['w9:p1'] = idle;
-    const chosen = pass({ team: teamOf(example), watch: teamOf(example).watch, state, live: withTemp, machine: fine, now: 0, memory: newMemory() });
-    expect(chosen.nudge?.seat).toBe('deepseek-acme');
-    expect(chosen.nudge?.pane).toBe('w3:p1');
+    const team = teamOf(example);
+    const memory = newMemory();
+    at(team, withTemp, memory, 0, state);
+    const chosen = at(team, withTemp, memory, 10 * MIN, state);
+    expect(chosen.work.map((item) => item.seat)).toEqual(['deepseek-acme']);
+    expect(chosen.work[0]?.pane).toBe('w3:p1');
     // The temporary seat idle alone, every file seat busy: still never it.
     const only = live({ 'deepseek-acme': { status: 'working', screen: busy } });
     only.agents.push(agent('deepseek-tmp', 'w9', 'idle'));
     only.screens['w9:p1'] = idle;
-    expect(pass({ team: teamOf(example), watch: teamOf(example).watch, state, live: only, machine: fine, now: 0, memory: newMemory() }).nudge).toBeNull();
-  });
-
-  test('a question is never typed into, and neither is a shell prompt', () => {
-    // herdr calls both idle; the screen says a key would answer a dialog, or land in a shell.
-    const atQuestion = live({ 'deepseek-acme': { status: 'idle', screen: question } });
-    expect(nudgeOf(teamOf(example), atQuestion, newMemory(), 0)).toBeNull();
-    const atShell = live({ 'deepseek-acme': { status: 'idle', screen: 'jvial@mac acme % ' } });
-    expect(nudgeOf(teamOf(example), atShell, newMemory(), 0)).toBeNull();
-  });
-
-  test('a seat holding unsent text is passed over for the idle seat, never typed into', () => {
-    const scene = live({
-      'deepseek-acme': { status: 'idle', screen: unsent },
-      'deepseek-acme-2': { status: 'idle', screen: idle },
-    });
-    expect(nudgeOf(teamOf(example), scene, newMemory(), 0)?.seat).toBe('deepseek-acme-2');
-  });
-
-  test('herdr\'s idle word is not enough: a screen mid-turn is never typed into', () => {
-    const scene = live({
-      'deepseek-acme': { status: 'idle', screen: busy },
-      'deepseek-acme-2': { status: 'idle', screen: idle },
-    });
-    expect(nudgeOf(teamOf(example), scene, newMemory(), 0)?.seat).toBe('deepseek-acme-2');
-    const alone = live({
-      'deepseek-acme': { status: 'idle', screen: busy },
-      'deepseek-acme-2': { status: 'working', screen: busy },
-    });
-    expect(nudgeOf(teamOf(example), alone, newMemory(), 0)).toBeNull();
+    const alone = newMemory();
+    at(team, only, alone, 0, state);
+    expect(at(team, only, alone, 10 * MIN, state).work).toEqual([]);
   });
 });
 
-describe('the pane the nudge means', () => {
+describe('the pane a typed line means', () => {
   test('a renamed pane is never the seat: the name gone from herdr, nothing is typed into it', () => {
     const scene = live();
     // The seat's pane keeps its idle prompt, but answers to another name now.
     scene.agents = scene.agents.map((one) => (one.name === 'deepseek-acme' ? { ...one, name: 'somebody-else' } : one));
     scene.screens['w3:p1'] = idle;
+    const team = teamOf(example);
     const memory = newMemory();
-    const result = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: scene, machine: fine, now: 0, memory });
-    expect(result.nudge).toBeNull();
-    // The pane was noticed — as somebody else's, running and not in the file — and its report
-    // waits with the rest rather than being typed anywhere.
-    expect(result.reports.map((report) => report.text).join('\n')).toContain('somebody-else');
-    expect(memory.pending.length).toBeGreaterThan(0);
+    const first = at(team, scene, memory, 0);
+    const result = at(team, scene, memory, 10 * MIN);
+    expect(first.work).toEqual([]);
+    expect(result.work).toEqual([]);
+    // The pane was noticed — as somebody else's, running and not in the file — and the report
+    // names it rather than being typed anywhere. It is said on the first pass that sees it.
+    expect(first.reports.map((report) => report.text).join('\n')).toContain('somebody-else');
   });
 
-  test('the nudge aims at the seat\'s live pane, never the pane recorded at launch', () => {
+  test('the drop aims at the seat\'s live pane, never the pane recorded at launch', () => {
     const scene = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
     scene.agents = scene.agents.map((one) => (one.name === 'deepseek-acme' ? { ...one, workspace: 'w8', pane: 'w8:p1' } : one));
     scene.screens['w8:p1'] = idle;
     const state = emptySession();
     state.seats['deepseek-acme'] = { stage: 'ready', pane: 'w3:p1', workspace: 'w3' };
-    const result = pass({ team: teamOf(example), watch: teamOf(example).watch, state, live: scene, machine: fine, now: 0, memory: newMemory() });
-    expect(result.nudge?.seat).toBe('deepseek-acme');
-    expect(result.nudge?.pane).toBe('w8:p1');
-  });
-});
-
-describe('its thresholds', () => {
-  test('a delivered nudge clears its reports: the same report never nudges again', () => {
+    const team = teamOf(example);
     const memory = newMemory();
-    const scene = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
-    const first = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: scene, machine: fine, now: 0, memory });
-    expect(first.nudge?.pending).toEqual([ASKED]);
-    expect(memory.pending).toEqual([]);
-    // The condition still holds — the report-once rule keeps it quiet — and nothing is owed.
-    const second = pass({ team: teamOf(example), watch: teamOf(example).watch, state: emptySession(), live: scene, machine: fine, now: 2 * MIN, memory });
-    expect(second.nudge).toBeNull();
-    expect(second.fallback).toBeNull();
+    at(team, scene, memory, 0, state);
+    const result = at(team, scene, memory, 10 * MIN, state);
+    expect(result.work.map((item) => item.seat)).toEqual(['deepseek-acme']);
+    expect(result.work[0]?.pane).toBe('w8:p1');
   });
 });
 

@@ -46,7 +46,7 @@ export const watch: Section = {
       nudge: {
         type: 'string',
         minLength: 1,
-        description: 'text sent to each idle worker after idle_first; the report line when omitted',
+        description: 'text the work drop asks each idle worker to read after idle_first; the fixed watch line when omitted',
       },
       quota_marks: {
         type: 'array',
