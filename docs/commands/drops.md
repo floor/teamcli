@@ -2,14 +2,15 @@
 
 Lists the drop files waiting in the calling seat's own drop folder. A drop is what another
 seat's `team send` writes under `.agents/send-drops/<session>/<seat>/` when its delivery ends on
-the drop leg: the file holds the sender's first line and the message body, and the file is the
-message. `team drops` reads the folder and never moves, deletes, or marks a drop. `team drops
---follow` prints each drop that appears while it runs, one line per file, so a Claude Code
-Monitor in the receiving seat can turn each arrival into a notification.
+the drop leg: the file is one signed message record — the sender, the rule that admitted it, the
+thread, and the body — and the file is the message. `team drops` reads the folder and never
+moves, deletes, or marks a drop. `team drops --follow` prints each drop that appears while it
+runs, one line per file, so a Claude Code Monitor in the receiving seat can turn each arrival
+into a notification.
 
-A `<id>.read` file beside a drop is the receipt that says the drop was handed over — the planned
-inbox listener writes it; nothing in this build does. A drop with one beside it is read, and is
-not listed.
+A receipt beside a drop says it was handed over, and a drop with one is read and not listed:
+`team messages` writes `<id>.read.json` when it shows a record, and the planned inbox listener's
+older `<id>.read` is read the same way.
 
 ## Synopsis
 
@@ -28,9 +29,10 @@ not listed.
 ## What it reads and writes
 
 Reads `.agents/team.yaml` to resolve the project, the session, and the calling seat, then reads
-`.agents/send-drops/<session>/<seat>/`. A drop's file name is the send's id, and its first line
-is the sender header `team send` wrote. Names with a dot in them — `<id>.pending`, `<id>.taken`,
-`<id>.read`, `<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. Nothing is written
+`.agents/send-drops/<session>/<seat>/`. A drop's file name is the send's id. A record's payload
+names its sender; a raw body file an earlier build wrote still names one on its first line.
+Names with a dot in them — `<id>.pending`, `<id>.taken`, `<id>.read`, `<id>.read.json`,
+`<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. Nothing is written
 or removed, and the folder is not created: a folder that does not exist yet is an empty one.
 
 ## Who may run it
@@ -44,8 +46,9 @@ receiving seat and is not a command a lead runs for someone else.
 
 A reading prints the context line (`team <project>, session "<session>"`), the table `FROM  PATH`
 with one row per waiting drop, then one summary line, `<n> drop` or `<n> drops`. `FROM` is the
-sender the file's first line names — `the owner`, a seat's name, or the name in the header's
-parentheses — and `unknown` when that line is no sender header. `PATH` is the file's absolute
+sender the record names — `the owner`, a seat's name, or a registered name — or, in a raw body
+file an earlier build wrote, the sender its first line names. It reads `unknown` when there is
+neither, and when a record does not verify against the message key. `PATH` is the file's absolute
 path.
 
 A follow prints nothing at start: the drops already on disk are waiting, not new. Then it prints
@@ -117,7 +120,8 @@ team beacon, session "beacon"
 exit 0
 ```
 
-A file whose first line is no sender header is still a drop, and its sender reads `unknown`:
+A raw body file an earlier build wrote, with no sender header, is still a drop, and its sender
+reads `unknown`:
 
 ```file file=.agents/send-drops/beacon/claude-keeper/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d
 an older build left this body with no sender line

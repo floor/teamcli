@@ -3,9 +3,13 @@
 // A drop is a message file another seat's `team send` wrote under
 // `.agents/send-drops/<session>/<seat>/`, and the file is the message: nothing in this build
 // deletes one. The receiving seat reads what is there with `team drops`, and a Claude Code
-// Monitor reads each file as it lands with `team drops --follow`. A `<id>.read` sibling is the
-// receipt the planned inbox listener writes when it hands a drop over (no writer in this build);
-// a drop with one beside it is read, and is not listed.
+// Monitor reads each file as it lands with `team drops --follow`. A send of this version writes
+// a signed record (`src/send/record.ts`) whose payload names the sender; a file a previous build
+// wrote is still a drop, and its first line names the sender. A `<id>.read` sibling is the
+// receipt the planned inbox listener writes when it hands a drop over (no writer in this build),
+// and the record spine's `team messages` writes `<id>.read.json`; a drop with either beside it
+// is read, and is not listed.
+import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -29,13 +33,16 @@ import {
   writeJson,
   writeJsonError,
 } from '../output/index.ts';
+import { signedRecordOf, receiptFile as recordReceiptFile, verifyRecord } from '../send/record.ts';
+import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
 
 Lists the drop files waiting in the calling seat's own drop folder,
-.agents/send-drops/<session>/<seat>: one row each, with the sender read from
-the file's first line and the file's absolute path. A drop that has an
-<id>.read file beside it is read, and is not listed.
+.agents/send-drops/<session>/<seat>: one row each, with the sender the message
+record names — or, in a file an earlier build wrote, its first line — and the
+file's absolute path. A drop that has an <id>.read or <id>.read.json file
+beside it is read, and is not listed.
 
 Options:
   --follow   print one line per drop file that appears while it runs,
@@ -49,9 +56,10 @@ team, the team file can't be read, or the drop folder can't be read, 2 when the
 invocation can't be read or this folder is not a git repository.
 `;
 
-/** One waiting drop: its file name (the send's id), the sender its first line names, when the
- *  file landed, and its absolute path. `from` is null when the first line is not a sender
- *  header: the file is still a drop, and its sender is simply unknown. */
+/** One waiting drop: its file name (the send's id), the sender the message record names (or, in
+ *  a file an earlier build wrote, its first line), when the file landed, and its absolute path.
+ *  `from` is null when there is no sender to read: the file is still a drop, and its sender is
+ *  simply unknown. */
 export type DropRow = {
   id: string;
   from: string | null;
@@ -117,6 +125,26 @@ export function senderOf(header: string): string | null {
   return lead === '' ? null : lead;
 }
 
+/** Whether a receipt file is there. An unreadable path counts as missing: the drop is still
+ *  waiting, and a listing does not fail over a receipt it cannot see. */
+function receiptHeld(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The file's text as JSON, or undefined when it is not JSON at all (an older raw drop). */
+function parsedJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'; reason: string };
 
 /**
@@ -125,7 +153,7 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
  * directory whose name is plain is not a drop either. A folder that does not exist is an empty
  * one: no send has written here yet.
  */
-export function listDrops(dropDir: string): DropListing {
+export function listDrops(dropDir: string, key?: KeyObject): DropListing {
   let names: string[];
   try {
     names = readdirSync(dropDir);
@@ -146,16 +174,21 @@ export function listDrops(dropDir: string): DropListing {
     }
     if (!stat.isFile()) continue;
     // The receipt means the drop was handed over: it is read, and this reading is done with it.
-    try {
-      lstatSync(`${path}.read`);
-      continue;
-    } catch {
-      // No receipt: the drop is still waiting.
-    }
+    // The record spine's receipt carries its status in the name (`<id>.read.json`); the older
+    // folder's is `<id>.read`.
+    if (receiptHeld(`${path}.read`) || receiptHeld(recordReceiptFile(dropDir, name, 'read'))) continue;
     let from: string | null = null;
     try {
       const text = readFileSync(path, 'utf8');
-      from = senderOf(text.split('\n', 1)[0] ?? '');
+      const record = signedRecordOf(parsedJson(text));
+      if (record !== null) {
+        // The record names its sender in the payload. The key that verified it is the message
+        // key; when the folder is read with no key at all, the payload is still what is shown —
+        // a record that fails the key it was checked with leaves the sender unknown.
+        from = key === undefined || verifyRecord(record, key) ? record.payload.from : null;
+      } else {
+        from = senderOf(text.split('\n', 1)[0] ?? '');
+      }
     } catch {
       // The file is still a drop; its sender is unknown.
     }
@@ -239,7 +272,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   }
   const seat = named.name;
   const dropDir = join(dir, 'send-drops', session, seat);
-  const first = listDrops(dropDir);
+  const keyState = messageKeyState(sources.home);
+  const key = keyState.kind === 'key' ? keyState.key : undefined;
+  const first = listDrops(dropDir, key);
   let unreadable: string | null = first.kind === 'unreadable' ? first.reason : null;
   const rows = first.kind === 'ok' ? first.rows : [];
   if (follow) {
@@ -249,7 +284,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const seen = new Set(rows.map((row) => row.id));
     let tick = 0;
     while (await poll(tick++)) {
-      const next = listDrops(dropDir);
+      const next = listDrops(dropDir, key);
       if (next.kind === 'unreadable') {
         unreadable = next.reason;
         break;
