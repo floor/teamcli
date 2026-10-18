@@ -7,7 +7,9 @@
 //
 // Fixtures only: a scratch home and a scratch record folder, both removed at the end.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { messageKeyOf } from '../src/store/keys.ts';
@@ -327,6 +329,72 @@ describe('the status derived from the receipts beside a message', () => {
       );
       expect(second).toMatchObject({ ok: true, existing: true });
       expect(readFileSync(path, 'utf8')).toBe(before);
+    } finally {
+      s.done();
+    }
+  });
+
+  test('a verifying receipt for another message proves nothing for this one, and is replaced', () => {
+    const s = scratch();
+    try {
+      const path = receiptFile(s.dropDir, payload().id, 'read');
+      const foreign = signReceiptPayload(receipt({ status: 'read', id: 'c0ffee00-1111-4222-8333-444455556667' }), s.home);
+      expect(verifyReceipt(foreign, messageKeyOf(s.home))).toBe(true);
+      writeFileSync(path, `${JSON.stringify(foreign, null, 2)}\n`);
+      expect(statusOf(s.dropDir, payload().id, context, messageKeyOf(s.home))).toBe('sent');
+
+      const written = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'read' }), s.home), s.home);
+      if (!written.ok) throw new Error(written.reason);
+      expect('existing' in written).toBe(false);
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { payload: ReceiptPayload };
+      expect(parsed.payload.id).toBe(payload().id);
+      expect(statusOf(s.dropDir, payload().id, context, messageKeyOf(s.home))).toBe('read');
+    } finally {
+      s.done();
+    }
+  });
+
+  test('a signed receipt naming another seat, session or checkout is replaced: it does not verify here', () => {
+    const s = scratch();
+    try {
+      const path = receiptFile(s.dropDir, payload().id, 'read');
+      const key = messageKeyOf(s.home);
+      const wrongs: Partial<ReceiptPayload>[] = [
+        { to: 'someone-else' },
+        { session: 'another-session' },
+        { root: '/scratch/other-root' },
+      ];
+      for (const wrong of wrongs) {
+        const foreign = signReceiptPayload(receipt({ status: 'read', ...wrong }), s.home);
+        expect(verifyReceipt(foreign, key)).toBe(true);
+        writeFileSync(path, `${JSON.stringify(foreign, null, 2)}\n`);
+        expect(statusOf(s.dropDir, payload().id, context, key)).toBe('sent');
+
+        const written = writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'read' }), s.home), s.home);
+        if (!written.ok) throw new Error(written.reason);
+        expect('existing' in written).toBe(false);
+        expect(statusOf(s.dropDir, payload().id, context, key)).toBe('read');
+      }
+    } finally {
+      s.done();
+    }
+  });
+
+  test('a link at a receipt\'s name is refused, never replaced, and its target is untouched', () => {
+    const s = scratch();
+    try {
+      const path = receiptFile(s.dropDir, payload().id, 'read');
+      const target = join(s.dropDir, 'elsewhere');
+      writeFileSync(target, 'not a receipt');
+      symlinkSync(target, path);
+
+      expect(writeReceipt(s.dropDir, signReceiptPayload(receipt({ status: 'read' }), s.home), s.home)).toEqual({
+        ok: false,
+        reason: 'the receipt path is held by something that is not a file',
+      });
+      expect(lstatSync(path).isSymbolicLink()).toBe(true);
+      expect(readFileSync(target, 'utf8')).toBe('not a receipt');
+      expect(statusOf(s.dropDir, payload().id, context, messageKeyOf(s.home))).toBe('sent');
     } finally {
       s.done();
     }
