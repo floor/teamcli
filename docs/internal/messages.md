@@ -16,8 +16,11 @@ one step. A record that does not verify prints no body and writes nothing.
 leg types the wake line that names the record, the drop leg leaves the record for its seat, and
 the mcp-inbox leg puts the same record in the seat's inbox. The watch rings
 `Team: run team messages` when a record is already there, and never writes one. A message a
-previous build left in `.agents/messages/` is read the same way; nothing writes there any more. A
-report to the owner still goes to the log, and also to the desktop notification.
+previous build left in `.agents/messages/<seat>/` is read the same way. The owner's mailbox is
+`.agents/messages/owner/`: the Runtime writes one signed record there for each event it delivers
+to the owner, its `from` is `runtime`, and the run lists it and writes its receipt like any other
+record (see [the event log and the bus](events.md)). A report to the owner still goes to the log,
+and also to the desktop notification.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
