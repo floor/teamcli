@@ -2,7 +2,7 @@
 // Each setting spec names its catalogue policy in canonical kebab-case while the snake_case
 // spelling every team file and registry record is written in stays a load-time alias. The
 // catalogue owns each setting's values, their order and the release default; the settings'
-// inheritance loop reads them, and an expired word is unset at its level (Atlas ruling 5).
+// inheritance loop reads them, and an expired word is unset at its level.
 import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_STATE_THRESHOLDS,

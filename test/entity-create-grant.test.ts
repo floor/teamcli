@@ -40,7 +40,7 @@ let base: string;
 let home: string;
 let lobby: string;
 let hqRoot: string;
-let radioRoot: string;
+let acmeRoot: string;
 let repoRoot: string;
 let irisId: string;
 
@@ -108,7 +108,7 @@ ${seat('tester', 'tester', '    count: 2')}
 
 /** The grantee's own placement, in its home root's state: the pane its session records for
  * the seat, which the mounting command reads through. */
-function placeIris(): void {
+function placeCaller(): void {
   updateState(join(hqRoot, '.agents'), (file) => {
     file.sessions.hq = {
       ...emptySession(),
@@ -182,15 +182,15 @@ beforeEach(() => {
   home = join(base, 'home');
   lobby = join(home, '.config', 'team', 'lobby');
   hqRoot = join(base, 'hq');
-  radioRoot = join(base, 'Code', 'radiooooo');
-  repoRoot = join(radioRoot, 'v4');
+  acmeRoot = join(base, 'Code', 'acme');
+  repoRoot = join(acmeRoot, 'v4');
   mkdirSync(join(home, '.config', 'team', 'grants'), { recursive: true });
   mkdirSync(lobby, { recursive: true });
   // The lobby gate refuses a lobby anyone else can read; a recursive mkdir makes 0755.
   chmodSync(lobby, 0o700);
   mkdirSync(join(hqRoot, '.agents'), { recursive: true });
   repoAt(repoRoot);
-  placeIris();
+  placeCaller();
   // The grantee's registry record: the id the record names, and the placement herdr gives the
   // caller (`w1:p1` in session `hq`, seat `iris`).
   irisId = registerAgent(home, {
@@ -214,7 +214,7 @@ afterEach(() => {
 
 describe('the standing create-grant scenes', () => {
   test('a granted agent creates and mounts a team under the granted path', async () => {
-    writeGrant({ paths: [radioRoot], expires: LATER });
+    writeGrant({ paths: [acmeRoot], expires: LATER });
     const io = testIo(repoRoot, IRIS);
     const code = await runInit([], io, home, undefined, { loggedIn: () => false, now: () => NOW });
     expect({ code, out: io.out, err: io.err }).toMatchObject({ code: 0 });
@@ -230,12 +230,12 @@ describe('the standing create-grant scenes', () => {
   });
 
   test('a path outside the grant is refused, by `..` and by symlink', async () => {
-    writeGrant({ paths: [radioRoot], expires: LATER });
+    writeGrant({ paths: [acmeRoot], expires: LATER });
     // `..` walks out of the granted prefix to a sibling the grant never names; the raw
     // string keeps its `..` segments, the way a traversal actually reaches in.
     const stolen = join(base, 'Code', 'stolen');
     repoAt(stolen);
-    const dots = testIo(`${radioRoot}/v4/../../stolen`, IRIS);
+    const dots = testIo(`${acmeRoot}/v4/../../stolen`, IRIS);
     const dotsCode = await runInit([], dots, home, undefined, { loggedIn: () => false, now: () => NOW });
     expect(dotsCode).toBe(1);
     expect(dots.out + dots.err).toContain('this call is iris');
@@ -243,15 +243,15 @@ describe('the standing create-grant scenes', () => {
     // A symlink inside the granted prefix that resolves outside it.
     const elsewhere = join(base, 'Code', 'elsewhere');
     repoAt(join(elsewhere, 'repo'));
-    symlinkSync(elsewhere, join(radioRoot, 'link'));
-    const link = testIo(join(radioRoot, 'link', 'repo'), IRIS);
+    symlinkSync(elsewhere, join(acmeRoot, 'link'));
+    const link = testIo(join(acmeRoot, 'link', 'repo'), IRIS);
     const linkCode = await runInit([], link, home, undefined, { loggedIn: () => false, now: () => NOW });
     expect(linkCode).toBe(1);
     expect(link.out + link.err).toContain('this call is iris');
   });
 
   test('another agent is refused: another seat, and the grantee in another session', async () => {
-    writeGrant({ paths: [radioRoot], expires: LATER });
+    writeGrant({ paths: [acmeRoot], expires: LATER });
     const coworker = testIo(repoRoot, COWORKER);
     const coworkerCode = await runInit([], coworker, home, undefined, { loggedIn: () => false, now: () => NOW });
     expect(coworkerCode).toBe(1);
@@ -267,7 +267,7 @@ describe('the standing create-grant scenes', () => {
   });
 
   test('a record whose expiry has passed is refused, at init and at mount', async () => {
-    writeGrant({ paths: [radioRoot], expires: EARLIER });
+    writeGrant({ paths: [acmeRoot], expires: EARLIER });
     const expired = testIo(repoRoot, IRIS);
     const expiredCode = await runInit([], expired, home, undefined, { loggedIn: () => false, now: () => NOW });
     expect(expiredCode).toBe(1);
@@ -292,10 +292,10 @@ describe('the standing create-grant scenes', () => {
   });
 
   test('a sibling that shares the granted prefix but is not under it is refused', async () => {
-    writeGrant({ paths: [radioRoot], expires: LATER });
-    // `radiooooo-other` begins with the granted path's own string; containment is not a
+    writeGrant({ paths: [acmeRoot], expires: LATER });
+    // `acme-other` begins with the granted path's own string; containment is not a
     // string prefix, and the sibling is outside the grant.
-    const sibling = join(base, 'Code', 'radiooooo-other');
+    const sibling = join(base, 'Code', 'acme-other');
     repoAt(sibling);
     const io = testIo(sibling, IRIS);
     const code = await runInit([], io, home, undefined, { loggedIn: () => false, now: () => NOW });

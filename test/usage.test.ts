@@ -2212,7 +2212,7 @@ describe('team usage', () => {
   });
 
   test('a window far ahead of its clock reads near cap in the DEFAULT table, and the advice prints without --tree', async () => {
-    // The live case (Atlas, 2026-10-17): google (claude-gpt) at weekly 89% with a -68.6% margin
+    // The live case: google (claude-gpt) at weekly 89% with a -68.6% margin
     // read only `fresh` in STATE, and the advice line sat behind `--tree`. The state is the
     // quota's, printed in the default table, and the advice stands beside it.
     withoutReadings();
@@ -2270,7 +2270,7 @@ describe('team usage', () => {
   });
 
   test('a named team whose file cannot be read reads as one sentence in every view: its name and its ~ root', async () => {
-    // The sentence (Atlas, 2026-10-17): `the team "team" (~/Code/floor/team): its file could
+    // The sentence: `the team "team" (~/Code/floor/team): its file could
     // not be read.` The store's folder is the record of the name; the root prints under the
     // home it lives in, never as an absolute path. A `~/…` root prints in every view — the
     // owner's and the restricted view alike — so a seat sees the same sentence the owner does.

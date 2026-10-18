@@ -1,5 +1,4 @@
-// What 0.5.0 must not pretend, said plainly (decided-grants-minimum-2026-10-17, "What 0.5.0
-// must not pretend, said plainly", and briefs/teamcli-notes/must-not-pretend-plain.md): the
+// What 0.5.0 must not pretend, said plainly: the
 // release's own honest limits in plain words for human output, with each line's Kernel reference
 // carried in `--json` (`ref`) and in the docs. In the 0.5.0 output contract (§2.3), this block is
 // printed only by `team doctor` (full runs, not `--login`) and `team --about`; routine operational

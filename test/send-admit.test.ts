@@ -329,9 +329,9 @@ describe('send admission: the entity its team records name', () => {
         { agent: 'agt_000000000025', seat: 'builder-1', role: 'builder' },
       ],
     },
-    'radiooooo-v4': {
-      project: 'radiooooo-v4',
-      entity: 'radiooooo',
+    'other-v4': {
+      project: 'other-v4',
+      entity: 'other-org',
       roster: [
         { agent: 'agt_000000000026', seat: 'orchestrator', role: 'orchestrator', leads: true },
         { agent: 'agt_000000000027', seat: 'builder-1', role: 'builder' },
@@ -343,7 +343,7 @@ describe('send admission: the entity its team records name', () => {
   const cliLead = agent('agt_000000000022', 'orchestrator', 'teamcli');
   const cliBuilder = agent('agt_000000000023', 'builder-1', 'teamcli');
   const ioLead = agent('agt_000000000024', 'orchestrator', 'teamcli.io');
-  const radioLead = agent('agt_000000000026', 'orchestrator', 'radiooooo-v4');
+  const otherLead = agent('agt_000000000026', 'orchestrator', 'other-v4');
   const reach = { ok: true, rule: 'an orchestrator to another orchestrator' } as const;
 
   test('(1) two teams of one entity: their leads write to each other, both ways', () => {
@@ -368,11 +368,11 @@ describe('send admission: the entity its team records name', () => {
   });
 
   test('across entities no lead pair is admitted, in either direction', () => {
-    // radiooooo is another entity's: every lead's reach stops at its own entity's edge.
-    expect(admitSend(coordinator, radioLead, floorTeams).ok).toBe(false);
-    expect(admitSend(radioLead, coordinator, floorTeams).ok).toBe(false);
-    expect(admitSend(cliLead, radioLead, floorTeams).ok).toBe(false);
-    expect(admitSend(radioLead, cliLead, floorTeams).ok).toBe(false);
+    // other-org is another entity's: every lead's reach stops at its own entity's edge.
+    expect(admitSend(coordinator, otherLead, floorTeams).ok).toBe(false);
+    expect(admitSend(otherLead, coordinator, floorTeams).ok).toBe(false);
+    expect(admitSend(cliLead, otherLead, floorTeams).ok).toBe(false);
+    expect(admitSend(otherLead, cliLead, floorTeams).ok).toBe(false);
   });
 
   test('two teams that name no entity are not one entity\'s, and their leads are refused', () => {

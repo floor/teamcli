@@ -5961,7 +5961,7 @@ describe('team down, live', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
         foregroundCwd: () => null,
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/jvial' }),
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));
@@ -5975,8 +5975,8 @@ describe('team down, live', () => {
       const run = harness({ kind: 'idle' });
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
-        foregroundCwd: () => '/Users/jvial/start/dir',
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/jvial' }),
+        foregroundCwd: () => '/Users/example/start/dir',
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));

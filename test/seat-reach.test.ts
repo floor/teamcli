@@ -1,7 +1,6 @@
 // The seat auto-discovery seam, team side: a seat's owner-only `reach` grant — allowlist,
-// schema, validation, and its place in the approval digest (briefs/autodiscovery-flo821-seam.md
-// in teamcli; the daemon side is the fan-out PR in teamcli-mcp-server). The projection the
-// grant feeds is test/reach-projection.test.ts.
+// schema, validation, and its place in the approval digest. The projection the grant feeds is
+// test/reach-projection.test.ts.
 import { describe, expect, test } from 'bun:test';
 import { compare, fingerprints } from '../src/approve/fingerprint.ts';
 import type { TeamFile } from '../src/file/types.ts';

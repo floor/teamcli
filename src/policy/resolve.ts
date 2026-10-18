@@ -2,12 +2,12 @@
 //
 // - Reads the chain outermost first: entity → project → team → seat.
 // - Unreadable or unverified source at any level refuses at load, naming the level.
-// - Expired declaration counts as UNSET at its level (Atlas ruling 5): the inherited value or the
+// - Expired declaration counts as UNSET at its level: the inherited value or the
 //   release default applies ('off' for gate-lifting policies where absent means 'off'); it never
 //   becomes a value no level chose.
 // - Inheritance tightens only: the first non-expired declaration sets the active bound, and any
 //   lower level that loosens what it inherits is refused AT LOAD, naming both levels.
-// - Migration trigger (Atlas ruling 6): `devModeGoverned` is true iff a `dev-mode` value ('on' or
+// - Migration trigger: `devModeGoverned` is true iff a `dev-mode` value ('on' or
 //   'off') is set anywhere in the chain; setting a threshold or another policy never switches
 //   dev-mode migration on.
 
@@ -89,7 +89,7 @@ export type PolicyChainResult =
       policies: Record<string, EffectivePolicy>;
       expired: Policy[];
       /**
-       * True iff a `dev-mode` value ('on' or 'off') is set anywhere in the chain (Atlas ruling 6).
+       * True iff a `dev-mode` value ('on' or 'off') is set anywhere in the chain.
        * When true, `dev-mode` policy governs and `TEAMCLI_DEV_MODE` is ignored.
        */
       devModeGoverned: boolean;
@@ -117,7 +117,7 @@ function isExpired(policy: Policy, now: Date): boolean {
  * Resolves a single policy across declarations from outermost (`entity`) to innermost (`seat`).
  *
  * - Absent = release default (`'off'` for gate-lifting policies).
- * - Expired = unset at its level (Atlas ruling 5).
+ * - Expired = unset at its level.
  * - Loosening = refused AT LOAD naming both levels (`higherLevel` and `lowerLevel`).
  */
 export function resolvePolicy<V extends PolicyValue = PolicyValue>(

@@ -246,7 +246,7 @@ describe('the assistant is one seat the file marks', () => {
   });
 });
 
-// The nickname: a human name for one seat (OD-20261017-15), unique in its team and never
+// The nickname: a human name for one seat, unique in its team and never
 // another seat's name. It confers nothing — the role keeps the grants — and it rides the built
 // seat, so the seat's digest changes when the file writes one.
 describe('a nickname is one seat\'s human name', () => {

@@ -600,19 +600,19 @@ describe('team send history log & team feed', () => {
     const briefsDir = join(root, 'briefs');
     mkdirSync(briefsDir, { recursive: true });
     writeFileSync(
-      join(briefsDir, 'iris-to-atlas.md'),
+      join(briefsDir, 'lead-to-worker.md'),
       [
-        '# Iris -> Atlas',
+        '# Lead -> Worker',
         '',
-        '## 2026-10-14T15:00:01Z — From Iris: Round 1',
+        '## 2026-10-14T15:00:01Z — From Lead: Round 1',
         '',
-        'First brief section from Iris.',
+        'First brief section from Lead.',
         '',
         '---',
         '',
-        '## 2026-10-14T15:00:05Z — From Atlas: Round 1 Reply',
+        '## 2026-10-14T15:00:05Z — From Worker: Round 1 Reply',
         '',
-        'Reply section from Atlas in the same file.',
+        'Reply section from Worker in the same file.',
         '',
       ].join('\n'),
     );
@@ -621,9 +621,9 @@ describe('team send history log & team feed', () => {
     expect(await runFeed([], io, { home })).toBe(0);
     expect(io.out).toBe(
       'team acme, session "acme"\n' +
-        '  TIME      KIND   SEAT           DETAIL\n' +
-        '  15:00:01  brief  iris -> atlas  Round 1: First brief section from Iris.\n' +
-        '  15:00:05  brief  atlas -> iris  Round 1 Reply: Reply section from Atlas in the same file.\n' +
+        '  TIME      KIND   SEAT            DETAIL\n' +
+        '  15:00:01  brief  lead -> worker  Round 1: First brief section from Lead.\n' +
+        '  15:00:05  brief  worker -> lead  Round 1 Reply: Reply section from Worker in the same file.\n' +
         '2 events\n',
     );
   });

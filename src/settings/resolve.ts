@@ -2,8 +2,8 @@
 // names one enforced policy; that policy owns the setting's vocabulary (its `parseValue`), which
 // word tightens and which loosens (its `isWithin`), and the release default the spec's fallback
 // must match. The inheritance loop stays the settings': machine → entity → project → team → seat,
-// loosening only at the levels the setting lists. An expired declaration is unset at its level
-// (Atlas ruling 5): it changes nothing and is not a word set aside.
+// loosening only at the levels the setting lists. An expired declaration is unset at its level:
+// it changes nothing and is not a word set aside.
 //
 // This lives beside `inherit.ts` rather than in it because `policy/types.ts` imports the delivery
 // legs and the liveness defaults from `inherit.ts`; a resolver importing the catalogue from there

@@ -262,7 +262,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(resolved.devModeGoverned).toBe(false);
   });
 
-  // Atlas ruling (5): EXPIRY — an expired value counts as UNSET at its level.
+  // EXPIRY — an expired value counts as UNSET at its level.
   test('expiry: an expired declaration counts as unset at its level so the inherited value or release default applies, never a value no level chose', () => {
     const declarations: Policy[] = [
       {
@@ -417,7 +417,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     }
   });
 
-  // Atlas ruling (6): MIGRATION — triggered only by a dev-mode value set anywhere in the chain.
+  // MIGRATION — triggered only by a dev-mode value set anywhere in the chain.
   test('migration: setting a non-dev-mode policy (such as a state threshold) leaves devModeGoverned false so dev mode is not switched off for the entity', () => {
     const fx = makeFixture();
     try {

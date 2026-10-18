@@ -89,8 +89,8 @@ Antigravity's screen fixtures do not provide a quota percentage. Accounts withou
 screen grammar or a recorded figure print `unknown  not readable from a CLI screen`. Readable
 accounts without an observation print `unknown`. A lab no screen reads and no reading reached is
 not an account row at all in the text face: it is one line `deepseek  not readable from a screen
-(11 seats)`, its seat count in place of an `unknown` row that would read as a figure not yet seen
-(Atlas, 2026-10-17). A lab whose own name is readable keeps its `unknown` row — that is a figure
+(11 seats)`, its seat count in place of an `unknown` row that would read as a figure not yet seen.
+A lab whose own name is readable keeps its `unknown` row — that is a figure
 not yet seen, not one no screen reads.
 
 An undeclared lab is never a hole in the report: its paying seats synthesize one account named
@@ -128,7 +128,7 @@ reading. Machine observations older than five minutes or past their reset are ma
 With `--tree`, after the account blocks the report prints `quota`: one block per visible lab, one
 line per account under it, one line per window, and one `advice:` line. The same advice sentence
 also follows the account lines in the default text face: without the flag the text face is the
-table and that line, never the table alone (Atlas, 2026-10-17); the flag changes no JSON key. The model lives in
+table and that line, never the table alone; the flag changes no JSON key. The model lives in
 `information/quota.ts`; the live readers in `information/quota-observe.ts`; `reportOf` builds the
 block from the labs it already shows, so a lab or account this view hides can never reach it.
 

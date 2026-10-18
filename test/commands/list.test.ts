@@ -213,8 +213,8 @@ test('near-duplicate names are names equal after stripping separators', async ()
     sessions: [
       { name: 'md3-io', running: true },
       { name: 'md3io', running: true },
-      { name: 'radiooooo', running: true },
-      { name: 'radiooooo-ios', running: true },
+      { name: 'acme', running: true },
+      { name: 'acme-ios', running: true },
       { name: 'teamcli', running: true },
       { name: 'teamcli.io', running: true },
     ],
@@ -224,8 +224,8 @@ test('near-duplicate names are names equal after stripping separators', async ()
   const line = (name: string) => run.out.split('\n').find((item) => item.startsWith(`${name} `)) ?? '';
   expect(line('md3-io')).toContain('near md3io');
   expect(line('md3io')).toContain('near md3-io');
-  expect(line('radiooooo')).not.toContain('near');
-  expect(line('radiooooo-ios')).not.toContain('near');
+  expect(line('acme')).not.toContain('near');
+  expect(line('acme-ios')).not.toContain('near');
   expect(line('teamcli')).not.toContain('near');
   expect(line('teamcli.io')).not.toContain('near');
 });

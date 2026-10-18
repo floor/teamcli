@@ -154,7 +154,7 @@ describe('the seats\' quota, parsed by the core', () => {
     expect(pass(unheld).readings).toEqual([]);
   });
 
-  test('an account whose sources name only the check takes no screen reading (floor-86)', () => {
+  test('an account whose sources name only the check takes no screen reading', () => {
     const result = pass({
       team: team(OPENAI), watch: team(OPENAI).watch, state: emptySession(), live: live({ 'codex-acme': { screen: quota } }),
       machine: fine, now: NOW, memory: newMemory(), approval: [], foreground: { 'w1:p1': ['codex'] },
