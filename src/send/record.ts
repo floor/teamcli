@@ -437,19 +437,27 @@ export function isRead(dropDir: string, id: string, context: StatusContext, key:
 
 /**
  * Writes one status receipt beside its message. Receipts are write-once: a signed receipt that
- * verifies for this message and status is left as the read that happened first, and is never
- * rewritten. A file at the name that does not verify — unsigned, unreadable, another message's,
- * a link — proves nothing, so the signed receipt replaces it; otherwise a planted file could
- * keep the status at `sent` forever. Every status has its own name, so a later writer can never
- * overwrite a receipt with a lower status: a second reader of a message that was already read,
- * or answered, adds nothing and the derived status never moves backward.
+ * verifies for this message and its context — id, status, seat, checkout and session, the same
+ * test `receiptHolds` makes — is left as the read that happened first, and is never rewritten.
+ * A regular file at the name that does not verify for this message proves nothing — unsigned,
+ * unreadable, another message's, another seat's, session's or checkout's — so the signed receipt
+ * replaces it; otherwise a planted or stale file could keep the status at `sent` forever. A name
+ * held by a link, a folder or a FIFO is refused and never replaced: writing there would either
+ * follow it or take a name this key does not own, and the inbox refuses the same path before it
+ * calls here. Every status has its own name, so a later writer can never overwrite a receipt with
+ * a lower status: a second reader of a message that was already read, or answered, adds nothing
+ * and the derived status never moves backward.
  */
 export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: string): RecordWrite {
   const id = receipt.payload.id;
   const status = receipt.payload.status;
   if (!recordNameOk(id)) return { ok: false, reason: 'the receipt id cannot be a file name' };
   const path = receiptFile(dropDir, id, status);
-  if (receivedAt(path, id, status, home)) return { ok: true, path, existing: true };
+  const held = heldAt(path);
+  if (held.kind !== 'missing' && held.kind !== 'file') {
+    return { ok: false, reason: 'the receipt path is held by something that is not a file' };
+  }
+  if (receivedAt(path, receipt, home)) return { ok: true, path, existing: true };
   try {
     dropMessage(dropDir, `${id}.${status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch {
@@ -458,26 +466,15 @@ export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: stri
   return { ok: true, path };
 }
 
-/** Whether the file at a receipt's name is the signed receipt it claims to be, for this message
- *  and status: the message key signed it, and it names the same id and status. A link, a file of
- *  another owner, a file that does not parse and a signature the key refuses are all `false`. */
-function receivedAt(path: string, id: string, status: ReceiptStatus, home: string): boolean {
-  const held = heldAt(path);
-  if (held.kind !== 'file') return false;
-  if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
-  const text = readNoFollow(path);
-  if (text === null) return false;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return false;
-  }
-  const existing = signedReceiptOf(parsed);
-  if (existing === null) return false;
-  if (existing.payload.id !== id || existing.payload.status !== status) return false;
+/** Whether the file at a receipt's name already is the receipt about to be written: it verifies
+ *  with this checkout's message key for this message, status, seat, checkout and session. A link
+ *  is not a file and never verifies; a regular file naming anything else proves nothing for this
+ *  receipt and is replaced. */
+function receivedAt(path: string, receipt: SignedReceipt, home: string): boolean {
   const key = messageKeyState(home);
-  return key.kind === 'key' && verifyReceipt(existing, key.key);
+  if (key.kind !== 'key') return false;
+  const { id, status, to, root, session } = receipt.payload;
+  return receiptHolds(path, id, status, { to, root, session }, key.key);
 }
 
 /**

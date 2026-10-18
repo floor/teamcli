@@ -90,12 +90,14 @@ that it acted on it. So:
 - no receipt is `sent (unconfirmed)`, with the drop kept;
 - nothing on this leg is ever reported as acted on.
 
-The receipt is the signed status receipt, write-once per status: a signed one is never rewritten,
-so a second reader adds nothing and no read moves a status backward, while a file at the name this
-key did not sign is replaced by the signed receipt, never trusted and never left to block it. Its
-signature is the procedural evidence: a file at that name this key did not sign, or one naming
-another message, seat, checkout or session, proves nothing
-and leaves the message waiting. Nothing it says is ever derived from pane text or a status.
+The receipt is the signed status receipt, write-once per status for the message and context it
+verifies for: a signed receipt at the name that verifies for this message, seat, checkout and
+session is never rewritten, so a second reader adds nothing and no read moves a status backward,
+while a regular file at the name that proves nothing for this message — unsigned, another
+message's, another seat's, session's or checkout's — is replaced by the signed receipt, never
+trusted and never left to block it; a name held by a link, a folder or a FIFO is refused instead.
+Its signature is the procedural evidence: a file at that name this key did not sign, or one naming
+another message, seat, checkout or session, proves nothing and leaves the message waiting. Nothing it says is ever derived from pane text or a status.
 
 ## Checking a build
 
