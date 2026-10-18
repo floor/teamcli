@@ -315,9 +315,13 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
-    // Dropping or reordering channels present in `higher` is within; adding one excluded by `higher` is not.
+    // Dropping or reordering channels present in `higher` is within. `native` is the one leg a
+    // word may add: it is never in the default order, and a level that names it is the sender
+    // choosing to deliver through its own SendMessage and record the delivery. Every other leg
+    // absent from `higher` is still an addition, and the whole word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
-      lower.length > 0 && lower.every((leg, idx) => higher.includes(leg) && lower.indexOf(leg) === idx),
+      lower.length > 0
+      && lower.every((leg, idx) => (leg === 'native' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
   'development-mode': {
     name: 'development-mode',

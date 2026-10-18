@@ -937,8 +937,9 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
 
 /**
  * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
- * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have, leaving
- * the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have,
+ * leaving the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ * `native` is the one leg a word may add, so a declaration naming it is no difference.
  */
 function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   let projectOrder: readonly DeliveryLeg[] | undefined;

@@ -1187,7 +1187,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     }
   });
 
-  test('scene: unsigned legacy delivery_order naming a leg the order in force lacks is set aside against a signed project policy, pointing the repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
+  test('scene: unsigned legacy delivery_order that loosens a signed project policy is reported as the team’s difference, pointing the repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
     const fx = makeFixture();
     try {
       // Signed project policy delivery-order [typed]
@@ -1203,10 +1203,10 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       );
       expect(wroteProject.ok).toBe(true);
 
-      // Team file carries legacy delivery_order: [native, typed]
+      // Team file carries legacy delivery_order: [mcp-inbox, typed]
       const teamYamlPath = join(fx.root, '.agents', 'team.yaml');
       const baseYaml = readFileSync(teamYamlPath, 'utf8');
-      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [native, typed]\n`);
+      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [mcp-inbox, typed]\n`);
 
       let out1 = '';
       let err1 = '';
@@ -1227,11 +1227,12 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       });
       expect(code1).toBe(1);
       expect(err1).toBe('');
-      // The word names `native`, which is no leg of the order in force: the settings reader sets
-      // the whole word aside, and that one difference stands in place of the policy loosening.
+      // The word adds `mcp-inbox` to the project's typed-only order, which a team level may not
+      // do: the policy chain refuses it, and that one difference stands in place of the legacy
+      // line taking effect.
       expect(out1).toContain(
-        'difference: delivery_order [native, typed] in .agents/team.yaml is set aside; [mcp-inbox, drop, typed] stands\n' +
-          '  repair: drop the 1 leg not in the inherited delivery_order in .agents/team.yaml\n' +
+        'difference: policy "delivery-order" at level team ("mcp-inbox, typed") loosens level project ("typed")\n' +
+          '  repair: remove or narrow delivery_order in .agents/team.yaml\n' +
           "  who: the team's lead\n",
       );
       expect(out1).toContain('1 difference\n');
