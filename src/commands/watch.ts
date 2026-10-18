@@ -47,6 +47,13 @@ import type { StateThresholds } from '../settings/inherit.ts';
 import { machineLiveness, watchWords } from '../settings/declared.ts';
 import { entityLiveness } from '../entities.ts';
 import { defaultWatch } from '../file/validate.ts';
+import { createSequenceTracker, type EventAppendInput, type SignedEventRecord, type SequenceTracker } from '../bus/log.ts';
+import {
+  publishToBus,
+  subscribeBusOnce,
+  type BusPublishOutcome,
+  type BusSubscribeOutcome,
+} from '../bus/server.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
 
@@ -109,6 +116,14 @@ export type WatchSources = {
   closeWorkspace?(session: string, workspace: string): boolean;
   /** The command a watch pane runs: the one `up` starts. Defaults to `up`'s own. */
   watchCommand?(session: string): string;
+  /** Subscribes to `.agents/bus.sock` from `cursor` when a bus is running; falls back to polling when unavailable. */
+  busSubscribe?(root: string, cursor: number): Promise<BusSubscribeOutcome>;
+  /** Publishes an event (e.g. `seat.unreachable` or `seat.at-prompt`) to `.agents/bus.sock` when a bus is running. */
+  busPublish?(root: string, event: EventAppendInput): Promise<BusPublishOutcome>;
+  /** Optional listener invoked for each verified event received from the bus in sequence order. */
+  onBusEvent?(event: SignedEventRecord): void;
+  /** Optional listener invoked when the bus reports a sequence gap (`cursor < oldest_seq`) and watch resyncs from records. */
+  onBusGap?(oldestSeq: number, newestSeq: number): void;
 };
 
 export const realWatchSources: WatchSources = {
@@ -146,6 +161,8 @@ export const realWatchSources: WatchSources = {
   paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
   watchCommand,
+  busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'watch', cursor }, { deadlineMs: 500 }),
+  busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
 };
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
@@ -392,6 +409,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
 
   const memory = newMemory();
   const told = new Set<string>();
+  const busTracker: SequenceTracker = createSequenceTracker(0);
   let outcomes: CheckOutcome[] = [];
   let checksAt: number | null = null;
   let readingsAt: number | null = null;
@@ -451,6 +469,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         told.add('foreign-session');
         say(`the session "${session}" is not this file's "${team.session}": its readings are not saved`, false);
       }
+
+      // Subscribe-first, poll-second (RFC 002 Amendment 01 §4.2): when the bus is running on
+      // `.agents/bus.sock`, read unseen events from `busTracker.cursor` and apply them in sequence
+      // order; on `gap`, reset the cursor and let this pass resync from the durable records; when
+      // no bus is running, fall back cleanly to the poll path.
+      const busConnected = !foreign && sources.busSubscribe !== undefined
+        ? await syncWatchBus(root, busTracker, sources)
+        : false;
 
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
       // `watch` or `tempo`, the watch keeps the waits that were approved, or the defaults.
@@ -556,6 +582,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           say(refusal.text, false);
         }
         for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        if (busConnected && sources.busPublish !== undefined) {
+          await publishWatchReportsToBus(root, session, result.reports, sources.now().toISOString(), sources.busPublish);
+        }
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
           if (label.title && sources.renameWorkspace) {
@@ -968,5 +997,83 @@ async function closeEnded(input: {
       ? sources.removeWorktree(task)
       : removeWorktree(io, false, { home: homedir(), now: sources.now }, team, root, dir, session, task, undefined, 'watch');
     if (code !== 0) say(`worktree ${task} was not removed`, true);
+  }
+}
+
+export async function syncWatchBus(
+  root: string,
+  tracker: SequenceTracker,
+  sources: Pick<WatchSources, 'busSubscribe' | 'onBusEvent' | 'onBusGap'>,
+): Promise<boolean> {
+  if (sources.busSubscribe === undefined) return false;
+  try {
+    const outcome = await sources.busSubscribe(root, tracker.cursor);
+    if (outcome.kind === 'events') {
+      for (const event of outcome.events) {
+        if (tracker.accept(event)) {
+          sources.onBusEvent?.(event);
+        }
+      }
+      if (outcome.cursor > tracker.cursor) {
+        tracker.reset(outcome.cursor);
+      }
+      return true;
+    }
+    if (outcome.kind === 'gap') {
+      tracker.reset(outcome.newest_seq);
+      sources.onBusGap?.(outcome.oldest_seq, outcome.newest_seq);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function publishWatchReportsToBus(
+  root: string,
+  session: string,
+  reports: readonly { key: string; text: string; to: string }[],
+  ts: string,
+  publish: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>,
+): Promise<void> {
+  for (const report of reports) {
+    const colon = report.key.indexOf(':');
+    if (colon < 0) continue;
+    const prefix = report.key.slice(0, colon);
+    const seat = report.key.slice(colon + 1);
+    if (seat === '') continue;
+    if (prefix === 'missing') {
+      await publish(root, {
+        ts,
+        kind: 'seat.unreachable',
+        session,
+        record_id: `watch:${report.key}:${ts}`,
+        seat,
+        subject: seat,
+        reason: report.text,
+      }).catch(() => {});
+    } else if (prefix === 'permission' || prefix === 'question' || prefix === 'vendor notice') {
+      await publish(root, {
+        ts,
+        kind: 'seat.at-prompt',
+        session,
+        record_id: `watch:${report.key}:${ts}`,
+        seat,
+        subject: seat,
+        prompt: prefix,
+        reason: report.text,
+      }).catch(() => {});
+    } else if (prefix === 'provider-error') {
+      await publish(root, {
+        ts,
+        kind: 'seat.provider-error',
+        session,
+        record_id: `watch:${report.key}:${ts}`,
+        seat,
+        subject: seat,
+        reason: report.text,
+      }).catch(() => {});
+    }
   }
 }
