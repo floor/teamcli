@@ -247,6 +247,8 @@ type SentAs = { spec: string; resolved: string };
  *  caller's own file. */
 type Aim = {
   seat: string;
+  /** The recipient's registry agent id (`agt_…`), or null on the declared-seat path. */
+  agentId: string | null;
   session: string;
   cli: string;
   /** The cross-session address the registry recorded for the target; null when none. */
@@ -474,7 +476,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (!configured) {
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
-    to = { seat, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
+    to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
@@ -485,6 +487,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     const cross = hit.team.root !== root;
     to = {
       seat: hit.agent.reach.seat,
+      agentId: hit.agent.id,
       session: hit.agent.reach.session,
       cli: hit.agent.cli,
       address: hit.agent.reach.address,
@@ -780,7 +783,7 @@ function handOff(
     from,
     from_id: admission.sender === 'owner' ? null : 'id' in admission.sender ? admission.sender.id : null,
     to: to.seat,
-    to_id: null,
+    to_id: to.agentId,
     team: teamIdOf(to.root),
     session: to.session,
     cli: to.cli,
@@ -789,6 +792,7 @@ function handOff(
     rule: admission.rule,
     project: to.project,
     root: to.root,
+    ...(to.sentAs !== null ? { spec: to.sentAs.spec, resolved: to.sentAs.resolved } : {}),
     body,
   };
   if (!PENDING_ID.test(record.id)) {
@@ -903,7 +907,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     if (!configured) {
       return refuse(io, dir, who, `${seatName}: it is not a declared seat; the file's seats are ${seatList(team)}`, host, report);
     }
-    to = { seat, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
+    to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) return refuse(io, dir, who, admission.why, host, report);
@@ -912,6 +916,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     const cross = hit.team.root !== root;
     to = {
       seat: hit.agent.reach.seat,
+      agentId: hit.agent.id,
       session: hit.agent.reach.session,
       cli: hit.agent.cli,
       address: hit.agent.reach.address,
@@ -1037,10 +1042,14 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   // Take before writing: only the confirm that renamed the record writes the line.
   const taken = takePending(team.project, root, host.home, id);
   if (!taken.ok) return refuse(io, dir, who, `${id}: ${taken.reason}`, host, report);
+  const sentAs = record.spec !== undefined && record.resolved !== undefined
+    ? { spec: record.spec, resolved: record.resolved }
+    : {};
   const written = appendHistory(record.project, record.root, host.home, {
     ts: host.now().toISOString(),
     from: record.from,
     to: record.to,
+    ...sentAs,
     body: record.body,
     id: record.id,
     outcome: 'delivered',
