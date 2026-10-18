@@ -35,6 +35,7 @@ import type { Command, Io } from '../io.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderHeader } from '../send/admit.ts';
 import { appendHistory } from '../send/history.ts';
@@ -70,18 +71,6 @@ opens a new one that cites the closed thread's last record.
 Exits 0 when the reply or the close is written, 1 when the reply is refused or no
 record holds <id>, 2 when the invocation or the team file can't be read.
 `;
-
-/**
- * How long a thread stays open after its newest record, in milliseconds. A placeholder the owner
- * may change: the setting's default is the owner's to name (`thread-ttl`, 002 §13).
- */
-export const THREAD_TTL_MS = 24 * 60 * 60 * 1000;
-
-/**
- * The most records a thread may hold before it ends — the cap on an exchange nobody closes
- * (`thread-cap`, 002 §13, question 8). A placeholder the owner may change.
- */
-export const THREAD_CAP = 50;
 
 export type ReplyHost = {
   home: string;
@@ -229,8 +218,8 @@ function findRecord(hits: { seat: string; path: string }[], root: string, sessio
 
 /**
  * Whether the thread is open, from the records on it and the closes beside them: an exchange
- * nobody closed, whose newest record is younger than `THREAD_TTL_MS`, with fewer than
- * `THREAD_CAP` records on it. A close outranks the clock, and the clock outranks the cap, so the
+ * nobody closed, whose newest record is younger than the shipping `thread-ttl`, with fewer than
+ * `thread-cap` records on it. A close outranks the clock, and the clock outranks the cap, so the
  * reason is the first fact that ended the thread. A record or close that does not verify changes
  * nothing, exactly as it changes no status.
  */
@@ -256,15 +245,19 @@ function threadStateOf(root: string, session: string, thread: string, key: KeyOb
     if (verifyClose(close, key)) closed = true;
   }
   if (closed) return { open: false, reason: 'close' };
-  if (latest > 0 && now.getTime() - latest >= THREAD_TTL_MS) return { open: false, reason: 'ttl' };
-  if (count >= THREAD_CAP) return { open: false, reason: 'cap' };
+  if (latest > 0 && now.getTime() - latest >= EVENT_THRESHOLDS.thread_ttl_seconds * 1_000) {
+    return { open: false, reason: 'ttl' };
+  }
+  if (count >= EVENT_THRESHOLDS.thread_cap) return { open: false, reason: 'cap' };
   return { open: true, reason: null };
 }
 
 /** Why a thread that is not open cannot be closed, in the thread's own terms. */
 function closedWords(thread: string, reason: NonNullable<ThreadState['reason']>): string {
-  if (reason === 'ttl') return `the thread ${thread} ended: no record on it for ${String(THREAD_TTL_MS / 3_600_000)}h`;
-  if (reason === 'cap') return `the thread ${thread} ended at its ${String(THREAD_CAP)}-record cap`;
+  if (reason === 'ttl') {
+    return `the thread ${thread} ended: no record on it for ${String(EVENT_THRESHOLDS.thread_ttl_seconds / 3_600)}h`;
+  }
+  if (reason === 'cap') return `the thread ${thread} ended at its ${String(EVENT_THRESHOLDS.thread_cap)}-record cap`;
   return `the thread ${thread} is already closed`;
 }
 

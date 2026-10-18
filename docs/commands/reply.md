@@ -19,7 +19,7 @@ open until it is closed or the clock or the cap ends it.
 
 A thread ends in three ways. `team reply <id> --close` writes a signed close sidecar beside the
 record it answers, `<id>.closed.json` — a thread's close is the addressee's own act, and it
-writes no message. A thread whose newest record is `thread-ttl` old (24 hours) is closed by the
+writes no message. A thread whose newest record is `thread-ttl` old (72 hours) is closed by the
 clock, and a thread that reaches `thread-cap` records (50) ends at the cap, for an exchange
 nobody closes. Both numbers are the owner's to change. A reply written on a closed thread is not
 refused for that reason: it opens a new thread that cites the record it answers — its own id is
@@ -100,7 +100,7 @@ Refusals name what stopped them, and nothing is written:
     team reply: record <id> is addressed to <seat>, not to <caller>
     team reply: record <id> was sent by the owner, and this build does not deliver a reply to the owner; nothing was written
     team reply: the thread <thread> is already closed; nothing was written
-    team reply: the thread <thread> ended: no record on it for 24h; nothing was written
+    team reply: the thread <thread> ended: no record on it for 72h; nothing was written
     team reply: the thread <thread> ended at its 50-record cap; nothing was written
     team reply: refused: <reason>
 
