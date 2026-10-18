@@ -260,7 +260,7 @@ function receiptSoon(dir: string, home: string, root: string, over: { seat?: str
       root,
       session: context.session,
       at: NOW.toISOString(),
-    }, home));
+    }, home), home);
     if (written.ok) clearInterval(timer);
   }, 2);
   return () => clearInterval(timer);
