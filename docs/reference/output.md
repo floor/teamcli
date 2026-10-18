@@ -143,9 +143,9 @@ difference: <what>
 
 The `who` value comes from the closed four-value vocabulary `DIFFERENCE_WHO_VALUES` (`src/output/text.ts`):
 
-- `'the owner'`: only the machine owner at an interactive terminal may run the repair (`team init`, `team add` when gated owner-only, `team grant`, `team delegate`, `team revoke`, `team check --repair`, `team reload` on rules drift, or any pane/file action marked `owner: true` or `approval: true`).
+- `'the owner'`: only the machine owner at an interactive terminal may run the repair (`team init`, `team add` when gated owner-only, `team grant`, `team delegate`, `team revoke`, `team check --repair`, or any pane/file action marked `owner: true` or `approval: true`).
 - `"the team's lead"`: the owner or the seat holding `leads: true` on the team (by the `leads` capability, never a role word) may run the repair (`team up`, `team down`, `team restart`, `team remove`, `team answer`, `team watch`, `team worktree`).
-- `'a grant holder'`: the owner or a seat/team holding an active signed grant covering the capability or grant scope (`write`, `read`, `review`, `gate`, `merge`, `deploy`, `act-as`, `use-broker`, or grant scopes `reload`, `swap`, `approve`).
+- `'a grant holder'`: the owner or a seat/team holding an active signed grant covering the capability or grant scope (`write`, `read`, `review`, `gate`, `merge`, `deploy`, `act-as`, `use-broker`, or grant scopes `reload`, `swap`, `approve`). A rules-drift difference names `team reload <seat>`: that command's map row is lead-admitted, so the row itself renders `who: the team's lead`, while a signed grant carrying the `reload` scope stands as the command's second door.
 - `'any seat'`: any registered seat of the team (or the owner) may run the repair (`team register`, `team send`, or seat-record read surfaces `status`, `check`, `messages`, `feed`, `list`, `usage`, `next`).
 
 **Set-aside `delivery_order` settings (`team check`, scene D4)**:
