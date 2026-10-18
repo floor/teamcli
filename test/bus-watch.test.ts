@@ -155,6 +155,51 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       expect(subOp.events.length).toBe(0);
       expect(subOp.cursor).toBe(1);
     }
+
+    // An explicit kinds filter narrows a subscription to the kinds it names; it never widens
+    // who receives a record. op-1 asking for message.arrived never sees worker-1's message,
+    // while worker-1 asking for the same kind still receives the one addressed to it.
+    const subOpKinds = await subscribeBusOnce(root, {
+      seat: 'op-1',
+      kinds: ['message.arrived'],
+      cursor: 0,
+    });
+    expect(subOpKinds.kind).toBe('events');
+    if (subOpKinds.kind === 'events') {
+      expect(subOpKinds.events.length).toBe(0);
+      expect(subOpKinds.cursor).toBe(1);
+    }
+    const subWorkerKinds = await subscribeBusOnce(root, {
+      seat: 'worker-1',
+      kinds: ['message.arrived'],
+      cursor: 0,
+    });
+    expect(subWorkerKinds.kind).toBe('events');
+    if (subWorkerKinds.kind === 'events') {
+      expect(subWorkerKinds.events.map((e) => e.payload.record_id)).toEqual(['m-1']);
+    }
+
+    // The owner's delivery path is no seat: a kind it asks for still reaches it when the raising
+    // side addresses the record to the owner.
+    const pubOwner = await publishToBus(root, {
+      ts: '2026-10-18T12:01:00.000Z',
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'm-owner',
+      from: 'clerk',
+      to: 'owner',
+    });
+    expect(pubOwner.kind).toBe('published');
+    const subOwnerKinds = await subscribeBusOnce(root, {
+      seat: 'owner',
+      kinds: ['message.arrived'],
+      cursor: 0,
+    });
+    expect(subOwnerKinds.kind).toBe('events');
+    if (subOwnerKinds.kind === 'events') {
+      // m-1 stays with worker-1; only the record addressed to the owner reaches the owner path.
+      expect(subOwnerKinds.events.map((e) => e.payload.record_id)).toEqual(['m-owner']);
+    }
   });
 
   test('a subscription resolves an agent registry id to its seat and binds a claimed pane, and a routing recipient named by id reaches that seat', async () => {
@@ -550,6 +595,14 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       stderr: () => {},
       reconcileIntervalMs: 0,
       bufferLimit: 2,
+      // A stored routing word names the projection seat for the message kinds it folds: its
+      // kinds filter narrows the subscription, and routing is what admits records addressed to
+      // other seats.
+      additiveRouting: {
+        'message.arrived': ['clerk'],
+        'message.delivered': ['clerk'],
+        'message.read': ['clerk'],
+      },
     });
     expect(gapBus.kind).toBe('serving');
     if (gapBus.kind !== 'serving') return;
@@ -613,10 +666,10 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
         gapRoot,
         follower.tracker,
         {
-          // A projection subscriber asks for the kinds it folds; the seat-addressed records it
-          // rebuilds from are delivered to their own recipients, not to a name.
+          // A projection subscriber asks for the kinds it folds; the records reach it through
+          // the routing word that names it, never because it named their kinds.
           busSubscribe: (r, cursor) => subscribeBusOnce(r, {
-            seat: 'owner',
+            seat: 'clerk',
             cursor,
             kinds: ['message.arrived', 'message.delivered', 'message.read'],
           }, { deadlineMs: 500 }),

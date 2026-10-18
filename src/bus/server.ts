@@ -493,12 +493,11 @@ function matchesSubscriber(
   resolveSeat?: SeatRecipientResolver,
 ): boolean {
   const { payload } = record;
+  // A kind filter narrows what a subscription reads; it never widens who receives a record.
+  if (selfKinds !== null && !selfKinds.has(payload.kind)) return false;
   // An event addressed to a seat by the raising side reaches that seat. The owner is addressed
   // this way for a report the policy's routing does not name him in (§4.5).
   if (payload.to !== undefined && payload.to !== '' && payload.to === seat) return true;
-  if (selfKinds !== null && selfKinds.has(payload.kind)) {
-    return true;
-  }
   const recipients = recipientsForEvent(payload, team, additiveRouting, [], resolveSeat);
   return recipients.has(seat);
 }
