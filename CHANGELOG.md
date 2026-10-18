@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.0-rc.4] - 2026-10-18
+## [0.5.0-rc.5] - 2026-10-18
 
 The first release since 0.3.5, and the first on npm since it. The file in the clone is the
 record: `team approve` is no longer a command, the commands read the file itself, and a seat
