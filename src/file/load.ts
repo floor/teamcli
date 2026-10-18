@@ -17,6 +17,16 @@ export const NOT_A_REPO = 'not inside a git repository: run team from a project,
 // `--file` still opens the path it names.
 export const LINK_NOT_FOLLOWED = `${NOT_A_REPO}: a link was found and not followed`;
 
+// The same refusal for a command whose options have no `--file`: the shared sentence ends by
+// offering one, and a command that takes none cannot keep it.
+export const NOT_A_REPO_NO_FILE = 'not inside a git repository: run team from a project';
+
+/** `message` with the `--file` offer removed when it is the no-repository refusal, unchanged
+ *  otherwise. A command that takes no `--file` prints this instead of the shared sentence. */
+export function withoutFileOffer(message: string): string {
+  return message.replace(NOT_A_REPO, NOT_A_REPO_NO_FILE);
+}
+
 /**
  * Whether a `loadTeamFile` / `currentTeam` problem is a line-attributed parse/validation error
  * (`problem.line > 0`, mapped to `*.file-invalid`) rather than an unparsed file-locate/read

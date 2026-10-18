@@ -2894,7 +2894,7 @@ scene('tempo.not-owner', async (place) => {
 scene('tempo.detached', async (place) => show(await tempo(place, ['urgent'], detachedCaller), 'only the owner runs this, from a terminal outside herdr'));
 scene('tempo.invocation', async (place) => show(await tempo(place, []), 'a word is required'));
 scene('tempo.word', async (place) => show(await tempo(place, ['faster']), 'must be relaxed, normal or urgent'));
-scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'not inside a git repository'), false);
+scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'run team from a project\n'), false);
 scene('tempo.file', async (place) => show(await tempo(place, ['urgent']), 'no team file'));
 
 async function held(place: Place, argv: string[], caller: Caller = owner, now: Date = NOW): Promise<Ran> {

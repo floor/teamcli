@@ -3,7 +3,7 @@ import { readArgs, type Args } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner, judgeCallerOf, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
-import { LINK_NOT_FOLLOWED, NOT_A_REPO } from '../file/load.ts';
+import { LINK_NOT_FOLLOWED, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -83,7 +83,9 @@ function fileProblemId(problems: Problem[]): 'proc.file' | 'proc.file-invalid' {
 }
 
 function problemLine(problem: Problem): string {
-  return `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}`;
+  // `team proc` takes no `--file`, so the no-repository refusal must not offer one; the id
+  // above still reads the untransformed message.
+  return `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${withoutFileOffer(problem.message)}`;
 }
 
 function fileProblems(io: Io, json: boolean, problems: Problem[]): number {

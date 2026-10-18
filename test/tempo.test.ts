@@ -177,6 +177,23 @@ describe('team tempo', () => {
     expect(readFileSync(where.file, 'utf8')).toBe(before);
   });
 
+  test('outside a repository, the no-repository refusal offers no --file: tempo takes none', async () => {
+    const where = place();
+    const bare = join(where.root, 'outside');
+    mkdirSync(bare);
+    const io = testIo(bare, { kind: 'owner' });
+    expect(await runTempo(['urgent'], io, { home: where.home })).toBe(2);
+    expect(io.err).toBe('team tempo: not inside a git repository: run team from a project\n');
+
+    const json = testIo(bare, { kind: 'owner' });
+    expect(await runTempo(['urgent', '--json'], json, { home: where.home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'tempo.not-a-repo',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
+  });
+
   test('--json carries the action envelope under the registered schema', async () => {
     const where = place();
     const io = testIo(where.root, { kind: 'owner' });

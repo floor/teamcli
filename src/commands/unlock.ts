@@ -1,4 +1,5 @@
 import { readArgs } from '../args.ts';
+import { withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
@@ -30,10 +31,12 @@ export async function runUnlock(argv: string[], io: Io, sources: LockHome = real
   if (!validLockName(name)) return invocation(out, nameProblem(name), json);
   const identity = resolveIdentity(io, sources);
   if (!identity.ok) {
+    // `team unlock` takes no `--file`, so the no-repository refusal must not offer one.
+    const message = withoutFileOffer(identity.message);
     if (json) {
-      writeJsonError(out, 'unlock.project', identity.message, null);
+      writeJsonError(out, 'unlock.project', message, null);
     } else {
-      out.stderr(`team unlock: ${identity.message}\n`);
+      out.stderr(`team unlock: ${message}\n`);
     }
     // exit: unlock.project
     return 2;
