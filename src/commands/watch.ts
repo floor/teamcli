@@ -48,7 +48,8 @@ import { machineLiveness, watchWords } from '../settings/declared.ts';
 import { entityLiveness } from '../entities.ts';
 import { defaultWatch } from '../file/validate.ts';
 import { createSequenceTracker, type EventAppendInput, type SignedEventRecord, type SequenceTracker } from '../bus/log.ts';
-import { OwnerDelivery } from '../bus/owner.ts';
+import { OwnerDelivery, writeRuntimeMailboxRecord } from '../bus/owner.ts';
+import { readEntityOrchestrator } from '../bus/seats.ts';
 import {
   publishToBus,
   subscribeBusOnce,
@@ -651,6 +652,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign && sources.busPublish !== undefined) {
           await publishWatchReportsToBus(root, session, result.reports, reportTs, sources.busPublish);
         }
+        // A prompt that is the lead's own, or one the lead has not cleared in time, climbs to the
+        // entity's lead in that team's own mailbox. The registry names no entity lead: the climb
+        // is still the event the line above published, whose routing always carries the owner.
+        if (!foreign && sources.home) {
+          for (const line of escalatePromptReports(
+            sources.home, root, team, session, result.reports, reportTs,
+          ).failed) tell(line, true);
+        }
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
           if (label.title && sources.renameWorkspace) {
@@ -1187,6 +1196,17 @@ export function watchReportEvent(
       reason: report.text,
     };
   }
+  if (prefix === 'prompt-escalated') {
+    return {
+      ts,
+      kind: 'seat.prompt-escalated',
+      session,
+      record_id: `watch:prompt-escalated:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
   if (prefix === 'provider-error') {
     return {
       ts,
@@ -1225,4 +1245,54 @@ export async function publishWatchReportsToBus(
     events.set(event.record_id, event);
   }
   for (const event of events.values()) await publish(root, event).catch(() => {});
+}
+
+/** The climb: the one place the watch leaves an escalation in another team's mailbox. A team's
+ *  lead at a prompt (the first rung skipped) and a prompt the lead has not cleared within
+ *  `prompt_escalation_seconds` are written as signed runtime messages to the entity's own lead,
+ *  in the entity team's root, where that team's watch rings them. Nothing is typed into a pane:
+ *  a climb is a mailbox record and an event, never a keystroke. A registry that names no entity
+ *  lead writes nothing here; the event's own routing still carries the owner, so a climb is
+ *  never silent. A seat at a prompt is not told about its own prompt: it cannot clear it by
+ *  reading a message, and the owner's copy carries it. */
+export function escalatePromptReports(
+  home: string,
+  root: string,
+  team: TeamFile,
+  session: string,
+  reports: readonly { key: string; text: string; to: string }[],
+  ts: string,
+): { written: string[]; failed: string[] } {
+  const target = readEntityOrchestrator(home, teamIdOf(root));
+  if (target === null) return { written: [], failed: [] };
+  const leads = new Set<string>();
+  if (team.orchestrator !== '') leads.add(team.orchestrator);
+  const stamp = ts.replace(/[^0-9A-Za-z]/g, '');
+  const written: string[] = [];
+  const failed: string[] = [];
+  const seen = new Set<string>();
+  for (const report of reports) {
+    const event = watchReportEvent(report, session, ts);
+    if (event === null || event.seat === undefined) continue;
+    const climbed = event.kind === 'seat.prompt-escalated';
+    if (!climbed && !(event.kind === 'seat.at-prompt' && leads.has(event.seat))) continue;
+    // One climb per seat per pass: the operator and owner copies of one report share a seat.
+    if (event.seat === target.seat || seen.has(event.seat)) continue;
+    seen.add(event.seat);
+    const why = climbed
+      ? report.text
+      : `${report.text} — its lead is the seat at the prompt, so the climb starts above it`;
+    const outcome = writeRuntimeMailboxRecord({
+      root: target.root,
+      home,
+      to: target.seat,
+      id: `evt-prompt-${climbed ? 'climb' : 'lead'}-${event.seat}-${stamp}`,
+      text: `${team.project}: ${why}`,
+      session: target.session,
+      at: ts,
+    });
+    if (outcome.ok) written.push(outcome.path);
+    else failed.push(`${target.seat} was not told of ${event.seat}'s prompt: ${outcome.error}`);
+  }
+  return { written, failed };
 }

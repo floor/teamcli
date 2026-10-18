@@ -62,7 +62,7 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 
 - **Closed union (`EVENT_KINDS`)**: message lifecycle (`message.arrived`, `.delivered`, `.read`,
   `.replied`, `.held`), seat lifecycle (`seat.working`, `.idle`, `.idle-timeout`, `.blocked`,
-  `.at-prompt`, `.unreachable`, `.done`), work lifecycle (`work.claimed`, `.done`, `.released`,
+  `.at-prompt`, `.prompt-escalated`, `.unreachable`, `.done`), work lifecycle (`work.claimed`, `.done`, `.released`,
   `.gate`, `.suite`), and team/governance (`team.seat-added`, `.seat-removed`, `.seat-reloaded`,
   `.grant-issued`, `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`),
   the lead's own `release.ready` and `decision.needed`, the two refusals — `record.invalid` for a
@@ -76,7 +76,9 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   one event per rule and object in an hour and counts the repeats in `.agents/team.log`.
 - **Recipients and how a seat is named**: a kind's recipients are positions — `lead` (the
   orchestrator's seat and every seat marked `leads`), `operator`, `sender` and `subject` (the
-  record's own fields), and `owner` (the owner's runtime, never a seat) — or seats.
+  record's own fields), `entity` (the lead of the entity's own team, the one whose `project` is the
+  entity — the same seat admission calls the entity's own coordinator, resolved from the registry
+  by `src/bus/seats.ts`), and `owner` (the owner's runtime, never a seat) — or seats.
   `EVENT_ROUTING_DEFAULTS` is the release table; a position the event does not carry resolves to
   nobody. A seat is written by
   its plain name or by the registry agent id (`agt_…`) that holds it: an id resolves to a seat only
@@ -93,7 +95,8 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   (`routing-removes-inherited`). A kind a level does not name keeps the recipients it has. A
   privileged kind's default recipients are added back at the end of every fold, so the invariant
   stands even when a hand-built chain skipped the check.
-- **Privileged kinds**: `team.grant-*`, `team.policy-*`, `seat.at-prompt`, `record.invalid` and
+- **Privileged kinds**: `team.grant-*`, `team.policy-*`, `seat.at-prompt`, `seat.prompt-escalated`,
+  `record.invalid` and
   `security.refused` are privileged, and
   the owner's `privileged-kinds` list grows the set (`growPrivilegedKinds`); the list itself is the
   owner's alone (`privileged-kinds-owner-only`). A seat may never add itself as a recipient of a
@@ -123,7 +126,7 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 - **At once, or in the pass's digest**: the `owner-at-once` setting (`OWNER_AT_ONCE_SETTING`, the
   owner's alone) names the kinds notified on the pass that reads them, each with its own record:
   `DEFAULT_OWNER_AT_ONCE_KINDS` holds `seat.at-prompt` of a permission, trust, login, vendor or
-  rate-limit prompt, a lead's `seat.unreachable` or `seat.done`, every `team.seat-*`,
+  rate-limit prompt, `seat.prompt-escalated`, a lead's `seat.unreachable` or `seat.done`, every `team.seat-*`,
   `team.grant-*` and `team.policy-*` kind, the lead's `release.ready` and `decision.needed`, and
   the two refusals `record.invalid` and `security.refused`. Every
   other owner-routed event waits in the pass and lands at its end as one digest record whose body
@@ -157,9 +160,23 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   events to `OwnerDelivery` (§4). Any watch publishes its check reports as events
   (`publishWatchReportsToBus`), merging an operator line and an owner line for one record id into
   one event addressed to `owner`; a watch a seat starts polls and publishes but never subscribes
-  with the owner's identity. It publishes `seat.unreachable`, `seat.at-prompt`, and
-  `seat.blocked` when its poll detects a missing, prompted, or blocked seat, and falls back
-  cleanly to polling when no bus is running.
+  with the owner's identity. It publishes `seat.unreachable`, `seat.at-prompt`,
+  `seat.prompt-escalated`, and
+  `seat.blocked` when its poll detects a missing, prompted, blocked, or un-cleared seat, and falls
+  back cleanly to polling when no bus is running.
+- **A prompt climbs, and never goes silent**: a seat held at a permission, vendor-notice or
+  rate-limit prompt starts the watch's clock. A prompt still held after
+  `EVENT_THRESHOLDS.prompt_escalation_seconds` (300s, shorten-only like the other event
+  thresholds) raises `seat.prompt-escalated`, whose release routing is `entity` and `owner`.
+  The owner is unconditional, so a climb is still delivered when the registry names no entity
+  lead. A lead's own `seat.at-prompt` is the first rung skipped: `recipientsForEvent` sends it to
+  `entity` and `owner` from the start, and no clock is kept for it. A prompt that clears before
+  the window is the lead acting: its clock goes and no climb is raised, and one climb is raised
+  per prompt spell. The entity lead is reached as one signed runtime record in that lead's
+  mailbox under the entity team's own root (`.agents/messages/<seat>/`, the entity team's
+  session), written with `writeRuntimeMailboxRecord` so that team's watch rings it as a message.
+  Nothing is typed into any pane: a climb is a record and an event, never a keystroke, and a
+  human's pane is not a delivery target.
 
 ## 6. Same-user (`M`-not-`A`) boundary
 

@@ -46,6 +46,7 @@ import { load } from './checks/load.ts';
 import { memory as memoryCheck } from './checks/memory.ts';
 import { missing } from './checks/missing.ts';
 import { modelDrift } from './checks/model-drift.ts';
+import { promptEscalation } from './checks/prompt-escalation.ts';
 import { restored } from './checks/restored.ts';
 import { swapFree } from './checks/swap-free.ts';
 import { swapGrowth } from './checks/swap-growth.ts';
@@ -146,9 +147,9 @@ export type PassResult = {
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
-// run, except the four that can't be turned off.
+// run, except the five that can't be turned off.
 export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, attention, providerError, unsent, idle];
-export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
+export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
 // permission prompt as idle, so the screen decides first. `team check` reads it too, over a pane

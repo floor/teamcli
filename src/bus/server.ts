@@ -43,6 +43,7 @@ import {
   recipientsForEvent,
   refusalRecord,
   type EventKind,
+  type TeamRoutingRoles,
 } from './kinds.ts';
 import {
   appendEvent,
@@ -54,7 +55,7 @@ import {
   type SignedEventRecord,
 } from './log.ts';
 import { reconcilePass } from './reconcile.ts';
-import { readSeatResolver } from './seats.ts';
+import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 
 export function busSocket(root: string): string {
@@ -522,7 +523,7 @@ function matchesSubscriber(
   record: SignedEventRecord,
   seat: string,
   selfKinds: ReadonlySet<EventKind> | null,
-  team: TeamFile,
+  team: TeamRoutingRoles,
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>,
   resolveSeat?: SeatRecipientResolver,
 ): boolean {
@@ -553,6 +554,14 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
   // A routing word may name a seat by its registry id; resolve it against the registry on disk so
   // that `{ seat: agt_… }` reaches the seat that holds it, while plain names stand as written.
   const resolveSeat = readSeatResolver(home, teamIdOf(input.root));
+  // The entity's own lead, for the `entity` routing position: a lead's prompt and a climbed
+  // `seat.prompt-escalated` name it. Read once at start; the watch resolves the mailbox target
+  // fresh on every climb, so a reregistered entity team is reached without a bus restart.
+  const entityOrchestrator = readEntityOrchestrator(home, teamIdOf(input.root));
+  const routingTeam: TeamRoutingRoles = {
+    ...input.team,
+    ...(entityOrchestrator === null ? {} : { entityOrchestrator: entityOrchestrator.seat }),
+  };
   const bufferLimit = input.bufferLimit ?? DEFAULT_SUBSCRIBER_BUFFER_LIMIT;
   const reconcileIntervalMs = input.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_SECONDS * 1000;
   // Retention before the first event: a team back after an idle month drops its old segments now.
@@ -596,7 +605,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     const fanOut = (record: SignedEventRecord): void => {
       for (const sub of subscribers) {
-        if (!matchesSubscriber(record, sub.seat, sub.kinds, input.team, input.additiveRouting, resolveSeat)) continue;
+        if (!matchesSubscriber(record, sub.seat, sub.kinds, routingTeam, input.additiveRouting, resolveSeat)) continue;
         if (sub.queue.length >= sub.bufferLimit) {
           // Bounded per-subscriber buffer overflow: send `gap` so the subscriber resyncs from
           // durable records rather than dropping an event silently (Amendment 01 §4.2).
@@ -640,7 +649,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     const server = createServer((socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));
-      serveBusConnection(socket, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat);
+      serveBusConnection(socket, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam);
     });
 
     const failure = await new Promise<{ code?: string } | null>((done) => {
@@ -713,6 +722,7 @@ function serveBusConnection(
   subscribers: Set<LiveSubscriber>,
   fanOut: (record: SignedEventRecord) => void,
   resolveSeat: SeatRecipientResolver,
+  routingTeam: TeamRoutingRoles,
 ): void {
   socket.on('error', () => socket.destroy());
   socket.setTimeout(REQUEST_IDLE_MS, () => socket.destroy());
@@ -734,7 +744,7 @@ function serveBusConnection(
     const line = buffer.slice(0, at);
     buffer = '';
     socket.setTimeout(0);
-    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat);
+    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam);
   });
 }
 
@@ -748,6 +758,7 @@ function dispatchBusRequest(
   subscribers: Set<LiveSubscriber>,
   fanOut: (record: SignedEventRecord) => void,
   resolveSeat: SeatRecipientResolver,
+  routingTeam: TeamRoutingRoles,
 ): void {
   const request = parseBusRequest(line);
   if (!request) {
@@ -876,7 +887,7 @@ function dispatchBusRequest(
 
   const selfKinds = request.kinds !== undefined ? new Set<EventKind>(request.kinds) : null;
   const matching = fromCursor.events.filter((rec) =>
-    matchesSubscriber(rec, seat, selfKinds, input.team, input.additiveRouting, resolveSeat),
+    matchesSubscriber(rec, seat, selfKinds, routingTeam, input.additiveRouting, resolveSeat),
   );
 
   if (matching.length > bufferLimit) {

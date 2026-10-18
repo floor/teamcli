@@ -169,6 +169,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
 | `<seat> is at a rate limit on <account>: usage limit, resets at <time>` | a seat stopped on its provider's usage limit, and the screen names when it resets — today Claude Code's rejected 429 or 403 and Gemini's exhausted-quota dialog; `<account>` is the pool the seat spends, its own `account:` or its vendor when it names none; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
 | `<seat> is at a rate limit on <account>: usage limit, and the screen names no reset time` | the same usage-limit screen when it names no reset time |
+| `<seat> is still at a <prompt> prompt after <n> minutes: the team's lead has not cleared it, and the entity's lead and the owner are told` | a permission, vendor-notice or rate-limit prompt held for `prompt_escalation_seconds` (5m by default, and only shorter): once per prompt, the team's lead having cleared none of it |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is neither idle, done, working nor blocked; a seat whose profile says herdr cannot report it is read from its screen, so this is said only when that screen cannot be read either |
 | `<seat> holds text in its input box that was never sent` | unsent text for `watch.unsent_after`; the watch never sends or clears text it cannot show it typed itself |
@@ -229,6 +230,16 @@ vendor notice, a machine figure, an account inside its reserve or at its floor, 
 herdr doesn't answer, a typed line was not sent, and the watch
 stopped. Neither flag removes the log line, and neither reaches `team status`: a reserve still
 shows on the budgets table, and a record that is not in force still shows there.
+
+A prompt never goes silent. When the seat at the prompt is the team's lead, or when any seat has
+held its prompt for the escalation window — `prompt_escalation_seconds`, five minutes by default
+and an event threshold the owner sets shorter, never longer — the watch raises
+`seat.prompt-escalated` beside its report. The routing sends that event, and a lead's own
+`seat.at-prompt`, to the entity's own lead and to the owner at once, and the watch leaves one
+signed record in the entity lead's mailbox under the entity team's own root, where that team's
+watch rings it as a message. A prompt that clears before the window is the lead acting, and no
+climb is raised. Nothing is typed into any pane for a climb: it is an event and a mailbox record,
+never a keystroke, so a prompt in a human's pane climbs the same way and is never nudged.
 
 Owner-addressed events take the same path from the Runtime, with no seat in it. The watch is the
 owner's delivery path when the owner check that admits owner-only actions admits it, when it runs
@@ -576,7 +587,8 @@ team watch: a watch already runs for the session "beacon" (pid 4242)
 exit 1
 ```
 
-The four that can't be turned off — `attention`, `missing`, `model-drift` and `approval` — are
+The five that can't be turned off — `attention`, `missing`, `model-drift`, `prompt-escalation` and
+`approval` — are
 refused by the schema itself, with the line, and so is a name that is no check. A command that
 reads such a file refuses it the same way, and the watch keeps the last copy that validated, with
 the checks as the owner approved them.
@@ -618,7 +630,7 @@ seats:
 
 ```console
 $ team up ; echo "exit $?"
-team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, approval always run
-team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, approval, load, memory, disk, swap-free, swap-growth, budget
+team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, prompt-escalation, approval always run
+team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-free, swap-growth, budget
 exit 2
 ```
