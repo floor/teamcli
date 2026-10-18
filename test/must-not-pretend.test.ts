@@ -45,7 +45,7 @@ const TEAM = [
   'workspace:',
   '  mode: shared',
   'seats:',
-  '  - role: coordinator',
+  '  - role: orchestrator',
   '    name: claude-keeper',
   '    label: coordinator',
   '    cli: claude-code',
