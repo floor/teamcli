@@ -28,7 +28,7 @@ operator: lead
 workspace:
   mode: shared
 seats:
-  - role: coordinator
+  - role: orchestrator
     name: lead
     cli: claude-code
     vendor: anthropic

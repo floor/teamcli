@@ -29,7 +29,7 @@ operator: lead
 workspace:
   mode: shared
 seats:
-  - role: coordinator
+  - role: orchestrator
     name: lead
     cli: claude-code
     vendor: anthropic
@@ -77,7 +77,7 @@ function place(text: string): { root: string; home: string } {
 /** A registered team, with its seat on the roster the permission bridge reads. */
 function record(root: string, home: string, entity: string, session = 'acme'): void {
   noteTeam(home, root, { project: 'acme', entity, session, lobby: null }, 'defined', 'owner');
-  setRoster(home, teamIdOf(root), [{ agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true }]);
+  setRoster(home, teamIdOf(root), [{ agent: 'agt_000000000000', seat: 'lead', role: 'orchestrator', leads: true }]);
 }
 
 /** The live session as herdr answers it, with the seat's sidebar lines as the file writes them. */

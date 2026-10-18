@@ -285,12 +285,13 @@ seats:
 ```
 
 The team runs as the file and the state say, so there is nothing to act on (beyond the file's
-legacy `coordinator:` deprecation warning):
+legacy `coordinator:` deprecation warning and the note its lead's 0.3.5/0.4 role word earns):
 
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
 warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0
 ```
@@ -301,6 +302,7 @@ A seat of the team runs it too, and reads the same answer:
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
 warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0
 ```
@@ -312,6 +314,7 @@ them, and both repairs are the owner's:
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
 warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 difference: claude-keeper is in the file and is not running
   repair: team up
   who: the owner
