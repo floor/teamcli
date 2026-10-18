@@ -1,9 +1,12 @@
 # team messages
 
 Shows a message that is already waiting and writes the receipt that says it was shown. Anyone in
-the checkout may run it. It verifies the record, prints the body, and writes the receipt in that one
-step; a record that does not verify prints no body and writes nothing. Nothing in this build writes
-a message record: the watch only rings when a record is already there.
+the checkout may run it. A send writes the message as one signed record into the recipient's
+folder, `<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still
+waiting there, verifies its signature with this checkout's message key, prints the body, and writes
+the signed read receipt (`<id>.read.json`) in that one step. A record that does not verify prints
+no body and writes nothing. A message a previous build left in `.agents/messages/` is read the same
+way; nothing writes there any more.
 
 ## Synopsis
 
