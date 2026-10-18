@@ -16,7 +16,7 @@ Every row was measured on this machine on 2026-10-18 with the binary's own `--ve
 | claude-code | 2.1.302 | none — it has the native leg | nothing | `claude mcp add ... -s, --scope <scope> (local, user, or project)` |
 | codex | codex-cli 0.161.0 | two `-c` values on the launch line, naming `mcp_servers.team_inbox` | nothing | `-c, --config <key=value>` "Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`" |
 | gemini | 0.64.0 | `gemini mcp add -s project team-inbox ...` | `.gemini/settings.json` | `-s, --scope <user\|project> (default: "project")` |
-| cursor | 2026.10.14-0f9edde | team merges the entry into `.cursor/mcp.json`; the launch line adds `--approve-mcps` | `.cursor/mcp.json` | `mcp login <identifier>` names ".cursor/mcp.json"; `--approve-mcps` "Automatically approve all MCP servers" |
+| cursor | 2026.10.16-e3cb207 | team merges the entry into `.cursor/mcp.json`; the launch line adds `--approve-mcps` | `.cursor/mcp.json` | `mcp login <identifier>` names ".cursor/mcp.json"; `--approve-mcps` "Automatically approve all MCP servers" |
 | grok | 1.0.60 | `grok mcp add -s project team-inbox ...` | `.grok/config.toml` | `-s, --scope <user\|project>`; "project (./.grok/config.toml)" |
 | antigravity/agy | 1.4.2 | none — drop and typed legs | nothing | `agy mcp add` has no scope flag and no per-run config route |
 | muse | 1.4.10 | none — drop and typed legs | nothing | `muse init` scaffolds `AGENTS.md`; no workspace settings route in `--help` |
