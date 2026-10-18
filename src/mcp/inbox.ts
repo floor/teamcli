@@ -38,6 +38,15 @@ export const INBOX_POLL_MS = 25;
  *  is no listener here that could take the message. */
 export const NO_INBOX_LISTENER = 'no live inbox listener';
 
+/** How long an unread inbox message waits before the watch types its drop as the fallback: the
+ *  same ten-minute window the native leg allows for a confirmation, so a live inbox never delays
+ *  a message longer than the frame path does. */
+export const INBOX_FALLBACK_MS = 10 * 60_000;
+
+/** The reason a typed fall-through records: the inbox had a live listener, and the message was
+ *  still unread when the fallback window ended. */
+export const INBOX_FALLBACK_REASON = `mcp-inbox: no receipt within ${String(INBOX_FALLBACK_MS / 60_000)}m`;
+
 /** What a running server leaves beside the inbox so `team send` can tell the leg is live. */
 export type InboxListener = {
   v: 1;

@@ -9,6 +9,11 @@
 // Every retry is bounded (`PENDING_MAX_TRIES` typed tries, `PENDING_MAX_AGE_MS` from the held
 // send) and reported when it stops: the word is the drop's path, so the message is never lost
 // silently even though the sender's own command has already exited.
+//
+// A message the mcp-inbox leg left is not a held send: its marker says so, and the seat's own
+// client reads it. A receipt promotes it once (`delivered (read)`, the marker cleared) with nothing
+// typed; a message still unread when `INBOX_FALLBACK_MS` ends is handed to this same retry, which
+// types its trigger and records why the fallback happened.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
@@ -16,6 +21,7 @@ import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { isBareShellPane } from '../send/daemon.ts';
+import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
 import {
   clearPending,
   PENDING_MAX_AGE_MS,
@@ -35,7 +41,6 @@ import { readScreen } from './screen.ts';
 export type RetrySources = {
   screen(pane: string, session: string): string | null;
   status(pane: string, session: string): string | null;
-  processes?(pane: string, session: string): PaneProcesses | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   sleep(ms: number): Promise<void>;
@@ -59,9 +64,11 @@ export type RetryScene = {
   say(text: string, desktop: boolean): void;
 };
 
-/** The drop's words, minus the trigger line: one sentence for the watch's log. */
+/** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send
+ *  was `sent (unconfirmed)` rather than held — the seat's own client never read it — and the
+ *  watch typing it is the fallback its bound promises, not a retry. */
 function heldWords(drop: PendingDrop): string {
-  return `a held send from ${drop.from}`;
+  return drop.leg === 'mcp-inbox' ? `an inbox send from ${drop.from}` : `a held send from ${drop.from}`;
 }
 
 /** The drop is out of retries: forget the marker and say where the message is, so it can be
@@ -154,6 +161,9 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
           outcome: 'delivered',
           ...(taken ? { note: TAKEN_REASON } : {}),
           via: 'typed',
+          // A typed fall-through is the inbox leg's own bound ending: the history line says why
+          // the same drop file was typed after the seat's client left it unread.
+          ...(drop.leg === 'mcp-inbox' ? { failed: [INBOX_FALLBACK_REASON] } : {}),
         });
       }
       scene.say(
@@ -181,15 +191,42 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
 }
 
 /**
+ * Promotes every inbox send a seat has read since the last pass: `<id>.read` is the seat's own
+ * client saying it read the message, so the history records `delivered (read)` once and the
+ * marker is cleared. Nothing is typed and no pane is needed — the pass reads two files per marker
+ * — so it runs in a watch without nudges too, where the receipt is the only word the sender gets.
+ */
+export function promoteInboxDrops(scene: RetryScene): void {
+  for (const seat of scene.team.seats) {
+    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    for (const drop of readPending(dropDir)) {
+      if (drop.leg !== 'mcp-inbox') continue;
+      if (!receiptHeld(dropDir, drop.id, seat.name, scene.session)) continue;
+      clearPending(dropDir, drop.id);
+      if (scene.home !== undefined) {
+        appendHistory(scene.team.project, scene.root, scene.home, {
+          ts: scene.now.toISOString(),
+          from: drop.from,
+          to: drop.to,
+          body: drop.body,
+          id: drop.id,
+          outcome: 'delivered (read)',
+          via: 'mcp-inbox',
+        });
+      }
+      scene.say(`${seat.name}: an inbox send from ${drop.from} was read in its inbox`, false);
+    }
+  }
+}
+
+/**
  * Retries the held drops of every seat this team has a live pane for: the oldest drop of each
  * seat, at most one per seat per pass, so a seat is never sent two messages at once.
  */
 export async function retryHeldDrops(scene: RetryScene): Promise<void> {
   for (const seat of scene.team.seats) {
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
-    // A marker the mcp-inbox leg left is not a held drop: the message waits in the seat's own
-    // inbox for its client to pull, and this pass never types it.
-    const drops = readPending(dropDir).filter((drop) => drop.leg === undefined);
+    const drops = readPending(dropDir);
     if (drops.length === 0) continue;
     // A pane the file marks as a human's is never typed into: a retry is typing, so a marker
     // left for such a seat is given up on where it stands, with the reason, and the message
@@ -214,7 +251,11 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
     const pane = agents.length === 1 ? agents[0]?.pane : undefined;
     if (pane === undefined || pane === scene.ownPane) continue;
-    const drop = live[0];
+    // A typed marker is the retry's own business and always goes first. An inbox marker is typed
+    // only once its fallback window has ended — before that the seat's own client still has the
+    // message, and typing the trigger would race a read that is about to happen.
+    const drop = live.find((one) => one.leg === undefined)
+      ?? live.find((one) => one.leg === 'mcp-inbox' && now - Date.parse(one.ts) > INBOX_FALLBACK_MS);
     if (drop !== undefined) await retryOne(scene, seat.cli, pane, dropDir, drop);
   }
 }

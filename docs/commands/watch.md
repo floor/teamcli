@@ -5,8 +5,9 @@ screens, the file, the record, the machine — prints what is wrong, and removes
 whose end holds. A temporary seat is left as it is: the owner removes it.
 
 A report is never typed into a seat. It goes to `.agents/team.log` and to the desktop
-notification; the operator reads the log. The watch types two fixed lines,
-and neither carries a report's text. A message already waiting under
+notification; the operator reads the log. The watch types two fixed lines of its own — the ring
+and a work drop's line — and neither carries a report's text; a held send's retry types the
+sender's own trigger line, which names the drop and carries no report either. A message already waiting under
 `.agents/messages/<seat>/` is the ring: when that seat's box is an empty idle prompt, the watch
 types `Team: run team messages` — and not the body — so the seat reads its messages. The work
 drop reaches each idle worker once `idle_first` has passed and again every `idle_repeat` when
@@ -227,7 +228,8 @@ stopped. Neither flag removes the log line, and neither reaches `team status`: a
 shows on the budgets table, and a record that is not in force still shows there.
 
 The watch types two fixed lines, and never a report: the ring, when a message waits for a seat,
-and a work drop's line, when an idle worker is due one. The lines around them:
+and a work drop's line, when an idle worker is due one. A retry types a third, the sender's own
+trigger line for a drop this watch is delivering. The lines around them:
 
 | Line | Made when |
 | --- | --- |
@@ -247,10 +249,15 @@ and a work drop's line, when an idle worker is due one. The lines around them:
 | `liveness_<setting>: the <level> declared <n>, longer than the <n> in force — a liveness threshold may be tightened, never loosened, unless the level above allows it` | a liveness word in the chain would loosen a threshold: it is set aside, the value in force stands, and the line is said once per setting |
 | `<name>: its record is not an approved seat; left as it is (the owner cleans it: team remove <name> --abandon)` | a temporary seat whose end is proved and whose pane is free is left running |
 | `worktree <task> was not removed` | its removal failed; it is tried again on the next pass |
+| `<seat>: an inbox send from <from> was read in its inbox` | the seat's client read an `mcp-inbox` message after the sender's own short wait had ended; the history records `delivered (read)` and the record beside the drop is cleared, and nothing is typed |
+| `<seat>: a held send from <from> was delivered on retry` / `<seat>: an inbox send from <from> was delivered on retry` | this pass typed the drop's trigger line and sent it: a held send once the box was free, or an inbox message still unread past its ten-minute fallback window |
+| `<seat>: a held send from <from> was not delivered (<why>); the drop file is at <path>; send it again` (the word is `an inbox send` for the fallback) | the retry's bound ended — three typed tries, thirty minutes, a trigger that would not fit in a pane, or a drop file moved away — and the message waits where the line names it |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
 
 A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, the watch types `Team: run team messages` and not the body. `--no-nudge` types neither line. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. A work drop wins the pane: a pass that types one does not also type the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes that record. A report is never typed. A seat the team file marks `human: true` is never typed into: a work drop or ring addressed there is not typed, and the report says whose pane was spared; a held send's retry is given up on with the reason, and its message waits in the drop file.
+
+A held send is not a report either. When `team send` found the box busy — a draft, a dialog, a trigger the seat did not take — it ended `held`, `not-submitted` or `unreachable` and left the drop and a record beside it. Each pass delivers one such drop per seat once that seat's box is free — an empty idle prompt, or the same trigger still in it unsent — never over text the watch cannot show it typed itself, bounded at three typed tries and thirty minutes from the send, and a drop that runs out is named by its path so the message can be sent again. A message the delivery order's `mcp-inbox` leg left is not typed while the seat's own client may still read it: the watch promotes a receipt once — one `delivered (read)` history line, nothing typed — and a message still unread ten minutes after the send is handed to the same retry, whose history line records `failed: mcp-inbox: no receipt within 10m`. A typed record always goes before an inbox one, so an inbox message never delays a held send's retry. `--no-nudge` types nothing, so it retries nothing; the promotion types nothing either way and runs in that watch too.
 
 ## Budgets
 

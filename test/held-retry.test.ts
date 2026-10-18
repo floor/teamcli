@@ -29,11 +29,19 @@ import {
 } from '../src/send/pending.ts';
 import { readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
 import type { Live } from '../src/status/compare.ts';
-import { retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
+import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage } from '../src/mcp/inbox.ts';
+import { promoteInboxDrops, retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
+// Inbox ids are what `team send` writes — a lowercase UUID — because the server serves no other
+// name: a seeded message must be readable through `readMessage`, the code the server reads with.
+const INBOX_A = 'aaaaaaaa-0000-4000-8000-000000000001';
+const INBOX_B = 'bbbbbbbb-0000-4000-8000-000000000002';
+const INBOX_C = 'cccccccc-0000-4000-8000-000000000003';
+const INBOX_D = 'dddddddd-0000-4000-8000-000000000004';
+const INBOX_W = 'eeeeeeee-0000-4000-8000-000000000005';
 const raw = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 // A question the agent asked: the classifier's last-line footer makes it a dialog, never a box
 // the send may type into or press Enter on.
@@ -155,6 +163,22 @@ function seedHeld(dir: string, session: string, seat: string, id: string, body: 
   const path = dropMessage(dropDir, id, body);
   markPending(dropDir, { id, from: 'owner', to: seat, body, ts: ts.toISOString() });
   return dropDir;
+}
+
+/** A drop and its record, as the mcp-inbox leg leaves them: the message waits in the seat's own
+ *  inbox, and the marker says which leg left it. */
+function seedInbox(dir: string, session: string, seat: string, id: string, body: string, ts = NOW): string {
+  const dropDir = join(dir, 'send-drops', session, seat);
+  dropMessage(dropDir, id, body);
+  markPending(dropDir, { id, from: 'owner', to: seat, body, ts: ts.toISOString(), leg: 'mcp-inbox' });
+  return dropDir;
+}
+
+/** The receipt an `inbox_read` call writes: through the same code the server serves reads with,
+ *  so the record's shape is the server's own. */
+function readInbox(dropDir: string, id: string, seat: string, session: string): void {
+  const read = readMessage(dropDir, id, seat, session, 4242);
+  if (!read.ok) throw new Error(read.reason);
 }
 
 describe('retryHeldDrops', () => {
@@ -378,7 +402,7 @@ describe('retryHeldDrops', () => {
     ]);
   });
 
-  test('an mcp-inbox marker is not a held send: the pass leaves it and types nothing', async () => {
+  test('a young mcp-inbox marker is not a held send: the pass leaves it and types nothing', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
@@ -406,6 +430,141 @@ describe('retryHeldDrops', () => {
     expect(readFileSync(path, 'utf8')).toBe(body);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok && history.entries).toEqual([]);
+  });
+});
+
+describe('promoteInboxDrops', () => {
+  test('a receipt promotes the send once: delivered (read), the marker gone, nothing typed', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const body = 'from the owner\n\nread when the seat polls';
+    const dropDir = seedInbox(made.dir, 'acme', 'lead', INBOX_A, body);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const at = {
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      // No pane is named: a promotion reads two files and types nothing.
+      live: { running: true, agents: [], workspaces: [], screens: {} } as Live,
+      ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    };
+
+    // Before the read there is no receipt, and the marker stands untouched.
+    promoteInboxDrops(at);
+    expect(readPending(dropDir)).toHaveLength(1);
+    expect(said).toEqual([]);
+    expect(readHistory('acme', made.root, made.home)).toMatchObject({ ok: true, entries: [] });
+
+    readInbox(dropDir, INBOX_A, 'lead', 'acme');
+    promoteInboxDrops(at);
+
+    expect(readPending(dropDir)).toEqual([]);
+    // The drop is the message and stays: only the record beside it is done with.
+    expect(readFileSync(join(dropDir, INBOX_A), 'utf8')).toBe(body);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([
+      {
+        ts: NOW.toISOString(),
+        from: 'owner',
+        to: 'lead',
+        body,
+        id: INBOX_A,
+        outcome: 'delivered (read)',
+        via: 'mcp-inbox',
+      },
+    ]);
+    expect(said).toEqual(['lead: an inbox send from owner was read in its inbox']);
+
+    // The marker is gone, so a later pass neither promotes nor reports it again.
+    promoteInboxDrops(at);
+    expect(said).toHaveLength(1);
+    expect(readHistory('acme', made.root, made.home)).toMatchObject({ ok: true, entries: [{ id: INBOX_A }] });
+  });
+
+  test('a receipt that names another seat proves nothing', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedInbox(made.dir, 'acme', 'lead', INBOX_B, 'from the owner\n\nnot for helper');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    // The receipt exists under the same id, but its record names another seat's read. It is not
+    // this inbox's own proof, so the marker stands and nothing is written down.
+    readInbox(dropDir, INBOX_B, 'helper', 'acme');
+    promoteInboxDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: { running: true, agents: [], workspaces: [], screens: {} },
+      ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(readPending(dropDir)).toHaveLength(1);
+    expect(said).toEqual([]);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok && history.entries).toEqual([]);
+  });
+});
+
+describe('an inbox send past its fallback window', () => {
+  test('the watch types the trigger once and records why', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const body = 'from the owner\n\nleft unread';
+    const old = new Date(NOW.getTime() - INBOX_FALLBACK_MS - 60_000);
+    const dropDir = seedInbox(made.dir, 'acme', 'lead', INBOX_C, body, old);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(one.typed).toEqual([triggerLine(join(dropDir, INBOX_C)) as string]);
+    expect(one.enters).toBe(1);
+    expect(readPending(dropDir)).toEqual([]);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([
+      {
+        ts: NOW.toISOString(),
+        from: 'owner',
+        to: 'lead',
+        body,
+        id: INBOX_C,
+        outcome: 'delivered',
+        via: 'typed',
+        failed: [INBOX_FALLBACK_REASON],
+      },
+    ]);
+    expect(said).toEqual(['lead: an inbox send from owner was delivered on retry']);
+  });
+
+  test('a typed marker goes before an inbox marker that is already due', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made.dir, 'acme', 'lead', 'held-now', 'from the owner\n\nheld first');
+    const old = new Date(NOW.getTime() - INBOX_FALLBACK_MS - 60_000);
+    seedInbox(made.dir, 'acme', 'lead', INBOX_D, 'from the owner\n\ninbox second', old);
+    const one = pane(claudeBox(''));
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
+      say: () => {},
+    });
+
+    // One delivery per seat per pass, and it is the typed marker's: the inbox marker is due but
+    // waits behind the retry's own kind.
+    expect(one.typed).toEqual([triggerLine(join(dropDir, 'held-now')) as string]);
+    expect(one.enters).toBe(1);
+    expect(readPending(dropDir).map((drop) => drop.id)).toEqual([INBOX_D]);
   });
 });
 
@@ -649,5 +808,68 @@ describe('team watch retries a held drop', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.at(-1)).toMatchObject({ id: 'drop-5', outcome: 'delivered', via: 'typed' });
+  });
+});
+
+describe('team watch promotes an inbox send its seat has read', () => {
+  test('the receipt is promoted with --no-nudge, and the watch types nothing', async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-promote-')));
+    base = directory;
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    mkdirSync(join(directory, '.agents'));
+    const file = join(directory, '.agents', 'team.yaml');
+    writeFileSync(file, raw);
+    const dropDir = join(directory, '.agents', 'send-drops', 'acme-web', 'deepseek-acme');
+    const clock = Date.parse('2026-10-03T14:00:00Z');
+    const body = 'from the owner\n\nread between passes';
+    dropMessage(dropDir, INBOX_W, body);
+    markPending(dropDir, { id: INBOX_W, from: 'owner', to: 'deepseek-acme', body, ts: new Date(clock - 60_000).toISOString(), leg: 'mcp-inbox' });
+    readInbox(dropDir, INBOX_W, 'deepseek-acme', 'acme-web');
+
+    const one = pane(claudeBox(''));
+    const typed: string[] = [];
+    const sources: WatchSources = {
+      live: () => liveWith('deepseek-acme', 'first:pane'),
+      machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => one.screen,
+      status: () => one.status,
+      foreground: () => ['claude'],
+      typeText: (_pane, text) => { typed.push(text); one.screen = claudeBox(text); return true; },
+      pressEnter: () => { one.enters += 1; one.status = 'working'; one.screen = claudeBox(''); return true; },
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock),
+      wait: async () => false,
+      alive: () => false,
+      pid: 4242,
+      home: directory,
+    };
+
+    // The watch that types nothing still promotes: the receipt is the seat's own read, and the
+    // sender's word is the history line, not a keystroke.
+    const io = testIo(directory, { kind: 'owner' });
+    const code = await runWatch(['--file', file, '--no-nudge'], io, sources);
+
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: an inbox send from owner was read in its inbox');
+    const history = readHistory('acme-web', directory, directory);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries.filter((entry) => entry.id === INBOX_W)).toEqual([
+      {
+        ts: new Date(clock).toISOString(),
+        from: 'owner',
+        to: 'deepseek-acme',
+        body,
+        id: INBOX_W,
+        outcome: 'delivered (read)',
+        via: 'mcp-inbox',
+      },
+    ]);
   });
 });

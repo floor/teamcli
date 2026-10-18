@@ -36,7 +36,9 @@ The first release since 0.3.5, and the first to ship on npm since it. The full l
   may drop legs or reorder the ones it keeps, never add one. The mcp-inbox leg takes the send only
   while the seat's own inbox server is listening: it writes the message into that inbox, types
   nothing, and reports `delivered (read)` when the read receipt lands or `sent (unconfirmed)`
-  when it does not; with no listener the leg is recorded `no live inbox listener` and the walk
+  when it does not — a receipt that lands later is promoted by the watch, and a message still
+  unread ten minutes on is typed by the watch, which records the ended wait on the history line;
+  with no listener the leg is recorded `no live inbox listener` and the walk
   moves on. This build makes no socket write, so the native leg is recorded `unavailable` and a
   send goes by the seat's inbox when its server is listening, otherwise by the drop file and one
   trigger line — or, on a seat that opts into the `drop` leg, by the same drop file alone, with
