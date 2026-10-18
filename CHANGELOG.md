@@ -152,9 +152,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another start holds the socket lock, or when the socket cannot be bound, and exits 2 on a bad
   invocation or a team file it cannot read. With a bus answering, `team watch` reads new events
   in sequence order and publishes the events its reports imply — `seat.unreachable`,
-  `seat.at-prompt` and `seat.blocked` — to the log, and after a sequence gap re-announces the
-  reports that are still true; with no bus running it polls exactly as before. The reconciliation
-  pass appends only the events the on-disk records imply and the log is missing, keyed by kind,
+  `seat.at-prompt`, `seat.prompt-escalated` and `seat.blocked` — to the log, and after a sequence
+  gap re-announces the reports that are still true; with no bus running it polls exactly as
+  before. The reconciliation pass appends only the events the on-disk records imply and the log
+  is missing, keyed by kind,
   record and session, so a pass over unchanged records adds no second
   event. A seat that is not a default recipient may not subscribe itself to a privileged kind —
   a grant, a policy, `seat.at-prompt`, or one the owner has named — and the bus refuses it with
@@ -172,12 +173,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seat silences neither, and the watch's owner report merges with the operator's copy of the
   same observation, so the owner's list holds it once. A kind on the owner's immediacy list —
   `owner-at-once`, an owner-sovereign setting whose release default holds `seat.at-prompt` only
-  at a permission, trust, login, vendor-notice or rate-limit prompt and `seat.unreachable` and
-  `seat.done` only for the team's lead, plus every roster, grant and policy event, both raise
-  kinds and both refusals — rings and lands as its own record; everything else collects in the
-  pass and lands as one digest record at its flush, and both ids are deterministic, so a watch
-  restarted from cursor 0 rings and writes nothing again. `--no-notify` never silences an owner
-  push.
+  at a permission, trust, login, vendor-notice or rate-limit prompt, `seat.prompt-escalated` at
+  every climb, and `seat.unreachable` and `seat.done` only for the team's lead, plus every
+  roster, grant and policy event, both raise kinds and both refusals — rings and lands as its
+  own record; everything else collects in the pass and lands as one digest record at its flush,
+  and both ids are deterministic, so a watch restarted from cursor 0 rings and writes nothing
+  again. `--no-notify` never silences an owner push.
 
 - **The watcher each launch leaves.** The launch plan reads, once per seat, how the seat's CLI
   will learn that a drop is waiting — the turn-start hook the launch installs, the MCP inbox
@@ -241,6 +242,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal's rule and object (a record id, a seat, a path) and never the refused content, and one
   event stands per rule and object in an hour with every occurrence counted in
   `.agents/team.log`, so a refusal loop counts instead of flooding.
+
+- **A prompt that is not cleared climbs.** A seat held at a permission, vendor-notice or
+  rate-limit prompt starts a clock, and one still held after `prompt_escalation_seconds` — five
+  minutes in this release — reports `<seat> is still at a <prompt> prompt after <n> minutes: the
+  team's lead has not cleared it, and the entity's lead and the owner are told` and raises
+  `seat.prompt-escalated`, once for that prompt spell; a prompt that clears before the window is
+  the lead acting, and its clock goes. The kind is privileged and on the owner-at-once list, and
+  its release routing is the entity's own lead and the owner; the owner stands even when the
+  registry names no entity lead, so a climb is never silent. The entity's lead is the
+  lead-marked seat of the team whose project is the entity — that team's roster, root and
+  session — and the climb is left there as one signed runtime record in that lead's mailbox,
+  where that team's watch rings it as a message. The team's own orchestrator keeps no clock: its
+  `seat.at-prompt` already routes to the entity's lead and the owner, and the same mailbox
+  record is left. A watch that restarts mid-spell starts the clock again, so a prompt held
+  across a restart can climb once more. Nothing is typed into any pane — a climb is an event
+  and a record, never a keystroke — so a human seat's prompt climbs the same way. The check is
+  one of the five the watch file cannot turn off.
 
 - The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
   unsent, working, question, permission and exit — are captured as fixtures, the trust dialog is
