@@ -578,6 +578,19 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName} is stopped`,
       });
     }
+    // A human's pane takes no trigger, even from a caller that reaches the daemon directly:
+    // the queue refuses it and no worker is started. The CLI's walk keeps its typing legs out
+    // earlier, with the same words.
+    if (configured.human === true) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: request.id ?? null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName}: the pane is a human's, and nothing is typed into it`,
+      });
+    }
     let queue = queues.get(seatName);
     if (!queue) {
       queue = [];
