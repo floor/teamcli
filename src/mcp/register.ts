@@ -1,13 +1,30 @@
 // Registering a seat's team inbox with its CLI, at launch.
 //
-// A route that lives on the launch line needs no file: the profile names the values, and
-// the launch carries them. The client is told this install's own runner — the executable
-// and its entry script — so the inbox server starts whether or not `team` is on the PATH.
-// The seat is the only binding the launch states; the session is the team file's in the
-// seat's folder, read the way the server itself reads it, so the drop folder the server
-// serves is the sender's.
+// A CLI that reads a project-scope MCP config file is registered in the seat's own folder by
+// the CLI's own `mcp add`, where a run measured one. Only the route a profile carries is
+// used, and the file is written only when the seat's folder is not a git work tree, or git
+// confirms the file is ignored there: nothing team writes may land in a file the project
+// tracks. A refused registration leaves the seat on its drop and typed legs, and the line
+// says why.
+//
+// A route that lives on the launch line needs no file: the profile names the values, and the
+// launch carries them. The client is told this install's own runner — the executable and its
+// entry script — so the inbox server starts whether or not `team` is on the PATH. The seat is
+// the only binding the launch states; the session is the team file's in the seat's folder,
+// read the way the server itself reads it, so the drop folder the server serves is the
+// sender's.
+import { spawnSync } from 'node:child_process';
+import { lstatSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadTeamFile } from '../file/load.ts';
+import { fillInboxPlace, profileFor, type InboxPlace } from '../profiles/profile.ts';
+
+/** A registration's outcome: made, or refused with the reason the seat's line carries. */
+export type InboxRegistration = { ok: true } | { ok: false; reason: string };
+
+/** One command run in the seat's folder. `code` is null when it did not run at all. */
+export type InboxRun = { code: number | null };
 
 /** The arguments the inbox server is started with, after the entry script. */
 export function inboxServeArgs(seat: string, session: string): string[] {
@@ -19,4 +36,90 @@ export function inboxServeArgs(seat: string, session: string): string[] {
 export function selfRunner(): { command: string; entry: string } {
   const here = fileURLToPath(import.meta.url);
   return { command: process.execPath, entry: join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js') };
+}
+
+function runIn(cwd: string): (command: string, args: readonly string[]) => InboxRun {
+  return (command, args) => {
+    const result = spawnSync(command, [...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    });
+    return { code: result.status ?? null };
+  };
+}
+
+/**
+ * Registers the seat's inbox when its CLI's profile carries a `mcp add` route. Null when it
+ * carries none: a launch-line route wrote everything it needs into the launch, and a CLI with
+ * no route stays on the drop and typed legs.
+ */
+export function registerInbox(input: {
+  cli: string;
+  seat: string;
+  cwd: string;
+  /** Runs a command in the seat's folder; tests pass their own. Absent: the real one. */
+  run?: (command: string, args: readonly string[], cwd: string) => InboxRun;
+}): InboxRegistration | null {
+  const profile = profileFor(input.cli);
+  const block = profile?.mcpInbox;
+  if (!profile || !block || block.add === null || block.target === null) return null;
+  let folder: string;
+  try {
+    folder = lstatSync(input.cwd).isDirectory() ? input.cwd : '';
+  } catch {
+    folder = '';
+  }
+  if (!folder) return { ok: false, reason: 'its folder could not be read' };
+  // The server resolves the team from the folder it starts in; a folder with no team file
+  // makes it refuse, so nothing is registered there. Its session is the file's own, which the
+  // server reads too.
+  const loaded = loadTeamFile(folder);
+  if (!loaded.ok) return { ok: false, reason: 'no team file could be read from its folder' };
+  const place: InboxPlace = { seat: input.seat, session: loaded.team.session, ...selfRunner() };
+  const refused = ignoreProblem(folder, block.target);
+  if (refused !== null) return { ok: false, reason: refused };
+  const args = block.add.map((word) => fillInboxPlace(word, place));
+  const run = input.run ?? ((command, argv) => runIn(folder)(command, argv));
+  const result = run(profile.binary, args, folder);
+  if (result.code !== 0) {
+    return { ok: false, reason: `\`${profile.binary} mcp add\` exited ${result.code === null ? 'without running' : result.code}` };
+  }
+  const path = join(folder, block.target);
+  try {
+    if (lstatSync(path).isFile()) return { ok: true };
+  } catch {
+    // The command said it wrote the file and did not: the client would start with no server.
+  }
+  return { ok: false, reason: `${block.target} was not written` };
+}
+
+/**
+ * Why the seat's folder may not take a config file, or null when it may. A folder outside a
+ * repository is the seat's own; one inside a work tree must have the file ignored, which is
+ * also how a tracked file reads — git never ignores one.
+ */
+function ignoreProblem(folder: string, target: string): string | null {
+  const inside = runGit(folder, ['rev-parse', '--is-inside-work-tree']);
+  // No repository here — or no git to ask: the folder is the seat's own and holds no
+  // tracked file to protect. A repository with no work tree is neither.
+  if (inside === null || inside.code !== 0) return null;
+  if (inside.stdout.trim() !== 'true') return 'its folder is inside a git repository with no work tree';
+  const ignored = runGit(folder, ['check-ignore', '-q', '--', target]);
+  if (ignored === null) return `git could not say whether ${target} is ignored`;
+  if (ignored.code === 0) return null;
+  if (ignored.code === 1) return `its project does not ignore ${target}`;
+  return `git could not say whether ${target} is ignored`;
+}
+
+function runGit(folder: string, args: readonly string[]): { code: number; stdout: string } | null {
+  const result = spawnSync('git', [...args], {
+    cwd: folder,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+  if (result.error || result.status === null) return null;
+  return { code: result.status, stdout: result.stdout ?? '' };
 }

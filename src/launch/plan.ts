@@ -21,7 +21,9 @@ export type Op =
   | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true }
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined }
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string }
+  /** `cli` and `cwd` let the launch register the seat's team inbox in its folder before the
+   *  command runs (`execute.ts`). Absent only on a hand-built op: every planned launch names them. */
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -580,7 +582,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         ...(said ? { note: `${said}; would launch` } : {}),
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, ...(said ? { notice: said } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(said ? { notice: said } : {}) },
       });
     }
     const rules = profile.rulesMode;

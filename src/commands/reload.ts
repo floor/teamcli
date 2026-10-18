@@ -58,6 +58,7 @@ import { readScreen } from '../watch/screen.ts';
 import { realSources as doctorSources } from './doctor.ts';
 import { rulesFileProblem } from './status.ts';
 import type { Launch } from './up.ts';
+import { registerInbox } from '../mcp/register.ts';
 
 export const USAGE = `Usage: team reload <seat> [--file <path>] [--json]
 
@@ -513,6 +514,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       agentPanes: (current) => launch.agentPanes(current),
       createWorkspace: (current, cwd, label) => launch.createWorkspace(current, cwd, label),
       paneRun: (current, pane, command) => launch.paneRun(current, pane, command),
+      registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
       renameAgent: (current, pane, next) => launch.renameAgent(current, pane, next),
       reportDisplayAgent: (current, pane, text) => launch.reportDisplayAgent?.(current, pane, text) ?? true,
       closeWorkspace(current, workspace) {
