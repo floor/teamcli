@@ -176,10 +176,10 @@ describe('team check omits the footer on every run; team doctor and team --about
     expect(ran.out).toBe(
       'team beacon, session "beacon"\n' +
         'difference: claude-keeper is in the file and is not running\n' +
-        '  repair: the owner runs team up\n' +
+        '  repair: team up\n' +
         '  who: the owner\n' +
         'difference: claude-beacon is in the file and is not running\n' +
-        '  repair: the owner runs team up\n' +
+        '  repair: team up\n' +
         '  who: the owner\n' +
         '2 differences, 2 for the owner\n',
     );

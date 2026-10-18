@@ -275,7 +275,7 @@ describe('status names the whole-team restart for a lead outside its launcher', 
         'difference: claude-coordinator-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n'
           + '  repair: team down, then team up (to restart the whole team)\n',
       );
-      expect(io.out).not.toContain("repair: the team's lead runs team up\n");
+      expect(io.out).not.toContain('  repair: team up\n');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

@@ -166,7 +166,7 @@ describe('team status', () => {
     live = { running: false, agents: [], workspaces: [], screens: {} };
     const { code, out } = await status();
     expect(out).toContain('note: the herdr session "acme-web" is not running');
-    expect(out).toContain('repair: the owner runs team up');
+    expect(out).toContain('repair: team up');
     expect(out).not.toContain('grok-acme is in the file');
     expect(out).toContain('4 differences');
     expect(code).toBe(1);
@@ -344,7 +344,7 @@ describe('team status', () => {
     });
     live = { ...built(), agents: [...built().agents, agent('codex-acme-tmp-1', 'w6', 'working', 'codex')] };
     const { out } = await status();
-    expect(out).toContain('codex-acme: its launch stopped at "named"\n  repair: the team\'s lead runs team up (it resumes the launch)');
+    expect(out).toContain('codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
     expect(out).toContain('deepseek-acme: its rules were not delivered');
     expect(out).toContain('note: codex-acme-tmp-1 is temporary, until merged:fix/select-width');
     expect(out).toContain('codex-acme-tmp-2: a temporary seat is recorded and is not running');
@@ -744,22 +744,23 @@ describe('team status', () => {
     const approveRun = await status();
     expect(approveRun.out).toContain('repair: the live file is what the commands read');
 
-    // 2. the owner runs team up: with the session down a lead cannot prove its pane
+    // 2. team up: with the session down a lead cannot prove its pane, so the repair is the
+    // owner's, named by the who line rather than the repair
     const validTeam = validateTeamFile(example);
     if (!validTeam.ok) throw new Error('invalid example');
     standing = verifiedOf(validTeam.team, example, dir, NOW);
     live = { running: false, agents: [], workspaces: [], screens: {} };
     const upRun = await status();
-    expect(upRun.out).toContain('repair: the owner runs team up');
+    expect(upRun.out).toContain('repair: team up');
 
-    // 3. the team's lead runs team up (it resumes the launch): the map's `up` row admits a
-    // lead, so no owner count
+    // 3. team up (it resumes the launch): the map's `up` row admits a lead, so the who line
+    // names the team's lead and there is no owner count
     live = built();
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ??= emptySession()).seats['codex-acme'] = { stage: 'launched' };
     });
     const resumeRun = await status();
-    expect(resumeRun.out).toContain("repair: the team's lead runs team up (it resumes the launch)");
+    expect(resumeRun.out).toContain('repair: team up (it resumes the launch)');
     expect(resumeRun.out).not.toContain('for the owner');
 
     // 4. the owner switches it back: git -C <shown> switch <base>
@@ -782,13 +783,14 @@ describe('team status', () => {
       "repair: the owner clears or sends it in the pane; team does not type into a box it can't verify",
     );
 
-    // 6. the team's lead clears or sends it in the pane, then runs team up (it resumes the launch)
+    // 6. clear or send it in the pane, then team up (it resumes the launch): the who line
+    // names the team's lead
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ??= emptySession()).seats['codex-acme'] = { stage: 'named' };
     });
     const mergedRun = await status();
     expect(mergedRun.out).toContain(
-      'repair: the team\'s lead clears or sends it in the pane, then runs team up (it resumes the launch)',
+      'repair: clear or send it in the pane, then team up (it resumes the launch)',
     );
   });
 
@@ -814,7 +816,7 @@ describe('team status', () => {
     });
     const namedRes = await status();
     expect(namedRes.out).toContain('difference: codex-acme: its launch stopped at "named", and it holds text in its input box that was never sent');
-    expect(namedRes.out).toContain('repair: the team\'s lead clears or sends it in the pane, then runs team up (it resumes the launch)');
+    expect(namedRes.out).toContain('repair: clear or send it in the pane, then team up (it resumes the launch)');
     expect(namedRes.out).not.toContain('difference: codex-acme holds text in its input box that was never sent');
 
     // seat that reads unknown: no unsent reading; the row says what herdr's word could not
@@ -824,7 +826,7 @@ describe('team status', () => {
     };
     const unknownRes = await status();
     expect(unknownRes.out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
-    expect(unknownRes.out).toContain('difference: codex-acme: its launch stopped at "named"\n  repair: the team\'s lead runs team up (it resumes the launch)');
+    expect(unknownRes.out).toContain('difference: codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
     expect(unknownRes.out).not.toContain('unsent text');
     expect(unknownRes.out).not.toContain('holds text in its input box that was never sent');
   });
@@ -954,7 +956,7 @@ describe('team status', () => {
 // A pane is its seat only while the process team launched is still in it. Each case records a
 // launch for codex-acme and hands the comparison one process-info reading for its pane.
 describe('a pane that no longer holds the process team launched', () => {
-  const GONE_REPAIR = "  repair: the team's lead runs team up\n";
+  const GONE_REPAIR = '  repair: team up\n';
 
   function recordCodex(patch: Record<string, unknown> = {}) {
     updateState(join(dir, '.agents'), (state) => {
@@ -1079,7 +1081,7 @@ describe('a pane that no longer holds the process team launched', () => {
       'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
         '  repair: team remove deepseek-acme --keep, then team add deepseek-acme (the owner runs the add, or an approved delegate when the file names one)\n',
     );
-    expect(out).not.toContain('repair: the team\'s lead runs team up\n');
+    expect(out).not.toContain('repair: team up\n');
   });
 
   test('a launcher the record cannot tie names the model and the restart', async () => {
@@ -1107,7 +1109,7 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).not.toContain('deepseek-acme runs');
     expect(out).not.toContain('repair: look at the pane\n');
-    expect(out).not.toContain('repair: the team\'s lead runs team up\n');
+    expect(out).not.toContain('repair: team up\n');
   });
 
   test('gone with no agent listed: its pane is read, not called a missing seat', async () => {
@@ -1147,7 +1149,7 @@ describe('a pane that no longer holds the process team launched', () => {
       'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
         '  repair: look at the pane\n',
     );
-    expect(out).not.toContain('repair: the team\'s lead runs team up\n');
+    expect(out).not.toContain('repair: team up\n');
     expect(out).not.toContain('is named "stranger"');
     expect(out).not.toContain('agent rename');
   });
@@ -1173,7 +1175,7 @@ describe('a pane that no longer holds the process team launched', () => {
       'difference: codex-acme: its pane runs no CLI and its process was never recorded\n' +
         '  repair: team remove codex-acme --abandon, then team up\n',
     );
-    expect(out).not.toContain('the team\'s lead runs team up');
+    expect(out).not.toContain('repair: team up');
     expect(out).not.toMatch(/codex-acme\s+idle/);
   });
 
@@ -1184,7 +1186,7 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(code).toBe(1);
     expect(out).toContain('repair: team remove codex-acme --abandon, then team up');
     expect(out).not.toContain('it resumes the launch');
-    expect(out).not.toContain('the team\'s lead runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a shell in the recorded pane, with no agent listed and no identity, is not a seat team up starts', async () => {
@@ -1201,7 +1203,7 @@ describe('a pane that no longer holds the process team launched', () => {
         '  repair: team remove codex-acme --abandon, then team up\n',
     );
     expect(out).not.toContain('codex-acme is in the file and is not running');
-    expect(out).not.toContain('the team\'s lead runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a model mismatch on a seat with no process identity names abandon, not remove --keep', async () => {
@@ -1216,7 +1218,7 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(out).toContain('codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol; its process was never recorded');
     expect(out).toContain('repair: team remove codex-acme --abandon, then team up');
     expect(out).not.toContain('team remove codex-acme --keep');
-    expect(out).not.toContain('the team\'s lead runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a lead whose record has no process identity and whose screen is another model names down --abandon', async () => {
@@ -1236,7 +1238,7 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).toContain('repair: team down --abandon, then team up');
     expect(out).not.toContain('team remove claude-coordinator-acme');
-    expect(out).not.toContain('the team\'s lead runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a model mismatch on the process team launched still names remove --keep', async () => {

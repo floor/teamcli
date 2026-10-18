@@ -213,9 +213,9 @@ prints no seat table and no budget block:
     team beacon, session "beacon"
     note: main/w9:p3's delegate entry names approve, which no command acts on since team approve was removed; drop it from the file
     difference: claude-beacon is in the file and is not running
-      repair: the team's lead runs team up
-      who: the team's lead
-    1 difference
+      repair: team up
+      who: the owner
+    1 difference, 1 for the owner
 
 The note is earned by a `delegates` entry still naming `approve`: `team approve` was removed,
 and the word stays accepted only so a file that already names it loads unchanged. It is a note
@@ -306,19 +306,19 @@ exit 0
 ```
 
 With the herdr session down, both seats are in the file and not running — the summary counts
-them, and the lead runs the one repair both name:
+them, and both repairs are the owner's:
 
 ```console herdr=absent
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
 warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
 difference: claude-keeper is in the file and is not running
-  repair: the team's lead runs team up
-  who: the team's lead
+  repair: team up
+  who: the owner
 difference: claude-beacon is in the file and is not running
-  repair: the team's lead runs team up
-  who: the team's lead
-2 differences
+  repair: team up
+  who: the owner
+2 differences, 2 for the owner
 exit 1
 ```
 

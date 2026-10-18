@@ -80,7 +80,7 @@ function waitingView(
       stored: 'trust-sent-recovery',
       difference: {
         what: `${name}: trust sent; recovery required`,
-        repair: "the team's lead runs team up",
+        repair: 'team up',
         needs: 'approve',
       },
     };
@@ -92,7 +92,7 @@ function waitingView(
     stored: 'waiting-owner',
     difference: {
       what: `${name}: ${phrase}`,
-      repair: answer ? `team answer ${name} trust` : "the team's lead runs team up",
+      repair: answer ? `team answer ${name} trust` : 'team up',
       needs: 'approve',
     },
   };
@@ -286,7 +286,7 @@ export function compare(
       if (isUnsent && recorded?.stage === 'named' && !unidentifiedMismatch) {
         differences.push({
           what: `${seat.name}: its launch stopped at "named", and it holds text in its input box that was never sent`,
-          repair: "the team's lead clears or sends it in the pane, then runs team up (it resumes the launch)",
+          repair: 'clear or send it in the pane, then team up (it resumes the launch)',
           needs: 'approve',
         });
       } else {
@@ -297,7 +297,7 @@ export function compare(
           // team is the one who repairs it.
           differences.push({
             what: `${seat.name}: its launch stopped at "${recorded.stage}"`,
-            repair: "the team's lead runs team up (it resumes the launch)",
+            repair: 'team up (it resumes the launch)',
             needs: 'approve',
           });
         }
@@ -426,7 +426,7 @@ export function compare(
       // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
       // this line must be handed a command it can run. With nothing running the session itself is
       // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
-      repair: anyRunning ? `team restart ${seat.name}` : 'the owner runs team up',
+      repair: anyRunning ? `team restart ${seat.name}` : 'team up',
       needs: 'approve',
       ...(anyRunning ? {} : { owner: true as const }),
     });
@@ -635,7 +635,7 @@ function notLaunched(
       // The same repair `up` makes: it closes the pane without typing and launches the seat
       // fresh. Admitted by the map's `up` row for the owner and the team's leads alike, so it is
       // not counted among the owner's.
-      repair: "the team's lead runs team up",
+      repair: 'team up',
       needs: 'approve',
     },
     // A note, not a difference: it names what the screen shows and does not change the exit.
