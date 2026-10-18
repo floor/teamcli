@@ -305,6 +305,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...signingDifferences(team, state, live, root, sources.home),
+    ...generalBriefDifferences(team, state),
     ...provenance.differences,
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
@@ -670,6 +671,27 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
       what: `${seat.name}: signs as ${signs}, runs ${running.model} ${running.version}`,
       repair: `update the team file's model, then team register ${seat.name}, or relaunch on the recorded model (${command})`,
       needs: 'approve',
+    });
+  }
+  return out;
+}
+
+/**
+ * The general seat brief every launch delivers first, by drop. A session that has launched a seat,
+ * or recorded a delivery, is a session whose seats were due the brief: one with no record under
+ * `briefs` never received it. The repair is the one both delivering paths answer to — `reload` for
+ * a CLI seat, `up` for a human's, where reload refuses to touch the pane. A seat the comparison
+ * already names as not running is left to that difference: its launch is its repair.
+ */
+function generalBriefDifferences(team: TeamFile, state: SessionState): Difference[] {
+  if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return [];
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (state.briefs?.[seat.name] !== undefined) continue;
+    if (seat.human !== true && state.seats[seat.name] === undefined) continue;
+    out.push({
+      what: `${seat.name}: the general seat brief has not been delivered`,
+      repair: seat.human === true ? 'team up' : `team reload ${seat.name} or team up`,
     });
   }
   return out;

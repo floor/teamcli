@@ -51,6 +51,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -1492,6 +1493,29 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
     cliHooks = installed;
     const plan = buildPlan();
+    // The general seat brief goes first: one signed drop in every declared seat's folder, human
+    // seats included, before the plan types a rules line into any pane. A delivery that cannot be
+    // written is said and logged, and the launch goes on; `team check` names the seat with no
+    // record. A seat that already holds this text's record is left as it is.
+    const briefs = deliverGeneralBrief({
+      dir,
+      root,
+      session,
+      seats: team.seats.map((seat) => seat.name),
+      home: sources.home,
+      at: (sources.now?.() ?? new Date()).toISOString(),
+    });
+    for (const delivery of briefs.deliveries) {
+      if (delivery.ok) continue;
+      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+      stderrLine(`team up: ${said}\n`);
+      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+    }
+    if (briefs.recording !== undefined) {
+      const said = `the general seat briefs were written and not recorded (${briefs.recording})`;
+      stderrLine(`team up: ${said}\n`);
+      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+    }
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
     resetCliHookState(dir, session, plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : [])));
