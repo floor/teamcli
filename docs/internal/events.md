@@ -65,12 +65,15 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   `.at-prompt`, `.unreachable`, `.done`), work lifecycle (`work.claimed`, `.done`, `.released`,
   `.gate`, `.suite`), and team/governance (`team.seat-added`, `.seat-removed`, `.seat-reloaded`,
   `.grant-issued`, `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`),
-  the lead's own `release.ready` and `decision.needed`, plus the operational
-  `team.event-log-dropped` that retention raises. The last kind is not privileged and is routed to
-  `lead` and `operator` by default: it reports log maintenance, not governance. `release.ready`
-  and `decision.needed` are the two kinds `team raise` writes; they are routed to `owner` alone
-  and delivered at once, and they are not privileged — the command's caller rule, not a
-  subscription ban, is what keeps the line the lead's.
+  the lead's own `release.ready` and `decision.needed`, the two refusals — `record.invalid` for a
+  record that does not verify, `security.refused` for an identity or an admission the rules deny —
+  plus the operational `team.event-log-dropped` that retention raises. That kind is not privileged
+  and is routed to `lead` and `operator` by default: it reports log maintenance, not governance.
+  `release.ready` and `decision.needed` are the two kinds `team raise` writes; they are routed to
+  `owner` alone and delivered at once, and they are not privileged — the command's caller rule,
+  not a subscription ban, is what keeps the line the lead's. A refusal carries its rule and its
+  object — the record id, the seat, the path — and never the refused content; the producer raises
+  one event per rule and object in an hour and counts the repeats in `.agents/team.log`.
 - **Recipients and how a seat is named**: a kind's recipients are positions — `lead` (the
   orchestrator's seat and every seat marked `leads`), `operator`, `sender` and `subject` (the
   record's own fields), and `owner` (the owner's runtime, never a seat) — or seats.
@@ -90,7 +93,8 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   (`routing-removes-inherited`). A kind a level does not name keeps the recipients it has. A
   privileged kind's default recipients are added back at the end of every fold, so the invariant
   stands even when a hand-built chain skipped the check.
-- **Privileged kinds**: `team.grant-*`, `team.policy-*`, and `seat.at-prompt` are privileged, and
+- **Privileged kinds**: `team.grant-*`, `team.policy-*`, `seat.at-prompt`, `record.invalid` and
+  `security.refused` are privileged, and
   the owner's `privileged-kinds` list grows the set (`growPrivilegedKinds`); the list itself is the
   owner's alone (`privileged-kinds-owner-only`). A seat may never add itself as a recipient of a
   privileged kind (`privileged-self-subscription`), and only the owner, or a holder whose grant
@@ -120,8 +124,8 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   owner's alone) names the kinds notified on the pass that reads them, each with its own record:
   `DEFAULT_OWNER_AT_ONCE_KINDS` holds `seat.at-prompt` of a permission, trust, login, vendor or
   rate-limit prompt, a lead's `seat.unreachable` or `seat.done`, every `team.seat-*`,
-  `team.grant-*` and `team.policy-*` kind, and the lead's `release.ready` and `decision.needed`.
-  Every
+  `team.grant-*` and `team.policy-*` kind, the lead's `release.ready` and `decision.needed`, and
+  the two refusals `record.invalid` and `security.refused`. Every
   other owner-routed event waits in the pass and lands at its end as one digest record whose body
   is the count (`1 event:` or `<n> events:`), then the pass's lines joined by `; `, each folded to
   one line and clipped to `MAX_OWNER_LINE`.

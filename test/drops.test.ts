@@ -19,6 +19,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readEvents } from '../src/bus/log.ts';
 import type { Caller } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
@@ -469,6 +470,22 @@ describe('team drops --read', () => {
     expect(result.out).toBe('');
     expect(result.err).toStartWith(`team drops: message ${JSON.stringify(D_RECORD)} is not a signed record: `);
     expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+
+    // The owner hears the refusal as its rule and object — the drop's id, its seat and its
+    // path — and never the file's content.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'record.invalid');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'shape',
+      seat: 'lead',
+      subject: D_RECORD,
+      reason: join(dropDir, D_RECORD),
+    });
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain('an old raw drop');
   });
 
   test('a link standing where the seat folder should be refuses the read', async () => {

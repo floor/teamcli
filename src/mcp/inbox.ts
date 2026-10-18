@@ -272,9 +272,19 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
   return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
 }
 
+/** Why a record was refused, as the rule and the object a refusal event names. The rule is one
+ *  of the checks the read makes; the object is the record's id, the seat whose inbox it holds,
+ *  and its path. A missing file or a bad id is not a refusal of a record and carries none. */
+export type InboxRefusal = {
+  rule: 'shape' | 'seat' | 'session' | 'root' | 'key' | 'signature';
+  id: string;
+  seat: string;
+  path: string;
+};
+
 export type InboxRead =
   | { ok: true; body: string }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; refusal?: InboxRefusal };
 
 /** The inbox a read serves: the launch's own folder, root, seat and session. */
 export type InboxTarget = { dropDir: string; root: string; seat: string; session: string };
@@ -296,25 +306,35 @@ export function readMessage(target: InboxTarget, id: string, home: string): Inbo
   if (atReceipt.kind !== 'missing' && atReceipt.kind !== 'file') {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
+  const refused = (rule: InboxRefusal['rule'], reason: string): InboxRead => ({
+    ok: false,
+    reason,
+    refusal: { rule, id, seat: target.seat, path: at },
+  });
   const looked = readRecord(at, id);
-  if (!looked.ok) return { ok: false, reason: `message ${JSON.stringify(id)} is not a signed record: ${looked.reason}` };
+  if (!looked.ok) {
+    return refused('shape', `message ${JSON.stringify(id)} is not a signed record: ${looked.reason}`);
+  }
   if (looked.record === null) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const payload = looked.record.payload;
-  if (payload.to !== target.seat || payload.session !== target.session) {
-    return { ok: false, reason: `message ${JSON.stringify(id)} is not addressed to this inbox` };
+  if (payload.to !== target.seat) {
+    return refused('seat', `message ${JSON.stringify(id)} is not addressed to this inbox`);
+  }
+  if (payload.session !== target.session) {
+    return refused('session', `message ${JSON.stringify(id)} is not addressed to this inbox`);
   }
   if (!sameRoot(payload.root, target.root)) {
-    return { ok: false, reason: `message ${JSON.stringify(id)} is bound to another checkout` };
+    return refused('root', `message ${JSON.stringify(id)} is bound to another checkout`);
   }
   const key = messageKeyState(home);
   if (key.kind !== 'key') {
-    return {
-      ok: false,
-      reason: key.kind === 'unreadable' ? `the message key is unreadable: ${key.why}` : 'no message key; nothing was shown',
-    };
+    return refused(
+      'key',
+      key.kind === 'unreadable' ? `the message key is unreadable: ${key.why}` : 'no message key; nothing was shown',
+    );
   }
   if (!verifyRecord(looked.record, key.key)) {
-    return { ok: false, reason: `message ${JSON.stringify(id)} does not verify against this message key` };
+    return refused('signature', `message ${JSON.stringify(id)} does not verify against this message key`);
   }
   // The signed status receipt `team messages` also writes: one shape under one name, so `statusOf`,
   // `team drops` and the watch all read it. It is write-once — a second read finds it there and

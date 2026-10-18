@@ -129,6 +129,59 @@ describe("owner delivery: the notification the watch raises and the owner's own 
     expect(listUnacked(root, 'acme', home).map((record) => record.id)).toEqual([id]);
   });
 
+  test('a broken record and a denied identity ring at once, naming the rule and the object only', () => {
+    const { root, home } = makeScratch();
+    const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const notes: string[] = [];
+    const delivery = new OwnerDelivery({
+      root,
+      session: 'acme',
+      team: parsed.team,
+      home,
+      notify: (text) => notes.push(text),
+      now: () => new Date('2026-10-18T12:00:05.000Z'),
+    });
+    const broken = event({
+      seq: 9,
+      kind: 'record.invalid',
+      record_id: 'record.invalid-signature-0123456789abcdef-0',
+      seat: 'lead',
+      subject: 'm1',
+      rule: 'signature',
+      reason: '.agents/messages/lead/m1.json',
+    });
+    const denied = event({
+      seq: 10,
+      kind: 'security.refused',
+      record_id: 'security.refused-placement-fedcba9876543210-0',
+      seat: 'lead',
+      subject: 'helper',
+      rule: 'placement',
+      reason: join(root, '.agents'),
+    });
+
+    // Both route to the owner alone, and both are on the owner's immediacy list.
+    for (const raised of [broken, denied]) {
+      expect(isOwnerAddressed(raised, parsed.team)).toBe(true);
+      expect(delivery.onEvent(raised)).toEqual({ addressed: true, notified: true, recorded: true });
+    }
+    expect(notes).toEqual([
+      'record.invalid lead: signature (m1 .agents/messages/lead/m1.json)',
+      `security.refused lead: placement (helper ${join(root, '.agents')})`,
+    ]);
+
+    // Each notice is also a signed record in the owner's mailbox, one per event.
+    for (const raised of [broken, denied]) {
+      const id = ownerRecordId(raised);
+      const stored = JSON.parse(readFileSync(messageFile(root, OWNER_MAILBOX, id), 'utf8'));
+      expect(stored.payload).toMatchObject({ to: 'owner', from: 'runtime', body: ownerDeliveryText(raised) });
+      expect(typeof stored.signature).toBe('string');
+    }
+  });
+
   test('a re-delivered event is silent and keeps its one record, so a watch restarted from cursor 0 does not ring again', () => {
     const { root, home } = makeScratch();
     const parsed = validateTeamFile(SAMPLE_TEAM_YAML);

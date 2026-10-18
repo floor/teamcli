@@ -330,6 +330,70 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     }
   });
 
+  test('a seat may not subscribe to either refusal kind, and neither reaches a seat on the bus', async () => {
+    const { root, home } = makeScratch();
+    const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    handles.push(started.handle);
+
+    // Both refusals are privileged: a seat asking for either is refused before any event is read.
+    for (const kind of ['record.invalid', 'security.refused'] as const) {
+      const refused = await subscribeBusOnce(root, { seat: 'worker-1', cursor: 0, kinds: [kind] });
+      expect(refused.kind).toBe('refused');
+      if (refused.kind === 'refused') {
+        expect(refused.at).toBe('policy');
+        expect(refused.rule).toBe(PRIVILEGED_SELF_SUBSCRIPTION_RULE);
+        expect(refused.eventKind).toBe(kind);
+      }
+    }
+    const teamLog = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(teamLog.split('\n').filter((line) => line.includes(PRIVILEGED_SELF_SUBSCRIPTION_RULE)).length).toBe(2);
+
+    // The routing default is the owner: publishing either kind reaches the owner and no seat,
+    // whether or not the seat asked for that kind.
+    for (const [kind, id] of [
+      ['record.invalid', 'r-1'],
+      ['security.refused', 's-1'],
+    ] as const) {
+      const published = await publishToBus(root, {
+        ts: '2026-10-18T12:02:00.000Z',
+        kind,
+        session: 'acme',
+        record_id: id,
+        rule: 'signature',
+      });
+      expect(published.kind).toBe('published');
+    }
+
+    const ownerSub = await subscribeBusOnce(root, { seat: 'owner', cursor: 0 });
+    expect(ownerSub.kind).toBe('events');
+    if (ownerSub.kind === 'events') {
+      const ids = ownerSub.events.map((event) => event.payload.record_id);
+      expect(ids).toContain('r-1');
+      expect(ids).toContain('s-1');
+    }
+    for (const seatName of ['worker-1', 'clerk']) {
+      const seatSub = await subscribeBusOnce(root, { seat: seatName, cursor: 0 });
+      expect(seatSub.kind).toBe('events');
+      if (seatSub.kind === 'events') {
+        const ids = seatSub.events.map((event) => event.payload.record_id);
+        expect(ids).not.toContain('r-1');
+        expect(ids).not.toContain('s-1');
+      }
+    }
+  });
+
   test('a seat named watch has no name equivalence and its privileged self-subscription is refused', async () => {
     const { root, home } = makeScratch();
     writeFileSync(join(root, '.agents', 'team.yaml'), WATCH_SEAT_TEAM_YAML);

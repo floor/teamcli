@@ -4,6 +4,7 @@ import { type KeyObject } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readEvents } from '../src/bus/log.ts';
 import { findRoot } from '../src/file/load.ts';
 import { messageFile, plantMessage, plantRecord, receiptFile, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { listUnread, readMessage } from '../src/mcp/inbox.ts';
@@ -189,6 +190,32 @@ difference: lead/m1 does not verify: the signature is not the message key's
     expect(result.err).toBe('');
     expect(existsSync(receiptFile(record.root, 'lead', 'm1'))).toBe(false);
     expect(existsSync(messageFile(record.root, 'lead', 'm1'))).toBe(true);
+
+    // The owner hears the refusal as its rule and object — the record's id, its seat and its
+    // mailbox path — and never the body the bad record holds.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'record.invalid');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'signature',
+      seat: 'lead',
+      subject: 'm1',
+      reason: '.agents/messages/lead/m1.json',
+    });
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain(BODY);
+
+    // The same refusal in the same window is counted in the log, not raised again.
+    const again = await run();
+    expect(again.code).toBe(1);
+    const later = readEvents('acme', root, home);
+    expect(later.ok).toBe(true);
+    if (!later.ok) return;
+    expect(later.events.filter((event) => event.payload.kind === 'record.invalid')).toHaveLength(1);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log.split('\n').filter((line) => line.includes('refusal [lead] record.invalid signature')).length).toBe(2);
   });
 
   test('a copy under a new id does not verify', async () => {

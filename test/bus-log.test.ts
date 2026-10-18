@@ -74,9 +74,11 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBe(28);
+    expect(EVENT_KINDS.length).toBe(30);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
+    expect(isEventKind('record.invalid')).toBe(true);
+    expect(isEventKind('security.refused')).toBe(true);
     expect(isEventKind('team.event-log-dropped')).toBe(true);
     expect(isPrivilegedKind('team.event-log-dropped')).toBe(false);
     expect(isEventKind('seat.at-prompt')).toBe(true);
@@ -89,11 +91,19 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
     for (const kind of DEFAULT_PRIVILEGED_KINDS) {
       expect(isPrivilegedKind(kind)).toBe(true);
     }
+    expect(DEFAULT_PRIVILEGED_KINDS).toContain('record.invalid');
+    expect(DEFAULT_PRIVILEGED_KINDS).toContain('security.refused');
+    expect(isPrivilegedKind('record.invalid')).toBe(true);
+    expect(isPrivilegedKind('security.refused')).toBe(true);
     expect(isPrivilegedKind('message.arrived')).toBe(false);
     expect(isPrivilegedKind('message.arrived', ['message.arrived'])).toBe(true);
 
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('seat.at-prompt');
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('team.policy-refused');
+    expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('record.invalid');
+    expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('security.refused');
+    expect(isOwnerAtOnce('record.invalid')).toBe(true);
+    expect(isOwnerAtOnce('security.refused')).toBe(true);
     expect(isOwnerAtOnce('seat.at-prompt')).toBe(true);
     expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'permission' })).toBe(true);
     expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'vendor notice' })).toBe(true);

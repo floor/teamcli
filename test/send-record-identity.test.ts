@@ -6,9 +6,10 @@
 // address is answered. Fake hosts and a temporary home: no pane is read and no socket is opened.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readEvents } from '../src/bus/log.ts';
 import type { Caller } from '../src/caller.ts';
 import { runRoute } from '../src/commands/route.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -165,6 +166,55 @@ describe('a registry record binds the call only where the call stands as it', ()
     );
     expect(run.frames).toEqual([]);
     expect(existsSync(join(w.root, '.agents', 'send-drops'))).toBe(false);
+
+    // The owner hears the refusal as its rule and object — the caller's seat, the seat it
+    // addressed, the folder the call stood in — and never the message it tried to send.
+    const events = readEvents('acme', w.root, w.home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'security.refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'admission',
+      seat: 'lead',
+      subject: 'helper',
+      reason: join(w.root, '.agents'),
+    });
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain('hello');
+
+    // The same refusal again is counted in the command's log, not repeated to the owner.
+    const again = await runSend(['helper', 'hello'], testIo(w.root, { kind: 'seat', name: 'lead', pane: 'w9:p9', session: 'acme' }), run);
+    expect(again).toBe(1);
+    const later = readEvents('acme', w.root, w.home);
+    expect(later.ok).toBe(true);
+    if (!later.ok) return;
+    expect(later.events.filter((event) => event.payload.kind === 'security.refused')).toHaveLength(1);
+    const log = readFileSync(join(w.root, '.agents', 'team.log'), 'utf8');
+    expect(log.split('\n').filter((line) => line.includes('refusal [lead] security.refused admission')).length).toBe(2);
+  });
+
+  test('a caller the state never placed is refused before the target is resolved', async () => {
+    const { w } = acme({ place: ['helper'] });
+    const io: TestIo = testIo(w.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+
+    const code = await runSend(['someone', 'hello'], io, host(w));
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('no pane is recorded for seat lead in this session');
+
+    const events = readEvents('acme', w.root, w.home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'security.refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'placement',
+      seat: 'lead',
+      subject: 'someone',
+      reason: join(w.root, '.agents'),
+    });
   });
 
   test("a pane renamed to a registered seat's name is refused on --record", async () => {
@@ -258,5 +308,20 @@ describe('a registry record binds the call only where the call stands as it', ()
 
     expect(code).toBe(1);
     expect(io.err).toBe("team send: refused: the registry's record for seat lead is stopped, not running: only a running seat acts as its own record\n");
+
+    // An identity the rules deny is the owner's to hear: the rule and the object, no message.
+    const events = readEvents('acme', w.root, w.home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'security.refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'admission',
+      seat: 'lead',
+      subject: 'helper',
+      reason: join(w.root, '.agents'),
+    });
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain('hello');
   });
 });

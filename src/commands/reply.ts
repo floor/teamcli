@@ -28,7 +28,8 @@ import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, standingOf } from '../caller.ts';
+import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, standingOf, type Caller } from '../caller.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
@@ -294,6 +295,34 @@ function seatList(team: TeamFile): string {
   return team.seats.map((seat) => seat.name).join(', ');
 }
 
+/** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
+ *  caller's seat, the seat it addressed and the folder the call stood in — never the message. */
+function raiseSecurityRefusal(
+  team: TeamFile,
+  root: string,
+  home: string,
+  dir: string,
+  caller: Caller,
+  rule: 'placement' | 'admission',
+  target: string | null,
+  now: Date,
+): void {
+  raiseRefusalEvent({
+    project: team.project,
+    root,
+    home,
+    session: team.session,
+    kind: 'security.refused',
+    rule,
+    object: {
+      ...(target === null ? {} : { id: target }),
+      ...(caller.kind === 'seat' ? { seat: caller.name } : caller.kind === 'owner' ? { seat: 'owner' } : {}),
+      path: dir,
+    },
+    now,
+  });
+}
+
 export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise<number> {
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
@@ -376,6 +405,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     // Closing is the addressee's own act on its own thread: the standing check every write into
     // a seat's folder asks, and nothing else — no admission, since no message is written.
     if (caller.kind === 'seat' && (placed.kind !== 'seat' || callerVerdict(placed, me, standing).kind !== 'ok')) {
+      raiseSecurityRefusal(team, root, host.home, dir, placed, 'placement', null, host.now());
       return refused(io, json, `seat ${me} is not this call on its own pane and session; this call is ${describeCaller(placed)}`);
     }
     if (state.reason !== null) return refused(io, json, `${closedWords(answered.thread, state.reason)}; nothing was written`);
@@ -431,6 +461,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     return refused(io, json, `record ${id} was sent by the owner, and this build does not deliver a reply to the owner; nothing was written`);
   }
   if (!team.seats.some((seat) => seat.name === target)) {
+    raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', target, host.now());
     return refused(io, json, `${target}: it is not a declared seat; the file's seats are ${seatList(team)}; nothing was written`);
   }
 
@@ -439,7 +470,10 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   // the new one this reply opens and cites (§3.5). A reply between seats no other rule pairs is
   // admitted by the reply rule; a send never carries the context.
   const admission = admissionOf(placed, team, null, target, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
-  if (!admission.ok) return refused(io, json, `refused: ${admission.why}`);
+  if (!admission.ok) {
+    raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', target, host.now());
+    return refused(io, json, `refused: ${admission.why}`);
+  }
 
   const replyId = host.newId?.() ?? randomUUID();
   const thread = state.open ? answered.thread : replyId;

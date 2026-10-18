@@ -11,6 +11,7 @@
 // `inbox_check`. The drop-folder watch is the bounded fall-back, not this process.
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
+import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Io } from '../io.ts';
 import { version } from '../version.ts';
@@ -47,7 +48,7 @@ export type ServeHost = { home: string };
 
 export const realServeHost: ServeHost = { home: homedir() };
 
-type Serving = { seat: string; session: string; root: string; dropDir: string; home: string };
+type Serving = { project: string; seat: string; session: string; root: string; dropDir: string; home: string };
 type RequestId = string | number | null;
 
 /** The process's stdin and stdout, framed the way MCP's stdio transport reads them. */
@@ -138,7 +139,21 @@ function callTool(params: unknown, serving: Serving): unknown {
       id,
       serving.home,
     );
-    if (!read.ok) return toolError(read.reason);
+    if (!read.ok) {
+      if (read.refusal !== undefined) {
+        // The owner hears the rule and the object, never the record's content.
+        raiseRefusalEvent({
+          project: serving.project,
+          root: serving.root,
+          home: serving.home,
+          session: serving.session,
+          kind: 'record.invalid',
+          rule: read.refusal.rule,
+          object: { id: read.refusal.id, seat: read.refusal.seat, path: read.refusal.path },
+        });
+      }
+      return toolError(read.reason);
+    }
     return toolText(read.body);
   }
   return toolError(`unknown tool ${JSON.stringify(String(name))}`);
@@ -227,7 +242,14 @@ export async function runMcpServe(
     ts: new Date().toISOString(),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
-  const serving: Serving = { seat: seat.name, session: team.session, root: loaded.root, dropDir, home: host.home };
+  const serving: Serving = {
+    project: team.project,
+    seat: seat.name,
+    session: team.session,
+    root: loaded.root,
+    dropDir,
+    home: host.home,
+  };
   try {
     for await (const line of streams.lines) {
       const reply = handleLine(line, serving);
