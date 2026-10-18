@@ -136,11 +136,13 @@ seats:
     launch: claude --model claude-opus-5-5
 ```
 
-The team runs as the file and the state say, so there is nothing to act on:
+The team runs as the file and the state say, so there is nothing to act on (the note is the
+housekeeping of a role word written the 0.3.5/0.4 way):
 
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
+note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0
 ```

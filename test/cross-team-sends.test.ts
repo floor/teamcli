@@ -22,19 +22,21 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { updateState } from '../src/state.ts';
 import { updateAgent } from '../src/registry/agents.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
-import { readTeams, teamIdOf } from '../src/registry/teams.ts';
+import { readTeams, setRoster, teamIdOf } from '../src/registry/teams.ts';
 import { historyPath } from '../src/send/history.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
 type SeatSpec = { name: string; role: string; leads?: boolean; nickname?: string };
-type TeamSpec = { project: string; entity: string; session: string; seats: SeatSpec[] };
+type TeamSpec = { project: string; entity: string; session: string; seats: SeatSpec[]; legacyLead?: string };
 
-/** Two entities. `acme` is three teams: the entity's own team (its project is the entity's name)
- *  and two teams under it; `beta` holds two more. The lead seats carry everyday roles, and the
- *  seats spelled `lead` and `coordinator` hold no mark: the shape a rule reading role words would
- *  get wrong. */
+/** Two entities. `acme` is four teams: the entity's own team (its project is the entity's name),
+ *  two teams under it, and `legacy`, upgraded from 0.3.5/0.4 — its file names its lead with the
+ *  legacy `coordinator:` key, its lead carries the legacy role word, and its registry roster (see
+ *  `beforeEach`) was written before the `leads` capability existed; `beta` holds two more. The
+ *  lead seats carry everyday roles, and the seats spelled `lead` and `coordinator` hold no mark:
+ *  the shape a rule reading role words would get wrong. */
 const TEAMS: Record<string, TeamSpec> = {
   acme: {
     project: 'acme',
@@ -63,6 +65,16 @@ const TEAMS: Record<string, TeamSpec> = {
       { name: 'api-helper', role: 'coordinator' },
     ],
   },
+  legacy: {
+    project: 'legacy',
+    entity: 'acme',
+    session: 'legacy',
+    legacyLead: 'steward',
+    seats: [
+      { name: 'steward', role: 'coordinator' },
+      { name: 'legacy-helper', role: 'builder' },
+    ],
+  },
   beta: {
     project: 'beta',
     entity: 'beta',
@@ -83,8 +95,9 @@ const TEAMS: Record<string, TeamSpec> = {
 type World = { base: string; home: string; roots: Record<string, string>; files: Record<string, TeamFile> };
 
 function teamText(spec: TeamSpec): string {
-  const lead = spec.seats.find((seat) => seat.leads === true);
-  if (!lead) throw new Error('a test team needs a seat that leads');
+  const marked = spec.seats.find((seat) => seat.leads === true);
+  const lead = marked?.name ?? spec.legacyLead;
+  if (lead === undefined) throw new Error('a test team needs a seat that leads');
   const seats = spec.seats
     .map(
       (seat) => `  - role: ${seat.role}
@@ -102,8 +115,8 @@ ${seat.nickname === undefined ? '' : `    nickname: ${seat.nickname}\n`}${seat.l
 project: ${spec.project}
 entity: ${spec.entity}
 session: ${spec.session}
-coordinator: ${lead.name}
-operator: ${lead.name}
+coordinator: ${lead}
+operator: ${lead}
 workspace:
   mode: shared
 seats:
@@ -135,6 +148,10 @@ beforeEach(() => {
   world = { base, home, roots, files };
   for (const [key, spec] of Object.entries(TEAMS)) {
     for (const seat of spec.seats) launch(key, seat.name);
+    // A team upgraded from 0.3.5/0.4: its registry roster was written before the `leads`
+    // capability existed, so no line carries the mark even though its file names its lead — the
+    // state the fix reads, where the record alone cannot say who leads the team.
+    if (spec.legacyLead !== undefined) unmarkLeads(key);
   }
 });
 
@@ -156,6 +173,24 @@ function launch(team: string, seat: string): void {
     session.seats[seat] = { stage: 'launched', pane: paneOf(team, seat), workspace: 'w1' };
     state.sessions[file.session] = session;
   });
+}
+
+/** One registry roster as a build before the `leads` capability wrote it: every line kept, no
+ *  line carrying the mark. The team's file still names its lead, so only the file can say it. */
+function unmarkLeads(team: string): void {
+  const id = teamIdOf(world.roots[team] as string);
+  const record = readTeams(world.home)[id];
+  if (!record) throw new Error(`the test world has no registry record for ${team}`);
+  setRoster(
+    world.home,
+    id,
+    record.roster.map((line) => ({
+      agent: line.agent,
+      seat: line.seat,
+      role: line.role,
+      ...(line.nickname === undefined ? {} : { nickname: line.nickname }),
+    })),
+  );
 }
 
 /** The send host the scenes are handed: no live session is read, because every record carries its
@@ -263,6 +298,28 @@ describe('cross-team sends inside an entity', () => {
   });
 });
 
+describe('a team upgraded from 0.3.5/0.4: its lead is the file\'s seat, never the role word', () => {
+  test("an orchestrator reaches a legacy coordinator's lead@team", async () => {
+    // `legacy`'s file names its lead with the legacy `coordinator:` key, its roster carries no
+    // `leads` mark, and its lead's role is the legacy word. The lead address and the bare seat
+    // both reach the seat the file declares — the send works without the role rename.
+    admitted(await send({ team: 'web', seat: 'web-lead' }, 'lead@legacy'));
+    admitted(await send({ team: 'web', seat: 'web-lead' }, 'steward@legacy'));
+    // And the legacy lead reaches another team's lead by the same rule.
+    admitted(await send({ team: 'legacy', seat: 'steward' }, 'web-lead@web'));
+  });
+
+  test("a non-lead seat is still refused the legacy lead, and the legacy lead another team's plain seat", async () => {
+    refused(await send({ team: 'web', seat: 'web-helper' }, 'lead@legacy'));
+    refused(await send({ team: 'web', seat: 'web-helper' }, 'steward@legacy'));
+    refused(await send({ team: 'web', seat: 'web-lead' }, 'legacy-helper@legacy'));
+  });
+
+  test('another entity is refused the legacy lead', async () => {
+    refused(await send({ team: 'data', seat: 'data-lead' }, 'lead@legacy'));
+  });
+});
+
 describe('cross-team --list', () => {
   test("the caller's entity's other teams' seats follow the file's own, each as seat@team", async () => {
     const reading = await list({ team: 'api', seat: 'api-lead' });
@@ -270,19 +327,23 @@ describe('cross-team --list', () => {
     expect(reading.code).toBe(0);
     expect(reading.err).toBe('');
     // The file's own rows first, then the entity's other teams by their own name: acme, then
-    // web. beta and data belong to another entity and are not addressable from here, so they
-    // never show; every name in the name column is a spec the resolver takes as it stands.
+    // legacy, then web. `legacy` is the team upgraded from 0.4 — its rows show although no roster
+    // line holds `leads` — and beta and data belong to another entity and are not addressable
+    // from here, so they never show; every name in the name column is a spec the resolver takes
+    // as it stands.
     expect(reading.out).toBe(
       [
         'team api, session "api"',
-        '  SEAT              NICKNAME        ROLE         PROJECT  REACH',
-        '  api-lead          @zeus           guide        api      socket',
-        '  api-helper        -               coordinator  api      socket',
-        '  coord@acme        -               facilitator  acme     socket',
-        '  acme-helper@acme  -               builder      acme     socket',
-        '  web-lead@web      -               guide        web      socket',
-        '  web-helper@web    hephaestus@web  lead         web      socket',
-        '6 seats',
+        '  SEAT                  NICKNAME        ROLE         PROJECT  REACH',
+        '  api-lead              @zeus           guide        api      socket',
+        '  api-helper            -               coordinator  api      socket',
+        '  coord@acme            -               facilitator  acme     socket',
+        '  acme-helper@acme      -               builder      acme     socket',
+        '  steward@legacy        -               coordinator  legacy   socket',
+        '  legacy-helper@legacy  -               builder      legacy   socket',
+        '  web-lead@web          -               guide        web      socket',
+        '  web-helper@web        hephaestus@web  lead         web      socket',
+        '8 seats',
       ].join('\n') + '\n',
     );
     expect(reading.out).not.toContain('@beta');
@@ -310,10 +371,14 @@ describe('cross-team --list', () => {
     expect(reading.code).toBe(0);
     const doc = JSON.parse(reading.out) as { project: string; session: string; summary: string; seats: { name: string; nickname: string | null; cli: string; role: string; stopped: boolean; project: string; reach: string }[] };
     expect(doc.session).toBe('api');
-    expect(doc.summary).toBe('6 seats');
+    expect(doc.summary).toBe('8 seats');
     const byName = new Map(doc.seats.map((row) => [row.name, row]));
-    expect(doc.seats.length).toBe(6);
+    expect(doc.seats.length).toBe(8);
     expect(byName.get('acme-helper@acme')).toEqual({ name: 'acme-helper@acme', nickname: null, cli: 'claude-code', role: 'builder', project: 'acme', reach: 'socket', stopped: true });
+    // The upgraded team's seats are addressable rows like any other: reachability keys on the
+    // entity, never on the `leads` mark a pre-0.5 roster never wrote.
+    expect(byName.get('steward@legacy')).toEqual({ name: 'steward@legacy', nickname: null, cli: 'claude-code', role: 'coordinator', project: 'legacy', reach: 'socket', stopped: false });
+    expect(byName.get('legacy-helper@legacy')).toEqual({ name: 'legacy-helper@legacy', nickname: null, cli: 'claude-code', role: 'builder', project: 'legacy', reach: 'socket', stopped: false });
     expect(byName.get('web-lead@web')).toEqual({ name: 'web-lead@web', nickname: null, cli: 'claude-code', role: 'guide', project: 'web', reach: 'socket', stopped: false });
     expect(byName.get('api-lead')).toEqual({ name: 'api-lead', nickname: '@zeus', cli: 'claude-code', role: 'guide', project: 'api', reach: 'socket', stopped: false });
     expect(byName.has('data-lead@data')).toBe(false);

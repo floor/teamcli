@@ -120,7 +120,7 @@ writes nothing, and the log records writes.
 | `agt_<12 hex>` | one agent by its id, from the agent registry |
 | `<seat>@<team>` | a seat in a named team — whoever its registry record holds now; `<team>` is a team id, a project or a session |
 | `<nickname>@<team>` | the seat that human name belongs to, in a named team — a nickname confers nothing: its seat talks and is judged by its own record |
-| `lead@<team>` | the team's lead: the seat its file marks `leads: true`, never a seat merely named `lead`. A team with no lead is refused — there is no one to deliver to; a roster marking two leads is refused naming both |
+| `lead@<team>` | the team's lead: the seat its file names as lead — the `leads: true` mark, or the legacy `coordinator:` key a 0.3.5/0.4 file still writes — never a seat merely named `lead`, and never a role's word. A team the file and the roster name no lead of is refused — there is no one to deliver to; a roster marking two leads is refused naming both |
 | `@<nickname>` | the seat carrying that human name: the caller's team first, then the other teams of the caller's entity (from a folder that is no team, every team the registry holds). Exactly one match sends; several are refused, each named by the `<nickname>@<team>` spelling that picks it; none is refused, pointing at `team send --list` |
 | `<seat>` or `<nickname>` | a seat of the caller's own team, by its name or its human name. From a folder that is no team, a bare name is refused with the forms that need none — never a `team init` suggestion |
 
@@ -129,14 +129,15 @@ the role `coordinator`. Every form resolves to one seat's registry record before
 and the admission rule judges that record's seat — a nickname added or removed never changes who
 may reach whom. A spec that two entries answer — one seat's name and another seat's nickname of
 the same team — is refused naming both and sending nothing. A `lead@<team>` naming a roster that
-marks two leads is refused the same way; a roster with no lead is refused because there is no one
-to deliver to, and the refusal names both repairs: `team send --list` to name a seat, or `leads`
-on one seat to give the team a lead.
+marks two leads is refused the same way. A roster that marks none is read from the team's file,
+whose `leads` mark or legacy `coordinator:` key names its lead; only a team whose file names no
+lead either is refused, because there is no one to deliver to, and the refusal names both
+repairs: `team send --list` to name a seat, or `leads` on one seat to give the team a lead.
 
 `lead` is reserved for that address. A file written before 0.5.0 may still declare a seat of the
 name: it loads, answers its bare name in its own team, and `team check` notes it — its repair is
-`team rename lead <new-name>` — while `lead@<team>` always reaches the seat that holds `leads`.
-No new seat and no nickname may take the word.
+`team rename lead <new-name>` — while `lead@<team>` always reaches the seat its file names as
+lead. No new seat and no nickname may take the word.
 
 A nickname is unique inside its team, and two teams may share one: `@<nickname>` asks the
 caller's own team first and then the entity's other teams, and a name more than one of them
@@ -219,9 +220,11 @@ in chain order, the entity's own team first and then its other teams by team id,
 whose files mark none has no assistant for the rule to admit.
 
 Which seat leads a team — the seat these rules call its orchestrator — is read the same way: the
-lead the file declares, carried onto the record's roster line as `leads: true`. A role word names
-nothing on its own, in any language: a seat called `orchestrator`, or one whose role is written
-`coordinator`, leads nothing without the mark.
+lead the file declares, by the `leads: true` mark or the legacy `coordinator:` key a 0.3.5/0.4
+file still writes, carried onto the record's roster line as `leads: true`; a registry written
+before the mark existed is answered from the file. A role word names nothing on its own, in any
+language: a seat called `orchestrator`, or one whose role is written `coordinator`, leads nothing
+without one of those two places.
 
 An owner-signed grant is a record in the owner's grants folder (`~/.config/team/grants/`, the
 same folder the standing create-grants live in), naming the pair it admits and when it stops:

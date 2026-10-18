@@ -266,6 +266,52 @@ describe('route: the address the native channel answers', () => {
     expect(io.err).toBe('');
   });
 
+  test("a lead reaches a legacy team's lead: the file's seat, never the role word", async () => {
+    const { w, leadIo } = acme();
+    // A second team of the same entity, upgraded from 0.3.5/0.4: its file names its lead with the
+    // legacy `coordinator:` key, its lead carries the legacy role word, and its registry roster was
+    // written before the `leads` capability existed. The route answers the pair all the same.
+    const web = world('web', 'web', 'steward', [seatBlock('coordinator', 'steward', 'claude-code')], w);
+    const webId = teamIdOf(web.root);
+    const steward = agent(w.home, { name: 'steward', role: 'coordinator', cli: 'claude-code', team: webId, seat: 'steward', session: 'web', pane: 'w2:p1' });
+    upsertTeam(w.home, webId, {
+      project: 'web',
+      entity: 'acme',
+      session: 'web',
+      root: web.root,
+      lobby: lobbyDir(w.home),
+      roster: [{ agent: steward.id, seat: 'steward', role: 'coordinator' }],
+      lifecycle: 'running',
+    });
+    place(web.root, 'web', 'steward', 'w2:p1');
+
+    const code = await runRoute(['lead@web'], leadIo, host(w));
+
+    expect(code).toBe(0);
+    expect(leadIo.err).toBe('');
+    expect(leadIo.out).toBe(
+      'team acme, session "acme"\n' +
+        `steward  ${steward.id}  (steward)\n` +
+        'session web\n' +
+        'cli claude-code\n' +
+        'pane w2:p1\n' +
+        'socket none (none)\n' +
+        'native yes\n' +
+        'admitted by: an orchestrator to another orchestrator\n' +
+        'steward: routed at no socket (none)\n',
+    );
+    // The one route record lands in the receiving team's own file, naming the rule.
+    const [record] = routeLines(routesPath('web', web.root, w.home));
+    expect(record).toMatchObject({
+      from: 'lead',
+      to: 'steward',
+      to_id: steward.id,
+      team: webId,
+      session: 'web',
+      rule: 'an orchestrator to another orchestrator',
+    });
+  });
+
   test('--json prints the route answer as the team.route envelope', async () => {
     const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
     const id = teamIdOf(w.root);

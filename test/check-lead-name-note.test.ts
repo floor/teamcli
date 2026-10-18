@@ -31,7 +31,8 @@ const SEAT = (role: string, name: string, lines: string[] = []): string =>
     launch: claude --model claude-opus-5-5
 ${lines.join('')}`;
 
-/** A file written before 0.5.0: its coordinator's seat is literally named `lead`, and it leads. */
+/** An upgraded file whose lead's seat is still literally named `lead`: the name is the legacy
+ *  bit here, so the role is 0.5's word and this file draws no note beyond the `coordinator:` key. */
 const LEGACY = `format: 1
 project: acme
 coordinator: lead
@@ -39,7 +40,7 @@ operator: lead
 workspace:
   mode: shared
 seats:
-${SEAT('coordinator', 'lead', ['    leads: true\n'])}`;
+${SEAT('orchestrator', 'lead', ['    leads: true\n'])}`;
 
 /** The same team where another seat leads: the name stays a legacy seat's bare address. */
 const SPLIT = `format: 1

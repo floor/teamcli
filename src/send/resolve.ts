@@ -214,7 +214,7 @@ function lookupInTeam(
   live: LiveRead,
   leadAddress: boolean,
 ): Target | ResolveProblem {
-  const chosen = seatOfTarget(team, spec, target, leadAddress);
+  const chosen = seatOfTarget(team, spec, target, leadAddress, leadAddress && target === LEAD ? fileLeadOf(home, team) : null);
   if (chosen !== null && 'error' in chosen) return chosen;
   const seat = chosen === null ? target : chosen.seat;
   const wanted =
@@ -253,22 +253,27 @@ function targetOfSeat(
  * The seat a target names in one team, from the team's roster: the `lead@<team>` address is the
  * team's lead — the entry its file marks `leads: true`, since the reserved word may not be a new
  * seat's name or any nickname, though a legacy seat may still carry the name and keeps its bare
- * spelling. A team with no lead has no one its lead address can reach, so the send is refused
- * rather than silently dropped; a roster marking two leads refuses that address too, naming both.
- * Any other target is a seat's name or a nickname, and one that two entries answer is refused
- * naming both: the load refuses that collision, so only a registry written elsewhere can hold it,
- * and no address in it may pick a seat by accident. `null` leaves the target to the agent-record
- * lookup in `targetOfSeat`.
+ * spelling. A roster written before the `leads` capability existed holds no mark, and a team
+ * upgraded from 0.3.5/0.4 names its lead with the legacy `coordinator:` key: the live file
+ * resolves either spelling, and `fileLead` — the lead the file declares, read only when the
+ * roster marks none — is that seat. A team whose file names no lead either has no one its lead
+ * address can reach, so the send is refused rather than silently dropped; a roster marking two
+ * leads refuses that address too, naming both. Any other target is a seat's name or a nickname,
+ * and one that two entries answer is refused naming both: the load refuses that collision, so
+ * only a registry written elsewhere can hold it, and no address in it may pick a seat by
+ * accident. `null` leaves the target to the agent-record lookup in `targetOfSeat`.
  */
 function seatOfTarget(
   team: TeamRecord,
   spec: string,
   target: string,
   leadAddress: boolean,
+  fileLead: string | null,
 ): { seat: string; via: 'lead' | 'seat' | 'nickname' } | ResolveProblem | null {
   if (leadAddress && target === LEAD) {
     const [lead, ...otherLeads] = team.roster.filter((entry) => entry.leads === true);
     if (lead === undefined) {
+      if (fileLead !== null) return { seat: fileLead, via: 'lead' };
       // TODO 0.5.1: resolve to the owner once the owner is reachable through team send
       return { error: `${spec}: this team has no lead seat, so there is no one to deliver to; name a seat (team send --list) or give a seat \`leads\`` };
     }
@@ -293,6 +298,20 @@ function seatOfTarget(
   if (seatNames.length > 0) return { seat: seatNames[0] as string, via: 'seat' };
   if (nicknameSeats.length > 0) return { seat: nicknameSeats[0] as string, via: 'nickname' };
   return null;
+}
+
+/**
+ * The lead a team file declares, for a registry roster that marks none: the file's `leads: true`
+ * seat or the legacy `coordinator:` key, whichever spelling it used — the loader resolves the two
+ * as one lead and never reads a role's word, so an upgraded 0.3.5/0.4 team reaches its lead
+ * without the role rename. Read only for `lead@<team>` and only when no roster line holds the
+ * capability: when one does, the registry is the address and the file is not asked. Null when the
+ * file cannot be read — the refusal then says the registry holds no lead.
+ */
+function fileLeadOf(home: string, team: TeamRecord): string | null {
+  if (team.roster.some((entry) => entry.leads === true)) return null;
+  const loaded = loadTeamFile(team.root, { home });
+  return loaded.ok && loaded.team.orchestrator !== '' ? loaded.team.orchestrator : null;
 }
 
 /** The pane to type into: the one the record carries, re-pointed on relaunch; when it carries

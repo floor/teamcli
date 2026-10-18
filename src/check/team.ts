@@ -346,6 +346,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const notes = collapseNotes([
     ...delegateNotes(team),
     ...leadNameNotes(team),
+    ...leadRoleNotes(team),
     ...lobbyNotes(team, root, sources.home, session),
     ...policyChecked.notes,
     ...unknownStatusNotes(team, state, live),
@@ -611,6 +612,21 @@ function leadNameNotes(team: TeamFile): string[] {
   const legacy = team.seats.find((seat) => seat.name === LEAD_NAME);
   if (legacy === undefined) return [];
   return [`seat "${LEAD_NAME}" does not hold leads: lead@<team> addresses the seat that does, so this seat answers only to its bare name; the team's lead: run team rename ${LEAD_NAME} <new-name> to give it another name`];
+}
+
+/**
+ * The team's lead carrying the legacy role word: 0.3.5 and 0.4 files spell the role
+ * `coordinator`, and an upgraded team keeps that word. The 0.5 word is `orchestrator`.
+ * Admission, the `lead@<team>` address and the listing all key on the lead's place in the file —
+ * the `leads` mark, or the legacy `coordinator:` key — never on a role's word, so every send
+ * reaches the seat either way and the rename is housekeeping; the file is worth bringing to the
+ * 0.5 word when convenient. A note, not a difference: nothing is wrong with the team, and its
+ * exit code is unchanged.
+ */
+function leadRoleNotes(team: TeamFile): string[] {
+  const lead = team.seats.find((seat) => seat.name === team.orchestrator);
+  if (lead === undefined || lead.role !== 'coordinator') return [];
+  return [`the lead seat "${lead.name}" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set \`role: orchestrator\` on it when convenient`];
 }
 
 /**
