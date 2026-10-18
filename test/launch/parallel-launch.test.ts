@@ -124,7 +124,8 @@ describe('parallel launch execution', () => {
     const names = ['seat-1', 'seat-2', 'seat-3', 'seat-4', 'seat-5', 'seat-6'];
     const plan: Step[] = [
       ...names.flatMap((name, i) => seatSteps(name, i % 2 === 0 ? 'claude-code' : 'codex')),
-      { kind: 'run', argv: [], do: { do: 'spawn-watch', command: 'team watch', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'create', label: 'Watch · acme', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'watch', label: 'Watch · acme', command: 'team watch' } },
     ];
 
     let t = 0;
@@ -156,7 +157,6 @@ describe('parallel launch execution', () => {
       closeWorkspace: () => true,
       stopSession: () => true,
       kill: () => true,
-      spawnWatch: () => 4242,
       agentPanes: () => names.map((name) => `${name}-pane`),
       // Every seat takes 6 s (3 polls of 2 s) before showing its idle prompt.
       classify: (): ScreenKind => (t >= 3 * IDLE_POLL_MS ? 'idle' : 'working'),
@@ -260,7 +260,8 @@ describe('parallel launch execution', () => {
       ...seatSteps('seat-3', 'codex'),
       ...seatSteps('seat-4', 'codex'),
       ...seatSteps('seat-5', 'claude-code'),
-      { kind: 'run', argv: [], do: { do: 'spawn-watch', command: 'team watch', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'create', label: 'Watch · acme', cwd: '.' } },
+      { kind: 'run', argv: [], do: { do: 'watch', label: 'Watch · acme', command: 'team watch' } },
     ];
 
     let t = 0;
@@ -277,7 +278,6 @@ describe('parallel launch execution', () => {
       deliverRules: async () => true,
       renameAgent: () => true,
       closeWorkspace: () => true,
-      spawnWatch: () => 4242,
       stopSession: () => true,
       kill: () => true,
       agentPanes: () => ['seat-1-pane', 'seat-3-pane', 'seat-4-pane', 'seat-5-pane'],
@@ -387,6 +387,7 @@ describe('parallel launch execution', () => {
     let activeWaits = 0;
     let maxActiveWaits = 0;
     let launchedCount = 0;
+    const launchedPanes = new Set<string>();
     const { out, sink: s } = sink(false);
     const records = progressWriter(s);
 
@@ -394,15 +395,18 @@ describe('parallel launch execution', () => {
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
-      paneRun: () => {
+      paneRun: (_session, pane) => {
+        launchedPanes.add(pane);
         launchedCount++;
         activeWaits++;
         if (activeWaits > maxActiveWaits) maxActiveWaits = activeWaits;
         return true;
       },
       typeLine: () => true,
-      renameAgent: () => {
-        activeWaits--;
+      // A pane is now named at create, before it runs; only a rename after the launch ends a
+      // seat's slot in the window.
+      renameAgent: (_session, pane) => {
+        if (launchedPanes.delete(pane)) activeWaits--;
         return true;
       },
       closeWorkspace: () => true,
@@ -515,5 +519,70 @@ describe('parallel launch execution', () => {
         'seat-2: left out: stopped cleanly\n' +
         'seat-3: left out: stopped cleanly\n',
     );
+  });
+
+  test('a seat answered at trust settles ready and is not renamed or delivered again', async () => {
+    // `team answer <seat> trust` renames the agent, delivers the rules and writes stage ready
+    // while this run waits at the dialog. The pause comes back ready; nothing after it may run:
+    // a second rename would overwrite the ready stage with named, and the delivery would send
+    // the rules again while the first rules turn is still running.
+    const plan = seatSteps('seat-1', 'codex');
+    const renamed: string[] = [];
+    const delivered: string[] = [];
+    const stages: string[] = [];
+    const { out, sink: s } = sink(false);
+    const records = progressWriter(s);
+
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
+      paneRun: () => true,
+      typeLine: () => true,
+      deliverRules: async () => {
+        delivered.push('seat-1');
+        return true;
+      },
+      renameAgent: (_session, _pane, name) => {
+        renamed.push(name);
+        return true;
+      },
+      closeWorkspace: () => true,
+      stopSession: () => true,
+      kill: () => true,
+      agentPanes: () => ['seat-1-pane'],
+      classify: (): ScreenKind => 'trust',
+      sleep: async () => {},
+      now: () => 0,
+      allow: () => null,
+      record: (_seat, record) => {
+        const stage = (record as { stage?: unknown }).stage;
+        if (typeof stage === 'string') stages.push(stage);
+      },
+      running: () => {},
+      drop: () => {},
+      say: () => {},
+      log: () => {},
+      progress: (seat, state) => records.progress(seat, state),
+      final: (seat, record) => records.final(seat, record),
+      detail: (line) => records.detail(line),
+      dialog: {
+        mode: 'prompt',
+        run: async () => {
+          // The owner's answer, landing between the pause's polls: the state reads ready.
+          stages.push('ready');
+          return { kind: 'ready', detail: '  seat-1 was answered while its prompt was open; it is ready\n' };
+        },
+      },
+    };
+
+    const report = await executePlan(plan, 'acme', host, { concurrency: 1 });
+    // The pane is named once, at create; the wait's ready return skips the post-pause rename.
+    expect(renamed).toEqual(['seat-1']);
+    expect(delivered).toEqual([]);
+    expect(stages).not.toContain('named');
+    expect(stages.at(-1)).toBe('ready');
+    expect(out.join('')).toBe('seat-1: ready\n');
+    expect(report.dropped).toEqual([]);
   });
 });

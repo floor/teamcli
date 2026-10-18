@@ -47,7 +47,7 @@ describe('the status page restored-pane sentences', () => {
   test('the repair forms and the no-start rule stand, verbatim', () => {
     const page = prose(PAGE);
     expect(page).toContain(
-      'repaired by that restart — `team remove <seat> --keep, then team add <seat>`, or `team down, then team up` for a lead',
+      'repaired the same way — `team restart <seat>` for a seat that is not a lead, or, for a lead\'s own seat, a note naming what the pane runs and no difference at all',
     );
     expect(page).toContain('a pane it can say nothing about is repaired by looking at it. Nothing either report says starts a seat.');
   });

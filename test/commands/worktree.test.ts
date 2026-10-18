@@ -8,9 +8,11 @@ import { compare, fingerprints } from '../../src/approve/fingerprint.ts';
 import { runWorktree, type WorktreeSources } from '../../src/commands/worktree.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
+import { WORKTREE_OUTPUT_SCHEMA } from '../../src/output/schema.ts';
 import { readState, updateState, emptySession } from '../../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { gitEnv, testIo, type TestIo } from '../helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 
 let base: string;
 let project: string;
@@ -114,7 +116,7 @@ describe('team worktree new', () => {
   test('creates the folder and the branch from the fetched base, and prints the path', async () => {
     const io = await run(['new', 'select-width', '--kind', 'fix', '--seat', 'lead']);
     expect(io.code).toBe(0);
-    expect(io.out).toBe('../worktrees/acme/select-width\n');
+    expect(io.out).toBe('team acme, session "acme"\nworktree select-width: created at ../worktrees/acme/select-width\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width', 'README.md'))).toBe(true);
     expect(git(project, 'rev-parse', '--verify', 'refs/heads/fix/select-width').trim()).toBe(git(project, 'rev-parse', 'origin/main').trim());
     const state = readState(join(project, '.agents'));
@@ -126,6 +128,66 @@ describe('team worktree new', () => {
       setup: 'ok',
     });
     expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toContain('worktree new [owner] created select-width');
+  });
+
+  test('--json carries the action envelope under the registered schema', async () => {
+    const io = await run(['new', 'select-width', '--kind', 'fix', '--json']);
+    expect(io.code).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, WORKTREE_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.worktree', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'created',
+      action_summary: 'worktree select-width: created at ../worktrees/acme/select-width',
+      project: 'acme',
+      session: 'acme',
+      action: 'new',
+      task: 'select-width',
+      branch: 'fix/select-width',
+      path: '../worktrees/acme/select-width',
+    });
+    const removed = await run(['remove', 'select-width', '--json']);
+    expect(removed.code).toBe(0);
+    expect(removed.err).toBe('');
+    const after = assertMatchesOutputSchema<Record<string, unknown>>(removed.out, WORKTREE_OUTPUT_SCHEMA);
+    expect(after).toMatchObject({
+      status: 'removed',
+      action_summary: 'removed select-width; the branch fix/select-width is kept',
+      action: 'remove',
+      task: 'select-width',
+      branch: 'fix/select-width',
+    });
+  });
+
+  test('--json: a refusal is the team.error document on stdout, stderr empty', async () => {
+    approve(teamText({ mode: 'shared' }));
+    const io = await run(['new', 'select-width', '--kind', 'fix', '--json']);
+    expect(io.code).toBe(1);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'worktree.shared', messageContains: 'workspace.mode is shared' });
+  });
+
+  test('--json is read before the parser: a bad option, or --json=<value>, still writes the error document', async () => {
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const io = await run([...argv]);
+      expect(io.code).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'worktree.invocation', messageContains, repair: null });
+    }
+  });
+
+  test('--json: a setup failure is the worktree.setup error document, and it writes nothing on stderr', async () => {
+    approve(teamText({ setup: '  setup:\n    - "false"\n' }));
+    const io = await run(['new', 'select-width', '--kind', 'fix', '--json']);
+    expect(io.code).toBe(1);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'worktree.setup', messageContains: 'setup failed on command 1 of 1' });
+    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
   });
 
   test('a coordinator seat may create one; another seat may not', async () => {
@@ -143,11 +205,19 @@ describe('team worktree new', () => {
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
-  test('refuses a file that was never approved, with the same line as before', async () => {
+  test('a team with no stored approval runs: the live file is the record', async () => {
     rmSync(home, { recursive: true, force: true });
     const missing = await run(['new', 'select-width', '--kind', 'fix']);
-    expect(missing.code).toBe(1);
-    expect(missing.err).toBe('team worktree: the file was never approved on this machine\n');
+    expect(missing.code).toBe(0);
+    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
+  });
+
+  test('a stored approval that cannot be verified still refuses, with its own line', async () => {
+    approve(teamText());
+    sources = { ...sources, standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }) };
+    const refused = await run(['new', 'select-width', '--kind', 'fix']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toBe('team worktree: the record cannot be verified\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
@@ -199,7 +269,7 @@ describe('team worktree new', () => {
     approve(teamText({ setup: '  setup:\n    - "false"\n    - "touch no-second"\n' }));
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);
-    expect(io.out).toBe('../worktrees/acme/select-width\n');
+    expect(io.out).toBe('team acme, session "acme"\nworktree select-width: created at ../worktrees/acme/select-width\n');
     expect(io.err).toContain('setup: failed');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width', 'no-second'))).toBe(false);
@@ -359,11 +429,11 @@ describe('team worktree and the live file', () => {
     const created = await run(['new', 'tidy-logs', '--kind', 'chore']);
     expect(created.code).toBe(0);
     expect(created.err).toBe(noNote);
-    expect(created.out).toBe('../worktrees/acme/tidy-logs\n');
+    expect(created.out).toBe('team acme, session "acme"\nworktree tidy-logs: created at ../worktrees/acme/tidy-logs\n');
     const removed = await run(['remove', 'select-width']);
     expect(removed.code).toBe(0);
     expect(removed.err).toBe(noNote);
-    expect(removed.out).toBe('removed select-width; the branch fix/select-width is kept\n');
+    expect(removed.out).toBe('team acme, session "acme"\nremoved select-width; the branch fix/select-width is kept\n');
   });
 
   test('the live workspace.path supplies the landing', async () => {
@@ -372,7 +442,7 @@ describe('team worktree and the live file', () => {
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
     expect(io.err).toBe(noNote);
-    expect(io.out).toBe('../worktrees/acme/file/select-width\n');
+    expect(io.out).toBe('team acme, session "acme"\nworktree select-width: created at ../worktrees/acme/file/select-width\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'file', 'select-width', 'README.md'))).toBe(true);
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
@@ -441,11 +511,11 @@ describe('team worktree and the live file', () => {
     const created = await run(['new', 'select-width', '--kind', 'fix']);
     expect(created.code).toBe(0);
     expect(created.err).toBe('');
-    expect(created.out).toBe('../worktrees/acme/select-width\n');
+    expect(created.out).toBe('team acme, session "acme"\nworktree select-width: created at ../worktrees/acme/select-width\n');
     const removed = await run(['remove', 'select-width']);
     expect(removed.code).toBe(0);
     expect(removed.err).toBe('');
-    expect(removed.out).toBe('removed select-width; the branch fix/select-width is kept\n');
+    expect(removed.out).toBe('team acme, session "acme"\nremoved select-width; the branch fix/select-width is kept\n');
   });
 
   test('a record that does not verify refuses with the signature line, unchanged', async () => {
@@ -695,7 +765,7 @@ seats:
     const io = await run(['new', 'select-width']);
     expect(io.code).toBe(0);
     expect(io.err).toBe(noNote);
-    expect(io.out).toBe('../worktrees/acme/live/select-width\n');
+    expect(io.out).toBe('team acme, session "acme"\nworktree select-width: created at ../worktrees/acme/live/select-width\n');
     expect(ran).toEqual(['echo from-file']);
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']?.branch).toBe('live/select-width');
     expect(existsSync(join(base, 'worktrees', 'acme', 'live'))).toBe(true);
@@ -754,7 +824,7 @@ seats:
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('../worktrees/renamed/select-width\n');
+    expect(io.out).toBe('team renamed, session "acme"\nworktree select-width: created at ../worktrees/renamed/select-width\n');
     expect(existsSync(join(base, 'worktrees', 'renamed', 'select-width', 'README.md'))).toBe(true);
   });
 
@@ -788,7 +858,12 @@ describe('team worktree list', () => {
     const io = await run(['list']);
     expect(io.code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('0 open, limit 8 (workspace.limit)\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\n' +
+      '  TASK  BRANCH  PATH\n' +
+      'note: limit 8 (workspace.limit)\n' +
+      '0 worktrees\n',
+    );
     expect(existsSync(statePath())).toBe(false);
     expect(existsSync(logPath())).toBe(false);
   });
@@ -801,8 +876,11 @@ describe('team worktree list', () => {
     expect(listed.code).toBe(0);
     expect(listed.err).toBe('');
     expect(listed.out).toBe(
-      '1 open, limit 8 (workspace.limit)\n' +
-      'select-width session acme seat lead ../worktrees/acme/select-width folder exists\n',
+      'team acme, session "acme"\n' +
+      '  TASK          BRANCH            PATH\n' +
+      '  select-width  fix/select-width  ../worktrees/acme/select-width\n' +
+      'note: limit 8 (workspace.limit)\n' +
+      '1 worktree\n',
     );
     expect(readFileSync(statePath(), 'utf8')).toBe(stateBefore);
     expect(readFileSync(logPath(), 'utf8')).toBe(logBefore);
@@ -811,11 +889,39 @@ describe('team worktree list', () => {
     const gone = await run(['list']);
     expect(gone.code).toBe(0);
     expect(gone.out).toBe(
-      '1 open, limit 8 (workspace.limit)\n' +
-      'select-width session acme seat lead ../worktrees/acme/select-width folder gone; team worktree remove select-width\n',
+      'team acme, session "acme"\n' +
+      '  TASK          BRANCH            PATH\n' +
+      '  select-width  fix/select-width  ../worktrees/acme/select-width (gone)\n' +
+      'note: limit 8 (workspace.limit)\n' +
+      '1 worktree\n',
     );
     expect(readState(join(project, '.agents')).sessions.acme?.worktrees['select-width']?.branch).toBe('fix/select-width');
     expect(git(project, 'rev-parse', '--verify', 'refs/heads/fix/select-width').trim().length).toBeGreaterThan(0);
+  });
+
+  test('--json is the reading document under the registered schema', async () => {
+    expect((await run(['new', 'select-width', '--kind', 'fix', '--seat', 'lead'])).code).toBe(0);
+    const io = await run(['list', '--json']);
+    expect(io.code).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, WORKTREE_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.worktree', version: 1 },
+      format: 1,
+      project: 'acme',
+      session: 'acme',
+      notice: null,
+      worktrees: [{
+        task: 'select-width',
+        branch: 'fix/select-width',
+        path: '../worktrees/acme/select-width',
+        session: 'acme',
+        seat: 'lead',
+        exists: true,
+      }],
+      notes: ['limit 8 (workspace.limit)'],
+      summary: { worktrees: 1 },
+    });
   });
 
   test('rows are ordered by session, then task', async () => {
@@ -828,9 +934,12 @@ describe('team worktree list', () => {
     const io = await run(['list']);
     expect(io.code).toBe(0);
     expect(io.out).toBe(
-      '2 open, limit 8 (workspace.limit)\n' +
-      'alpha session m seat lead ../worktrees/acme/alpha folder gone; team worktree remove alpha\n' +
-      'beta session z ../worktrees/acme/beta folder gone; team worktree remove beta\n',
+      'team acme, session "acme"\n' +
+      '  TASK   BRANCH     PATH\n' +
+      '  alpha  fix/alpha  ../worktrees/acme/alpha (gone)\n' +
+      '  beta   fix/beta   ../worktrees/acme/beta (gone)\n' +
+      'note: limit 8 (workspace.limit)\n' +
+      '2 worktrees\n',
     );
   });
 
@@ -850,7 +959,12 @@ describe('team worktree list', () => {
     recordSeat('lead', 'w1:p1');
     const leadList = await run(['list'], lead);
     expect(leadList.code).toBe(0);
-    expect(leadList.out).toBe('0 open, limit 8 (workspace.limit)\n');
+    expect(leadList.out).toBe(
+      'team acme, session "acme"\n' +
+      '  TASK  BRANCH  PATH\n' +
+      'note: limit 8 (workspace.limit)\n' +
+      '0 worktrees\n',
+    );
     const other = await run(['list'], { kind: 'seat', name: 'stranger', pane: 'w2:p1' });
     expect(other.code).toBe(1);
     expect(other.err).toBe('team worktree: only the owner, the orchestrator or the operator runs it; this call is stranger\n');

@@ -34,14 +34,15 @@ import { boxHoldsText } from '../launch/deliver.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { profileFor } from '../profiles/index.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
-import { bindPane, deliverTrigger } from './deliver.ts';
+import { bindPane, deliverTrigger, TAKEN_REASON } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { FRAME_LIMIT, sendFrame, type SendOutcome } from './uds.ts';
+import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -95,6 +96,15 @@ export type DaemonSendRequest = {
   body: string;
   wait?: boolean;
   timeout_s?: number;
+  /** The legs the caller's walk already tried and could not take the send, each `<leg>:
+   *  <reason>`: the daemon writes the history line this send ends in, and the failures travel
+   *  with it. Absent when the walk had none. */
+  failed?: string[];
+  /** The address the caller wrote, when it was not the resolved seat's own name — a `@<nickname>`,
+   *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id — and the registry id it resolved
+   *  to. The history line keeps both beside `to`, the seat. */
+  spec?: string;
+  resolved?: string;
 };
 
 export type DaemonRequest =
@@ -103,7 +113,18 @@ export type DaemonRequest =
   | DaemonSendRequest;
 
 export type DaemonSendResponse =
-  | { v: 1; ok: true; id: string; seat: string; outcome: 'delivered'; status: string; drop_path: string }
+  | {
+      v: 1;
+      ok: true;
+      id: string;
+      seat: string;
+      outcome: 'delivered';
+      status: string;
+      /** `taken` when the box cleared with no status or transcript evidence inside the window:
+       *  a delivery whose confirmation is still to come, and which is never typed again. */
+      evidence?: 'taken';
+      drop_path: string;
+    }
   | { v: 1; ok: true; id: string; seat: string; outcome: 'answered'; reply: string; reply_id: string | null }
   | {
       v: 1;
@@ -545,6 +566,18 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: it is not a declared seat; the file's seats are ${seatList}`,
       });
     }
+    // Defence in depth for a caller that reaches the daemon directly: the file's stopped seat
+    // takes nothing, and no worker is started. The CLI refuses earlier, with the same words.
+    if (configured.stopped === true) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: request.id ?? null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName} is stopped`,
+      });
+    }
     let queue = queues.get(seatName);
     if (!queue) {
       queue = [];
@@ -757,9 +790,13 @@ async function executeQueuedSend(
 ): Promise<DaemonSendResponse> {
   const seatName = request.to;
   const from = request.from;
-  const who = from === 'owner' ? 'owner' : from === team.orchestrator ? 'orchestrator' : 'seat';
+  // The log names the caller as it is: `owner`, or the seat that asked — never the seat's role.
+  const who = from;
   const body = request.body;
   const msgId = request.id ?? randomUUID();
+  // The address as written and the id it resolved to, when the caller wrote a form rather than
+  // the seat's own name: every history line this send writes keeps them beside `to`.
+  const sentAs: Pick<HistoryEntry, 'spec' | 'resolved'> = { spec: request.spec, resolved: request.resolved };
   // Send to outcome is measured from here: the daemon's own handling, not the requester's wait.
   const startedAt = Date.now();
   const configured = team.seats.find((s) => s.name === seatName);
@@ -778,6 +815,20 @@ async function executeQueuedSend(
   const waitMs = host.deliverWaitMs ?? DELIVER_WAIT_MS;
   const pollMs = host.pollReadyMs ?? POLL_READY_MS;
 
+  // A compose seat's brief is typed through the CLI's own screens by its profile's module,
+  // which this daemon does not drive; typing a drop-file trigger there would land in a
+  // screen that reads no file. The typed leg in `team send` delivers these seats itself.
+  if (profileFor(configured.cli)?.compose != null) {
+    return {
+      v: 1,
+      ok: false,
+      id: null,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName} runs ${configured.cli}: its brief is typed through the CLI's own screens, which this daemon does not drive; nothing was sent`,
+    };
+  }
+
   if (request.wait) {
     if (configured.cli !== 'claude-code') {
       return {
@@ -789,7 +840,7 @@ async function executeQueuedSend(
         detail: `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`,
       };
     }
-    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive);
+    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs);
   }
 
   const found = findSeatAgent(host, team.session, seatName);
@@ -801,10 +852,12 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
@@ -817,10 +870,12 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
   }
@@ -840,6 +895,9 @@ async function executeQueuedSend(
     };
   }
   const stateDropDir = dropLadder.leaf;
+  // This is the store's drop folder, not the project's `.agents/send-drops/<session>/<seat>`
+  // that a running watch scans, so no pending record is written beside it and these lines
+  // promise no retry. When the daemon is wired in, write the record where the watch reads.
   const candidateDropPath = join(stateDropDir, msgId);
   const trigger = triggerLine(candidateDropPath);
   if (trigger === null) {
@@ -872,14 +930,18 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'held',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     };
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
     appendHistory(team.project, root, host.home, entry);
+    // No pending record: the store's drop folder is not where a watch reads, so the line says
+    // what happened and promises no retry.
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
 
@@ -888,10 +950,12 @@ async function executeQueuedSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
       ms: Date.now() - startedAt,
+      failed: request.failed,
     };
     // The path is named only once the trigger had been typed, never for a refusal before it.
     if (via !== undefined) entry.via = via;
@@ -973,12 +1037,16 @@ async function executeQueuedSend(
         ts: host.now().toISOString(),
         from,
         to: seatName,
+        ...sentAs,
         body,
         id: msgId,
         outcome: 'not-submitted',
         ms: Date.now() - startedAt,
         via: 'typed',
+        failed: request.failed,
       });
+      // The trigger was typed and not taken: the drop is still the message, but nothing in
+      // this folder is what a watch scans, so the line promises no retry.
       return {
         v: 1,
         ok: false,
@@ -992,23 +1060,27 @@ async function executeQueuedSend(
       };
     }
     const submittedStatus = result.status ?? 'working';
+    const taken = result.evidence === 'taken';
 
     logLine(
       dir,
       'send',
       who,
-      `${seatName}: delivered (drop ${String(body.length)} characters, ${result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`})`,
+      `${seatName}: delivered (drop ${String(body.length)} characters, ${taken ? TAKEN_REASON : result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`})`,
       host.now(),
     );
     appendHistory(team.project, root, host.home, {
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'delivered',
+      ...(taken ? { note: TAKEN_REASON } : {}),
       ms: Date.now() - startedAt,
       via: 'typed',
+      failed: request.failed,
     });
     return {
       v: 1,
@@ -1017,6 +1089,7 @@ async function executeQueuedSend(
       seat: seatName,
       outcome: 'delivered',
       status: submittedStatus,
+      ...(taken ? { evidence: 'taken' as const } : {}),
       drop_path: dropPath,
     };
   } catch {
@@ -1040,7 +1113,23 @@ async function executeSocketSend(
   pollMs: number,
   host: DaemonHost,
   alive: (pid: number) => boolean,
+  /** The address as written, when it was a form: every history line carries it beside the seat. */
+  sentAs: Pick<HistoryEntry, 'spec' | 'resolved'>,
 ): Promise<DaemonSendResponse> {
+  // While SOCKET_SEND is off, the daemon serves no waited send: the frame the reply would ride
+  // is one this build does not write, and a caller asking for one anyway — an older CLI — is
+  // refused here rather than dialed. Nothing is written, nothing is locked, and no history
+  // line is appended: the daemon did not touch the seat.
+  if (!SOCKET_SEND) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent`,
+    };
+  }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
   const startedAt = Date.now();
   const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
@@ -1064,6 +1153,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -1078,6 +1168,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -1092,6 +1183,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'unreachable',
@@ -1115,6 +1207,7 @@ async function executeSocketSend(
       ts: host.now().toISOString(),
       from,
       to: seatName,
+      ...sentAs,
       body,
       id: msgId,
       outcome: 'held',
@@ -1136,6 +1229,7 @@ async function executeSocketSend(
           ts: host.now().toISOString(),
           from,
           to: seatName,
+          ...sentAs,
           body,
           id: msgId,
           outcome: 'unreachable',
@@ -1153,6 +1247,7 @@ async function executeSocketSend(
           ts: host.now().toISOString(),
           from,
           to: seatName,
+          ...sentAs,
           body,
           id: msgId,
           outcome: 'answered',
@@ -1166,6 +1261,7 @@ async function executeSocketSend(
         ts: host.now().toISOString(),
         from,
         to: seatName,
+        ...sentAs,
         body,
         id: msgId,
         outcome: 'timeout',

@@ -12,10 +12,10 @@ the checkout may run it. It verifies the record, prints the body, and writes the
 one step. A record that does not verify prints no body and writes nothing.
 
 Nothing in this build writes a message record. No command writes the first record: not `team
-watch`, not `team messages`, not a seat. `team send` writes a frame to a seat's cross-session
-socket, which is not this mailbox and leaves no record here. A report still leaves as today's
-nudge,
-`Team watch: reports are waiting in .agents/team.log`. The watch only rings
+watch`, not `team messages`, not a seat. `team send` gives a seat the body in a drop file and one
+typed trigger line — its cross-session socket path is refused in this build — which is not this
+mailbox and leaves no record here. A report is not typed into a seat: it goes to the log, and a
+report for the owner also to the desktop notification. The watch only rings
 `Team: run team messages` when a record is already there.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
@@ -38,7 +38,19 @@ Writes `.agents/messages/<seat>/<id>.read.json` for each record that verifies, s
 message key under its own domain. The receipt is written only after `io.stdout` has returned the
 body: a write that throws leaves no receipt, and the record stays waiting. A receipt that does
 not verify leaves the message waiting.
-The second run, once every waiting record has a receipt, prints that nothing is waiting.
+The second run, once every waiting record has a receipt, prints the zero-message reading: the
+table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
+
+Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
+`format`, `project`, `session`, every row as `{ id, from, to, sent, sent_display, status, body? }`
+— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row that verified — then
+`notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
+`owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
+`refused`, the table's own closing figures). An empty mailbox's document carries no rows, the note
+`nothing is waiting`, and three zero counts. An invocation, checkout, team-file or key refusal
+under `--json` writes a `team.error` v1 document on stdout instead — `messages.invocation`,
+`messages.not-a-repo`, `messages.file` or `messages.key`, its `message` and a null `repair` — and
+stderr stays empty. The exit code is the same as without `--json`.
 
 `team init` lists `.agents/messages/` in `.git/info/exclude`, the same way it lists the team file.
 
@@ -50,19 +62,41 @@ mailbox is not a wall between seats.
 
 ## Refusals
 
-A record that fails one of these prints no body and writes no receipt:
+A record that fails one of these prints no body and writes no receipt. It is a `refused` row in
+the table, and the run prints its difference before the summary; `who` is `any seat`, and the
+repair names the file the table already shows:
 
-    team messages: <seat>/<id> does not verify: the record is not a message
-    team messages: <seat>/<id> does not verify: its id is <id>, and the filename is the id
-    team messages: <seat>/<id> does not verify: it is addressed to <seat>
-    team messages: <seat>/<id> does not verify: it is bound to another checkout
-    team messages: <seat>/<id> does not verify: it is bound to session "<session>"
-    team messages: <seat>/<id> does not verify: the signature is not the message key's
+    difference: <seat>/<id> does not verify: the record is not a message
+      repair: remove .agents/messages/<seat>/<id>.json, or restore it from the sender
+      who: any seat
+
+    difference: <seat>/<id> does not verify: its id is <payload id>, and the filename is the id
+      repair: move .agents/messages/<seat>/<id>.json to .agents/messages/<seat>/<payload id>.json, or remove it
+      who: any seat
+
+    difference: <seat>/<id> does not verify: it is addressed to <payload to>
+      repair: move .agents/messages/<seat>/<id>.json to .agents/messages/<payload to>/<id>.json, or remove it
+      who: any seat
+
+    difference: <seat>/<id> does not verify: it is bound to another checkout
+      repair: remove .agents/messages/<seat>/<id>.json: it is bound to another checkout
+      who: any seat
+
+    difference: <seat>/<id> does not verify: it is bound to session "<session>"
+      repair: remove .agents/messages/<seat>/<id>.json: it is bound to another session
+      who: any seat
+
+    difference: <seat>/<id> does not verify: the signature is not the message key's
+      repair: remove .agents/messages/<seat>/<id>.json, or have the sender re-send it
+      who: any seat
+
+A missing or unreadable message key is a refusal of the whole run, with nothing shown:
+
     team messages: no message key; nothing was shown
 
 An empty mailbox is not a refusal:
 
-    team messages: nothing is waiting
+    note: nothing is waiting
 
 ## Examples, moved here whole
 
@@ -97,6 +131,11 @@ Nothing is waiting:
 
 ```console
 $ team messages ; echo "exit $?"
-team messages: nothing is waiting
+team beacon, session "beacon"
+  ID  FROM  TO  SENT  STATUS
+
+note: nothing is waiting
+
+0 messages
 exit 0
 ```

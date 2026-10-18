@@ -30,7 +30,9 @@ describe('Antigravity launch and captured screens', () => {
     expect(versionVerdict('1.2.16', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.2.18', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.3.5', antigravity.tested)).toBe('tested');
-    expect(versionVerdict('1.3.6', antigravity.tested)).toBe('newer');
+    expect(versionVerdict('1.4.0', antigravity.tested)).toBe('tested');
+    expect(versionVerdict('1.4.1', antigravity.tested)).toBe('tested');
+    expect(versionVerdict('1.4.2', antigravity.tested)).toBe('newer');
     expect(versionVerdict('1.2.10', antigravity.tested)).toBe('older');
   });
 
@@ -128,6 +130,20 @@ describe('Antigravity launch and captured screens', () => {
     expect(readScreen('antigravity', current('exit')).kind).toBe('unknown');
   });
 
+  test('1.4.1 captures keep the same dialog kinds', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/antigravity/1.4.1/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('antigravity', current('trust')).kind).toBe('trust');
+    expect(readScreen('antigravity', current('idle')).kind).toBe('idle');
+    expect(readScreen('antigravity', current('unsent')).kind).toBe('unsent');
+    expect(readScreen('antigravity', current('working')).kind).toBe('working');
+    expect(readScreen('antigravity', current('question')).kind).toBe('question');
+    expect(readScreen('antigravity', current('permission')).kind).toBe('permission');
+    expect(readScreen('antigravity', current('exit')).kind).toBe('unknown');
+    // The folder is the profile's ceiling, and its footer still names the running model.
+    expect(profileFor('antigravity')?.tested.to).toBe('1.4.1');
+    expect(runningModel('antigravity', current('idle'))).toEqual({ model: 'Gemini Argon', version: '4' });
+  });
+
   test('the plan delivers the one line through the guarded path, never a config file', () => {
     const line = rulesLine('/home/owner/.config/team/demo-3f9c2a8e1d7b/rules/gemini.md', '5e1d0a9c4b2f');
     const plan = upPlan({
@@ -135,6 +151,7 @@ describe('Antigravity launch and captured screens', () => {
       session: 'scratch',
       sessionRunning: true,
       watchAlive: true,
+      watchLabel: 'Watch · scratch',
       seats: [{ name: 'gemini', cli: 'antigravity', launch: 'agy', cwd: '.', label: 'gemini', stopped: false, rules: 'Rules.',
         repairLine: '`team remove gemini --keep` then `team add gemini`',
         rulesFile: { path: '/home/owner/.config/team/demo-3f9c2a8e1d7b/rules/gemini.md', line } }],
@@ -146,7 +163,7 @@ describe('Antigravity launch and captured screens', () => {
   });
   test('a message seat whose rules file has no typeable path is refused before anything is typed', () => {
     const plan = upPlan({
-      root: '.', session: 'scratch', sessionRunning: true, watchAlive: true,
+      root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
       seats: [{ name: 'gemini', cli: 'antigravity', launch: 'agy', cwd: '.', label: 'gemini', stopped: false, rules: 'Rules.',
         repairLine: '`team remove gemini --keep` then `team add gemini`',
         rulesRefusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" }],

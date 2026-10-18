@@ -1,10 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
-import { notInForce } from '../approve/approval.ts';
+import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
-import { trustPolicy } from '../file/dialogs.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
@@ -15,8 +14,9 @@ import { deliverRules, type Delivery } from '../launch/deliver.ts';
 import { seatProcessVerdict, type LaunchedIdentity } from '../launch/identity.ts';
 import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '../launch/rules-file.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { resolveLobby } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
+import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, keyOf, labelMatches, versionMatches, type TrustRecord } from '../profiles/trust-answer.ts';
@@ -24,9 +24,28 @@ import { emptySession, readState, updateState, type SeatState } from '../state.t
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 
-export const USAGE = 'Usage: team answer <seat> trust [--session <name>] [--file <path>] [--json]\n';
+export const USAGE = `Usage: team answer <seat> trust [--session <name>] [--file <path>] [--json]
 
-const OUTSIDE = 'ask the owner to approve this exact folder and answer through team up';
+Presses the one recorded key of a folder-trust dialog, and only that key. Every check has
+to pass on two fresh reads of the pane, and the folder must be the lobby on three readings
+at once: the path the screen shows, the folder the pane itself reports working in, and the
+lobby's parent directory. <seat> names one seat of the team file; trust is the only
+dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent
+of that name; a pane recorded in the state selects nothing. A name the file does not carry
+is left as it is, and two agents of the name send nothing. --session is the owner's alone,
+and so is --file: each is refused before the flagged session or file is read. The answer
+opens on the team's context line and closes on <seat>: answered trust (<folder>). A refused
+or incomplete answer names its reason on stderr, and a recovery stays recorded for the next
+answer to observe. --json prints one document instead of the lines: {format, dry_run,
+status, action_summary, project, session, seat, pane, dialog, state, folder?}. A run that
+exits 1 or 2 writes the structured error document instead — {error: {id, message, repair}} —
+and stderr stays empty.
+
+Exits 0 when the trust dialog is answered and the seat is ready, 1 when the answer is
+refused or does not complete, 2 when the invocation or team file can't be read.
+`;
+
+const OUTSIDE = 'ask the owner to add this exact folder to trust and answer through team up';
 
 export type AnswerHost = {
   version(binary: string): string | null;
@@ -75,7 +94,23 @@ export const realHost: AnswerHost = {
 
 type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery';
 
-type Refusal = { class: Reason; message: string };
+/** A refusal class that is also a contract row: every class word is the row id's last word. */
+type RefusalClass = Exclude<Reason, 'idle' | 'rule delivery'>;
+
+type Refusal = {
+  /** The `contract/exit-codes.json` row this refusal answers; the `--json` error carries it. */
+  id: string;
+  class: Reason;
+  /** The human sentence, as the plain run prints it (a caller sentence keeps its prefix). */
+  message: string;
+  /** The actionable repair an error document carries, or absent for none. */
+  repair?: string | null;
+};
+
+/** A refusal whose contract row is `answer.<class>`. */
+function refusedClass(reason: RefusalClass, message: string): Refusal {
+  return { id: `answer.${reason}`, class: reason, message };
+}
 
 type Seen = { record: TrustRecord; version: string; folder: string };
 
@@ -84,16 +119,19 @@ export default answer;
 
 export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promise<number> {
   const args = readArgs(argv, ['session', 'file'], ['json']);
-  const json = args.flags.has('json');
+  // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
+  // structured error document, and the parser errors before its flag set sees them.
+  const json = hasJsonFlag(argv);
   const seatName = args.rest[0];
   const dialog = args.rest[1];
   if (args.error || args.rest.length !== 2 || !seatName || dialog !== 'trust') {
     const message = args.error ?? (dialog && dialog !== 'trust' ? `unknown dialog "${dialog}"` : 'a seat and trust are required');
     return usage(io, json, message);
   }
-  const detached = detachedRefusal(walkCaller(io));
+  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or the orchestrator from its own seat', where: 'a terminal outside herdr or its own seat' });
   if (detached !== undefined) {
-    io.stderr(`team answer: ${detached}\n`);
+    if (json) writeJsonError(io, 'answer.detached', detached, 'run team answer from a terminal outside herdr');
+    else io.stderr(`team answer: ${detached}\n`);
     // exit: answer.detached
     return 1;
   }
@@ -104,7 +142,8 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   // whose `--file` is the owner's decides it; the walk reads no session, no state and no log.
   const fileRefusal = fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
-    io.stderr(`team answer: ${fileRefusal}\n`);
+    if (json) writeJsonError(io, 'answer.file-owner', fileRefusal, null);
+    else io.stderr(`team answer: ${fileRefusal}\n`);
     // exit: answer.file-owner
     return 1;
   }
@@ -122,10 +161,11 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
         io,
         json,
         local.ok ? dirname(local.path) : undefined,
-        logWho(walked, local.ok ? local.team : undefined),
+        logTag(walked),
         seatName,
         host,
         {
+          id: 'answer.session-owner',
           class: 'caller',
           message: `team answer: ${sessionOwnerRefusal(walked)}`,
         },
@@ -150,68 +190,81 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     : judgeCallerIn(io, dir, team);
   const { caller } = judged;
   const session = judged.session;
-  const who = logWho(caller, team);
+  const who = logTag(caller);
 
   const refused = (reason: Refusal): number => refuse(io, json, dir, who, seatName, host, reason);
 
   const callerProblem = callerProblemOf(caller, team, seatName, standingOf(dir, session, caller));
   if (callerProblem) return refused(callerProblem);
+  // The setting is the owner's live grant: a team grant carrying `dialogs.trust`, read fresh
+  // here. No file key and no approval stand behind it — off is the default, the owner turns it
+  // on with `team grant @team --capabilities dialogs.trust`, and a revocation ends it at the
+  // next dialog. The recovery path below still receives the standing, whose rules delivery
+  // reads no approval gate.
   const standing = host.standing(root);
-  if (standing.kind !== 'verified') return refused({ class: 'caller', message: notInForce(standing) });
-  if (trustPolicy(team) !== 'coordinator') return refused({ class: 'policy', message: `${seatName}: use team up and [o]` });
+  if (!dialogsTrustInForce(host.home, root, host.now())) {
+    return refused(refusedClass('policy', `${seatName}: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)`));
+  }
 
   const lock = acquireSeatLock(dir, session, seatName);
-  if (!('release' in lock)) return refused({ class: 'state', message: `${seatName}: another command holds it` });
+  if (!('release' in lock)) return refused(refusedClass('state', `${seatName}: another command holds it`));
   try {
     const state = readState(dir).sessions[session] ?? emptySession();
     const recorded = state.seats[seatName];
-    // The seat is the file's, and the pane is herdr's one agent of that name.
-    // A recorded pane selects nothing: the state can name another pane, and a name the
-    // file does not carry is left for the owner.
+    // The seat is the file's, and the pane is herdr's one agent of that name — or, when a new
+    // seat paused at trust before the rename step named it, the unnamed agent on the pane its
+    // waiting-for-trust record holds. A name the file does not carry is left for the owner.
     const configured = team.seats.find((seat) => seat.name === seatName);
     if (!configured) {
-      if (!recorded) return refused({ class: 'state', message: `${seatName}: it is not a live seat` });
+      if (!recorded) return refused({ id: 'answer.unverified', class: 'state', message: `${seatName}: it is not a live seat` });
       return refused({
+        id: 'answer.unverified',
         class: 'state',
         message: `${seatName}: its record is not a declared seat; left as it is (the owner cleans it: team remove ${seatName} --abandon)`,
       });
     }
     const agents = host.agents(session);
     const named = agents?.filter((item) => item.name === seatName) ?? [];
-    const agent = named.length === 1 ? named[0] : undefined;
+    const onRecorded =
+      named.length === 0 &&
+      recorded?.waiting?.classification === 'trust' &&
+      recorded.pane !== undefined
+        ? agents?.find((item) => item.pane === recorded.pane && !item.name)
+        : undefined;
+    const agent = named.length === 1 ? named[0] : onRecorded;
     if (!agent) {
       if (named.length > 1) {
-        return refused({ class: 'state', message: `${seatName}: herdr lists more than one agent of this name; left as it is` });
+        return refused({ id: 'answer.ambiguous', class: 'state', message: `${seatName}: herdr lists more than one agent of this name; left as it is` });
       }
-      return refused({ class: 'state', message: `${seatName}: it is not a live seat` });
+      return refused(refusedClass('state', `${seatName}: it is not a live seat`));
     }
     const pane = agent.pane;
     const workspace = agent.workspace;
     const waiting = recorded?.waiting;
-    if (waiting?.manual === true) return refused({ class: 'state', message: `${seatName}: the owner has the pane open` });
+    if (waiting?.manual === true) return refused(refusedClass('state', `${seatName}: the owner has the pane open`));
     if (waiting?.state === 'trust-sent-recovery') {
-      return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched);
+      return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, waiting.folder);
     }
     if (waiting?.state !== 'waiting-owner' || waiting.classification !== 'trust') {
-      return refused({ class: 'state', message: `${seatName}: it is not waiting at a trust dialog` });
+      return refused(refusedClass('state', `${seatName}: it is not waiting at a trust dialog`));
     }
 
     const cli = configured.cli;
     const profile = profileFor(cli);
     // The lobby the file resolves to: its own when the file sets `entity` or `lobby`, else
     // the machine-global one. The folder shown in the dialog must be this lobby, as team writes it.
-    const answerLobby = resolveLobby(host.home, team);
+    const answerLobby = lobbyOf(host.home, root, { ...team, session });
     const checked = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);
     if ('class' in checked) return refused(checked);
     const again = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);
     if ('class' in again) return refused(again);
-    if (again.folder !== checked.folder) return refused({ class: 'folder', message: `${seatName}: ${OUTSIDE}` });
+    if (again.folder !== checked.folder) return refused(refusedClass('folder', `${seatName}: ${OUTSIDE}`));
     if (again.record.from !== checked.record.from || again.record.to !== checked.record.to || again.record.action !== checked.record.action) {
-      return refused({ class: 'version', message: `${seatName}: this version has no trust answer` });
+      return refused(refusedClass('version', `${seatName}: this version has no trust answer`));
     }
     const key = keyOf(checked.record.action);
     if (!key) {
-      return refused({ class: 'action', message: `${seatName}: the recorded key is not one this version sends` });
+      return refused(refusedClass('action', `${seatName}: the recorded key is not one this version sends`));
     }
     // The recovery intent is on disk before the key: a crash between the two leaves a
     // recovery that may never have sent (a retry only observes), never a waiting-owner
@@ -223,7 +276,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       version: checked.version,
       folder: checked.folder,
     }, pane, workspace)) {
-      return refused({ class: 'state', message: `${seatName}: its recovery state could not be recorded` });
+      return refused(refusedClass('state', `${seatName}: its recovery state could not be recorded`));
     }
     const keyProcessProblem = checkProcess(seatName, host, session, pane, recorded?.launched);
     if (keyProcessProblem) {
@@ -232,7 +285,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       // write above exists only for the crash case — that window stays write-before-key. A
       // rollback that does not take leaves the recovery, the direction that only observes.
       if (!restoreWaiting(dir, session, seatName, waiting, pane, workspace)) {
-        return refused({ class: 'state', message: `${keyProcessProblem.message} (it is still recorded as a recovery)` });
+        return refused({ id: keyProcessProblem.id, class: 'state', message: `${keyProcessProblem.message} (it is still recorded as a recovery)` });
       }
       return refused(keyProcessProblem);
     }
@@ -244,38 +297,27 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     }
     if (!sent) {
       logLine(dir, 'answer', who, `${seatName}: refused trust: action`, host.now());
-      return recovery(io, json, seatName, 'its key could not be sent', `${seatName}: the key could not be sent; recovery required`);
+      return recovery(io, json, `${seatName}: the key could not be sent; recovery required`);
     }
-    return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched);
+    return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, checked.folder);
   } finally {
     lock.release();
   }
 }
 
-/** The caller class the caller check returned, as the log's bracket. With no team file yet, a seat
- *  stays a seat: telling an orchestrator from any other seat would read that file. */
-function logWho(caller: Caller, team?: TeamFile): string {
-  // `owner-no-tty` is refused before anything logs (it is not on a terminal), but the bracket
-  // it would carry is the owner's, as everywhere else.
-  if (caller.kind === 'owner' || caller.kind === 'owner-no-tty') return 'owner';
-  if (caller.kind === 'unplaced') return 'unplaced';
-  if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
-  return team !== undefined && caller.name === team.orchestrator ? 'orchestrator' : 'seat';
-}
-
-function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at?: SeatStanding): Refusal | null {
+function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at: SeatStanding): Refusal | null {
   if (caller.kind === 'owner') return null;
   // The orchestrator's seat, in the session judged and on its recorded pane; a seat of another
   // session, or one merely renamed, falls through to the refusal below, unchanged.
   const verdict = callerVerdict(caller, team.orchestrator, at);
   if (verdict.kind === 'ok') return null;
-  if (verdict.kind === 'no-pane') return { class: 'caller', message: `team answer: ${noPaneRefusal(verdict.name)}` };
+  if (verdict.kind === 'no-pane') return { id: 'answer.no-pane', class: 'caller', message: `team answer: ${noPaneRefusal(verdict.name)}` };
   if (verdict.kind === 'another-pane') {
-    return { class: 'caller', message: `team answer: ${anotherPaneRefusal(verdict.name, verdict.recordedPane)}` };
+    return { id: 'answer.another-pane', class: 'caller', message: `team answer: ${anotherPaneRefusal(verdict.name, verdict.recordedPane)}` };
   }
-  if (caller.kind === 'unplaced') return { class: 'caller', message: caller.reason };
-  if (caller.kind === 'pane') return { class: 'caller', message: describeCaller(caller) };
-  return { class: 'caller', message: `${seat}: only the owner, or the orchestrator from its own seat, can answer` };
+  if (caller.kind === 'unplaced') return refusedClass('caller', caller.reason);
+  if (caller.kind === 'pane') return refusedClass('caller', describeCaller(caller));
+  return refusedClass('caller', `${seat}: only the owner, or the orchestrator from its own seat, can answer`);
 }
 
 function checkProcess(
@@ -288,8 +330,8 @@ function checkProcess(
   if (!launched) return null;
   const info = host.processInfo ? host.processInfo(session, pane) : null;
   const verdict = seatProcessVerdict(launched, info);
-  if (verdict === 'unknown') return { class: 'process', message: `${seat}: its pane could not be read` };
-  if (verdict !== 'same') return { class: 'process', message: `${seat}: the process in its pane is not the one team launched` };
+  if (verdict === 'unknown') return refusedClass('process', `${seat}: its pane could not be read`);
+  if (verdict !== 'same') return refusedClass('process', `${seat}: the process in its pane is not the one team launched`);
   return null;
 }
 
@@ -309,7 +351,8 @@ function inspect(
   root: string,
   launched?: LaunchedIdentity,
 ): Seen | Refusal {
-  const say = (reason: Reason, text: string): Refusal => ({ class: reason, message: `${seat}: ${text}` });
+  const say = (reason: 'version' | 'screen' | 'label' | 'folder', text: string): Refusal =>
+    refusedClass(reason, `${seat}: ${text}`);
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
   if (!profile) return say('version', 'this version has no trust answer');
@@ -413,15 +456,22 @@ function writeWaiting(
 }
 
 /**
- * The recovery report. Two paths reach it — a key the host did not take, and a sent key
- * whose seat did not come ready — and both leave the same `trust-sent-recovery` state,
- * so both answer with the same object shape and exit.
+ * The recovery report: a key the host did not take, and a sent key whose seat did not come
+ * ready — idle prompt or rules — all leave the same `trust-sent-recovery` state, so all
+ * answer with the same row and exit.
  */
-function recovery(io: Io, json: boolean, seat: string, reason: string, human: string): number {
-  if (json) io.stdout(`${JSON.stringify({ seat, dialog: 'trust', status: 'recovery', state: 'trust-sent-recovery', reason })}\n`);
+function recovery(io: Io, json: boolean, human: string): number {
+  if (json) writeJsonError(io, 'answer.recovery', human, null);
   else io.stderr(`${human}\n`);
   // exit: answer.recovery
   return 1;
+}
+
+/** The human text an error document carries: the contract's `message` has no `team <command>: `
+ *  prefix, so one a caller-written sentence carries in its plain form is dropped here. */
+function errorText(message: string): string {
+  const prefix = 'team answer: ';
+  return message.startsWith(prefix) ? message.slice(prefix.length) : message;
 }
 
 function refuse(
@@ -436,7 +486,7 @@ function refuse(
   // No directory means this folder had no team file to log beside. Writing the line would create
   // `.agents` and `team.log` wherever the command was run.
   if (dir !== undefined) logLine(dir, 'answer', who, `${seat}: refused trust: ${reason.class}`, host.now());
-  if (json) io.stdout(`${JSON.stringify({ seat, dialog: 'trust', status: 'refused', reason: reason.message })}\n`);
+  if (json) writeJsonError(io, reason.id, errorText(reason.message), reason.repair ?? null);
   else io.stderr(`${reason.message}\n`);
   // exit: answer.caller
   // exit: answer.no-pane
@@ -470,6 +520,7 @@ async function finish(
   root: string,
   standing: Standing,
   launched?: LaunchedIdentity,
+  folder?: string,
 ): Promise<number> {
   const seatState = readState(dir).sessions[session]?.seats[name];
   const like = seatState?.temporary?.like;
@@ -482,8 +533,7 @@ async function finish(
   }
   if (ready !== true) {
     logLine(dir, 'answer', who, `${name}: refused trust: ${ready}`, host.now());
-    const reason = ready === 'idle' ? 'its idle prompt did not come' : 'its rules were not delivered';
-    return recovery(io, json, name, reason, `${name}: trust sent; recovery required`);
+    return recovery(io, json, `${name}: trust sent; recovery required`);
   }
   updateState(dir, (state) => {
     const current = state.sessions[session] ?? emptySession();
@@ -493,12 +543,29 @@ async function finish(
     recorded.stage = 'ready';
     recorded.pane = pane;
     if (workspace) recorded.workspace = workspace;
-    if (profile?.rulesOption === null) recorded.rules = 'message';
+    const mode = profile?.rulesMode;
+    if (mode === 'message' || mode === 'prepend') recorded.rules = mode;
     current.seats[name] = recorded;
   });
   logLine(dir, 'answer', who, `${name}: trust answered`, host.now());
-  if (json) io.stdout(`${JSON.stringify({ seat: name, dialog: 'trust', status: 'answered', state: 'ready' })}\n`);
-  else io.stdout(`${name}: trust answered; ready\n`);
+  const summary = folder === undefined ? `${name}: answered trust` : `${name}: answered trust (${folder})`;
+  if (json) {
+    writeJson(io, 'team.answer', {
+      format: 1 as const,
+      dry_run: false,
+      status: 'answered',
+      action_summary: summary,
+      project: team.project,
+      session,
+      seat: name,
+      pane,
+      dialog: 'trust',
+      state: 'ready',
+      ...(folder !== undefined ? { folder } : {}),
+    });
+  } else {
+    io.stdout(`${contextLine(team.project, session)}\n${summary}\n`);
+  }
   // exit: answer.ready
   return 0;
 }
@@ -518,7 +585,7 @@ async function recover(
   if (!(await waitIdle(host, session, pane, profile))) return 'idle';
   const named = host.agents(session)?.some((agent) => agent.name === name && agent.pane === pane) === true;
   if (!named && !host.rename(session, pane, name)) return 'rule delivery';
-  if (profile.rulesOption !== null) return true;
+  if (profile.rulesMode !== 'message') return true;
   // The rules are delivered exactly as `up` delivers them: written to the seat's per-seat
   // file first — from the live file, as `up`'s are — then the one line that points at it,
   // the only shape of rules a read-back can prove; this command shares that delivery.
@@ -534,7 +601,7 @@ async function recover(
       const problem = checkProcess(name, host, session, pane, launched);
       if (!problem) return true;
       processRefusal = action === 'enter'
-        ? { class: problem.class, message: `${problem.message}; rules were typed, not sent` }
+        ? { id: problem.id, class: problem.class, message: `${problem.message}; rules were typed, not sent` }
         : problem;
       return false;
     }),
@@ -577,14 +644,14 @@ function deliveryOf(
 }
 
 function usage(io: Io, json: boolean, message: string): number {
-  if (json) io.stdout(`${JSON.stringify({ error: { code: 'usage', message } })}\n`);
+  if (json) writeJsonError(io, 'answer.usage', message, null);
   else io.stderr(`team answer: ${message}\n${USAGE}`);
   // exit: answer.usage
   return 2;
 }
 
 function configuration(io: Io, json: boolean, message: string): number {
-  if (json) io.stdout(`${JSON.stringify({ error: { code: 'configuration', message } })}\n`);
+  if (json) writeJsonError(io, 'answer.configuration', message, null);
   else io.stderr(`team answer: ${message}\n`);
   // exit: answer.configuration
   return 2;

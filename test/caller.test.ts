@@ -163,16 +163,18 @@ describe('the classes read apart', () => {
 
 describe('who may change a running team', () => {
   const team = { orchestrator: 'claude-coordinator', operator: 'claude-operator' };
+  const at = { session: 's', recordedPane: 'w1:p1' };
+  const other = { session: 's', recordedPane: 'w4:p1' };
   test('the owner, the coordinator and the operator', () => {
-    expect(mayChangeTeam({ kind: 'owner' }, team)).toBe(true);
-    expect(mayChangeTeam({ kind: 'seat', name: 'claude-coordinator', pane: 'w1:p1' }, team)).toBe(true);
-    expect(mayChangeTeam({ kind: 'seat', name: 'claude-operator', pane: 'w4:p1' }, team)).toBe(true);
+    expect(mayChangeTeam({ kind: 'owner' }, team, at)).toBe(true);
+    expect(mayChangeTeam({ kind: 'seat', name: 'claude-coordinator', pane: 'w1:p1', session: 's' }, team, at)).toBe(true);
+    expect(mayChangeTeam({ kind: 'seat', name: 'claude-operator', pane: 'w4:p1', session: 's' }, team, other)).toBe(true);
   });
   test('no other seat, and no unplaced caller', () => {
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, team)).toBe(false);
-    expect(mayChangeTeam({ kind: 'unplaced', reason: 'x' }, team)).toBe(false);
-    expect(mayChangeTeam({ kind: 'pane', pane: 'w9:p1', session: 'main' }, team)).toBe(false);
-    expect(callerVerdict({ kind: 'pane', pane: 'w9:p1', session: 'main' }, 'claude-coordinator')).toEqual({ kind: 'refused' });
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 's' }, team, at)).toBe(false);
+    expect(mayChangeTeam({ kind: 'unplaced', reason: 'x' }, team, at)).toBe(false);
+    expect(mayChangeTeam({ kind: 'pane', pane: 'w9:p1', session: 'main' }, team, at)).toBe(false);
+    expect(callerVerdict({ kind: 'pane', pane: 'w9:p1', session: 'main' }, 'claude-coordinator', at)).toEqual({ kind: 'refused' });
   });
 });
 
@@ -210,15 +212,17 @@ describe('a caller is judged against the session and the pane it was placed in',
     const verdict = callerVerdict({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'a' }, 'codex-acme', none);
     expect(verdict).toEqual({ kind: 'no-pane', name: 'codex-acme' });
     expect(noPaneRefusal('codex-acme')).toBe(
-      'no pane is recorded for seat codex-acme in this session: the owner stops that seat and runs `team up`',
+      'no pane is recorded for seat codex-acme in this session: a lead stops that seat and runs `team up`',
     );
     // Another session is refused before the missing pane is even consulted.
     expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w9:p1', session: 'b' }, team, none)).toBe(false);
   });
 
-  test('without a standing the name alone decides, exactly as before', () => {
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, team)).toBe(true);
-    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, 'codex-acme')).toBe(true);
+  test('the placement is mandatory: a caller with no session is refused against a standing', () => {
+    // The name alone proves no placement, so no caller is admitted by it: every judgement asks
+    // for a standing, and a caller main's placement produced (no session) is refused.
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, team, where)).toBe(false);
+    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, 'codex-acme', where)).toBe(false);
   });
 
   const made: string[] = [];
@@ -236,7 +240,7 @@ describe('a caller is judged against the session and the pane it was placed in',
     expect(recordedPaneOf(dir, 'a', 'worker')).toBeUndefined();
     expect(recordedPaneOf(dir, 'b', 'lead')).toBeUndefined();
     const caller: Caller = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'a' };
-    expect(standingOf(dir, 'a', caller)).toEqual({ session: 'a', recordedPane: 'w1:p1' });
+    expect(standingOf(dir, 'a', caller)).toEqual({ session: 'a', recordedPane: 'w1:p1', stage: 'ready' });
     expect(standingOf(dir, 'a', { kind: 'owner' })).toEqual({ session: 'a', recordedPane: undefined });
     // A state that can't be read records none: the caller check must never become a stack trace.
     writeFileSync(state, '{ not a state');

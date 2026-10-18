@@ -71,16 +71,76 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   expect(code, io.err).toBe(0);
   expect(readMachineReadings(home)).toEqual([{ ...zero, resets: undefined, observedAt: NOW, resetsAt: null }].map(({ resets, ...one }) => one));
   const usage = testIo(root, { kind: 'owner' });
-  expect(await runUsage([], usage, { home, now: () => new Date(NOW + 120000) })).toBe(0);
-  expect(usage.out).toContain('2 accounts');
-  expect(usage.out).toContain('xai  weekly  left 0%  used 100%  resets unknown');
+  expect(await runUsage(['--tree'], usage, { home, now: () => new Date(NOW + 120000) })).toBe(0);
+  expect(usage.out).toContain('3 labs, 3 accounts');
+  expect(usage.out).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
   expect(usage.out).toContain('2m ago');
-  expect(usage.out).toContain('google-antigravity  not readable from a CLI screen');
+  // The Antigravity account has a live reader of its own — the CLI's usage print — so with no
+  // reading it is `unknown`, not "not readable from a CLI screen".
+  expect(usage.out).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
   expect(usage.out).toContain('lead  grok  xai');
-  // The seat's own vendor forms a lab with no account under it, and says so; the machine's
-  // readings are counted, so the "nothing is counted" sentence never prints.
-  expect(usage.out).toContain('wrong-vendor  not known (no team declares an account for it yet)');
+  // The seat's own vendor forms a lab with no declared account: zero-config makes its seats one
+  // account named after the lab, and no screen reads that name, so the lab stands for its seat in
+  // one line. The machine's readings are counted, so the "nothing is counted" sentence never prints.
+  expect(usage.out).toContain('wrong-vendor  not readable from a screen  (1 seat)\n');
+  expect(usage.out).toContain('  wrong-vendor  unknown\n');
+  expect(usage.out).toContain('    wrong-vendor  unknown  seats: lead\n');
   expect(usage.out).not.toContain('nothing is counted');
+  // The persisted zero is a wall in the quota view: the reading the watch wrote is the one the
+  // block reads, it names no reset so the margin has no clock to read, and the advice names the
+  // seat drawing on the walled account rather than inventing a destination.
+  expect(usage.out).toContain('  xai  walled\n');
+  expect(usage.out).toContain('    xai  walled  seats: lead\n');
+  expect(usage.out).toContain('      weekly  used 100%  left 0%  resets unknown  margin not known  (machine reading, read 2m ago)');
+  expect(usage.out).toContain('advice: swap lead off xai (walled): no other account has headroom');
+});
+
+test('a DeepSeek seat’s Claude status bar is stored as the Anthropic reading it measures', async () => {
+  // The live case (owner, 2026-10-17): builders run DeepSeek on the Claude Code CLI, and the
+  // L:/W: bar their screen prints is the Claude subscription's own. The reading is stored under
+  // the account that measures it — Anthropic — never under the launcher that pays for the seat,
+  // or the report would read the same figure twice and call one copy DeepSeek's.
+  writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
+project: fixture
+session: fixture
+operator: lead
+trust:
+  - ~/.config/team/lobby
+  - ${root}
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: lead
+    label: lead
+    leads: true
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek
+    version: "4.1"
+    launch: claude-deepseek.sh
+`);
+  const bar = '  main · …/floor/teamcli · Opus 5.5 · S: $5.8 ⣿⣄⣀⣀⣀ 24% · L: 20% (2h6m) · W: 36% (-10.2%) (125h26m)';
+  // The bypass line is what makes the pane a composer screen for this profile: a pane without it
+  // is unknown, and an unknown screen gives no figures at all.
+  const screen = `❯\n${'─'.repeat(40)}\n${bar}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n`;
+  const io = testIo(root, { kind: 'owner' });
+  const base = sources();
+  const code = await runWatch(['--file', '.agents/team.yaml', '--no-nudge', '--no-notify'], io, {
+    ...base,
+    live: () => ({ running: true, workspaces: [{ id: 'fixture-workspace', label: 'lead' }],
+      agents: [{ name: 'lead', agent: 'claude', pane: 'fixture-pane', workspace: 'fixture-workspace', status: 'idle', cwd: null }],
+      screens: { 'fixture-pane': screen } }),
+    screen: () => screen,
+    // herdr reports the pane's foreground process: the Claude Code CLI is the DeepSeek seat's
+    // CLI here, and a seat whose CLI is not seen running gives no figure at all.
+    foreground: () => ['claude'],
+  });
+  expect(code, io.err).toBe(0);
+  const readings = readMachineReadings(home);
+  expect(readings.map((one) => one.account)).not.toContain('deepseek');
+  expect(readings.filter((one) => one.account === 'anthropic').map((one) => one.window).sort()).toEqual(['session', 'weekly']);
+  expect(readings.find((one) => one.account === 'anthropic' && one.window === 'weekly')).toMatchObject({ used: 36, left: 64 });
 });
 
 test('machine subscriptions and a persisted reading remain visible outside any team', () => {
@@ -90,7 +150,23 @@ test('machine subscriptions and a persisted reading remain visible outside any t
   expect(machine.counts).toEqual({ teams: 0, labs: 2, accounts: 2 });
   const report = reportOf(machine, view, NOW, []);
   expect(report.teams).toEqual([]);
-  expect(reportText(report)).toContain('xai  weekly  left 0%');
+  expect(reportText(report)).toMatch(/xai\s+weekly\s+0%/);
+});
+
+test('the entity form of the machine list counts the same figures, the zero among them', () => {
+  // The map keyed by entity is the same file the flat list is: the accounts it gives each entity
+  // are still the machine's own, counted for every team and readable outside any project, and a
+  // recorded zero is a figure, not an absence.
+  writeFileSync(join(home, '.config', 'team', 'accounts.yaml'), 'accounts:\n  northwind: [xai, google-antigravity]\n');
+  saveMachineReadings(home, figuresOf(quotaFor('grok'), statusRow('grok', grok)), NOW);
+  const view = { full: false, mine: null };
+  const machine = machineUsage(home, NOW, view);
+  expect(machine.machineAccounts).toEqual(['google-antigravity', 'xai']);
+  expect(machine.counts).toEqual({ teams: 0, labs: 2, accounts: 2 });
+  const text = reportText(reportOf(machine, view, NOW, []));
+  expect(text).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
+  expect(text).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
+  expect(text).not.toContain('nothing is counted');
 });
 
 test('machine updates merge accounts and pools, reject older updates, and refresh observation age', () => {
@@ -104,8 +180,8 @@ test('machine updates merge accounts and pools, reject older updates, and refres
   expect(readings.find((one) => one.pool === 'claude-gpt')?.resetsAt).toBe(NOW + 3601000);
   const view = { full: true, mine: null };
   const text = reportText(reportOf(machineUsage(home, NOW + 60000, view), view, NOW + 60000, []));
-  expect(text).toContain('google-antigravity (gemini)  weekly  left 10%');
-  expect(text).toContain('google-antigravity (claude-gpt)  weekly  left 80%');
+  expect(text).toMatch(/google-antigravity \(gemini\)\s+weekly\s+10%/);
+  expect(text).toMatch(/google-antigravity \(claude-gpt\)\s+weekly\s+80%/);
   expect(payingPoolOf({ cli: 'agy', launch: 'agy', vendor: 'anthropic', model: 'Gemini 3.1' })).toBe('gemini');
   expect(payingPoolOf({ cli: 'antigravity', launch: 'agy', vendor: 'google', model: 'Claude Opus' })).toBe('claude-gpt');
 });

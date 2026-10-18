@@ -28,6 +28,10 @@ export const VERIFY_TOTAL_MS = 20_000;
 /** The transcript is read once a second, not at every status poll. */
 const TRANSCRIPT_EVERY = Math.ceil(1000 / POLL_MS);
 
+/** The words a `taken` delivery wears, in the history, the sender's line and the watch's log: the
+ *  line left the box, and nothing in the window showed the seat acting on it yet. */
+export const TAKEN_REASON = 'taken, not yet confirmed';
+
 /** What a delivery needs from the pane: one seat's pane, the session already bound. */
 export type DeliverHost = {
   typeText(pane: string, text: string): boolean;
@@ -52,9 +56,14 @@ export type DeliverResult = {
   tries: number;
   /** One line saying why, for a log or a receipt. */
   reason?: string;
-  /** What showed the seat took the line, with `delivered`: herdr's status, or the transcript. */
+  /** What showed the seat took the line, with `delivered`: herdr's status or the transcript — or
+   *  `taken`, a line that left the box with no status or transcript evidence inside the window:
+   *  taken, not yet confirmed. */
   status?: string;
-  evidence?: 'status' | 'transcript';
+  evidence?: 'status' | 'transcript' | 'taken';
+  /** The status herdr read before Enter, with `taken` when the box cleared: a later reader (the
+   *  watch) compares a status against it to confirm the seat acted. */
+  prior?: string;
   /** The dialog kind the screen showed, when that is why the seat was not reached. */
   dialog?: string;
 };
@@ -73,11 +82,28 @@ export function bindPane(native: NativePane, session: string): DeliverHost {
 
 const DIALOGS = new Set(['question', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
 
+/** What the held-frame screen reports as its dialog kind: a cross-session frame held for a person
+ *  blocks the box, but the screen is the CLI's own frame rather than one of `DIALOGS`. */
+const HELD_FRAME_KIND = 'held message';
+
 /** The dialog kind a screen shows, or null. A screen that could not be read is not a dialog. */
 export function dialogKind(profile: string, screen: string | null): string | null {
   if (screen === null) return null;
   const kind = classify(profile, screen.split('\n')).kind;
   return DIALOGS.has(kind) ? kind : null;
+}
+
+/** The dialog a Claude Code session shows when a cross-session frame arrived while it was busy:
+ *  the frame is held for a person to let through, and the input box is blocked until then. */
+const HELD_FRAME_DIALOG = 'Held message from another session';
+
+/** Whether a pane's text shows the held-frame dialog. SGR styling is stripped and the frame's
+ *  borders and pipes flatten to space with every other whitespace run, so the sentence is found
+ *  whole whether it sits on one row or wraps inside the dialog's own frame. */
+export function showsHeldFrameDialog(screen: string | null): boolean {
+  if (screen === null) return false;
+  const flat = stripSgr(screen).replace(/[─-╿|]/g, ' ').replace(/\s+/g, ' ');
+  return flat.includes(HELD_FRAME_DIALOG);
 }
 
 type Look =
@@ -91,9 +117,16 @@ type Look =
 function look(host: DeliverHost, pane: string, line: string, profile: string): Look {
   const screen = host.readAnsi?.(pane) ?? null;
   if (screen === null) return { state: 'unread' };
+  const read = readScreen(profile, screen);
+  // The held-frame dialog is drawn in the composer's place, so a screen that shows it and has no
+  // live box to read (kind unknown) is stopped at it. A seat whose own transcript quotes the
+  // sentence above a live composer is at its box, not at that dialog: the send goes through.
+  if (read.kind === 'unknown' && showsHeldFrameDialog(screen)) {
+    return { state: 'dialog', kind: HELD_FRAME_KIND };
+  }
   const dialog = dialogKind(profile, screen);
   if (dialog !== null) return { state: 'dialog', kind: dialog };
-  if (readScreen(profile, screen).kind !== 'unsent') return { state: 'empty', screen };
+  if (read.kind !== 'unsent') return { state: 'empty', screen };
   if (boxHoldsText(profile, line, screen)) return { state: 'trigger' };
   return { state: 'other', text: boxText(profile, screen) };
 }
@@ -144,6 +177,14 @@ function boxOf(seen: Look, line: string): string | undefined {
   return undefined;
 }
 
+/** What a caller knows about the box its line is going into. */
+export type DeliverOptions = {
+  /** A box already holding exactly this line is the caller's own: a record says a send typed the
+   *  trigger and left it unsent (a `not-submitted` send). That line gets the Enter and is never
+   *  typed over. Without the record the line is someone else's, and the outcome is `held`. */
+  submitHeld?: boolean;
+};
+
 /**
  * Types `line` into the pane's box and presses Enter until the seat is seen to take it.
  *
@@ -154,31 +195,46 @@ function boxOf(seen: Look, line: string): string | undefined {
  * to an empty one, to one that holds something else, to one that cannot be read, or to a dialog; at
  * most `MAX_TRIES` Enters, each waiting longer than the last (`BACKOFF_MS`). Evidence has to come
  * from this line: a status that moved after Enter (never the one a seat already had), or the drop
- * in the transcript. A box that cannot be read keeps the first Enter and is judged by the status
- * alone, and never gets a second.
+ * in the transcript. After the last Enter the box itself is the verdict: a trigger still in it is
+ * `not-submitted`; one that has left it — an empty box, or one holding other text — is `delivered`
+ * with `taken` evidence, taken but not yet confirmed, because a busy CLI can clear its box while
+ * herdr's status lags or stays idle. A box that cannot be read keeps the first Enter and is judged
+ * by the status alone, and never gets a second. A `submitHeld` caller's own unsent trigger, found
+ * in the box, is submitted and never typed over.
  */
-export async function deliverTrigger(host: DeliverHost, pane: string, line: string, profile: string): Promise<DeliverResult> {
+export async function deliverTrigger(
+  host: DeliverHost, pane: string, line: string, profile: string, options: DeliverOptions = {},
+): Promise<DeliverResult> {
   const before = host.status(pane);
   if (before === null) return { outcome: 'unreachable', tries: 0, reason: "the seat's status could not be read" };
 
   const start = look(host, pane, line, profile);
   if (start.state === 'dialog') return dialogStop(start.kind, 0);
-  if (start.state === 'trigger' || start.state === 'other') {
-    const text = start.state === 'other' ? start.text : line;
-    return { outcome: 'held', box: text, tries: 0, reason: 'the composer already holds unsent text' };
+  if (start.state === 'other') {
+    return { outcome: 'held', box: start.text, tries: 0, reason: 'the composer already holds unsent text' };
+  }
+  if (start.state === 'trigger' && options.submitHeld !== true) {
+    return { outcome: 'held', box: line, tries: 0, reason: 'the composer already holds unsent text' };
   }
 
-  if (!host.typeText(pane, line)) return { outcome: 'unreachable', tries: 0, reason: 'the pane did not take the trigger' };
-  await host.wait(SETTLE_MS);
+  let seen: Look;
+  if (start.state === 'trigger') {
+    // The line is already in the box and a record says it is this delivery's own unsent trigger:
+    // the Enter below submits it, and nothing is typed over it.
+    seen = start;
+  } else {
+    if (!host.typeText(pane, line)) return { outcome: 'unreachable', tries: 0, reason: 'the pane did not take the trigger' };
+    await host.wait(SETTLE_MS);
 
-  const typed = look(host, pane, line, profile);
-  if (typed.state === 'dialog') return dialogStop(typed.kind, 0);
-  if (typed.state === 'other') {
-    return { outcome: 'held', box: typed.text, tries: 0, reason: 'the composer read-back did not match the trigger' };
+    const typed = look(host, pane, line, profile);
+    if (typed.state === 'dialog') return dialogStop(typed.kind, 0);
+    if (typed.state === 'other') {
+      return { outcome: 'held', box: typed.text, tries: 0, reason: 'the composer read-back did not match the trigger' };
+    }
+    seen = typed;
   }
 
   let tries = 0;
-  let seen: Look = typed;
   for (let round = 0; round < MAX_TRIES; round++) {
     // The first Enter goes, read or not. Later ones go only where a fresh read shows the box still
     // holds exactly the trigger; an empty or unreadable box waits another window, and gets no key.
@@ -208,13 +264,26 @@ export async function deliverTrigger(host: DeliverHost, pane: string, line: stri
     const late = await verify(host, pane, line, profile, before, Math.max(0, VERIFY_TOTAL_MS - spent));
     if (late !== null) return { outcome: 'delivered', tries, ...late };
     seen = look(host, pane, line, profile);
+    // A dialog that came up during the late window is why the seat was not reached, exactly as
+    // one met between the tries: it is never the box's verdict.
+    if (seen.state === 'dialog') return dialogStop(seen.kind, tries);
+  }
+  // The box decides after the last Enter. A trigger still in it was never taken. A box that no
+  // longer holds the trigger — empty, or holding other text — took it: a CLI can clear its box
+  // without herdr's status moving, so a cleared box is a delivery, reported as taken but not yet
+  // confirmed (the watch confirms it later). A box that cannot be read keeps the status-alone
+  // judgement the window already made: nothing shows the line was taken.
+  if (seen.state === 'empty' || seen.state === 'other') {
+    return { outcome: 'delivered', tries, evidence: 'taken', prior: before, reason: TAKEN_REASON };
   }
   const box = boxOf(seen, line);
   return {
     outcome: 'not-submitted',
     ...(box === undefined ? {} : { box }),
     tries,
-    reason: 'herdr did not report the seat working and the trigger did not leave the composer cleanly',
+    reason: seen.state === 'trigger'
+      ? 'the trigger stayed in the composer after the Enters'
+      : 'herdr did not report the seat working and the trigger did not leave the composer cleanly',
   };
 }
 

@@ -39,53 +39,63 @@ Anyone, in any terminal. Both subcommands write nothing at all, whoever runs the
 
 ## What it prints
 
-`status` prints one section per leg — helper, each bridge, the front, each guard — with a state
-column, and closes with the state the legs add up to: `up` when every observed leg is up, `down`
-when one is not, and `not-set-up` when the lobby holds no bridge config at all. The level column
-is the same one every report uses:
+`status` prints the context line naming the lobby, then one section per leg — helper, each bridge,
+the front, each guard — each opening on a `NAME  STATE  DETAIL` header row and its own rows, and
+closes with the state the legs add up to: `up` when every observed leg is up, `down` when one is
+not, and `not-set-up` when the lobby holds no bridge config at all. The state column is the same
+level vocabulary every report uses:
 
 | Level | Meaning |
 | --- | --- |
 | `ok  ` | as it should be |
 | `warn` | worth knowing |
 | `MISS` | a leg is down; `status` exits 1 |
-| `--  ` | neither: a note |
+| `note` | neither: a note |
 
 ```console
 $ team mcp status ; echo "exit $?"
+mcp ~/.config/team/lobby
 helper  /usr/local/teamcli-helper
-  root                ok    0755, world-traversable
-  keys                ok    0700, private (contents are the helper's own, not readable here)
-  queue               ok    0700, private (contents are the helper's own, not readable here)
-  state               ok    0700, private (contents are the helper's own, not readable here)
-  sock/               ok    0750, excludes "other"
-  bin/bun             ok    executable
-  app/                ok    the bridge script is deployed
-  helper-config.json  ok    0600, owner-held (its contents are not read here)
+  NAME                STATE  DETAIL
+  root                ok     0755, world-traversable
+  keys                ok     0700, private (contents are the helper's own, not readable here)
+  queue               ok     0700, private (contents are the helper's own, not readable here)
+  state               ok     0700, private (contents are the helper's own, not readable here)
+  sock/               ok     0750, excludes "other"
+  bin/bun             ok     executable
+  app/                ok     the bridge script is deployed
+  helper-config.json  ok     0600, owner-held (its contents are not read here)
 bridge  ~/.config/team/lobby/mcp-1
-  config          ok    0600, 827 bytes
-  seats           ok    beacon -> seat-beacon-1 (seat-beacon-1)
-  bridge process  ok    running
-  signer socket   ok    ~/.config/team/lobby/mcp-1/signer.sock accepts connections
-  mailbox         ok    2 outbound ready, 0 inbound ready
-  last audit      ok    ws-open at 2026-10-04T08:55:00Z
+  NAME            STATE  DETAIL
+  config          ok     0600, 827 bytes
+  seats           ok     beacon -> seat-beacon-1 (seat-beacon-1)
+  bridge process  ok     running
+  signer socket   ok     ~/.config/team/lobby/mcp-1/signer.sock accepts connections
+  mailbox         ok     2 outbound ready, 0 inbound ready
+  last audit      ok     ws-open at 2026-10-04T08:55:00Z
 front  https://mcp.example.test
-  mcp endpoint     ok    401, OAuth required (the front answers)
-  connector        ok    401, enabled and token-gated (the route is bound)
-  tls certificate  ok    valid for 90 more days (to 2027-01-02T09:00:00Z)
+  NAME             STATE  DETAIL
+  mcp endpoint     ok     401, OAuth required (the front answers)
+  connector        ok     401, enabled and token-gated (the route is bound)
+  tls certificate  ok     valid for 90 more days (to 2027-01-02T09:00:00Z)
 state: up
 exit 0
 ```
 
 
-`--json` prints the same report as one document: the helper rows, each bridge's config, seats,
-process, socket, mailbox and last audit entry, the guard reports, and the front's two statuses and
-certificate dates. Token values, key material and the helper config's contents are not in it
-either — fields are named, never filled:
+`--json` prints the same report as one `team.mcp` document with the `schema` tag first: the helper
+rows, each bridge's config, seats, process, socket, mailbox and last audit entry, the guard
+reports, the front's two statuses and certificate dates, and the state, for `status`; the same
+findings and their two counts for `doctor`. Token values, key material and the helper config's
+contents are not in it either — fields are named, never filled:
 
 ```console
 $ team mcp status --json ; echo "exit $?"
 {
+  "schema": {
+    "name": "team.mcp",
+    "version": 1
+  },
   "format": 1,
   "lobby_dir": "~/.config/team/lobby",
   "helper": {
@@ -180,13 +190,14 @@ exit 0
 ```
 
 
-`doctor` prints one finding per line, the level first, then two spaces, and a `fix:` line under
-each finding that has one — the same shape as [team doctor](doctor.md). A finding a command can
-repair is a command to run; one that needs the owner's shell or root is marked `[owner]` and names
-what it would do, never running it. The last line counts the findings:
+`doctor` prints the context line, then one finding per line, the level first, then two spaces, and
+a `fix:` line under each finding that has one — the same shape as [team doctor](doctor.md). A
+finding a command can repair is a command to run; one that needs the owner's shell or root is
+marked `[owner]` and names what it would do, never running it. The last line counts the findings:
 
 ```console
 $ team mcp doctor ; echo "exit $?"
+mcp ~/.config/team/lobby
 ok    root: 0755, world-traversable
 ok    keys: 0700, private (contents are the helper's own, not readable here)
 ok    queue: 0700, private (contents are the helper's own, not readable here)
@@ -219,7 +230,9 @@ are `MISS` findings of their own: the guard blocks on them.
 ## Refusals
 
 The two subcommands are required, and only they are known; anything else prints the usage and
-exits 2 without reading the machine:
+exits 2 without reading the machine. Under `--json` the same refusal is one `team.error`
+document on stdout — `error.id` `mcp.invocation`, `error.message` the sentence below without its
+`team mcp: ` prefix, `error.repair` `null` — and stderr stays empty:
 
 | Message | Exit |
 | --- | --- |
@@ -234,9 +247,17 @@ team mcp: a subcommand is required: status or doctor
 Usage: team mcp status [--json]
        team mcp doctor [--json]
 Read-only: reports the MCP bridge's state and diagnoses what is missing.
-`status` exits 0 when every observed leg is up, 1 when one is down or the
-bridge was never set up. `doctor` exits 0 when nothing is missing, 1 with
-findings. Owner-gated fixes are marked [owner]. The mutating setup commands
-(enable, disable, key generation) are not in this build yet.
+`status` prints one table per leg and the state they add up to; `doctor`
+turns the same surface into findings, each missing one with a one-line fix.
+Owner-gated fixes are marked [owner]. The mutating setup commands (enable,
+disable, key generation) are not in this build yet. --json prints one
+document instead of the lines: {format, lobby_dir, helper, bridges, guards,
+front, state} for status, {format, lobby_dir, findings, missing, warnings}
+for doctor. A run that exits 2 writes the structured error document instead
+— {error: {id, message, repair}} — and stderr stays empty.
+
+Exits 0 when every observed leg is up (status) or nothing is missing (doctor),
+1 when a leg is down, the bridge is not set up, or doctor finds something
+missing, 2 when the invocation can't be read.
 exit 2
 ```

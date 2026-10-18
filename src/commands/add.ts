@@ -1,31 +1,37 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { fingerprints } from '../approve/fingerprint.ts';
 import { readArgs } from '../args.ts';
-import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
+import { describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
+import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, seatIsStopped } from '../file/lines.ts';
-import { findRoot, loadTeamFile, placedProblems } from '../file/load.ts';
+import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { writeTeamFile } from '../file/write.ts';
-import { recheckLobby, resolveLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
+import { recheckLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import {
   agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sendKey, sessionRunning,
   sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
@@ -33,6 +39,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -41,14 +48,17 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
+import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
-import { resolveEffortOverride, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
+import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 
@@ -120,15 +130,19 @@ export const realSources: AddSources = {
   launch: realLaunch,
 };
 
-export const USAGE = `Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
-       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+export const USAGE = `Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+
+Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
 `;
 
 /** The gate's refusal as this command prints it: the verdict's own sentence behind the prefix.
  *  Both delegate branches print it — the caller rule's below and the owner-only flags' — so the
  *  exit ids sit at one site. */
-function delegateRefused(out: { stderr(text: string): void }, verdict: { text: string }): number {
-  out.stderr(`team add: ${plainText(verdict.text)}\n`);
+function delegateRefused(io: Io, json: boolean, verdict: { id: string; text: string }): number {
+  // The gate names the row it refused on (`add.delegate-flag`, `add.delegate-approval`, …): the
+  // document carries that id, the plain line the same sentence it always printed.
+  refuse(io, json, 'add', { id: verdict.id, message: verdict.text, repair: null });
   // exit: add.delegate-approval
   // exit: add.delegate-evidence
   // exit: add.delegate-placement
@@ -145,45 +159,51 @@ export const add: Command = (argv, io) => runAdd(argv, io, realSources);
 export default add;
 
 export async function runAdd(argv: string[], io: Io, sources: AddSources = realSources): Promise<number> {
+  // `--json` is read off the raw argv before the parser: an invocation the parser refuses still
+  // owes the `team.error` document rather than the plain usage line.
+  const wantsJson = hasJsonFlag(argv);
+  // Under `--json` nothing but the one document reaches stdout: the seat's records (the run's
+  // closing line last) and every other line the plain output prints are collected here instead.
+  const finalRecords: string[] = [];
+  const jsonNotes: string[] = [];
+  const collectInto = (into: string[]): ((text: string) => void) => (text) => {
+    for (const line of text.split('\n')) if (line !== '') into.push(line);
+  };
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
-  const out = cleanedIo(io);
-  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file'], ['temporary', 'dry-run']);
+  const out = cleanedIo(wantsJson ? { ...io, stdout: collectInto(finalRecords), stderr: collectInto(jsonNotes) } : io);
+  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file'], ['temporary', 'dry-run', 'json']);
+  const json = wantsJson;
   if (args.error) {
-    out.stderr(`team add: ${plainText(args.error)}\n${USAGE}`);
+    refuse(io, json, 'add', { id: 'add.invocation', message: args.error, repair: null, usage: USAGE });
     // exit: add.invocation
     return 2;
   }
-  // A create-grant's own runner is the one detached caller the record may name: this sentence is
-  // not for it, exactly as `init` asks it. Only the cwd's root is known this early, before any
-  // file is read, so this decision answers this refusal alone — the loaded file's root decides
-  // the caller rule below, and a team outside the granted paths still refuses there.
-  const detached = detachedRefusal(walkCaller(io));
-  // Asked only for the placement that would be refused, and only when a record exists, so a
-  // caller with none is refused without reading a repository or a clock —
-  // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
-  // order, exactly as `down` and `init` ask it.
-  let runnerGranted = false;
-  if (detached !== undefined && readEntityCreateGrants(sources.home).length > 0) {
-    const hereRoot = findRoot(io.cwd);
-    runnerGranted = hereRoot !== null
-      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
-  }
-  if (detached !== undefined && !runnerGranted) {
-    out.stderr(`team add: ${detached}\n`);
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none. This sentence is answered before any file is
+  // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
+  // send every reader to the owner.
+  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
+  if (detached !== undefined) {
+    refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
     // exit: add.detached
     return 1;
   }
   const temporary = args.flags.has('temporary');
   const dry = args.flags.has('dry-run');
   if (temporary ? args.rest.length > 0 : args.rest.length !== 1) {
-    out.stderr(`team add: ${plainText(temporary ? `unexpected "${args.rest[0]}"` : 'a seat name is required')}\n${USAGE}`);
+    refuse(io, json, 'add', {
+      id: temporary ? 'add.temporary-unexpected' : 'add.seat-name',
+      message: temporary ? `unexpected "${args.rest[0]}"` : 'a seat name is required',
+      repair: null,
+      usage: USAGE,
+    });
     // exit: add.seat-name
     // exit: add.temporary-unexpected
     return 2;
   }
   if (!temporary && (args.values.like || args.values.until || args.values.worktree)) {
-    out.stderr('team add: --like, --until and --worktree are for --temporary\n');
+    refuse(io, json, 'add', { id: 'add.temporary-flags', message: '--like, --until and --worktree are for --temporary', repair: null });
     // exit: add.temporary-flags
     return 2;
   }
@@ -200,7 +220,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // the flagged file is not read at all; with no `delegates` section there, today's refusal
   // stands, byte for byte.
   const walked = args.values.session !== undefined ? walkCaller(io) : undefined;
-  const flagRefusal = fileOwnerRefusal(io, args.values.file)
+  const fileFlag = fileOwnerRefusal(io, args.values.file);
+  const flagRefusal = fileFlag
     ?? (walked !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
   if (flagRefusal !== undefined) {
     const named = loadTeamFile(io.cwd, { home: sources.home });
@@ -214,26 +235,56 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         io,
         home: sources.home,
       });
-      if (flagged.kind === 'refused') return delegateRefused(out, flagged);
+      if (flagged.kind === 'refused') return delegateRefused(io, json, flagged);
     }
-    out.stderr(`team add: ${plainText(flagRefusal)}\n`);
+    refuse(io, json, 'add', {
+      id: fileFlag !== undefined ? 'add.file-owner' : 'add.session-owner',
+      message: flagRefusal,
+      repair: null,
+    });
     // exit: add.file-owner
     // exit: add.session-owner
     return 1;
   }
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: sources.home });
+  const loaded = loadTeamFile(io.cwd, {
+    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
+    home: sources.home,
+    // The session this run addresses: the placement check reads that session's recorded lobby.
+    ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+  });
   if (!loaded.ok) {
-    for (const problem of loaded.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
+    if (json) {
+      const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
+        ? 'add.not-a-repo'
+        : loaded.errors.some((problem) => problem.line > 0) ? 'add.file-invalid' : 'add.file';
+      refuse(io, json, 'add', {
+        id,
+        message: loaded.errors.map((problem) => `${where(problem)}${problem.message}`).join('; '),
+        repair: null,
+      });
+    } else for (const problem of loaded.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
     // exit: add.not-a-repo
     // exit: add.file
     // exit: add.file-invalid
     return 2;
   }
   const { team, root, path } = loaded;
+  // The send grammar's team-lead address is `lead@<team>` (src/send/resolve.ts), so the word may
+  // not become a new seat's name. A file written before 0.5.0 may already declare a seat of that
+  // name: it keeps loading, `lead@<team>` still addresses the seat holding `leads`, and this
+  // command may still start it — the reservation binds only a name that would be new, and a new
+  // name it refuses is one the file does not declare (the file's own load refuses a new nickname
+  // of the word, src/file/sections/seats.ts).
+  if (!temporary && args.rest[0] === LEAD_NAME && !team.seats.some((seat) => seat.name === LEAD_NAME)) {
+    out.stderr(`team add: "${LEAD_NAME}" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name\n${USAGE}`);
+    // exit: add.reserved-name
+    return 2;
+  }
   // The create-grant, decided on the loaded root: the team this run would change must be under
-  // the granted paths. The early `runnerGranted` above answered the detached sentence alone.
+  // the granted paths. The early detached sentence above stands alone: no record admits a
+  // caller with no terminal.
   const dir = dirname(path);
   // The gate judges the caller placed in the session this command asks about — the proof its pane
   // is that session's. With no `--session` the session judged is the caller's own placement: the
@@ -245,7 +296,19 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     : judgeCallerIn(io, dir, team);
   const { caller, shown } = judged;
   const session = judged.session;
-  const mayChange = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
+  // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
+  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  const dev = resolveDevMode('add', io, { home: sources.home, team, root, now: sources.now() });
+  if (!dry) logDevModeState(dir, 'add', describeCaller(shown), dev, sources.now());
+  let devFolded = false;
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: the `add` row is the owner's alone in 0.5.0, so every seat is refused here whatever
+  // pane it sits on, and the delegate gate below is the one standing grant that opens a seat's
+  // run. The map's own rows are the judge; a caller it refuses is refused before any standing.
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home, 'add', at, sources.now);
+  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
   // A create-grant the record holds for this loaded root is the run's admission: the ordinary
   // rule's sentence is then not a refusal, and the delegate gate — which the ordinary refusal
   // alone summons — has nothing to replace. Asked only where the ordinary rule has just refused,
@@ -280,26 +343,45 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // stopped, as an entry that lists `add` already could.
       ...(!temporary && isLeadSeat(team, args.rest[0] ?? '') ? { swap: true } : {}),
     });
-    if (verdict.kind === 'refused') return delegateRefused(out, verdict);
+    if (verdict.kind === 'refused') return delegateRefused(io, json, verdict);
     delegatePane = verdict.pane;
   }
-  if (mayChange.kind === 'no-pane' && delegatePane === null) {
-    out.stderr(`team add: ${plainText(noPaneRefusal(mayChange.name))}\n`);
-    // exit: add.no-pane
-    return 1;
-  }
-  if (mayChange.kind === 'another-pane' && delegatePane === null) {
-    out.stderr(`team add: ${plainText(anotherPaneRefusal(mayChange.name, mayChange.recordedPane))}\n`);
-    // exit: add.another-pane
-    return 1;
-  }
-  if (mayChange.kind === 'refused' && delegatePane === null && !createGranted) {
-    out.stderr(`team add: only the owner, the orchestrator or the operator runs it; this call is ${plainLine(describeCaller(shown))}\n`);
-    // exit: add.caller
-    return 1;
+  // The who-may-run-it gate: the map's `add` row, the owner's alone, with the standing grant the
+  // delegate gate above may have answered read as its opening. Set to exactly `1`, dev mode says
+  // this gate once, as a warning, and the edit continues — exactly as `up` does. Every other
+  // refusal stays a refusal: the target placement, the CLI, the records, the approvals and
+  // trust. The warning is logged where this call runs; a dry run says it beside the dry answer
+  // and decides nothing.
+  const mayRun = mayChange.kind === 'refused' && delegatePane === null && !createGranted
+    ? `only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
+    : null;
+  if (mayRun !== null) {
+    const folded = devModeCallerGate(dev, mayRun);
+    if (folded !== null) {
+      devFolded = true;
+      // The document's note is the sentence itself; only the terminal's line carries the
+      // dry run's `! ` and the command's name in front.
+      if (json) (dry ? finalRecords : jsonNotes).push(folded);
+      else if (dry) out.stdout(`! ${folded}\n`);
+      else out.stderr(`team add: ${plainText(folded)}\n`);
+      if (!dry) logDevMode(dir, 'add', describeCaller(caller), folded, sources.now());
+    } else {
+      if (json) {
+        refuse(io, true, 'add', {
+          id: 'add.caller',
+          message: mayRun,
+          repair: 'an approved delegate runs `team add …` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr',
+          rule: 'owner-only',
+        });
+      } else if (dry) {
+        out.stdout(`! add would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(unblockingAddRun(argv))}\n`);
+      } else out.stderr(`team add: ${plainText(mayRun)}\n`);
+      // exit: add.caller
+      return 1;
+    }
   }
   if (session === 'default') {
-    out.stderr('team add: session can\'t be "default", herdr\'s own session\n');
+    refuse(io, json, 'add', { id: 'add.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null });
     // exit: add.default-session
     return 1;
   }
@@ -308,7 +390,13 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // in force.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    out.stderr(`team add: ${plainText(notInForce(standing))}\n`);
+    refuse(io, json, 'add', {
+      // Both kinds that reach here — `legacy` and `refused` — are a record not in force; a file
+      // never approved is still run, so this site's document is `add.ceilings`.
+      id: 'add.ceilings',
+      message: notInForce(standing),
+      repair: null,
+    });
     // exit: add.never-approved
     // exit: add.ceilings
     return 1;
@@ -317,12 +405,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const live = sources.sessionState(session);
   if (live === null) {
-    out.stderr('team add: herdr doesn\'t answer\n');
+    refuse(io, json, 'add', { id: 'add.herdr', message: 'herdr doesn\'t answer', repair: null });
     // exit: add.herdr
     return 1;
   }
   if (live === 'stopped') {
-    out.stderr(`team add: session ${plainLine(session)} is stopped; clear it with \`herdr session delete ${plainLine(session)}\`\n`);
+    refuse(io, json, 'add', {
+      id: 'add.stopped',
+      message: `session ${plainLine(session)} is stopped; clear it with \`herdr session delete ${plainLine(session)}\``,
+      repair: `herdr session delete ${plainLine(session)}`,
+    });
     // exit: add.stopped
     return 1;
   }
@@ -330,7 +422,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Read so a session whose workspace list can't be read is refused. The title is not a key.
   const workspaces = live === 'running' ? sources.workspaces(session) : [];
   if (agents === null || workspaces === null) {
-    out.stderr(`team add: session ${plainLine(session)} runs, and its agents can't be read\n`);
+    refuse(io, json, 'add', { id: 'add.agents', message: `session ${plainLine(session)} runs, and its agents can't be read`, repair: null });
     // exit: add.agents
     return 1;
   }
@@ -340,10 +432,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const original = readFileSync(path, 'utf8');
   const asked = args.rest[0] ?? '';
   const built = temporary
-    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base)
+    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
     : declaredSeat(asked, original, team, sources.home, sources.fs);
   if ('error' in built) {
-    out.stderr(`team add: ${plainText(built.error)}\n`);
+    // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
+    // …); the plain line is the sentence it always printed.
+    refuse(io, json, 'add', { id: built.id, message: built.error, repair: null });
     // exit: add.no-seat
     // exit: add.not-restored
     // exit: add.no-like
@@ -388,7 +482,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   // A program the record cannot tie to the launch is not closed and not launched again.
   if (continuity === 'doubt' && held?.workspace && held.pane && held.launched) {
-    out.stderr(`team add: ${plainText(`${built.name}: its pane holds a process this record cannot tie to the launch`)}\n`);
+    refuse(io, json, 'add', {
+      id: 'add.session-doubt',
+      message: `${built.name}: its pane holds a process this record cannot tie to the launch`,
+      repair: null,
+    });
     // exit: add.session-doubt
     return 1;
   }
@@ -399,27 +497,50 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const runningNow = !repair ? agents.find((agent) => agent.name === built.name) : undefined;
   if (runningNow) {
     const unknown = screenUnknown(built.seat.cli, sources.launch.paneText(session, runningNow.pane));
-    out.stderr(alreadyRunningLine(built.name, caller.kind === 'owner', unknown));
+    const owner = caller.kind === 'owner';
+    if (json) {
+      refuse(io, true, 'add', {
+        id: 'add.already-running',
+        message: alreadyRunningText(built.name, owner, unknown),
+        repair: null,
+      });
+    } else out.stderr(alreadyRunningLine(built.name, owner, unknown));
     // exit: add.already-running
     return 1;
   }
-  // A delegated add may start only a declared, not-stopped seat that is not running: one that
-  // would restore a missing seat or clear `stopped` edits the file, and that stays the owner's.
-  // Refused after the already-running refusal, before the write,
-  // the digest and any dry-run plan — so a delegated add writes neither file nor approval.
-  if (delegatePane !== null && built.edited !== original) {
-    out.stderr(`team add: ${plainText(ADD_DELEGATE_EDIT.text)}\n`);
-    // exit: add.delegate-edit
-    return 1;
+  // A delegated add is a copy and nothing else: the one seat it may start is one the last
+  // approval already holds, its stanza hash for hash as the approved copy wrote it, and the add
+  // must write nothing. A missing seat, a stopped seat or a stanza the approval does not hold
+  // would extend or edit the file, and that stays the owner's. Refused after the
+  // already-running refusal, before the write, the digest and any dry-run plan — so a
+  // non-copy delegated add writes neither file nor approval. The rule is not the caller gate
+  // dev mode lifts: a delegate's edit is refused in every mode, so a folded caller gate above
+  // still ends here.
+  if (delegatePane !== null) {
+    const stanza = fingerprints(team).seats[built.name];
+    const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
+    if (built.edited !== original || inCopy === undefined || inCopy !== stanza) {
+      refuse(io, json, 'add', { id: 'add.delegate-edit', message: ADD_DELEGATE_EDIT.text, repair: null });
+      // exit: add.delegate-edit
+      return 1;
+    }
   }
   const profile = profileFor(built.seat.cli);
   if (!profile) {
-    out.stderr(`team add: no launch profile for \`${plainLine(built.seat.cli)}\` in this version\n`);
+    refuse(io, json, 'add', {
+      id: 'add.no-profile',
+      message: `no launch profile for \`${plainLine(built.seat.cli)}\` in this version`,
+      repair: null,
+    });
     // exit: add.no-profile
     return 1;
   }
   if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && caller.kind !== 'owner') {
-    out.stderr("team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat\n");
+    refuse(io, json, 'add', {
+      id: 'add.override-owner',
+      message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
+      repair: null,
+    });
     // exit: add.override-owner
     return 1;
   }
@@ -427,7 +548,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? resolveModelOverride(profile, args.values.model, built.seat.version)
     : undefined;
   if (args.values.model !== undefined && !resolvedModel) {
-    out.stderr(`team add: ${plainLine(built.name)}: unknown model ${JSON.stringify(args.values.model)} for ${plainLine(built.seat.cli)}\n`);
+    refuse(io, json, 'add', {
+      id: 'add.model',
+      message: `${plainLine(built.name)}: unknown model ${JSON.stringify(args.values.model)} for ${plainLine(built.seat.cli)}`,
+      repair: null,
+    });
     // exit: add.model
     return 2;
   }
@@ -435,7 +560,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? resolveEffortOverride(built.seat.cli, built.seat.vendor, args.values.effort)
     : undefined;
   if (resolvedEffort && 'error' in resolvedEffort) {
-    out.stderr(`team add: ${plainLine(built.name)}: ${plainText(resolvedEffort.error)}\n`);
+    refuse(io, json, 'add', {
+      id: 'add.effort',
+      message: `${plainLine(built.name)}: ${plainText(resolvedEffort.error)}`,
+      repair: null,
+    });
     // exit: add.effort
     return 2;
   }
@@ -460,16 +589,32 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const prepared = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
   if (!prepared.ok) {
-    for (const problem of prepared.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
+    if (json) {
+      refuse(io, json, 'add', {
+        id: 'add.prepared',
+        message: prepared.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('; '),
+        repair: null,
+      });
+    } else for (const problem of prepared.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
     // exit: add.prepared
     return 2;
   }
-  for (const problem of placedProblems(prepared.team, root, sources.home, sources.fs)) {
-    out.stderr(`team add: ${plainText(problem.message)}\n`);
+  const placed = placedProblems(prepared.team, root, sources.home, sources.fs, session);
+  if (placed.length > 0) {
+    if (json) {
+      refuse(io, json, 'add', {
+        id: 'add.placed',
+        message: placed.map((problem) => plainText(problem.message)).join('; '),
+        repair: null,
+      });
+    } else for (const problem of placed) out.stderr(`team add: ${plainText(problem.message)}\n`);
     // exit: add.placed
     return 1;
   }
-  const lobby = resolveLobby(sources.home, prepared.team);
+  // The session this run addresses — `--session`, or the caller's own placement — reads its own
+  // recorded lobby, which is the file's own unless the run names another.
+  const runTeam = { ...prepared.team, session };
+  const lobby = lobbyOf(sources.home, root, runTeam);
   let startProblem: string | null = null;
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
@@ -477,14 +622,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // to launch there, after `wouldLaunch` is known, so a dry run refuses in the same words.
   const startupReads = shippedStartupReads();
   if (!prepared.team.trust || prepared.team.trust.length === 0 || isLegacyTrust(prepared.team.trust)) {
-    startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(prepared.team, root, sources.home)}`;
+    startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(runTeam, root, sources.home)}`;
   }
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.
   const start: SeatStart = startProblem
     ? { problem: startProblem }
-    : seatStart(prepared.team, built.seat, root, sources.home, verifiedLobby ?? undefined);
+    : seatStart(runTeam, built.seat, root, sources.home, verifiedLobby ?? undefined);
   if ('problem' in start) {
-    out.stderr(`team add: ${plainText(start.problem)}\n`);
+    refuse(io, json, 'add', { id: 'add.start', message: start.problem, repair: null });
     // exit: add.start
     return 1;
   }
@@ -523,8 +668,24 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // way, and every other line of the run on stderr, after the record it belongs to. It exists
   // from here, before the run, because the launch-line note is one of its detail lines.
   // It is handed the raw pair on purpose: the writer cleans its own fields and draws its own
-  // `\r\x1b[K` on a TTY, and the cleaned pair would strip those bytes.
-  const records = progressWriter({ stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false });
+  // `\r\x1b[K` on a TTY, and the cleaned pair would strip those bytes. Under `--json` the same
+  // writer feeds the document instead of the terminal: the final records are kept whole, in
+  // order — the last one is the run's `action_summary` — and every other line is a note. The
+  // provisional lines are off (nothing is a terminal in that mode).
+  const records = progressWriter({
+    stdout: (text) => {
+      if (!json) {
+        io.stdout(text);
+        return;
+      }
+      for (const line of text.split('\n')) if (line !== '') finalRecords.push(line);
+    },
+    stderr: (text) => {
+      if (json) collectInto(jsonNotes)(text);
+      else io.stderr(text);
+    },
+    isTTY: json ? false : (io.stdoutIsTTY ?? false),
+  });
   // The note is the writer's detail line on a real run: one line, cleaned like a record's
   // fields, whatever the launch line's word holds. A dry run has no run, and its note goes to
   // stdout with the plan it belongs to.
@@ -562,13 +723,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {
-        const warning = `team add: warning: ${plainText(finding.text)}\n`;
-        if (dry) out.stdout(warning);
-        else out.stderr(warning);
+        // The document's note is the sentence itself; only the terminal's line carries the
+        // command's name in front.
+        const warning = `warning: ${plainText(finding.text)}`;
+        if (json) (dry ? finalRecords : jsonNotes).push(warning);
+        else if (dry) out.stdout(`team add: ${warning}\n`);
+        else out.stderr(`team add: ${warning}\n`);
         continue;
       }
       const launchText = launchProblem ? `${built.name}: ${launchProblemDetail ?? launchProblem}` : '';
-      if (dry && launchProblem && !stray && finding.text === launchText) {
+      if (json) {
+        // Under `--json` a dry run's refusal is the error envelope too: the plan it would
+        // otherwise print is no document, and the row is the same one the real run takes.
+        refuse(io, true, 'add', { id: 'add.doctor', message: finding.text, repair: null });
+      } else if (dry && launchProblem && !stray && finding.text === launchText) {
         const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home);
         const planned = repair ? { ...starting, repair } : starting;
         const preview = upPlan({
@@ -581,6 +749,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             ...(launchProblemDetail ? { launchProblemDetail } : {}),
           }],
           watchAlive: true,
+          cliHooks: plannedCliHooks(dir, session, [planned]),
+          watchLabel: watchLabel(prepared.team.project),
         });
         out.stdout(plainText(formatPlan(preview)));
       } else {
@@ -602,21 +772,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // decision. Every caller refusal above returns before this gate, so a line is only ever
     // written for a call that was allowed this far; a dry run decides nothing and writes none.
     if (!dry) logLine(dir, 'add', describeCaller(caller), `refused: ${first.problem} — readings: ${readingsText(first.machine)}`, sources.now());
-    out.stderr(`team add: ${plainText(first.problem)}\n`);
+    refuse(io, json, 'add', { id: 'add.machine', message: first.problem, repair: null });
     // exit: add.machine
     return 1;
   }
   const running = runningOf(agents, prepared.team, recorded);
   const room = ceilingProblem(ceilings, running, built.seat, Boolean(built.temporary));
   if (room) {
-    out.stderr(`team add: ${plainText(room)}\n`);
+    refuse(io, json, 'add', { id: 'add.ceiling', message: room, repair: null });
     // exit: add.ceiling
     return 1;
   }
   const again = crossed();
   if (again?.problem) {
     if (!dry) logLine(dir, 'add', describeCaller(caller), `refused: ${again.problem} — readings: ${readingsText(again.machine)}`, sources.now());
-    out.stderr(`team add: ${plainText(again.problem)}\n`);
+    refuse(io, json, 'add', { id: 'add.machine-again', message: again.problem, repair: null });
     // exit: add.machine-again
     return 1;
   }
@@ -639,7 +809,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ...(decision.kind === 'refuse' && !wouldLaunch ? { budget: decision } : {}),
   };
   if (decision.kind === 'refuse' && wouldLaunch) {
-    if (dry) {
+    if (json) {
+      refuse(io, true, 'add', { id: 'add.budget', message: decision.why, repair: null });
+    } else if (dry) {
       out.stdout(`${plainLine(built.name)}: would refuse: ${plainText(decision.why)}\ndry run: nothing was run\n`);
     } else {
       out.stderr(`team add: refused: ${plainText(decision.why)}\n`);
@@ -656,7 +828,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       create: false, getuid: sources.getuid, fs: sources.fs,
       reads: intoLobby ? startupReads : [], lobby,
     });
-    if (!gate.ok) return refuseLobby(out, built.name, gate.text, dry);
+    if (!gate.ok) return refuseLobby(io, json, built.name, gate.text, dry);
     if ('path' in gate) {
       verifiedLobby = gate.path;
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
@@ -669,7 +841,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // below, once the lobby exists.
   if (intoLobby && wouldLaunch && !trustSeat.launchProblem) {
     const line = lobbyPretrustLine(trustSeat, sources.home, { write: false, now: sources.now() });
-    if (line) return refusePretrust(out, built.name, line, dry);
+    if (line) return refusePretrust(io, json, built.name, line, dry);
   }
   if (dry) {
     if (decision.kind === 'unknown') out.stdout(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
@@ -679,8 +851,22 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       sessionRunning: live === 'running',
       seats: [seatForPlan],
       watchAlive: true,
+      cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
+      watchLabel: watchLabel(prepared.team.project),
     });
-    out.stdout(plainText(formatPlan(preview)));
+    if (json) {
+      writeJson(io, 'team.add', {
+        format: 1,
+        dry_run: true,
+        status: 'dry-run',
+        action_summary: 'dry run: nothing was run',
+        project: prepared.team.project,
+        session,
+        seat: built.name,
+        plan: planStepsOf(preview),
+        notes: [...jsonNotes, ...finalRecords],
+      });
+    } else out.stdout(plainText(formatPlan(preview)));
     // exit: add.dry-run
     return 0;
   }
@@ -690,14 +876,18 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // above, and the lock is released on every exit path (`launch/run-lock.ts`).
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    out.stderr(`team add: ${plainText(runLockText(runLock.held, session, dir))}\n`);
+    refuse(io, json, 'add', {
+      id: 'add.run-lock',
+      message: runLockText(runLock.held, session, dir),
+      repair: null,
+    });
     // exit: add.run-lock
     return 1;
   }
   try {
     if (intoLobby) {
       const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby });
-      if (!gate.ok) return refuseLobby(out, built.name, gate.text, false);
+      if (!gate.ok) return refuseLobby(io, json, built.name, gate.text, false);
       if ('path' in gate) {
         verifiedLobby = gate.path;
         lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
@@ -711,7 +901,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         sources.home,
         { write: true, now: sources.now() },
       );
-      if (line) return refusePretrust(out, built.name, line, false);
+      if (line) return refusePretrust(io, json, built.name, line, false);
     }
     if (decision.kind === 'unknown') out.stderr(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
@@ -725,12 +915,22 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         return wrote.ok ? { kind: 'ok' as const } : { kind: 'invalid' as const, errors: wrote.errors };
       });
       if (written.kind === 'changed') {
-        out.stderr('team add: the file changed while add was checking; nothing was written\n');
+        refuse(io, json, 'add', {
+          id: 'add.changed',
+          message: 'the file changed while add was checking; nothing was written',
+          repair: null,
+        });
         // exit: add.changed
         return 1;
       }
       if (written.kind === 'invalid') {
-        for (const problem of written.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
+        if (json) {
+          refuse(io, json, 'add', {
+            id: 'add.locked',
+            message: written.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('; '),
+            repair: null,
+          });
+        } else for (const problem of written.errors) out.stderr(`team add: ${where(problem)}${plainText(problem.message)}\n`);
         // exit: add.locked
         return 2;
       }
@@ -746,12 +946,23 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true });
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and launches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat]);
     const who = describeCaller(caller);
+    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
+      logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+    }
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
+    // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
+    resetCliHookState(dir, session, [planSeat.name]);
+    const outcome = { swallowed: false, unknown: false };
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
-      caller: who, owner: caller.kind === 'owner', now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
-      verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path,
+      caller: who, owner: caller.kind === 'owner', devMode: devModeMark(dev, devFolded), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
+      ...(delegatePane === null ? {} : { delegated: { actor: delegatePane, command: 'add' as const } }),
+      verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path, outcome,
       doctor: sources.doctor,
       // The lobby is read again directly before the workspace this run makes in it, with nothing
       // in between (`execute.ts`). Null when it is still the folder the gate read and every file
@@ -780,6 +991,43 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (launched && built.temporary) {
       recordLedger(storePath(team.project, root, sources.home), [built.seat]);
     }
+    if (json) {
+      if (outcome.swallowed) {
+        // The writer swallowed the seat's one record: its pane is the seat's again, and the
+        // run's own sentence — not a record — is this document's error.
+        refuse(io, true, 'add', {
+          id: 'add.already-running',
+          message: alreadyRunningText(built.name, caller.kind === 'owner', outcome.unknown),
+          repair: null,
+        });
+      } else if (launched && !report.serverFailed) {
+        writeJson(io, 'team.add', {
+          format: 1,
+          dry_run: false,
+          status: 'ready',
+          // The last record is the run's closing line (`<seat>: ready`); with no record at all
+          // the seat's own outcome is said.
+          action_summary: finalRecords.at(-1) ?? `${plainLine(built.name)}: ready`,
+          project: prepared.team.project,
+          session,
+          seat: built.name,
+          pane: afterwards?.pane ?? null,
+          notes: [...jsonNotes, ...finalRecords.slice(0, -1)],
+        });
+      } else if (report.serverFailed) {
+        refuse(io, true, 'add', {
+          id: 'add.server',
+          message: "the session's server did not start",
+          repair: null,
+        });
+      } else {
+        refuse(io, true, 'add', {
+          id: 'add.not-ready',
+          message: 'the launch finished without a ready seat',
+          repair: null,
+        });
+      }
+    }
     // exit: add.ready
     // exit: add.not-ready
     // exit: add.server
@@ -791,46 +1039,47 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
 function declaredSeat(
   name: string, current: string, team: TeamFile, home: string, fs?: FsReader,
-): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string } {
+): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string; id: string } {
   const seat = team.seats.find((item) => item.name === name);
-  if (!seat) return { error: `the file has no seat ${JSON.stringify(name)}` };
+  if (!seat) return { id: 'add.no-seat', error: `the file has no seat ${JSON.stringify(name)}` };
   let edited = current;
   if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
   const again = validateTeamFile(edited, { home, fs });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
-  if (!restored) return { error: `couldn't put ${name} back into the file` };
+  if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into the file` };
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
 }
 
 function temporarySeat(
   values: Record<string, string>, current: string, approved: TeamFile, state: SessionState, agents: readonly HerdrAgent[],
-  root: string, base: string | null,
-): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string } {
+  root: string, base: string | null, home: string, now: Date,
+): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string; id: string } {
   const like = approved.seats.find((item) => item.name === values.like);
-  if (!like) return { error: `the file has no seat ${JSON.stringify(values.like)}` };
+  if (!like) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(values.like)}` };
   const until = parseUntil(values.until ?? '');
-  if (!until) return { error: '--until is result:<path> or merged:<branch>' };
+  if (!until) return { id: 'add.until', error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;
   if (until.kind === 'result') {
     const problem = resultPathProblem(root, until.path);
-    if (problem) return { error: problem };
-    if (existsSync(resolve(root, until.path))) return { error: `${until.path} already exists` };
+    if (problem) return { id: 'add.result-absolute', error: problem };
+    if (existsSync(resolve(root, until.path))) return { id: 'add.result-exists', error: `${until.path} already exists` };
   } else if (!base) {
-    return { error: 'workspace.base is required to read a merged end' };
+    return { id: 'add.merged-base', error: 'workspace.base is required to read a merged end' };
   } else {
     const name = branchProblem(root, until.branch);
-    if (name) return { error: name };
+    // A name git itself refuses is a malformed `--until` target, not a branch that is gone.
+    if (name) return { id: 'add.until', error: name };
     const read = readMerge(root, until.branch, base, false);
     const here = branchPresent(root, until.branch);
-    if (read.detail.includes('the branch is gone') || here === false) return { error: `branch ${until.branch} doesn't exist` };
-    if (here !== true && read.verdict === 'unproven') return { error: read.detail };
+    if (read.detail.includes('the branch is gone') || here === false) return { id: 'add.branch-missing', error: `branch ${until.branch} doesn't exist` };
+    if (here !== true && read.verdict === 'unproven') return { id: 'add.branch-missing', error: read.detail };
     own = read.ownNow > 0;
   }
   const task = values.worktree;
   const worktree = task ? state.worktrees[task] : undefined;
-  if (task && !worktree) return { error: `no worktree named ${JSON.stringify(task)} is recorded` };
-  if (worktree?.setup === 'failed') return { error: `worktree ${task} has a failed setup; team worktree remove ${task}` };
-  const name = temporaryName(like.name, approved, state, agents);
+  if (task && !worktree) return { id: 'add.worktree-missing', error: `no worktree named ${JSON.stringify(task)} is recorded` };
+  if (worktree?.setup === 'failed') return { id: 'add.worktree-failed', error: `worktree ${task} has a failed setup; team worktree remove ${task}` };
+  const name = temporaryName(like.name, approved, state, agents, seatNumberingInForce({ home, root, team: approved, now }));
   return {
     name,
     edited: current,
@@ -844,11 +1093,16 @@ function temporarySeat(
   };
 }
 
-function temporaryName(like: string, team: TeamFile, state: SessionState, agents: readonly HerdrAgent[]): string {
+/**
+ * The temporary seat's name: the like seat's own name, `-tmp`, and the next free seat number in
+ * the numbering in force — the `seat-numbering` setting's width and separator (`worker-tmp-01`
+ * at the shipped default). The number is read as a number, so a `worker-tmp-1` minted under an
+ * older width still holds 1 and the next name is `worker-tmp-02`; a name already running in the
+ * session or listed by herdr holds its number too.
+ */
+function temporaryName(like: string, team: TeamFile, state: SessionState, agents: readonly HerdrAgent[], numbering: SeatNumbering): string {
   const used = new Set([...team.seats.map((seat) => seat.name), ...Object.keys(state.seats), ...agents.map((agent) => agent.name ?? '')]);
-  let n = 1;
-  while (used.has(`${like}-tmp-${n}`)) n++;
-  return `${like}-tmp-${n}`;
+  return nextFreeSeatNumber(`${like}-tmp`, used, numbering);
 }
 
 function parseUntil(value: string): Until | null {
@@ -951,19 +1205,26 @@ function screenUnknown(cli: string, text: string | null | undefined): boolean {
  * seat gets. A screen it does not recognise names the way out for this caller: the owner is
  * told to run `team remove <seat> --abandon`; anyone else is told that the owner runs it.
  */
-function alreadyRunningLine(name: string, owner: boolean, unknown: boolean): string {
+function alreadyRunningText(name: string, owner: boolean, unknown: boolean): string {
   const who = plainLine(name);
-  const base = `team add: ${who} is already running`;
-  if (!unknown) return `${base}\n`;
+  const base = `${who} is already running`;
+  if (!unknown) return base;
   const way = owner
     ? `team remove ${who} --abandon closes its workspace without typing`
     : `the owner runs team remove ${who} --abandon, which closes its workspace without typing`;
-  return `${base} (${way})\n`;
+  return `${base} (${way})`;
+}
+
+function alreadyRunningLine(name: string, owner: boolean, unknown: boolean): string {
+  return `team add: ${alreadyRunningText(name, owner, unknown)}\n`;
 }
 
 function hostOf(input: {
   dir: string; session: string; team: TeamFile; root: string; home: string; ceilings: Ceilings; running: Running[];
-  seat: Seat; temporary?: SeatState['temporary']; caller: string; owner: boolean; now(): Date; launch: Launch;
+  seat: Seat; temporary?: SeatState['temporary']; caller: string; owner: boolean; devMode: boolean; now(): Date; launch: Launch;
+  /** The delegation this add ran under, when it is the approved delegate's: the owner as signer,
+   *  this pane as actor, the one command `add`. Absent: no delegation. */
+  delegated?: { actor: string; command: ActingCommand };
   readMachine?: (root: string) => Machine; samples: SwapSample[]; limits: TeamFile['machine']; io: Io;
   standing: Standing;
   teamFile: string;
@@ -973,6 +1234,9 @@ function hostOf(input: {
   inLobby: boolean;
   /** The run's writer, made by the caller before the launch-line note is said. */
   records: Progress;
+  /** What the writer swallowed: the one record whose line the command replaces with its own
+   *  sentence, and whether the screen named the way out. Read after the run for `--json`. */
+  outcome: { swallowed: boolean; unknown: boolean };
   doctor: DoctorSources;
   confirmLobby(): LobbyRefusal | null;
 }): Host {
@@ -1056,7 +1320,9 @@ function hostOf(input: {
     workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
     classify: (_name, pane, cli) => readScreen(cli, launch.paneText(session, pane) ?? undefined).kind,
     paneText: (_name, pane) => launch.paneText(session, pane),
+    foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
+    agentStatus: (_name, pane) => launch.agentStatus?.(session, pane) ?? null,
     processInfo: (_name, pane) => launch.processInfo?.(session, pane) ?? null,
     sleep: launch.sleep,
     now: () => input.now().getTime(),
@@ -1131,7 +1397,10 @@ function hostOf(input: {
         // The registry: the seat's agent is registered at its first launch, re-pointed after.
         if (name === seat.name) {
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session },
+            {
+              home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner,
+              ...(input.delegated === undefined ? {} : { delegated: input.delegated }),
+            },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
@@ -1186,10 +1455,13 @@ function hostOf(input: {
         swallowed = true;
         const listed = launch.agents(session)?.find((agent) => agent.name === name);
         const unknown = screenUnknown(seat.cli, listed ? launch.paneText(session, listed.pane) : undefined);
+        input.outcome.swallowed = true;
+        input.outcome.unknown = unknown;
         input.io.stderr(alreadyRunningLine(input.seat.name, input.owner, unknown));
         return;
       }
       swallowed = false;
+      input.outcome.swallowed = false;
       records.final(name, record);
     },
     detail(line) {
@@ -1203,16 +1475,35 @@ function hostOf(input: {
   };
 }
 
-function refusePretrust(out: Io, name: string, line: string, dry: boolean): number {
-  if (dry) out.stdout(`${plainLine(name)}: would refuse: ${plainText(line)}\ndry run: nothing was run\n`);
-  else out.stderr(`team add: refused: ${plainText(line)}\n`);
+/** The one command that unblocks an `add` this caller cannot run: an approved delegate's own,
+ *  from its pane, when the file names one, otherwise the owner's, in this folder from a terminal
+ *  outside herdr. The caller's words are kept, the dry run's and the document's own flags
+ *  dropped, so the printed line is a command that runs. */
+function unblockingAddRun(argv: string[]): string {
+  const words = ['team', 'add', ...withoutOutputFlags(argv).map(shellQuote)];
+  return `an approved delegate runs \`${words.join(' ')}\` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr`;
+}
+
+/** The caller's words without this run's own output flags: the repair names a command that
+ *  runs on a terminal, so neither the dry run nor the document belongs in it. */
+function withoutOutputFlags(argv: string[]): string[] {
+  return argv.filter((word) => word !== '--dry-run' && word !== '--json' && !word.startsWith('--json='));
+}
+
+function refusePretrust(io: Io, json: boolean, name: string, line: string, dry: boolean): number {
+  if (json) {
+    refuse(io, true, 'add', { id: 'add.pretrust', message: line, repair: null });
+  } else if (dry) io.stdout(`${plainLine(name)}: would refuse: ${plainText(line)}\ndry run: nothing was run\n`);
+  else io.stderr(`team add: refused: ${plainText(line)}\n`);
   // exit: add.pretrust
   return 1;
 }
 
-function refuseLobby(out: Io, name: string, text: string, dry: boolean): number {
-  if (dry) out.stdout(`${plainLine(name)}: would refuse: ${plainText(text)}\ndry run: nothing was run\n`);
-  else out.stderr(`team add: ${plainText(text)}\n`);
+function refuseLobby(io: Io, json: boolean, name: string, text: string, dry: boolean): number {
+  if (json) {
+    refuse(io, true, 'add', { id: 'add.lobby', message: text, repair: null });
+  } else if (dry) io.stdout(`${plainLine(name)}: would refuse: ${plainText(text)}\ndry run: nothing was run\n`);
+  else io.stderr(`team add: ${plainText(text)}\n`);
   // exit: add.lobby
   return 1;
 }

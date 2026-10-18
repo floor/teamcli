@@ -1,0 +1,466 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/mcp.schema.json",
+  "title": "team mcp --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "format",
+        "lobby_dir",
+        "helper",
+        "bridges",
+        "guards",
+        "front",
+        "state"
+      ],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "const": "team.mcp"
+            },
+            "version": {
+              "type": "integer",
+              "const": 1
+            }
+          }
+        },
+        "format": {
+          "type": "integer",
+          "const": 1
+        },
+        "lobby_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "helper": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "root",
+            "present",
+            "rows"
+          ],
+          "properties": {
+            "root": {
+              "type": "string",
+              "minLength": 1
+            },
+            "present": {
+              "type": "boolean"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "state",
+                  "detail"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "ok  ",
+                      "warn",
+                      "MISS",
+                      "note"
+                    ]
+                  },
+                  "detail": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "bridges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dir",
+              "config",
+              "problem",
+              "wss_url",
+              "seats",
+              "signer_socket",
+              "bridge_process",
+              "mailbox",
+              "inbox_outbox",
+              "audit"
+            ],
+            "properties": {
+              "dir": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "invalid"
+                ]
+              },
+              "problem": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "wss_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "seats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "alias",
+                    "route",
+                    "key_id"
+                  ],
+                  "properties": {
+                    "alias": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "route": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "key_id": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              },
+              "signer_socket": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "state"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "refused",
+                      "missing",
+                      "unknown"
+                    ]
+                  }
+                }
+              },
+              "bridge_process": {
+                "type": "string",
+                "enum": [
+                  "up",
+                  "down",
+                  "unknown"
+                ]
+              },
+              "mailbox": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "outbound_ready",
+                  "inbound_ready"
+                ],
+                "properties": {
+                  "outbound_ready": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "inbound_ready": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  }
+                }
+              },
+              "inbox_outbox": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "audit": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "last"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "last": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": false,
+                    "required": [
+                      "ts",
+                      "event"
+                    ],
+                    "properties": {
+                      "ts": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "event": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "guards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dir",
+              "config",
+              "problem",
+              "enabled",
+              "last_audit"
+            ],
+            "properties": {
+              "dir": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "invalid"
+                ]
+              },
+              "problem": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "last_audit": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "ts",
+                  "event"
+                ],
+                "properties": {
+                  "ts": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "event": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "front": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "origin",
+            "mcp_status",
+            "connector_status",
+            "tls_valid_to",
+            "tls_authorized"
+          ],
+          "properties": {
+            "origin": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mcp_status": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "connector_status": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tls_valid_to": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tls_authorized": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "not-set-up"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "format",
+        "lobby_dir",
+        "findings",
+        "missing",
+        "warnings"
+      ],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "const": "team.mcp"
+            },
+            "version": {
+              "type": "integer",
+              "const": 1
+            }
+          }
+        },
+        "format": {
+          "type": "integer",
+          "const": 1
+        },
+        "lobby_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "level",
+              "text",
+              "fix"
+            ],
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "miss",
+                  "note"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fix": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "missing": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warnings": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  ]
+}

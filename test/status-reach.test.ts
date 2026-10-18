@@ -117,18 +117,22 @@ async function status(current: Live, ...argv: string[]) {
   return { code, out: io.out, err: io.err };
 }
 
-test('the plain table prints each seat how a send would reach it, as its last column', async () => {
+test('the plain table prints each active seat how a send would reach it, as its last column', async () => {
   // The scene carries differences (agents the state never launched), so the table is what is
-  // pinned here, not the exit code.
+  // pinned here, not the exit code. Stopped seats are hidden from the default table.
   const { out } = await status(live({ 'w1:p1': processes(SESSION_PID) }));
   const line = (name: string) => out.split('\n').find((candidate) => candidate.trimStart().startsWith(`${name} `)) ?? '';
   expect(line('claude-coordinator-acme')).toMatch(/  typed$/);
   expect(line('codex-acme')).toMatch(/  typed$/);
-  expect(line('grok-acme')).toMatch(/  typed$/);
+  expect(line('grok-acme')).toBe('');
 });
 
-test('--json keeps the row shape it published: the reach word is the plain table\'s alone', async () => {
+test('--json keeps the reach word out of the rows: it is the plain table\'s alone', async () => {
   const { out } = await status(live({ 'w1:p1': processes(SESSION_PID) }), '--json');
   const doc = JSON.parse(out) as { rows: Record<string, unknown>[] };
-  for (const row of doc.rows) expect(Object.keys(row).sort()).toEqual(['model', 'name', 'pane', 'state']);
+  // The published keys stand, the seat's own reading riding beside them additively; `reach`
+  // never crosses over, and no row here is blind (each reads a word), so no `blind` key either.
+  for (const row of doc.rows) {
+    expect(Object.keys(row).sort()).toEqual(['model', 'name', 'pane', 'seat_state', 'seat_state_source', 'state']);
+  }
 });

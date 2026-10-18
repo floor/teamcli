@@ -15,18 +15,27 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { runFeed } from '../src/commands/feed.ts';
+import { runFeed, USAGE } from '../src/commands/feed.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { FEED_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { appendHistory, historyPath, MAX_HISTORY_BYTES, readHistory } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
+
+type FeedDoc = {
+  schema: { name: string; version: number };
+  format: number;
+  project: string | null;
+  session: string | null;
+  events: Array<Record<string, unknown>>;
+};
 
 const NOW = new Date('2026-10-14T15:30:00.000Z');
 
@@ -40,7 +49,7 @@ function teamFile(root: string, lobby: string): string {
   return `format: 1
 project: acme
 coordinator: lead
-operator: helper
+operator: lead
 session: acme
 workspace:
   mode: shared
@@ -144,7 +153,7 @@ function registerSeat(home: string, seat: string, role: string): void {
       '  team: "acme"',
       `  seat: "${seat}"`,
       '  session: "acme"',
-      '  pane: "pane-lead"',
+      `  pane: "pane-${seat}"`,
       '  address: null',
       'mcp: []',
       'skills: []',
@@ -187,7 +196,7 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the id admission admitted, and the rule.
     const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
@@ -199,6 +208,12 @@ describe('team send history log & team feed', () => {
       outcome: 'delivered',
       ms: 0,
       via: 'typed',
+      // The walk landed on the typed leg through both legs ahead of it: the socket write this
+      // build does not make, and the mcp-inbox leg it does not carry.
+      failed: [
+        'native: unavailable; the frame path is a socket write this build does not make',
+        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+      ],
     });
 
     // Team log in .agents/ keeps only byte counts, never the message body; lobbies stay empty.
@@ -207,15 +222,84 @@ describe('team send history log & team feed', () => {
     expect(existsSync(join(dir, 'messages.jsonl'))).toBe(false);
     expect(readdirSync(lobbyDir(home))).toEqual([]);
 
+    // The table's KIND keeps the channel and the timing, and DETAIL folds the filed body's
+    // header and blank line onto the one line its cell can hold.
     const feedIo = testIo(root);
     expect(await runFeed([], feedIo, { home })).toBe(0);
     expect(feedIo.out).toBe(
-      `15:30:00  helper -> lead  [delivered] via typed in 0 ms  ${seatHeader.split('\n')[0]}\n          \n          ${secret}\n`,
+      'team acme, session "acme"\n' +
+        '  TIME      KIND                           SEAT            DETAIL\n' +
+        `  15:30:00  delivered (via typed in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
+        '1 event\n',
     );
+
+    // One envelope, not one line per event; it carries the legs that failed before the typed one.
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const doc = assertMatchesOutputSchema<FeedDoc>(jsonIo.out, FEED_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.feed', version: 1 });
+    expect(doc).toMatchObject({ format: 1, project: 'acme', session: 'acme' });
+    expect(doc.events).toHaveLength(1);
+    expect(doc.events[0]).toMatchObject({
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      id: sentDoc.ids.sent,
+      outcome: 'delivered',
+      ms: 0,
+      via: 'typed',
+    });
+    expect(doc.events[0]?.failed).toEqual([
+      'native: unavailable; the frame path is a socket write this build does not make',
+      'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+    ]);
+  });
+
+  test('--json carries the address a send kept beside the seat, and the line keeps it', async () => {
+    const { root, home } = world();
+    const wrote = appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      spec: 'zeus@acme',
+      resolved: 'agt_0123456789ab',
+      body: `${OWNER_HEADER}addressed`,
+      id: 'seed-addressed',
+      outcome: 'delivered',
+      via: 'typed',
+    });
+    expect(wrote.ok).toBe(true);
+
+    const raw = readFileSync(historyPath('acme', root, home), 'utf8');
+    expect(raw).toContain('"spec":"zeus@acme"');
+    expect(raw).toContain('"resolved":"agt_0123456789ab"');
+
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const jsonDoc = JSON.parse(jsonIo.out) as { events: Record<string, unknown>[] };
+    expect(jsonDoc.events[0]?.to).toBe('lead');
+    expect(jsonDoc.events[0]?.spec).toBe('zeus@acme');
+    expect(jsonDoc.events[0]?.resolved).toBe('agt_0123456789ab');
+
+    // A line that wrote neither keeps the shape it always had.
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}plain`,
+      id: 'seed-plain',
+      outcome: 'delivered',
+      via: 'typed',
+    });
+    const plainIo = testIo(root);
+    expect(await runFeed(['--limit', '1', '--json'], plainIo, { home })).toBe(0);
+    const plainDoc = JSON.parse(plainIo.out) as { events: Record<string, unknown>[] };
+    expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts', 'via']);
   });
 
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
     const { root, home, sockets } = world();
+    // A file at the measured socket name stands while every send below runs: no path consults it.
     writeFileSync(join(sockets, '222.sock'), '');
 
     // 1. refused (unknown seat), --list, --dry-run write nothing to messages.jsonl
@@ -236,27 +320,31 @@ describe('team send history log & team feed', () => {
       ),
     ).toBe(1);
 
-    // 4. answered (--wait)
-    const answeringHost = hostFor(home, sockets, {
-      deliver: async () => {
-        const back = createConnection(join(sockets, `${String(process.pid)}.sock`));
-        back.on('error', () => {});
-        back.on('connect', () =>
-          back.end('{"type":"user","message":{"role":"user","content":"ack"},"msg_id":"r-1"}\n'),
-        );
-        return { ok: true };
-      },
+    // 4. a --wait refusal writes nothing either. The waited outcomes are out of this build's
+    // reach while the socket is off, so the answered and timeout lines are seeded straight into
+    // the history — as the native leg's will be — and the feed renders the history, not the
+    // runs that made it.
+    expect(await runSend(['lead', 'msg-refused-wait', '--wait'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(1);
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}msg-answered`,
+      id: 'seed-answered',
+      outcome: 'answered',
+      ms: 0,
+      via: 'socket',
     });
-    expect(await runSend(['lead', 'msg-answered', '--wait'], testIo(root, { kind: 'owner' }), answeringHost)).toBe(0);
-
-    // 5. timeout (--wait)
-    expect(
-      await runSend(
-        ['lead', 'msg-timeout', '--wait', '--timeout', '1'],
-        testIo(root, { kind: 'owner' }),
-        hostFor(home, sockets),
-      ),
-    ).toBe(1);
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}msg-timeout`,
+      id: 'seed-timeout',
+      outcome: 'timeout',
+      ms: 0,
+      via: 'socket',
+    });
 
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);
@@ -309,6 +397,80 @@ describe('team send history log & team feed', () => {
     const io = testIo(root);
     expect(await runFeed([], io, { home })).toBe(1);
     expect(io.err).toContain('the history log cannot be read: a symbolic link was found and not followed');
+
+    // Under `--json` the same refusal is one team.error document on stdout, stderr empty.
+    const json = testIo(root);
+    expect(await runFeed(['--json'], json, { home })).toBe(1);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'feed.unreadable',
+      messageContains: 'the history log cannot be read: a symbolic link was found and not followed',
+    });
+  });
+
+  test('--follow and --json are refused: the error document --json asks for', async () => {
+    const { root, home } = world();
+    const io = testIo(root);
+    expect(await runFeed(['--follow', '--json'], io, { home })).toBe(2);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, {
+      id: 'feed.usage',
+      messageContains: "--follow and --json can't be used together",
+    });
+  });
+
+  test('--json writes one team.feed document, names no team outside a checkout, and every refusal is a team.error', async () => {
+    const { root, home } = world();
+    const empty = testIo(root);
+    expect(await runFeed(['--json'], empty, { home })).toBe(0);
+    expect(assertMatchesOutputSchema<FeedDoc>(empty.out, FEED_OUTPUT_SCHEMA)).toMatchObject({
+      format: 1,
+      project: 'acme',
+      session: 'acme',
+      events: [],
+    });
+
+    // A run outside any checkout with --all is not team-scoped: the document names no team.
+    const all = testIo(base);
+    expect(await runFeed(['--all', '--json'], all, { home })).toBe(0);
+    expect(assertMatchesOutputSchema<FeedDoc>(all.out, FEED_OUTPUT_SCHEMA)).toMatchObject({
+      project: null,
+      session: null,
+      events: [],
+    });
+
+    // Outside any checkout the refusal names only the project: feed takes no --file.
+    const plain = testIo(base);
+    expect(await runFeed([], plain, { home })).toBe(2);
+    expect(plain.err).toBe('team feed: not inside a git repository: run team from a project\n');
+
+    const noFile = testIo(base);
+    expect(await runFeed(['--json'], noFile, { home })).toBe(2);
+    expect(noFile.err).toBe('');
+    assertJsonErrorShape(noFile.out, { id: 'feed.configuration', messageContains: 'not inside a git repository: run team from a project' });
+    expect(noFile.out).not.toContain('--file');
+
+    const usage = testIo(root);
+    expect(await runFeed(['--json', 'extra'], usage, { home })).toBe(2);
+    expect(usage.err).toBe('');
+    assertJsonErrorShape(usage.out, { id: 'feed.usage', messageContains: 'unexpected "extra"' });
+
+    // The raw argv is scanned before the parser runs: an unknown option ahead of `--json`, or a
+    // `--json=<value>` the parser refuses, still writes the error document and leaves stderr empty.
+    const nope = testIo(root);
+    expect(await runFeed(['--nope', '--json'], nope, { home })).toBe(2);
+    expect(nope.err).toBe('');
+    assertJsonErrorShape(nope.out, { id: 'feed.usage', messageContains: 'unknown option --nope' });
+
+    const inline = testIo(root);
+    expect(await runFeed(['--json=1'], inline, { home })).toBe(2);
+    expect(inline.err).toBe('');
+    assertJsonErrorShape(inline.out, { id: 'feed.usage', messageContains: 'unknown option --json' });
+
+    const badLimit = testIo(root);
+    expect(await runFeed(['--json', '--limit', '0'], badLimit, { home })).toBe(2);
+    expect(badLimit.err).toBe('');
+    assertJsonErrorShape(badLimit.out, { id: 'feed.usage', messageContains: '--limit takes a whole number' });
   });
 
   test('rotates at 1 MB keeping 3 files at mode 0600, and team feed --follow streams across rotation', async () => {
@@ -338,9 +500,10 @@ describe('team send history log & team feed', () => {
     expect(statSync(`${logPath}.1`).mode & 0o777).toBe(0o600);
     expect(statSync(`${logPath}.2`).mode & 0o777).toBe(0o600);
 
-    // Follow mode across another rotation
+    // Follow mode across another rotation: the opening batch is the last line before it, and
+    // the pass that crosses the rotation prints the four events it brought as its own table.
     const followIo = testIo(root);
-    const code = await runFeed(['--limit', '1', '--follow', '--json'], followIo, {
+    const code = await runFeed(['--limit', '1', '--follow'], followIo, {
       home,
       poll: async (tick) => {
         if (tick === 0) {
@@ -361,11 +524,14 @@ describe('team send history log & team feed', () => {
       },
     });
     expect(code).toBe(0);
-    const lines = followIo.out
-      .trim()
-      .split('\n')
-      .map((line) => (JSON.parse(line) as { id: string }).id);
-    expect(lines).toEqual(['id-9', 'id-10', 'id-11', 'id-12', 'id-13']);
+    expect((followIo.out.match(/^ *TIME +KIND +SEAT +DETAIL$/gm) ?? []).length).toBe(2);
+    expect((followIo.out.match(/team acme, session "acme"/g) ?? []).length).toBe(1);
+    expect(followIo.out).toContain('1 event\n');
+    expect(followIo.out).toContain('4 events\n');
+    expect(followIo.out).toContain(`9:${chunk}`);
+    for (let j = 10; j <= 13; j++) {
+      expect(followIo.out).toContain(`followed-${String(j)}:${'z'.repeat(240_000)}`);
+    }
   });
 
   test('filters by --seat, respects --limit, and merges briefs/*-to-*.md and audit.jsonl', async () => {
@@ -403,27 +569,30 @@ describe('team send history log & team feed', () => {
     const allIo = testIo(root);
     expect(await runFeed([], allIo, { home, auditPath })).toBe(0);
     expect(allIo.out).toBe(
-      [
-        '15:00:01  lead -> helper  [delivered]  first task',
-        '15:00:02  iris -> atlas  [brief]  handoff note',
-        '15:00:03  lead -> native  [delivered]  second task',
-        '          line two',
-        '15:00:04  desk -> lead  [verified]  status check',
-        '',
-      ].join('\n'),
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT            DETAIL\n' +
+        '  15:00:01  delivered  lead -> helper  first task\n' +
+        '  15:00:02  brief      iris -> atlas   handoff note\n' +
+        '  15:00:03  delivered  lead -> native  second task line two\n' +
+        '  15:00:04  verified   desk -> lead    status check\n' +
+        '4 events\n',
     );
 
     const seatIo = testIo(root);
     expect(await runFeed(['--seat', 'helper'], seatIo, { home, auditPath })).toBe(0);
-    expect(seatIo.out).toBe('15:00:01  lead -> helper  [delivered]  first task\n');
+    expect(seatIo.out).toBe(
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT            DETAIL\n' +
+        '  15:00:01  delivered  lead -> helper  first task\n' +
+        '1 event\n',
+    );
 
     const limitIo = testIo(root);
     expect(await runFeed(['--limit', '2', '--json'], limitIo, { home, auditPath })).toBe(0);
-    const jsonIds = limitIo.out
-      .trim()
-      .split('\n')
-      .map((line) => (JSON.parse(line) as { id: string }).id);
-    expect(jsonIds).toEqual(['m2', 'req-1']);
+    expect(assertMatchesOutputSchema<FeedDoc>(limitIo.out, FEED_OUTPUT_SCHEMA).events.map((event) => event.id)).toEqual([
+      'm2',
+      'req-1',
+    ]);
   });
 
   test('parses multi-section briefs/*-to-*.md with ## <ISO-8601> — From <Sender> headers in chronological order', async () => {
@@ -431,19 +600,19 @@ describe('team send history log & team feed', () => {
     const briefsDir = join(root, 'briefs');
     mkdirSync(briefsDir, { recursive: true });
     writeFileSync(
-      join(briefsDir, 'iris-to-atlas.md'),
+      join(briefsDir, 'lead-to-worker.md'),
       [
-        '# Iris -> Atlas',
+        '# Lead -> Worker',
         '',
-        '## 2026-10-14T15:00:01Z — From Iris: Round 1',
+        '## 2026-10-14T15:00:01Z — From Lead: Round 1',
         '',
-        'First brief section from Iris.',
+        'First brief section from Lead.',
         '',
         '---',
         '',
-        '## 2026-10-14T15:00:05Z — From Atlas: Round 1 Reply',
+        '## 2026-10-14T15:00:05Z — From Worker: Round 1 Reply',
         '',
-        'Reply section from Atlas in the same file.',
+        'Reply section from Worker in the same file.',
         '',
       ].join('\n'),
     );
@@ -451,11 +620,11 @@ describe('team send history log & team feed', () => {
     const io = testIo(root);
     expect(await runFeed([], io, { home })).toBe(0);
     expect(io.out).toBe(
-      [
-        '15:00:01  iris -> atlas  [brief]  Round 1: First brief section from Iris.',
-        '15:00:05  atlas -> iris  [brief]  Round 1 Reply: Reply section from Atlas in the same file.',
-        '',
-      ].join('\n'),
+      'team acme, session "acme"\n' +
+        '  TIME      KIND   SEAT            DETAIL\n' +
+        '  15:00:01  brief  lead -> worker  Round 1: First brief section from Lead.\n' +
+        '  15:00:05  brief  worker -> lead  Round 1 Reply: Reply section from Worker in the same file.\n' +
+        '2 events\n',
     );
   });
 
@@ -507,16 +676,17 @@ describe('team send history log & team feed', () => {
     writeFileSync(answerFile, answerContent);
 
     // Running outside any git checkout (e.g. from the Desk lobby directory) merges all projects + Desk lobby records
+    // Outside any checkout there is no team to name: no context line, and the table starts at
+    // column 0.
     const deskPaneIo = testIo(lobbyDir(home));
     expect(await runFeed([], deskPaneIo, { home })).toBe(0);
     expect(deskPaneIo.out).toBe(
-      [
-        '16:00:01  lead -> helper  [delivered]  acme message',
-        '16:00:02  keeper -> reviewer  [delivered]  beacon message',
-        '16:00:03  desk -> orchestrator  [accepted]  accepted (req-9)',
-        '16:00:04  orchestrator -> desk  [answered]  gate approved',
-        '',
-      ].join('\n'),
+      'TIME      KIND       SEAT                  DETAIL\n' +
+        '16:00:01  delivered  lead -> helper        acme message\n' +
+        '16:00:02  delivered  keeper -> reviewer    beacon message\n' +
+        '16:00:03  accepted   desk -> orchestrator  accepted (req-9)\n' +
+        '16:00:04  answered   orchestrator -> desk  gate approved\n' +
+        '4 events\n',
     );
 
     // Running inside `acme` with `--all`, `--audit`, and `--briefs` flags
@@ -538,15 +708,15 @@ describe('team send history log & team feed', () => {
       await runFeed(['--all', '--briefs', customBriefs, '--audit', customAudit], flagIo, { home }),
     ).toBe(0);
     expect(flagIo.out).toBe(
-      [
-        '16:00:01  lead -> helper  [delivered]  acme message',
-        '16:00:02  keeper -> reviewer  [delivered]  beacon message',
-        '16:00:03  desk -> orchestrator  [accepted]  accepted (req-9)',
-        '16:00:04  orchestrator -> desk  [answered]  gate approved',
-        '16:00:05  desk -> lead  [brief]  custom brief line',
-        '16:00:06  desk -> lead  [forwarded]  explicit audit line',
-        '',
-      ].join('\n'),
+      'team acme, session "acme"\n' +
+        '  TIME      KIND       SEAT                  DETAIL\n' +
+        '  16:00:01  delivered  lead -> helper        acme message\n' +
+        '  16:00:02  delivered  keeper -> reviewer    beacon message\n' +
+        '  16:00:03  accepted   desk -> orchestrator  accepted (req-9)\n' +
+        '  16:00:04  answered   orchestrator -> desk  gate approved\n' +
+        '  16:00:05  brief      desk -> lead          custom brief line\n' +
+        '  16:00:06  forwarded  desk -> lead          explicit audit line\n' +
+        '6 events\n',
     );
 
     // Desk ask/answer and audit files remain untouched (read-only)

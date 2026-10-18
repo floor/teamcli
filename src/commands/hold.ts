@@ -1,8 +1,10 @@
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerVerdict } from '../caller.ts';
 import { currentTeam } from '../file/current.ts';
+import { withoutFileOffer } from '../file/load.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import { holdText, liveHold, updateState, type HoldRecord } from '../state.ts';
 
 // `team hold <reason> [--until <time>]` records a hold on the team's work in the team state,
@@ -14,8 +16,10 @@ import { holdText, liveHold, updateState, type HoldRecord } from '../state.ts';
 // `down`'s — the owner, or the team's orchestrator or operator — because a hold is shown to
 // the whole team like the stop is, and the same gate places and releases.
 
-export const USAGE = `Usage: team hold <reason> [--until <time>]
-       team hold --release
+export const USAGE = `Usage: team hold <reason> [--until <time>] [--json]
+       team hold --release [--json]
+
+Exits 0 when the hold is placed or released, 1 when it is refused or state I/O fails, 2 when the invocation or team file can't be read.
 `;
 
 /** What `runHold` reads from outside, so tests can stand in for the clock and the store. */
@@ -34,26 +38,31 @@ type Op =
 
 export async function runHold(argv: string[], io: Io, sources: HoldSources = realHoldSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['until'], ['release']);
-  if (args.error) return invocation(out, args.error);
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['until'], ['release', 'json']);
+  if (args.error) return invocation(out, args.error, json);
   const now = sources.now?.() ?? new Date();
   const release = args.flags.has('release');
   let reason = '';
   let until: Date | undefined;
   if (release) {
     if (args.rest.length > 0 || args.values.until !== undefined) {
-      return invocation(out, '--release takes no <reason> and no --until');
+      return invocation(out, '--release takes no <reason> and no --until', json);
     }
   } else {
-    if (args.rest.length === 0) return invocation(out, 'a <reason> is required');
+    if (args.rest.length === 0) return invocation(out, 'a <reason> is required', json);
     const extra = args.rest[1];
-    if (extra !== undefined) return invocation(out, `unexpected "${plainLine(extra)}"`);
+    if (extra !== undefined) return invocation(out, `unexpected "${plainLine(extra)}"`, json);
     reason = plainLine(args.rest[0] ?? '').trim();
-    if (reason === '') return invocation(out, 'a <reason> is required');
+    if (reason === '') return invocation(out, 'a <reason> is required', json);
     if (args.values.until !== undefined) {
       const parsed = untilOf(args.values.until, now);
       if (typeof parsed === 'string') {
-        out.stderr(`team hold: ${parsed}\n`);
+        if (json) {
+          writeJsonError(out, 'hold.until', parsed, null);
+        } else {
+          out.stderr(`team hold: ${parsed}\n`);
+        }
         // exit: hold.until
         return 1;
       }
@@ -61,29 +70,46 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     }
   }
   const walked = walkCaller(io);
-  const detached = detachedRefusal(walked);
+  const detached = detachedRefusal(walked, { who: 'the owner, the orchestrator or the operator', where: 'a terminal outside herdr or its own seat' });
   if (detached !== undefined) {
-    out.stderr(`team hold: ${detached}\n`);
+    if (json) {
+      writeJsonError(out, 'hold.detached', detached, null, 1, 'unplaced');
+    } else {
+      out.stderr(`team hold: ${detached}\n`);
+    }
     // exit: hold.detached
     return 1;
   }
   const current = currentTeam(io.cwd, undefined, now, sources.home, isOwner(walked));
   if (!current.ok) {
-    for (const problem of current.errors) {
-      out.stderr(`team hold: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+    // `team hold` takes no `--file`, so the no-repository refusal must not offer one.
+    const messages = current.errors.map(
+      (problem) => `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${withoutFileOffer(plainText(problem.message))}`,
+    );
+    if (json) {
+      writeJsonError(out, 'hold.file', messages.join('; '), null);
+    } else {
+      for (const msg of messages) {
+        out.stderr(`team hold: ${msg}\n`);
+      }
     }
     // exit: hold.file
     return 2;
   }
   const { team, dir } = current;
-  if (current.notice) out.stdout(`${plainText(current.notice)}\n`);
-  for (const warning of current.warnings) {
-    out.stderr(`team hold: warning, line ${warning.line}: ${plainText(warning.message)}\n`);
-  }
+  const notice = current.notice ? plainText(current.notice) : undefined;
+  if (notice !== undefined && !json) out.stdout(`${notice}\n`);
   const { caller, session } = judgeCallerIn(io, dir, team);
   const verdict = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
   if (verdict.kind !== 'ok') {
-    out.stderr(`team hold: ${refusalOf(verdict, caller)}\n`);
+    const msg = refusalOf(verdict, caller);
+    if (json) {
+      const rule = verdict.kind === 'no-pane' || verdict.kind === 'another-pane' ? 'unplaced' : 'owner-or-leads';
+      const repair = verdict.kind === 'no-pane' ? 'team up' : verdict.kind === 'another-pane' ? 'team down && team up' : null;
+      writeJsonError(out, 'hold.caller', msg, repair, 1, rule, notice);
+    } else {
+      out.stderr(`team hold: ${msg}\n`);
+    }
     // exit: hold.caller
     return 1;
   }
@@ -104,26 +130,71 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
       return { kind: 'placed', hold: record };
     });
   } catch (error) {
-    out.stderr(`team hold: ${plainText(error instanceof Error ? error.message : String(error))}\n`);
+    const msg = plainText(error instanceof Error ? error.message : String(error));
+    if (json) {
+      writeJsonError(out, 'hold.io', msg, null, 1, undefined, notice);
+    } else {
+      out.stderr(`team hold: ${msg}\n`);
+    }
     // exit: hold.io
     return 1;
   }
   if (op.kind === 'placed') {
-    out.stdout(`${holdText(op.hold)}\n`);
+    const summary = holdText(op.hold);
+    if (json) {
+      writeJson(out, 'team.hold', {
+        format: 1,
+        dry_run: false,
+        status: 'placed',
+        action_summary: summary,
+        project: team.project,
+        session,
+        target: 'hold',
+        value: op.hold.reason,
+        hold: op.hold,
+        ...(notice !== undefined ? { notice } : {}),
+      });
+    } else {
+      out.stdout(`${summary}\n`);
+    }
     // exit: hold.placed
     return 0;
   }
   if (op.kind === 'released') {
-    out.stdout('hold: released\n');
+    const summary = 'hold: released';
+    if (json) {
+      writeJson(out, 'team.hold', {
+        format: 1,
+        dry_run: false,
+        status: 'released',
+        action_summary: summary,
+        project: team.project,
+        session,
+        target: 'hold',
+        value: null,
+        ...(notice !== undefined ? { notice } : {}),
+      });
+    } else {
+      out.stdout(`${summary}\n`);
+    }
     // exit: hold.released
     return 0;
   }
   if (op.kind === 'held') {
-    out.stderr(`team hold: already held${op.hold.until ? ` until ${op.hold.until}` : ''}: ${op.hold.reason}\n`);
+    const msg = `already held${op.hold.until ? ` until ${op.hold.until}` : ''}: ${op.hold.reason}`;
+    if (json) {
+      writeJsonError(out, 'hold.held', msg, 'team hold --release', 1, undefined, notice);
+    } else {
+      out.stderr(`team hold: ${msg}\n`);
+    }
     // exit: hold.held
     return 1;
   }
-  out.stderr('team hold: not held\n');
+  if (json) {
+    writeJsonError(out, 'hold.not-held', 'not held', null, 1, undefined, notice);
+  } else {
+    out.stderr('team hold: not held\n');
+  }
   // exit: hold.not-held
   return 1;
 }
@@ -154,8 +225,12 @@ function untilOf(text: string, now: Date): Date | string {
   return '--until is a local <HH:MM>, or an ISO 8601 instant with Z or an offset, and nothing else';
 }
 
-function invocation(io: Io, message: string): number {
-  io.stderr(`team hold: ${message}\n${USAGE}`);
+function invocation(io: Io, message: string, json: boolean): number {
+  if (json) {
+    writeJsonError(io, 'hold.invocation', message, null);
+  } else {
+    io.stderr(`team hold: ${message}\n${USAGE}`);
+  }
   // exit: hold.invocation
   return 2;
 }

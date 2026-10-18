@@ -48,7 +48,7 @@ describe('the --seats rows and roster keys', () => {
 
     const ioJson = testIo(dir, { kind: 'owner' });
     expect(await runList(['--seats', '--json'], ioJson, sources)).toBe(0);
-    const roster = (JSON.parse(ioJson.out) as ListSeatsRow[])[0]!.roster;
+    const roster = (JSON.parse(ioJson.out) as { rows: ListSeatsRow[] }).rows[0]!.roster;
     expect(roster[0]).toEqual({ name: 'seen', status: null, id: null, cli: null, model: null, pane: null });
     expect(roster[1]).toEqual({ name: 'brief', status: 'idle' });
     expect(roster[2]).toEqual({ name: 'odd', status: 'working', id: null, pane: 'w9:p3' });
@@ -92,7 +92,7 @@ describe('the --seats rows and roster keys', () => {
 
     const ioJson = testIo(dir, { kind: 'owner' });
     expect(await runList(['--seats', '--json'], ioJson, sources)).toBe(0);
-    const row = (JSON.parse(ioJson.out) as ListSeatsRow[])[0]!;
+    const row = (JSON.parse(ioJson.out) as { rows: ListSeatsRow[] }).rows[0]!;
     expect(row.seats).toBe('1');
     expect(row.activity).toBe('1 ready / 0 working / 0 waiting / 0 stopped');
     expect(row.active).toEqual({ ready: 1, working: 0, waiting: 0, stopped: 0 });
@@ -113,7 +113,7 @@ describe('the --seats rows and roster keys', () => {
 
     const ioJson = testIo(dir, { kind: 'owner' });
     expect(await runList(['--seats', '--json'], ioJson, sources)).toBe(0);
-    const row = (JSON.parse(ioJson.out) as ListSeatsRow[])[0]!;
+    const row = (JSON.parse(ioJson.out) as { rows: ListSeatsRow[] }).rows[0]!;
     expect(row.activity).toBe('?');
     expect(row.active).toBeNull();
     expect(row.roster).toEqual([]);

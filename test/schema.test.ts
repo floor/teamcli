@@ -21,7 +21,7 @@ type Errors = string[];
 const KNOWN = new Set([
   '$schema', '$id', 'title', 'description', '$comment', 'deprecated',
   'type', 'const', 'enum', 'required', 'properties', 'additionalProperties', 'propertyNames',
-  'items', 'minItems', 'minLength', 'maxLength', 'pattern',
+  'items', 'minItems', 'uniqueItems', 'minLength', 'maxLength', 'pattern',
   'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum',
   'allOf', 'anyOf', 'oneOf', 'if', 'then', 'else', 'not',
 ]);
@@ -79,6 +79,10 @@ function check(schema: Schema, value: unknown, at: string, root: Schema): Errors
     value.forEach((item, index) => errors.push(...check(schema.items as Schema, item, `${at}[${index}]`, root)));
   }
   if (typeof schema.minItems === 'number' && Array.isArray(value) && value.length < schema.minItems) note(`has fewer than ${schema.minItems} items`);
+  if (schema.uniqueItems === true && Array.isArray(value)) {
+    const seen = new Set(value.map((one) => JSON.stringify(one)));
+    if (seen.size !== value.length) note('repeats an item it must not');
+  }
   if (typeof value === 'string') {
     if (typeof schema.minLength === 'number' && value.length < schema.minLength) note(`is shorter than ${schema.minLength}`);
     if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) note(`is longer than ${schema.maxLength}`);

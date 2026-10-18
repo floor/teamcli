@@ -1,5 +1,7 @@
 import { format } from './format.ts';
 import { project } from './project.ts';
+import { inProject } from './in_project.ts';
+import { projectLead } from './project_lead.ts';
 import { entity } from './entity.ts';
 import { lobby } from './lobby.ts';
 import { trust } from './trust.ts';
@@ -18,6 +20,8 @@ import { budgets } from './budgets.ts';
 import { watch } from './watch.ts';
 import { watchChecks } from './watch-checks.ts';
 import { seats } from './seats.ts';
+import { deliveryOrder } from './delivery_order.ts';
+import { policies } from './policies.ts';
 import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
 import { grant } from './grant.ts';
@@ -29,17 +33,27 @@ import type { Section } from './section.ts';
  * Every section of the team file, in one order. The owner-only list is generated from this order
  * (`SECTIONS.filter(s => s.owner).map(s => s.name)`), and that order feeds the approval digest,
  * so it is part of the contract: the owner sections appear here exactly as the digest reads them.
- * The validator walks the list running each section once every section it names in `after` has
+ * The validator walks the list running each section once every section it reads (`after`) has
  * run, which is the order `validate.ts` read them in before the sections were modules.
  */
 export const SECTIONS: readonly Section[] = [
   format,
   project,
+  // The project the team makes its own above; the project it sits in here. Non-owner and
+  // additive, like `entity` and `lobby` below: absent in every file written before Phase 0b.
+  inProject,
+  // The team-side `leads: true`: set by the one team that leads the project `in_project` names,
+  // and read by the registry's writers. Non-owner and additive too, and it reads `in_project`, so
+  // it runs after it.
+  projectLead,
   // Where this team's lobby lives. Both non-owner and additive: a file that sets neither keeps the
   // machine-global lobby, so they change no approval digest and sit outside the owner-section list.
   entity,
   lobby,
   trust,
+  // The 0.4 line's trust-dialog setting, kept as a known deprecated field: read and ignored, so
+  // it grants nothing and changes no approval digest. It runs without an `after` and its report
+  // is printed by `team check` alone.
   dialogs,
   limits,
   machine,
@@ -57,6 +71,13 @@ export const SECTIONS: readonly Section[] = [
   watch,
   watchChecks,
   seats,
+  // The file's word on how a send to its seats walks: non-owner and additive, so a file written
+  // before it keeps every digest and approval it had, and it changes no approval fingerprint.
+  // The seat-level word sits on a seat and is read by the seats section above.
+  deliveryOrder,
+  // Owner-signed team-level policies (Kernel amendment 02 §2.12). Non-owner in the section list
+  // so existing approval digests stay intact; each entry carries its own Ed25519 signature.
+  policies,
   releases,
   // The sections before `tasks` keep the relative order records were written with.
   tasks,

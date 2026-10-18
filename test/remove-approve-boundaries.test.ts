@@ -140,6 +140,7 @@ function world() {
   const panes = new Map<string, { text: string; agent: boolean }>();
   const events: string[] = [];
   const renames: string[] = [];
+  const read = new Set<string>();
   let clock = NOW.getTime();
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
@@ -172,7 +173,15 @@ function world() {
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
     agents: () => [],
-    paneText: (_session, pane) => panes.get(pane)?.text ?? '',
+    // The first look at a pane's screen: the idle wait's first read. Recorded so the scene
+    // can tell a concurrent mount (every launch before any look) from a serial one.
+    paneText(_session, pane) {
+      if (!read.has(pane)) {
+        read.add(pane);
+        events.push(`read:${pane}@${at()}`);
+      }
+      return panes.get(pane)?.text ?? '';
+    },
     foreground: () => ['claude'],
     sleep: async (ms) => {
       events.push(`sleep:${ms}@${at()}`);
@@ -293,13 +302,19 @@ describe('a granted agent mounts the team with no approval record', () => {
     // roster, itself included, and every seat is named.
     expect(made.renames).toHaveLength(5);
     expect(made.renames.slice().sort()).toEqual(['lead', 'builder-1', 'builder-2', 'tester-1', 'tester-2'].sort());
-    expect(made.launch.agentPanes('acme')).toHaveLength(5);
-    // Concurrent: every seat's launch began before any seat was named — no seat
-    // waited behind another seat's start.
-    const firstRename = made.events.findIndex((line) => line.startsWith('rename:'));
+    // The five seats and the watch's own pane, which the same run starts.
+    expect(made.launch.agentPanes('acme')).toHaveLength(6);
+    // Concurrent: every seat's launch began before any seat's pane was first read at its
+    // prompt — no seat waited behind another seat's start. Each pane is named at create now,
+    // so the renames come first; the sixth launch is the watch's pane, still started after
+    // the seats are named.
+    const reads = made.events.map((line, at) => (line.startsWith('read:') ? at : -1)).filter((at) => at >= 0);
+    const renamesAt = made.events.map((line, at) => (line.startsWith('rename:') ? at : -1)).filter((at) => at >= 0);
     const launches = made.events.map((line, at) => (line.startsWith('launch:') ? at : -1)).filter((at) => at >= 0);
-    expect(launches).toHaveLength(5);
-    expect(firstRename).toBeGreaterThan(launches.at(-1)!);
+    expect(launches).toHaveLength(6);
+    expect(reads.length).toBeGreaterThanOrEqual(5);
+    expect(reads[0]).toBeGreaterThan(launches[4]!);
+    expect(renamesAt.at(-1)).toBeLessThan(launches[5]!);
     // Ready inside the budget on the clock the mount itself reports.
     expect(made.clock - NOW.getTime()).toBeLessThan(30_000);
     // No record was written anywhere: the mount never created an approval store.
@@ -336,20 +351,23 @@ describe('an agent the grant does not name', () => {
     const dry = caller();
     expect(await runUp(['--dry-run'], dry, sources)).toBe(1);
     expect(dry.err).toBe('');
-    expect(dry.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
-    expect(dry.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(dry.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
+    expect(dry.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(made.events.filter((line) => line.startsWith('create:'))).toEqual([]);
     expect(audits).toEqual([]);
   });
 });
 
 describe('the approve command is gone', () => {
-  test('the dispatch table carries no approve and the command answers unknown', async () => {
+  test('the dispatch table carries no approve and the command says it was removed', async () => {
     expect(Object.keys(commands)).not.toContain('approve');
     const io = testIo(base, owner);
     const code = await main(['approve'], io);
     expect(code).toBe(2);
-    expect(io.err).toContain('unknown command "approve"');
+    expect(io.err).toBe(
+      'team approve was removed in 0.5.0: the live team file is the record, and nothing needs approving; see UPGRADE-0.5.md\n',
+    );
+    expect(io.out).toBe('');
   });
 
   test('the exit-code contract keeps no approve row and carries the deny row', () => {

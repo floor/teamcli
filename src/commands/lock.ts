@@ -1,4 +1,5 @@
 import { readArgs } from '../args.ts';
+import { withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
@@ -11,8 +12,12 @@ import {
   WAIT_MAX_SECONDS,
   type LockSources,
 } from '../lock/machine.ts';
+import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 
-export const USAGE = 'Usage: team lock <name> [--for <text>] [--wait <seconds>]\n';
+export const USAGE = `Usage: team lock <name> [--for <text>] [--wait <seconds>] [--json]
+
+Exits 0 when the lock is taken, 1 when it is already held or cannot be written, 2 when the invocation or project can't be read.
+`;
 
 export const lock: Command = (argv, io) => runLock(argv, io, realLockSources);
 export default lock;
@@ -24,19 +29,26 @@ export default lock;
  */
 export async function runLock(argv: string[], io: Io, sources: LockSources = realLockSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['for', 'wait'], []);
-  if (args.error) return invocation(out, args.error);
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['for', 'wait'], ['json']);
+  if (args.error) return invocation(out, args.error, json);
   const name = args.rest.length === 1 ? args.rest[0] : undefined;
   if (!name) {
     const extra = args.rest[1];
-    return invocation(out, extra === undefined ? 'a <name> is required' : `unexpected "${plainLine(extra)}"`);
+    return invocation(out, extra === undefined ? 'a <name> is required' : `unexpected "${plainLine(extra)}"`, json);
   }
-  if (!validLockName(name)) return invocation(out, nameProblem(name));
+  if (!validLockName(name)) return invocation(out, nameProblem(name), json);
   const wait = waitOf(args.values.wait);
-  if (!wait.ok) return invocation(out, wait.message);
+  if (!wait.ok) return invocation(out, wait.message, json);
   const identity = resolveIdentity(io, sources);
   if (!identity.ok) {
-    out.stderr(`team lock: ${identity.message}\n`);
+    // `team lock` takes no `--file`, so the no-repository refusal must not offer one.
+    const message = withoutFileOffer(identity.message);
+    if (json) {
+      writeJsonError(out, 'lock.project', message, null);
+    } else {
+      out.stderr(`team lock: ${message}\n`);
+    }
     // exit: lock.project
     return 2;
   }
@@ -49,24 +61,49 @@ export async function runLock(argv: string[], io: Io, sources: LockSources = rea
     sleep: sources.sleep,
     waitSeconds: wait.seconds,
   });
-  if (outcome.kind === 'bad-name') return invocation(out, nameProblem(name));
+  if (outcome.kind === 'bad-name') return invocation(out, nameProblem(name), json);
   if (outcome.kind === 'taken') {
-    out.stdout(takenText(name, outcome.who));
+    if (json) {
+      writeJson(out, 'team.lock', {
+        format: 1,
+        dry_run: false,
+        status: 'taken',
+        action_summary: `${name}: taken`,
+        project: outcome.who.team,
+        target: name,
+        value: outcome.who.run === '' ? null : outcome.who.run,
+        holder: outcome.who,
+      });
+    } else {
+      out.stdout(takenText(name, outcome.who));
+    }
     // exit: lock.taken
     return 0;
   }
   if (outcome.kind === 'held') {
-    out.stderr(`${outcome.line}\n`);
+    if (json) {
+      writeJsonError(out, 'lock.held', outcome.line, null);
+    } else {
+      out.stderr(`${outcome.line}\n`);
+    }
     // exit: lock.held
     return 1;
   }
-  out.stderr(`team lock: ${outcome.message}\n`);
+  if (json) {
+    writeJsonError(out, 'lock.io', outcome.message, null);
+  } else {
+    out.stderr(`team lock: ${outcome.message}\n`);
+  }
   // exit: lock.io
   return 1;
 }
 
-function invocation(io: Io, message: string): number {
-  io.stderr(`team lock: ${message}\n${USAGE}`);
+function invocation(io: Io, message: string, json: boolean): number {
+  if (json) {
+    writeJsonError(io, 'lock.invocation', message, null);
+  } else {
+    io.stderr(`team lock: ${message}\n${USAGE}`);
+  }
   // exit: lock.invocation
   return 2;
 }

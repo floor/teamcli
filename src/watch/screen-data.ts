@@ -23,6 +23,11 @@ export type Rule = {
   belowLastRule?: RegExp;
   /** The window has no composer rule: the dialog is the pane. */
   withoutRule?: boolean;
+  /** `any` and `all` are read on the live region only — the composer's own rows, rules and
+   *  footers, and the newest turn of transcript above them — so a sentence the window has
+   *  scrolled past is not the dialog. A window whose composer cannot be read keeps the whole
+   *  window, as a rule without this field does. */
+  live?: true;
   noneAfter?: { anchor: LinePattern; patterns: LinePattern[] };
   /** Every non-blank row after the block's last anchor must match one of these: the block's
    *  own tail, with nothing of another dialog's after it. */
@@ -112,6 +117,10 @@ type StatusThenOne = {
   /** Rows the pane draws of its own between the input row and the status row, declared
    *  only where a capture shows them. They are not the person's text. */
   ownRows?: RegExp[];
+  /** The pane's own chrome row under the status line, declared only where a capture shows it.
+   *  When set, a line under the status row is chrome only when it matches; any other line
+   *  leaves the status row unread, so text the seat prints can never stand in for the row. */
+  chrome?: RegExp[];
 };
 type TwoRules = {
   mode: 'two-rules-footer-below';
@@ -152,4 +161,7 @@ export type ScreenData = {
   working?: Stage;
   composer: Composer;
   profile?: ScreenProfile;
+  /** Set by the loader when the reading comes from a `screen_module`: the module reads the
+   *  whole visible screen, where the data patterns read the pane's last 20 lines. */
+  whole_screen?: true;
 };

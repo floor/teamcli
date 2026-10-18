@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/seats.schema.json",
+  "title": "team seats --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "project",
+    "session",
+    "seats"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.seats"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": "string",
+      "minLength": 1
+    },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "seats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "id",
+          "role",
+          "cli",
+          "model",
+          "effort",
+          "status",
+          "state",
+          "state_source",
+          "last_active",
+          "pane",
+          "launch_line"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nickname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cli": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state_source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blind": {
+            "type": "boolean",
+            "const": true
+          },
+          "last_active": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pane": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "launch_line": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dev_mode": {
+            "type": "boolean"
+          },
+          "start_cwd": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

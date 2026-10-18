@@ -1,15 +1,18 @@
-import { trustPolicy } from '../file/dialogs.ts';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
+import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
-import { readScreen, type Screen } from '../watch/screen.ts';
+import { pluralCount } from '../output/text.ts';
+import { watchLabel } from '../watch/pane.ts';
+import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
@@ -44,10 +47,11 @@ export const APPROVAL_REPAIR = 'the live file is what the commands read';
  * re-derive from the repair's wording, both set where the difference is created:
  *
  * - `needs`: the repair names a command that refuses while no approval is in force.
- *   Confirmed from the commands themselves: `team up` (`up.ts`), `team add` (`add.ts`), and
- *   `team worktree` (`worktree.ts`) each refuse on the standing before they do anything. Such a
- *   repair waits for `APPROVAL_REPAIR`, and is printed with `(after: …)` while the approval
- *   difference is there. A difference is never marked for a command that does not refuse.
+ *   Confirmed from the commands themselves: `team up` (`up.ts`), `team add` (`add.ts`),
+ *   `team restart` (`restart.ts`) and `team worktree` (`worktree.ts`) each refuse on the
+ *   standing before they do anything. Such a repair waits for `APPROVAL_REPAIR`, and is printed
+ *   with `(after: …)` while the approval difference is there. A difference is never marked for
+ *   a command that does not refuse.
  * - `owner`: the repair is one of the owner's commands (the summary line counts these).
  *
  * `approval` marks the approval difference itself: it is the precondition, printed first.
@@ -62,13 +66,11 @@ export type Difference = {
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
 
-export const WATCH_LABEL = 'watchdog';
-
 /** The one row a seat shows while it waits, ahead of the ordinary launch-stopped and unnamed rows. */
 function waitingView(
   name: string,
   recorded: SeatState | undefined,
-  team: TeamFile,
+  trust: boolean,
 ): { state: string; stored: string; difference: Difference } | null {
   const waiting = recorded?.waiting;
   if (!waiting) return null;
@@ -78,22 +80,26 @@ function waitingView(
       stored: 'trust-sent-recovery',
       difference: {
         what: `${name}: trust sent; recovery required`,
-        repair: 'the owner runs team up',
+        repair: 'team up',
         needs: 'approve',
-        owner: true,
       },
     };
   }
   const phrase = `waiting for owner (${waiting.classification})`;
-  const answer = trustPolicy(team) === 'coordinator' && waiting.classification === 'trust';
+  const isTrust = waiting.classification === 'trust';
+  const answer = trust && isTrust;
+  const repair = answer
+    ? `team answer ${name} trust, or the owner answers the dialog in the pane, then team up`
+    : isTrust
+      ? 'the owner answers the dialog in the pane, then team up'
+      : 'the owner runs team up';
   return {
     state: phrase,
     stored: 'waiting-owner',
     difference: {
       what: `${name}: ${phrase}`,
-      repair: answer ? `team answer ${name} trust` : 'the owner runs team up',
+      repair,
       needs: 'approve',
-      ...(answer ? {} : { owner: true as const }),
     },
   };
 }
@@ -134,7 +140,9 @@ function limitMark(seat: Seat | undefined, screen: Screen): string | null {
 // Compares the file and the state with the live session. Pure over what is handed in, but for
 // one probe: a seat reads `socket` only while the session's socket file is really there, so the
 // filesystem decides that word. `watch` is the watch values in force — the live file's under a
-// verified standing, the defaults under none — so the verdict reads one object.
+// verified standing, the defaults under none — so the verdict reads one object. `trust` is
+// whether the owner's live grant turns trust answering on for this team: the caller passes
+// `dialogsTrustInForce`, so the repair line offers `team answer` only while the setting is on.
 export function compare(
   team: TeamFile,
   session: string,
@@ -143,6 +151,7 @@ export function compare(
   now: Date = new Date(),
   watch: TeamFile['watch'] = team.watch,
   sockets: string | readonly string[] = defaultSocketsDirs(),
+  trust = false,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -184,19 +193,25 @@ export function compare(
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
           : cannotTie(seat, agent.pane, live.screens[agent.pane], team);
         rows.push({ ...found.row, ...idField });
-        differences.push(found.difference);
+        if (found.difference) differences.push(found.difference);
         if (found.note) notes.push(found.note);
         continue;
       }
       // The conversation came back without the program the launch line names. Said here; the
-      // seat is still the running one, and nothing in this report starts it.
+      // seat is still the running one, and nothing in this report starts it. For a lead's own
+      // seat no per-seat restart is offered (a lead is never removed or restarted alone), and
+      // the whole-team restart it would take is never the repair: the note says what the
+      // process is, and the lead reads it.
       if (continuity === 'restored' && usesLauncher(seat)) {
-        differences.push({
-          what: `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched`,
-          repair: seatRestartRepair(team, seat.name),
-          needs: 'approve',
-          owner: true,
-        });
+        if (isLeadSeat(team, seat.name)) {
+          notes.push(`${seat.name}: started by a launcher; team cannot tell its process from the one it launched`);
+        } else {
+          differences.push({
+            what: `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched`,
+            repair: `team restart ${seat.name}`,
+            needs: 'approve',
+          });
+        }
       }
       // A ready seat with no identity is not relaunched by `up` when its model differs. A seat
       // still at launch is: `up` finishes it, so that repair stays `team up`. A bare shell is
@@ -207,7 +222,7 @@ export function compare(
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
       const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified);
-      const held = waitingView(seat.name, recorded, team);
+      const held = waitingView(seat.name, recorded, trust);
       if (held) {
         rows.push({
           name: seat.name,
@@ -238,18 +253,22 @@ export function compare(
       }
       const screenText = live.screens[agent.pane];
       const screen = readScreen(seat.cli, screenText);
+      // A profile herdr cannot report is read from its own screen: the row's word is the
+      // screen's, and herdr's `unknown` is not a state to show or a note to print. A screen no
+      // profile reads leaves herdr's word standing, and the note with it.
+      const theirWord = herdrUnreliable(seat.cli);
+      const word = theirWord ? screenWord(screen) : agent.status;
       // `done` is as free as `idle`: delivery types into either one (`deliver.ts`), and the
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
-      const quiet = agent.status === 'idle' || agent.status === 'done';
+      const quiet = word === 'idle' || word === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
-      const isPermission = screen.kind === 'permission' || screen.kind === 'trust';
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
       const limit = quiet ? limitMark(seat, screen) : null;
       const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : limit ?? '';
-      const stateText = `${agent.status}${mark}${seat.parked ? ', parked' : ''}`;
+      const stateText = `${word}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
         ...idField,
@@ -258,6 +277,16 @@ export function compare(
         pane: agent.pane,
         ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
+      if (
+        !(theirWord && screen.kind !== 'unknown') &&
+        agent.status !== '' &&
+        agent.status !== 'idle' &&
+        agent.status !== 'done' &&
+        agent.status !== 'working' &&
+        agent.status !== 'blocked'
+      ) {
+        notes.push(`${seat.name}: herdr reports the status "${agent.status}"`);
+      }
       if (seat.stopped) {
         differences.push({
           what: `${seat.name} is marked stopped in the file and is running`,
@@ -270,17 +299,19 @@ export function compare(
       if (isUnsent && recorded?.stage === 'named' && !unidentifiedMismatch) {
         differences.push({
           what: `${seat.name}: its launch stopped at "named", and it holds text in its input box that was never sent`,
-          repair: 'the owner clears or sends it in the pane, then runs team up (it resumes the launch)',
+          repair: 'clear or send it in the pane, then team up (it resumes the launch)',
           needs: 'approve',
-          owner: true,
         });
       } else {
         if (recorded && recorded.stage !== 'ready' && !unidentifiedMismatch) {
+          // `team up` is the map's `owner-or-leads` row, so a lead runs this repair as well as the
+          // owner; the difference is not counted among the owner's. A relaunch that closed its
+          // seat and never reached ready leaves exactly this record, and the lead who watches the
+          // team is the one who repairs it.
           differences.push({
             what: `${seat.name}: its launch stopped at "${recorded.stage}"`,
-            repair: 'the owner runs team up (it resumes the launch)',
+            repair: 'team up (it resumes the launch)',
             needs: 'approve',
-            owner: true,
           });
         }
         if (isUnsent) {
@@ -291,12 +322,19 @@ export function compare(
           });
         }
       }
-      if (isPermission) {
-        differences.push({
-          what: `${seat.name} waits at a permission prompt: its owner's to answer`,
-          repair: 'the owner answers it in the pane',
-          owner: true,
-        });
+      if (screen.kind === 'permission' || screen.kind === 'trust') {
+        // A permission prompt is the pane's lead's to answer, in the pane; a trust prompt stays
+        // the owner's alone (its live `dialogs.trust` grant).
+        differences.push(screen.kind === 'permission'
+          ? {
+              what: `${seat.name} waits at a permission prompt: its lead's to answer, or its owner's`,
+              repair: 'its lead answers it in the pane',
+            }
+          : {
+              what: `${seat.name} waits at a trust prompt: the owner's to answer`,
+              repair: 'the owner answers it in the pane',
+              owner: true,
+            });
       }
       if (recorded?.rules === 'undelivered') {
         differences.push({
@@ -337,7 +375,7 @@ export function compare(
       claimed.add(held);
       const found = cannotTie(seat, held, live.screens[held], team);
       rows.push({ ...found.row, ...idField });
-      differences.push(found.difference);
+      if (found.difference) differences.push(found.difference);
       if (found.note) notes.push(found.note);
       continue;
     }
@@ -351,7 +389,7 @@ export function compare(
     // A waiting record is read only of a pane that may still hold the seat: one that lost the
     // launched process reads `missing` or `restored, not launched by team` above — never
     // `waiting for owner`, and never under the declared model for a replaced one.
-    const waiting = recorded?.pane ? waitingView(seat.name, recorded, team) : null;
+    const waiting = recorded?.pane ? waitingView(seat.name, recorded, trust) : null;
     if (waiting && recorded?.pane) {
       rows.push({
         name: seat.name,
@@ -397,7 +435,11 @@ export function compare(
     });
     differences.push({
       what: `${seat.name} is in the file and is not running`,
-      repair: anyRunning ? `team add ${seat.name}` : 'the owner runs team up',
+      // With the session up, `team restart <seat>` is the per-seat repair the map admits to the
+      // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
+      // this line must be handed a command it can run. With nothing running the session itself is
+      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
+      repair: anyRunning ? `team restart ${seat.name}` : 'team up',
       needs: 'approve',
       ...(anyRunning ? {} : { owner: true as const }),
     });
@@ -414,7 +456,7 @@ export function compare(
     const agent = live.agents.find((candidate) => candidate.name === name);
     if (agent) {
       claimed.add(agent.pane);
-      const held = waitingView(name, recorded, team);
+      const held = waitingView(name, recorded, trust);
       if (held) {
         rows.push({
           name,
@@ -433,25 +475,31 @@ export function compare(
       // either. The cli comes from the like-seat, as the model string does; a like-seat gone reads
       // nothing, and the suffix is true then too.
       const likeCli = likeSeat?.cli ?? '';
-      const quiet = agent.status === 'idle' || agent.status === 'done';
       const tempScreen = readScreen(likeCli, live.screens[agent.pane]);
+      const tempWord = herdrUnreliable(likeCli) ? screenWord(tempScreen) : agent.status;
+      const quiet = tempWord === 'idle' || tempWord === 'done';
       const unread = quiet && tempScreen.kind === 'unknown';
       // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
       const limit = quiet ? limitMark(likeSeat, tempScreen) : null;
       rows.push({
         name,
         ...idField,
-        state: `${agent.status}${unread ? ' (screen not recognised)' : limit ?? ''}, temporary`,
+        state: `${tempWord}${unread ? ' (screen not recognised)' : limit ?? ''}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
       if (tempScreen.kind === 'permission' || tempScreen.kind === 'trust') {
-        differences.push({
-          what: `${name} waits at a permission prompt: its owner's to answer`,
-          repair: 'the owner answers it in the pane',
-          owner: true,
-        });
+        differences.push(tempScreen.kind === 'permission'
+          ? {
+              what: `${name} waits at a permission prompt: its lead's to answer, or its owner's`,
+              repair: 'its lead answers it in the pane',
+            }
+          : {
+              what: `${name} waits at a trust prompt: the owner's to answer`,
+              repair: 'the owner answers it in the pane',
+              owner: true,
+            });
       }
       notes.push(`${name} is temporary, until ${recorded.temporary.until}`);
     } else {
@@ -460,7 +508,7 @@ export function compare(
   }
 
   for (const agent of live.agents) {
-    if (claimed.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
+    if (claimed.has(agent.pane) || labels.get(agent.workspace) === watchLabel(team.project)) continue;
     differences.push({
       what: `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`,
       repair: 'add the seat to the file, or close it',
@@ -473,6 +521,20 @@ export function compare(
     }
   }
 
+  // The watch the state records, as one line: where it runs, whose process it is once a pass has
+  // recorded one, and how old its last heartbeat is. The difference below says when that is too
+  // old; this note is what stands either way.
+  if (state.watch) {
+    const beat = Date.parse(state.watch.heartbeat);
+    const seconds = Number.isFinite(beat) ? Math.max(0, Math.round((now.getTime() - beat) / 1000)) : null;
+    const age = seconds === null
+      ? 'never recorded'
+      : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
+    const where = state.watch.pane ? `pane ${state.watch.pane}` : 'pane not recorded';
+    const whose = state.watch.pid !== undefined ? `pid ${state.watch.pid}` : 'pid not recorded yet';
+    notes.push(`watch: ${where}, ${whose}, last heartbeat ${age}`);
+  }
+
   if (live.running && anyRunning) {
     const beat = state.watch ? Date.parse(state.watch.heartbeat) : NaN;
     if (!state.watch) {
@@ -480,7 +542,7 @@ export function compare(
     } else if (!(now.getTime() - beat <= 2 * watch.interval * 1000)) {
       const minutes = Number.isFinite(beat) ? Math.round((now.getTime() - beat) / 60_000) : null;
       differences.push({
-        what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${minutes} minute(s) ago`}`,
+        what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${pluralCount(minutes, 'minute')} ago`}`,
         repair: `team watch --session ${session}`,
       });
     }
@@ -509,7 +571,7 @@ function cannotTie(
   pane: string,
   screen: string | undefined,
   team: TeamFile,
-): { row: Row; difference: Difference; note?: string } {
+): { row: Row; difference?: Difference; note?: string } {
   const running = seatModel(seat, screen);
   const launcher = usesLauncher(seat);
   const shown = running
@@ -525,13 +587,23 @@ function cannotTie(
   // A model that is not the file's, or a launch line that names a launcher, is the report.
   // The row stays `-`: the declared model is not shown as the one running. Nothing starts the seat.
   if (differs || launcher) {
+    // A lead's own seat is never restarted alone, and the whole-team restart is not the repair:
+    // the note says what the process is, with no command that stops the team. An ordinary seat's
+    // restart relaunches it in a fresh workspace, so it does not need this pane.
+    if (isLeadSeat(team, seat.name)) {
+      return {
+        row,
+        note: launcher && !differs
+          ? `${seat.name}: started by a launcher; team cannot tell its process from the one it launched`
+          : restoredProcessWhat(seat, running, launcher),
+      };
+    }
     return {
       row,
       difference: {
         what: restoredProcessWhat(seat, running, launcher),
-        repair: seatRestartRepair(team, seat.name),
+        repair: `team restart ${seat.name}`,
         needs: 'approve',
-        owner: true,
       },
     };
   }
@@ -584,9 +656,11 @@ function notLaunched(
       what: verdict === 'gone'
         ? `${seat.name}: its pane runs no CLI (the CLI ended or the session was restored)`
         : `${seat.name}: the process in its pane is not the one team launched; nothing checks its model, account or rules`,
-      repair: 'the owner runs team up',
+      // The same repair `up` makes: it closes the pane without typing and launches the seat
+      // fresh. Admitted by the map's `up` row for the owner and the team's leads alike, so it is
+      // not counted among the owner's.
+      repair: 'team up',
       needs: 'approve',
-      owner: true,
     },
     // A note, not a difference: it names what the screen shows and does not change the exit.
     ...(running
@@ -612,7 +686,8 @@ function modelOf(
   /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
   unidentified: boolean,
 ): string {
-  const running = seatModel(seat, live.screens[agent.pane]);
+  const screen = live.screens[agent.pane];
+  const running = seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.
@@ -623,21 +698,36 @@ function modelOf(
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }
-  if (!modelDiffers(running, seat)) return seat.display;
+  // What the pane shows against what the file promises, effort included: the word the screen
+  // prints is the observed one, and a screen printing none leaves the file's word standing —
+  // the rule the label's own line follows — so only a word actually seen can differ from it.
+  // When the file declares no effort, a seen word is not a drift. When only the effort drifts,
+  // the line names the effort alone so it never echoes the model in another word order.
+  const seen = observedEffort(seat.cli, screen);
+  const modelDrifts = modelDiffers(running, seat);
+  const effortDrifts = seen !== undefined && seat.effort !== undefined && seen !== seat.effort;
+  if (!modelDrifts && !effortDrifts) return seat.display;
   const declared = declaredModel(seat);
+  const observed = `${running.model} ${running.version}${seen ? ` ${seen}` : ''}`;
+  const file = `${declared}${seat.effort ? ` ${seat.effort}` : ''}`;
+  const detail = modelDrifts
+    ? `running ${observed}, file says ${file}`
+    : `effort ${seen}, file says ${seat.effort}`;
   differences.push(unidentified
     ? {
-        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}; its process was never recorded`,
+        what: `${seat.name}: ${detail}; its process was never recorded`,
         repair: unidentifiedRepair(team, seat.name),
         needs: 'approve',
         owner: true,
       }
     : {
-        what: `${seat.name} runs ${running.model} ${running.version}; the file says ${declared}`,
+        what: `${seat.name}: ${detail}`,
         repair: modelMismatchRepair(team, seat.name),
         needs: 'approve',
       });
-  return `${running.model} ${running.version} (file: ${seat.display})`;
+  // The column is the running model's when that is what drifted; an effort alone does not
+  // change it, the model on the pane is still the file's.
+  return modelDrifts ? `${running.model} ${running.version} (file: ${seat.display})` : seat.display;
 }
 
 /** The model-mismatch repair. A lead cannot be removed, so it gets the same whole-team

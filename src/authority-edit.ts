@@ -1,12 +1,14 @@
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describeCaller, isOwner, walkCaller } from './caller.ts';
-import { findRoot, loadTeamFile } from './file/load.ts';
+import { findRoot, loadTeamFile, withoutFileOffer } from './file/load.ts';
 import type { TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
 import { writeTeamFile } from './file/write.ts';
 import { cleanedIo, type Io } from './io.ts';
+import { plainText } from './launch/plain.ts';
+import { writeJson, writeJsonError } from './output/index.ts';
 import { withLock } from './state.ts';
 import { parseYaml, type YamlNode } from './yaml.ts';
 
@@ -19,6 +21,7 @@ export type AuthorityEdit =
 export type AuthorityEditOptions = {
   home?: string;
   dryRun?: boolean;
+  json?: boolean;
   /** Tests only: change the fixture after planning, before the final file check. */
   beforeWrite?: () => void;
 };
@@ -33,9 +36,15 @@ export async function runAuthorityEdit(
   options: AuthorityEditOptions = {},
 ): Promise<AuthorityEditResult> {
   const io = cleanedIo(rawIo);
+  const json = Boolean(options.json);
   const caller = walkCaller(io);
   if (!isOwner(caller)) {
-    io.stderr(`team ${command}: only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}\n`);
+    const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+    if (json) {
+      writeJsonError(rawIo, `${command}.refused`, plainText(msg), `the owner runs \`team ${command}\` from a terminal outside herdr`, 1, 'owner-only');
+    } else {
+      io.stderr(`team ${command}: ${msg}\n`);
+    }
     return 'refused';
   }
 
@@ -46,11 +55,21 @@ export async function runAuthorityEdit(
     requireRegularFile(join(root, '.agents', 'team.yaml'));
     loaded = loadTeamFile(io.cwd, { home });
   } catch (error) {
-    io.stderr(`team ${command}: ${message(error)}\n`);
+    const msg = withoutFileOffer(message(error));
+    if (json) {
+      writeJsonError(rawIo, `${command}.invalid`, plainText(msg), null);
+    } else {
+      io.stderr(`team ${command}: ${msg}\n`);
+    }
     return 'invalid';
   }
   if (!loaded.ok) {
-    io.stderr(`team ${command}: ${loaded.errors[0]?.message ?? 'the team file cannot be read'}\n`);
+    const msg = withoutFileOffer(loaded.errors[0]?.message ?? 'the team file cannot be read');
+    if (json) {
+      writeJsonError(rawIo, `${command}.invalid`, plainText(msg), null);
+    } else {
+      io.stderr(`team ${command}: ${msg}\n`);
+    }
     return 'invalid';
   }
 
@@ -59,19 +78,37 @@ export async function runAuthorityEdit(
     next = editedText(loaded.text, loaded.team, edit);
     const checked = validateTeamFile(next, { home, root: loaded.root });
     if (!checked.ok) {
-      io.stderr(`team ${command}: ${checked.errors[0]?.message ?? 'invalid authority record'}\n`);
+      const msg = checked.errors[0]?.message ?? 'invalid authority record';
+      if (json) {
+        writeJsonError(rawIo, `${command}.invalid`, plainText(msg), null);
+      } else {
+        io.stderr(`team ${command}: ${msg}\n`);
+      }
       return 'invalid';
     }
   } catch (error) {
-    io.stderr(`team ${command}: ${message(error)}\n`);
+    const msg = message(error);
+    if (json) {
+      writeJsonError(rawIo, `${command}.invalid`, plainText(msg), null);
+    } else {
+      io.stderr(`team ${command}: ${msg}\n`);
+    }
     return 'invalid';
   }
   if (next === loaded.text) {
-    io.stdout(`${command}: unchanged\n`);
+    if (json) {
+      writeAuthorityJson(rawIo, command, edit, loaded.team, Boolean(options.dryRun), 'unchanged', `${command}: unchanged`);
+    } else {
+      io.stdout(`${command}: unchanged\n`);
+    }
     return 'ok';
   }
   if (options.dryRun) {
-    io.stdout(`${command}: would change\n`);
+    if (json) {
+      writeAuthorityJson(rawIo, command, edit, loaded.team, true, 'dry-run', `${command}: would change`);
+    } else {
+      io.stdout(`${command}: would change\n`);
+    }
     return 'ok';
   }
 
@@ -87,23 +124,94 @@ export async function runAuthorityEdit(
       if (!wrote.ok) throw new Error(wrote.errors[0]?.message ?? 'the team file cannot be written');
     });
   } catch (error) {
-    io.stderr(`team ${command}: ${message(error)}\n`);
+    const msg = message(error);
+    if (json) {
+      writeJsonError(rawIo, `${command}.refused`, plainText(msg), null);
+    } else {
+      io.stderr(`team ${command}: ${msg}\n`);
+    }
     return 'refused';
   }
-  io.stdout(`${command}: updated\n`);
+  if (json) {
+    writeAuthorityJson(rawIo, command, edit, loaded.team, false, 'updated', `${command}: updated`);
+  } else {
+    io.stdout(`${command}: updated\n`);
+  }
   return 'ok';
+}
+
+function writeAuthorityJson(
+  io: Io,
+  command: 'grant' | 'delegate' | 'revoke',
+  edit: AuthorityEdit,
+  team: TeamFile,
+  dryRun: boolean,
+  status: 'updated' | 'unchanged' | 'dry-run',
+  summary: string,
+): void {
+  const target =
+    edit.kind === 'grant'
+      ? edit.seat
+      : edit.kind === 'delegate' || edit.kind === 'revoke-delegate'
+        ? edit.pane
+        : 'grant';
+  writeJson(io, `team.${command}`, {
+    format: 1 as const,
+    dry_run: dryRun,
+    status,
+    action_summary: summary,
+    project: team.project,
+    session: team.session,
+    target,
+    ...(edit.kind === 'grant' ? { scope: edit.scope } : {}),
+    ...(edit.kind === 'delegate' ? { commands: edit.commands } : {}),
+    ...(dryRun
+      ? {
+          plan: [
+            {
+              step: command,
+              detail: summary,
+              prefix: (status === 'unchanged' ? 'skip' : '+') as '+' | 'skip',
+            },
+          ],
+        }
+      : {}),
+  });
 }
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Refuses a linked team file; a missing one is left to the loader's own no-team-file refusal.
+ * The sweep caught a raw `ENOENT ... lstat '<cwd>/.agents'` here, printed as `*.invalid`: this
+ * check runs before the loader, which is the one that knows how to say there is no file.
+ */
 function requireRegularFile(path: string): void {
-  const dir = lstatSync(dirname(path));
-  const file = lstatSync(path);
+  let dir: Stats;
+  try {
+    dir = lstatSync(dirname(path));
+  } catch (error) {
+    if (missing(error)) return;
+    throw error;
+  }
+  let file: Stats;
+  try {
+    file = lstatSync(path);
+  } catch (error) {
+    if (missing(error)) return;
+    throw error;
+  }
   if (!dir.isDirectory() || dir.isSymbolicLink() || !file.isFile() || file.isSymbolicLink()) {
     throw new Error('the team file and its .agents directory must not be symbolic links');
   }
+}
+
+/** Whether a failed lstat means nothing is there (`ENOENT`, or `ENOTDIR` when `.agents` is a file). */
+function missing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 /** The existing atomic writer must not follow an old temporary entry, even a dangling link. */

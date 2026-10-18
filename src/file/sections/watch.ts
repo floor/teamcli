@@ -24,7 +24,18 @@ export const watch: Section = {
     additionalProperties: false,
     properties: {
       interval: measureSchema(DURATION),
-      idle_first: measureSchema(DURATION),
+      idle_first: {
+        ...measureSchema(DURATION),
+        description: 'how long an idle seat waits before its lead is told; a team may tighten it, never loosen it',
+      },
+      idle_owner: {
+        ...measureSchema(DURATION),
+        description: 'how long after that the owner is told, once per idle period; a team may tighten it, never loosen it',
+      },
+      blind_after: {
+        ...measureSchema(DURATION),
+        description: 'how long a seat no source has heard from reads unknown before it is blind; a team may tighten it, never loosen it',
+      },
       idle_repeat: {
         ...measureSchema(DURATION),
         description: 'how often to repeat an idle report while a seat stays idle; off unless set',
@@ -35,7 +46,7 @@ export const watch: Section = {
       nudge: {
         type: 'string',
         minLength: 1,
-        description: 'text sent to each idle worker after idle_first; the report line when omitted',
+        description: 'text the work drop asks each idle worker to read after idle_first; the fixed watch line when omitted',
       },
       quota_marks: {
         type: 'array',
@@ -60,7 +71,9 @@ export const watch: Section = {
 export function defaultWatch(): TeamFile['watch'] {
   return {
     interval: 120,
-    idleFirst: 600,
+    idleFirst: 300,
+    idleOwner: 900,
+    blindAfter: 300,
     teamIdle: 600,
     nudgeWait: 600,
     unsentAfter: 60,
@@ -71,7 +84,7 @@ export function defaultWatch(): TeamFile['watch'] {
 
 function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
   const fields = check.fields(entry?.value, 'watch', [
-    'interval', 'idle_first', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'nudge', 'quota_marks', 'checks',
+    'interval', 'idle_first', 'idle_owner', 'blind_after', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'nudge', 'quota_marks', 'checks',
   ]);
   const time = (name: string, fallback: number) =>
     check.measure(fields.get(name), `watch.${name}`, DURATION, '120s or 10m') ?? fallback;
@@ -95,6 +108,8 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
     watch: {
       interval: time('interval', base.interval),
       idleFirst: time('idle_first', base.idleFirst),
+      idleOwner: time('idle_owner', base.idleOwner),
+      blindAfter: time('blind_after', base.blindAfter),
       ...(idleRepeat !== undefined ? { idleRepeat } : {}),
       teamIdle: time('team_idle', base.teamIdle),
       nudgeWait: time('nudge_wait', base.nudgeWait),

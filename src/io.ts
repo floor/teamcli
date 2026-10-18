@@ -11,6 +11,9 @@ export type Io = {
   /** Whether stdout is a terminal: only then does `up` or `add` draw a seat's provisional line.
    *  Absent counts as false — a caller that never reads it may leave it out. */
   stdoutIsTTY?: boolean;
+  /** Whether stderr is a terminal: used by `ttyStyle` when colouring stderr diagnostics.
+   *  Absent counts as false. */
+  stderrIsTTY?: boolean;
   // Set by tests only. A command asks `callerOf(io)`, which otherwise reads the processes.
   caller?: Caller;
   // Set by tests only. A command asks `callerOf(io, session)`, which otherwise reads the

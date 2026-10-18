@@ -1,0 +1,23 @@
+ > Search sessions or type / to use                  
+╭───────────────────────────────────────────────────╮
+│╭─────╮╭────────────────╮╭──────╮╭──────╮╭────────╮│
+││ ID  ││  Description   ││ Repo ││  Las…││ Status ││
+│╰─────╯╰────────────────╯╰──────╯╰──────╯╰────────╯│
+│          # <owner>/<repo>                         │
+│ <id>   <session>         <repo>  <when>           │
+│          # <owner>/<repo>                         │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+│ <id>   <session>         <repo>  <when>           │
+╰───────────────────────────────────────────────────╯
+ enter: select session | ctrl+r: refresh |           
+ctrl+d: delete | ctrl+c: quit                        
+ Working in: <workspace>                             
+<ws>      unknown/<workspace>                        
+(main)                                               

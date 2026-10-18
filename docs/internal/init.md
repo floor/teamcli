@@ -7,8 +7,8 @@ codes stay on the page.
 
 ## What the run does: the skeleton, the restore, the exclude lines
 
-Writes the team file: a skeleton for this project, or the copy of `.agents/team.yaml` you last
-approved on this machine. It also lists the team file and its runtime files in `.git/info/exclude`,
+Writes the team file: a skeleton for this project, or the copy of `.agents/team.yaml` this machine
+stored. It also lists the team file and its runtime files in `.git/info/exclude`,
 so git never sees them and a fresh clone never carries them.
 
 ## What it reads and writes
@@ -46,16 +46,31 @@ That line names the schema of the release that wrote the file — the tag `v` pl
 The owner, from a terminal outside herdr. A seat or an agent-run CLI is refused with the caller
 named. A run with no terminal is refused with one sentence, before the repository is read.
 
+## What it prints
+
+`Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team up.`, or
+`Restored .agents/team.yaml from the copy this machine stored.`, followed by the
+privacy paragraph: the file is private to this clone, listed in `.git/info/exclude` and never in
+`.gitignore`, so git doesn't see it and a fresh clone doesn't carry it; a collaborator writes
+their own, or receives one and uses it as their own.
+
+Under `--json` the run writes one `team.init` v1 document on stdout, its `schema` tag first:
+`format`, `dry_run` (always false), `status` (`wrote`, or `restored`), `action_summary` — the
+closing line above — `file` (`.agents/team.yaml`), `restored`, and `notes`; the privacy paragraph
+is plain prose and has no field. A refusal under `--json` writes a `team.error` v1 document on
+stdout instead — the refusal's own `id`, its `message` and `repair` — and stderr stays empty. The
+exit code is the same as without `--json`.
+
 ## Refusals
 
 | Message | Exit |
 | --- | --- |
 | `team init: only the owner runs this, from a terminal outside herdr` — a run with no terminal | 1 |
-| `team init: only the owner runs init, from a terminal outside herdr; this call is <caller>` | 1 |
+| `team init: only the owner runs this, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team init: not inside a git repository` | 2 |
 | `team init: .agents/team.yaml is tracked by git, and a team file is private. Untrack it, keeping the file:` … | 1 |
 | `team init: .agents/team.yaml exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.` | 1 |
-| `team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.` | 1 |
+| `team init: nothing to restore: no copy of a team file was stored for this folder on this machine. Run team init for a skeleton.` | 1 |
 | `team init: nothing was restored: the record for this folder was approved before records were signed.` — the record was written by an earlier `team`; the same shape, with the case, for a record that does not verify | 1 |
 | `team init: unknown option --<name>` (with the usage) | 2 |
 
@@ -75,15 +90,15 @@ A seat can't run it:
 
 ```console caller=agent
 $ team init ; echo "exit $?"
-team init: only the owner runs init, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
+team init: only the owner runs this, from a terminal outside herdr; this call is unplaced (it is run by an agent (claude) outside herdr)
 exit 1
 ```
 
-With nothing approved on this machine yet, `--restore` has nothing to bring back:
+With nothing stored on this machine yet, `--restore` has nothing to bring back:
 
 ```console
 $ team init --restore ; echo "exit $?"
-team init: nothing to restore: no team file was approved for this folder on this machine. Run team init for a skeleton.
+team init: nothing to restore: no copy of a team file was stored for this folder on this machine. Run team init for a skeleton.
 exit 1
 ```
 
@@ -92,11 +107,11 @@ team file knows nothing about yet:
 
 ```console
 $ team init
-Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.
+Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team up.
 
 The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
-receives one and approves it themselves.
+receives one and uses it as their own.
 ```
 
 Running it again never touches the file:

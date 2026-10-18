@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../../src/approve/command.ts';
@@ -12,11 +12,14 @@ import { sessionState, setHerdrRun, workspacePanes, type HerdrAgent, type HerdrW
 import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../../src/store/store.ts';
 import { readState } from '../../src/state.ts';
+import { writeGrant } from '../../src/permissions/grants.ts';
+import { teamIdOf } from '../../src/registry/teams.ts';
 import { parseMemoryPressure, parseSwapUsage, type Machine } from '../../src/watch/machine.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { defaultFs } from '../../src/lobby/gate.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
+import { watchLabel } from '../../src/watch/pane.ts';
 import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
@@ -340,7 +343,7 @@ describe('team up, live', () => {
       expect(sent).toEqual([]);
       expect(seat).toBeUndefined();
       expect(made.closes).toContain('w2');
-      expect(made.renames).not.toContain('codex-acme');
+      expect(made.renames).toContain('codex-acme');
       expect(made.terminal.reads).toBe(0);
       // The record names the reading and why it closed; the close follows it on stderr, and the
       // log keeps the record alone.
@@ -442,7 +445,7 @@ describe('team up, live', () => {
       expect(sent).toEqual([]);
       expect(seat).toBeUndefined();
       expect(made.closes).toContain('w2');
-      expect(made.renames).not.toContain('gemini-acme');
+      expect(made.renames).toContain('gemini-acme');
       expect(made.terminal.reads).toBe(0);
       expect(io.out).toContain('gemini-acme: left out: trust (no terminal for owner)\n');
       expect(io.err).toContain('  its workspace was closed without input\n');
@@ -460,6 +463,8 @@ describe('team up, live', () => {
       'claude-coordinator-acme · project coordinator',
       'deepseek-acme · implementer',
       'deepseek-acme-2 · implementer',
+      // Last, the watch's own workspace: the pane that runs the watch.
+      watchLabel('acme-web'),
     ]);
     expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
@@ -474,8 +479,20 @@ describe('team up, live', () => {
     const launches = made.runs.filter(({ command }) => command.includes('--append-system-prompt'));
     expect(launches).toHaveLength(3);
     for (const { command } of launches) {
-      expect(command).toEndWith(`${CLOSING_OPTION}'`);
+      // The rules stay whole, and the seat's own state hook rides after them on a settings file
+      // this run wrote, aimed at that seat's state file.
+      expect(command).toContain(`--append-system-prompt '`);
+      expect(command).toContain(`\n${CLOSING_OPTION}' --settings ${join(root, '.agents', 'hooks', 'acme-web')}/`);
       expect(command).not.toContain('reply ready and wait for your brief');
+      const settingsPath = command.slice(command.lastIndexOf(' --settings ') + ' --settings '.length);
+      expect(settingsPath).toMatch(/\/\.agents\/hooks\/acme-web\/[A-Za-z0-9._-]+\.json$/);
+      expect(existsSync(settingsPath)).toBe(true);
+      expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
+      expect(readFileSync(settingsPath, 'utf8')).toContain('UserPromptSubmit');
+    }
+    // What the record keeps is the file's line, never the typed one with the hook's flag.
+    for (const seat of Object.values(seats)) {
+      expect(seat.launch_line ?? '').not.toContain('--settings');
     }
     expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain('watch: started');
   });
@@ -489,6 +506,65 @@ describe('team up, live', () => {
     expect(seats['claude-coordinator-acme']?.cli).toBe('claude-code');
     expect(seats['deepseek-acme']?.cli).toBe('claude-code');
     expect(seats['deepseek-acme-2']?.cli).toBe('claude-code');
+  });
+
+  test('a pane herdr lists only after the rename is named by its process, not waited out', async () => {
+    // herdr 0.7.1 lists a jules pane as an agent only after `agent rename`; the agent list alone
+    // would leave the seat unnamed until the 90 s idle deadline. The pane's foreground process
+    // is the CLI the profile names, so the rename goes by pane id at once.
+    const julesIdle = readFileSync(join(import.meta.dir, '../fixtures/jules/0.1.42/idle.txt'), 'utf8');
+    const file = makeExample(
+      base,
+      root,
+      EXAMPLE.replace('parked: true', 'stopped: true')
+        + '\n  - role: implementer\n'
+        + '    name: jules-acme\n'
+        + '    cli: jules\n'
+        + '    vendor: google\n'
+        + '    model: Jules\n'
+        + '    version: "0.1.42"\n'
+        + '    launch: jules\n',
+    );
+    writeFileSync(join(root, '.agents/team.yaml'), file);
+    await approve();
+    const made = world((_pane, label) => (label === 'jules-acme · implementer' ? julesIdle : IDLE));
+    let julesPane: string | null = null;
+    const renamed = new Set<string>();
+    const create = made.launch.createWorkspace.bind(made.launch);
+    made.launch.createWorkspace = (session, cwd, label) => {
+      const space = create(session, cwd, label);
+      if (space && label === 'jules-acme · implementer') julesPane = space.pane;
+      return space;
+    };
+    // Herdr's agent list: every launched pane but the jules one, which appears only once named.
+    const listed = made.launch.agentPanes.bind(made.launch);
+    made.launch.agentPanes = (session) => (listed(session) ?? []).filter((pane) => pane !== julesPane || renamed.has(pane));
+    const rename = made.launch.renameAgent.bind(made.launch);
+    made.launch.renameAgent = (session, pane, name) => {
+      renamed.add(pane);
+      return rename(session, pane, name);
+    };
+    const foreground = made.launch.foreground.bind(made.launch);
+    made.launch.foreground = (session, pane) => (pane === julesPane ? ['jules'] : foreground(session, pane));
+    const typed: string[] = [];
+    made.launch.typeText = (_session, pane, text) => { typed.push(`${pane}:${text}`); return true; };
+    made.launch.pressEnter = (_session, pane) => { typed.push(`${pane}:Enter`); return true; };
+
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(FILE, io, sources({}, made));
+
+    expect(code).toBe(0);
+    expect(julesPane).not.toBeNull();
+    expect(renamed.has(julesPane!)).toBe(true);
+    expect(made.renames).toContain('jules-acme');
+    expect(io.out).toContain('jules-acme: ready\n');
+    // Named at once, not after a poll: the old wait would have slept 90 s and left it out.
+    expect(made.launch.now().getTime() - NOW.getTime()).toBeLessThan(2000);
+    // Rules are prepended on this profile: nothing was typed into the pane.
+    expect(typed).toEqual([]);
+    const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    expect(seats['jules-acme']?.stage).toBe('ready');
+    expect(seats['jules-acme']?.rules).toBe('prepend');
   });
 
   test('a permission prompt without a terminal closes that workspace and leaves the others', async () => {
@@ -520,7 +596,7 @@ describe('team up, live', () => {
     );
     expect(made.closes).toEqual(['w1']);
     expect(made.terminal.reads).toBe(0);
-    expect(made.renames).not.toContain('claude-coordinator-acme');
+    expect(made.renames).toContain('claude-coordinator-acme');
     expect(made.renames).toContain('deepseek-acme');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['claude-coordinator-acme']).toBeUndefined();
@@ -592,7 +668,7 @@ describe('team up, live', () => {
     expect(named.err).toContain(
       '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
     );
-    expect(made.renames).not.toContain('claude-coordinator-acme');
+    expect(made.renames.filter((name) => name === 'claude-coordinator-acme')).toHaveLength(1);
     expect(made.closes).not.toContain('w1');
     expect(made.terminal.reads).toBe(0);
     const kept = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -806,7 +882,7 @@ describe('team up, live', () => {
     expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain(line);
     expect(made.closes).toEqual(['w1']);
     expect(made.terminal.reads).toBe(0);
-    expect(made.renames).not.toContain('claude-coordinator-acme');
+    expect(made.renames).toContain('claude-coordinator-acme');
     expect(made.runs.some((run) => run.command.includes('Yes'))).toBe(false);
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['claude-coordinator-acme']).toBeUndefined();
@@ -886,7 +962,7 @@ describe('team up, live', () => {
     expect(io.err).toContain("  | zsh: can't open input file: ../tools/launcher.sh\n");
     expect(io.err).toContain('  run `team up` again to resume it\n');
     expect(made.closes).toEqual([]);
-    expect(made.renames).toEqual([]);
+    expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['claude-coordinator-acme']?.stage).toBe('launched');
     expect(seats['claude-coordinator-acme']?.pane).toBe('w1:p1');
@@ -1172,13 +1248,13 @@ describe('team up, live', () => {
     );
     expect(code).toBe(0);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
-    // The state records no process for it, so the detail carries the note main added: how to
-    // relaunch it. It is the coordinator, so the repair is the whole team's.
+    // The state records no process for it, so the detail names the one per-seat register run
+    // that records it — the coordinator's own seat included, and nothing relaunched.
     expect(io.err).toContain(
-      '  already ready; left as it is; a relaunch records its process: ' +
-        'team down, then team up (to restart the whole team)\n',
+      '  already ready; left as it is; its process was never recorded: ' +
+        'run team register claude-coordinator-acme to record it, nothing relaunched\n',
     );
-    expect(made.creates).toEqual(['deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['deepseek-acme-2 · implementer', watchLabel('acme-web')]);
     expect(made.renames).toContain('deepseek-acme');
     expect(made.renames).not.toContain('claude-coordinator-acme');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
@@ -1223,7 +1299,7 @@ describe('team up, live', () => {
     expect(io.err).toContain(
       '  its pane runs no CLI and its process was never recorded (team down --abandon, then team up)\n',
     );
-    expect(io.err).not.toContain('a relaunch records its process');
+    expect(io.err).not.toContain('its process was never recorded: run team register');
     expect(io.out).not.toContain('team up (it resumes the launch)');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude opus 5.5');
@@ -1268,7 +1344,7 @@ describe('team up, live', () => {
     expect(io.err).toContain(
       '  its screen runs Claude Fable 5.1; the file says Claude Opus 5.5; its process was never recorded (team down --abandon, then team up)\n',
     );
-    expect(io.err).not.toContain('a relaunch records its process');
+    expect(io.err).not.toContain('its process was never recorded: run team register');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude opus 5.5');
   });
@@ -1871,7 +1947,7 @@ describe('team up, live', () => {
     expect(code, io.err + io.out).toBe(refusal ? 1 : 0);
     const names = ['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2'];
     const labels = ['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer'];
-    expect(made.creates.filter((label) => label !== 'watchdog')).toEqual(labels.slice(0, count));
+    expect(made.creates.filter((label) => label !== watchLabel('acme-web'))).toEqual(labels.slice(0, count));
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     for (const name of names.slice(0, count)) expect(seats[name]?.stage, name).toBe('ready');
     for (const name of names.slice(count)) expect(seats[name]?.stage, name).not.toBe('ready');
@@ -2016,7 +2092,7 @@ describe('team up, live', () => {
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ machine: () => fine }, made))).toBe(0);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
   });
 
   test("a doctor miss refuses, and the watch's missing heartbeat does not", async () => {
@@ -2864,7 +2940,7 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: was not in the agent list in time; left at launched\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: was not named in time; left at launched\n');
     expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'])
       .toMatchObject({ stage: 'launched', launched: { shell: 400, cli: [401] } });
   });
@@ -3291,12 +3367,17 @@ describe('team up, the pause', () => {
     return { calls, typed, lockedWhileWaiting };
   }
 
-  /** The team file with the coordinator owning trust decisions; call before `approve`. */
-  function withCoordinatorPolicy(): void {
-    writeFileSync(
-      join(root, '.agents/team.yaml'),
-      readFileSync(join(root, '.agents/team.yaml'), 'utf8').replace('format: 1\n', 'format: 1\ndialogs:\n  trust: coordinator\n'),
-    );
+  /** The owner's live grant: the coordinator may answer trust dialogs for this project. */
+  function grantCoordinatorTrust(): void {
+    const written = writeGrant(home, {
+      name: `team-${teamIdOf(root)}`,
+      kind: 'team',
+      grantee: teamIdOf(root),
+      capabilities: ['dialogs.trust'],
+      roots: [root],
+      scope: [root],
+    });
+    if (!written.ok) throw new Error(`the scene's grant was refused: ${written.why}`);
   }
 
   /** A seat under coordination whose trust dialog the coordinator may answer mid-prompt. */
@@ -3462,7 +3543,7 @@ describe('team up, the pause', () => {
     expect(calls).toEqual([
       // The fresh reading that stopped the seat, the identity read when the dialog was found
       // (nothing is recorded for the seat yet), and the entry write's identity read.
-      'create:claude-coordinator-acme · project coordinator', 'run:w1:p1', 'read:w1:p1', 'process:w1:p1', 'process:w1:p1',
+      'create:claude-coordinator-acme · project coordinator', 'rename:w1:p1:claude-coordinator-acme', 'run:w1:p1', 'read:w1:p1', 'process:w1:p1', 'process:w1:p1',
       // o: the key, then the lock's own reads (the pane is still the seat's — herdr's list,
       // then the process), the manual write with its identity read, and the focus. No key,
       // no text.
@@ -3471,10 +3552,12 @@ describe('team up, the pause', () => {
       'sleep:2000', 'agents', 'agent-panes', 'process:w1:p1', 'read:w1:p1',
       // The ordinary path from the idle prompt: the model read, the identity, the agent list
       // (so the session id can be stored with it), the rename.
-      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
+      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'agent-panes',
       // Then the later seats, the same way.
-      'create:deepseek-acme · implementer', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w2:p1:deepseek-acme',
-      'create:deepseek-acme-2 · implementer', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes', 'rename:w3:p1:deepseek-acme-2',
+      'create:deepseek-acme · implementer', 'rename:w2:p1:deepseek-acme', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes',
+      'create:deepseek-acme-2 · implementer', 'rename:w3:p1:deepseek-acme-2', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes',
+      // Then the watch's workspace and its command line, the plan's last step.
+      'create:Watch · acme-web', 'run:w4:p1',
     ]);
     expect(typed).toEqual([]);
     expect(lockedWhileWaiting.length).toBeGreaterThanOrEqual(2);
@@ -3504,7 +3587,7 @@ describe('team up, the pause', () => {
     expect(code).toBe(1);
     expect(io.err).toContain(prompt('claude-coordinator-acme', 'permission'));
     expect(made.closes).toEqual(['w1']);
-    expect(made.renames).toEqual(['deepseek-acme', 'deepseek-acme-2']);
+    expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
     expect(io.out).toContain('claude-coordinator-acme: left out: skipped by owner\n');
     expect(io.out).toContain('deepseek-acme: ready\n');
     expect(io.out).toContain('deepseek-acme-2: ready\n');
@@ -3566,10 +3649,10 @@ describe('team up, the pause', () => {
     expect(code).toBe(1);
     expect(io.err).toContain(prompt('claude-coordinator-acme', 'permission'));
     // The run's own seat's workspace is closed; the session it did not start is not stopped,
-    // and no second watchdog is started into it.
+    // and no second watch is started into it.
     expect(made.closes).toEqual(['w1']);
     expect(stopped).toBe(0);
-    expect(made.creates).not.toContain('watchdog');
+    expect(made.creates).not.toContain(watchLabel('acme-web'));
     expect(io.err).not.toContain('session acme-web');
   });
 
@@ -3604,7 +3687,7 @@ describe('team up, the pause', () => {
   });
 
   test('under coordination, a seat answered ready between polls is this run\'s ready', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     // What `team answer` leaves on its success: the seat ready, its waiting record gone.
     const { made, typed } = coordinated((seat) => { seat.stage = 'ready'; delete seat.waiting; });
@@ -3620,7 +3703,7 @@ describe('team up, the pause', () => {
   });
 
   test('under coordination, a recovery left between polls is shown, and the owner still chooses', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     const { made, typed } = coordinated((seat) => {
       seat.waiting = { state: 'trust-sent-recovery', classification: 'trust', sentAt: '2026-10-03T14:01:00.000Z' };
@@ -3640,7 +3723,7 @@ describe('team up, the pause', () => {
   });
 
   test('the same recovery prompt reaches a redirected stdout: what the record says, on stderr', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     const { made, typed } = coordinated((seat) => {
       seat.waiting = { state: 'trust-sent-recovery', classification: 'trust', sentAt: '2026-10-03T14:01:00.000Z' };
@@ -3657,7 +3740,7 @@ describe('team up, the pause', () => {
   });
 
   test('under coordination, an unchanged state re-prompts from the fresh reading, no key sent', async () => {
-    withCoordinatorPolicy();
+    grantCoordinatorTrust();
     await approve();
     const { made, typed } = coordinated();
     const io = testIo(root, { kind: 'owner' });
@@ -4026,11 +4109,11 @@ describe('team up, the pause', () => {
     const code = await runUp(FILE, io, sources({
       sessionState: () => 'running',
       alive: () => true,
-      workspaces: () => [{ id: 'w9', label: 'Claude Opus 5.5' }],
+      workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
       agents: listed,
     }, made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane is gone\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane could not be read\n');
     expect(io.err).toContain(
       '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
     );
@@ -4263,7 +4346,12 @@ describe('team up, the pause', () => {
       const [first = '', ...rest] = typed.split('\n');
       return shown.replace('  → Plan, search, build anything', [`  → ${first}`, ...rest.map((line) => `    ${line}`)].join('\n'));
     };
-    made.launch.agentStatus = () => status;
+    // Herdr's own status is the last word on a screen the profile cannot read
+    // (`src/launch/unread.ts`): the two screens the grammar refuses report the pane working, so
+    // the wait itself reads them as unknown and times out, as this scene pins. Every other case
+    // reads its own screen, where the status makes no difference.
+    const unread = screen === 'unknown-family' || screen === 'spoof';
+    made.launch.agentStatus = () => (unread ? 'working' : status);
     // The order the run's host calls are made in, recorded so the unreadable case can pin it.
     const calls: string[] = [];
     const makeWorkspace = made.launch.createWorkspace;
@@ -4302,7 +4390,7 @@ describe('team up, the pause', () => {
     if (expectCase === 'drift') {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
-      expect(made.renames).not.toContain('cursor-acme');
+      expect(made.renames).toContain('cursor-acme');
       expect(seat?.stage).toBe('launched');
       expect(io.out).toContain(
         'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version\n',
@@ -4312,7 +4400,7 @@ describe('team up, the pause', () => {
     if (expectCase === 'refused') {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
-      expect(made.renames).not.toContain('cursor-acme');
+      expect(made.renames).toContain('cursor-acme');
       expect(seat?.stage).toBe('launched');
       expect(io.out).toContain('cursor-acme: left out: timeout\n');
       expect(io.err).toContain('timed out after 90 s waiting for its idle prompt; the screen last read unknown; left at launched');
@@ -4342,11 +4430,11 @@ describe('team up, the pause', () => {
       const from = calls.indexOf('create:cursor-acme · implementer');
       expect(calls.slice(from, from + 14)).toEqual([
         'create:cursor-acme · implementer',
+        'renameAgent',
         'paneRun:AGENT_UNATTENDED=1',
         'paneText',
         'paneText',
         'agentPanes',
-        'renameAgent',
         'paneText',
         'typeText',
         'paneText',
@@ -4419,7 +4507,7 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   expect(code).toBe(1);
   expect(pane).not.toBe('');
   expect(workspace).not.toBe('');
-  expect(made.renames).not.toContain('cursor-acme');
+  expect(made.renames).toContain('cursor-acme');
   expect(io.out).toContain('left at launched, not named');
 
   writeFileSync(path, readFileSync(path, 'utf8').replace(
@@ -4686,7 +4774,7 @@ describe('team up, delegated', () => {
     expect(io.err).not.toContain("--file is the owner's");
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
     expect(audits).toEqual([]);
   });
 
@@ -4720,7 +4808,7 @@ describe('team up, delegated', () => {
     const code = await runUp(FILE, io, sources({ ...passed, logDelegated }, made));
     expect(code).toBe(0);
     expect(made.starts).toBe(1);
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer']);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(made.terminal.reads).toBe(0);
     expect(audits).toHaveLength(1);
@@ -4910,7 +4998,7 @@ describe('team up, delegated', () => {
     expect(code).toBe(1);
     expect(asked).toBe(0);
     expect(audits).toEqual([]);
-    expect(io.err).toContain('team up: only the owner runs this, from a terminal outside herdr\n');
+    expect(io.err).toContain('team up: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane\n');
     expect(io.out).not.toContain('left out:');
     expect(made.closes).toEqual([]);
   });
@@ -5041,8 +5129,8 @@ describe('team up, delegated', () => {
     // A dry run is never answered with the bare word: it names the reason and the owner's own
     // command, and the refusal leaves through the real run's exit — the plan, nothing run.
     expect(io.err).toBe('');
-    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is it runs in pane main/w9:p1, which no grant lists\n');
-    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is it runs in pane main/w9:p1, which no grant lists\n');
+    expect(io.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(made.starts).toBe(0);
     expect(made.creates).toEqual([]);
   });
@@ -5348,6 +5436,48 @@ describe('team down, live', () => {
     expect(io.out).toContain('deepseek-acme: stopped\n');
     // The close op is `down`'s own purpose, announced by its plan; the line and the log name the seat and the fact.
     expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain('deepseek-acme: stopped');
+  });
+
+  test('a jules seat herdr reports unknown is free at its idle table, and stops on ctrl+c', async () => {
+    // herdr 0.7.1 reports a jules pane as no agent, and `unknown` after the rename. The profile
+    // says its herdr status is unreliable, so the screen module's idle table is the reading: the
+    // seat is free, one ctrl+c is pressed at that table, and the pane's own process says it left.
+    const julesIdle = readFileSync(join(import.meta.dir, '../fixtures/jules/0.1.42/idle.txt'), 'utf8');
+    writeFileSync(
+      join(root, '.agents/team.yaml'),
+      makeExample(
+        base,
+        root,
+        EXAMPLE
+          + '\n  - role: implementer\n'
+          + '    name: jules-acme\n'
+          + '    cli: jules\n'
+          + '    vendor: google\n'
+          + '    model: Jules\n'
+          + '    version: "0.1.42"\n'
+          + '    launch: jules\n',
+      ),
+    );
+    await approve();
+    liveSeat = 'jules-acme';
+    const run = harness(readScreen('jules', julesIdle), 'unknown');
+    run.setBox(julesIdle);
+    let sent = false;
+    run.launch.sendKey = (_session, _pane, key) => {
+      run.keys.push(key);
+      sent = true;
+      return true;
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runDown(FILE, io, run.sourcesOf({
+      status: () => 'unknown',
+      foreground: () => (sent ? ['zsh'] : ['jules']),
+    }));
+    expect(code).toBe(0);
+    expect(run.keys).toEqual(['ctrl+c']);
+    expect(run.closed).toEqual(['w3']);
+    expect(run.stopped).toEqual(['acme-web']);
+    expect(io.out).toContain('jules-acme: stopped\n');
   });
 
   test('clears the session it stopped, in the same run, and says so in one line', async () => {
@@ -5831,7 +5961,7 @@ describe('team down, live', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
         foregroundCwd: () => null,
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/jvial' }),
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));
@@ -5845,8 +5975,8 @@ describe('team down, live', () => {
       const run = harness({ kind: 'idle' });
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
-        foregroundCwd: () => '/Users/jvial/start/dir',
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/jvial' }),
+        foregroundCwd: () => '/Users/example/start/dir',
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));

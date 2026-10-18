@@ -37,8 +37,14 @@ export function validateTeamFile(text: string, options: { home?: string; fs?: Fs
   // Warnings read in file order, as errors do: secrets are pushed before the sections run and
   // the sections push in the order they run, so without this a warning late in the file can
   // print before one written above it. Sorting is stable, so two warnings on one line keep
-  // the order they were pushed in.
-  return { ok: true, team, warnings: check.warnings.sort((a, b) => a.line - b.line) };
+  // the order they were pushed in. Deprecations keep the same order, for the same reason: the
+  // check prints them in the order the file writes them.
+  return {
+    ok: true,
+    team,
+    warnings: check.warnings.sort((a, b) => a.line - b.line),
+    deprecations: check.deprecations.sort((a, b) => a.line - b.line),
+  };
 }
 
 function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, rootDir?: string): TeamFile | null {
@@ -71,21 +77,25 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
   const seats = valueOf<DraftSeat[]>(ctx, 'seats');
   const mode = valueOf<TeamFile['workspace']>(ctx, 'workspace').mode;
   for (const seat of seats) seat.mode ??= mode;
+  const policies = valueOf<TeamFile['policies'] | null>(ctx, 'policies');
 
   return {
     format: 1,
     project: valueOf<string>(ctx, 'project'),
+    inProject: valueOf<string | null>(ctx, 'in_project'),
+    projectLead: valueOf<boolean>(ctx, 'project_lead'),
     entity: valueOf<string | null>(ctx, 'entity'),
     lobby: valueOf<string | null>(ctx, 'lobby'),
     visibility: valueOf<TeamFile['visibility']>(ctx, 'visibility'),
     session: valueOf<string>(ctx, 'session'),
     orchestrator: valueOf<string>(ctx, 'orchestrator'),
     operator: valueOf<string>(ctx, 'operator'),
+    deliveryOrder: valueOf<TeamFile['deliveryOrder']>(ctx, 'delivery_order'),
+    ...(policies !== null && policies !== undefined ? { policies } : {}),
     tools: valueOf<TeamFile['tools']>(ctx, 'tools'),
     identity: valueOf<TeamFile['identity']>(ctx, 'identity'),
     rules: valueOf<string[]>(ctx, 'rules'),
     trust: valueOf<string[]>(ctx, 'trust'),
-    dialogs: valueOf<TeamFile['dialogs']>(ctx, 'dialogs'),
     workspace: valueOf<TeamFile['workspace']>(ctx, 'workspace'),
     watch: valueOf<Watched>(ctx, 'watch').watch,
     budgets: valueOf<Budgeted>(ctx, 'budgets').budgets,

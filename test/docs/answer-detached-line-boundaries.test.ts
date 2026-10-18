@@ -20,7 +20,7 @@ describe("answer's fifth caller line, the no-terminal refusal", () => {
     const page = prose(ANSWER_PAGE);
     expect(page).toContain('the five `team answer:` lines that speak to the caller rather than about the seat');
     expect(page).toContain(
-      '`team answer: only the owner runs this, from a terminal outside herdr` — a run placed with no terminal, judged before the file or the caller is read',
+      "`team answer: only the owner or the orchestrator from its own seat runs this, from a terminal outside herdr or its own seat` — a run placed with no terminal, judged before the file or the caller is read",
     );
     // The count the fifth line moved: four is gone.
     expect(page).not.toContain('the four `team answer:` lines');
@@ -31,7 +31,8 @@ describe("answer's fifth caller line, the no-terminal refusal", () => {
     // The detached refusal, walked once at the top and printed with `team answer:`'s prefix —
     // the sentence the page names, from the constant it lives in (pinned in caller.ts by its
     // own family elsewhere; here the print site is what this page rides).
-    expect(src).toContain('const detached = detachedRefusal(walkCaller(io));');
+    expect(src).toContain("const detached = detachedRefusal(walkCaller(io), { who: 'the owner or the orchestrator from its own seat'");
+    expect(src).toContain("where: 'a terminal outside herdr or its own seat' });");
     expect(src).toContain('io.stderr(`team answer: ${detached}\\n`)');
     expect(src).toContain('// exit: answer.detached');
   });

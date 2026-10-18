@@ -158,7 +158,7 @@ describe('the typed path names itself after the trigger', () => {
     const io = owner(root);
 
     expect(await runSend(['native', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('not reached');
+    expect(io.err).toContain('unreachable now (the screen reads permission); a running watch retries it when the seat is idle');
     expect(io.err).toContain('the screen reads permission');
     expect(pane.enters).toBe(0);
 

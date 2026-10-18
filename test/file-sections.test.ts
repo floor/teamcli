@@ -14,7 +14,6 @@ import { storePath, writeApproval, type ApprovalRecord } from '../src/store/stor
 test('the generated owner sections equal the hand-kept list, in order', () => {
   expect(OWNER_SECTIONS).toEqual([
     'trust',
-    'dialogs',
     'limits',
     'machine',
     'rules',
@@ -114,6 +113,93 @@ test('budgets.check_every refuses a zero pause too', () => {
   const clean = validateTeamFile(`${TEAM}budgets:\n  check_every: 10m\n`);
   if (!clean.ok) throw new Error('the budgets fixture does not validate');
   expect(clean.team.budgets.checkEvery).toBe(600);
+});
+
+// `delivery_order` is the word on how a send to the team's seats walks. The file's own key and a
+// seat's are read; the shape is checked here, and whether the word drops, reorders or would add
+// a leg is the resolver's question, so a valid seat word may name legs the file's own word
+// lacks. Omitted, the file reads null and the seat carries no field — the digests a file had.
+describe('delivery_order', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted key reads null, and the seats carry no field', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect(checked.team.deliveryOrder).toBeNull();
+    expect('deliveryOrder' in (checked.team.seats[0] as object)).toBe(false);
+  });
+
+  test('the file’s own word and a seat’s are read, in the order written', () => {
+    const checked = validateTeamFile(`${TEAM}delivery_order: [typed]\n`);
+    if (!checked.ok) throw new Error('the delivery-order fixture does not validate');
+    expect(checked.team.deliveryOrder).toEqual(['typed']);
+    const seated = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    delivery_order: [native, typed]\n`));
+    if (!seated.ok) throw new Error('the seat word fixture does not validate');
+    expect(seated.team.seats[0]?.deliveryOrder).toEqual(['native', 'typed']);
+    expect(seated.team.deliveryOrder).toBeNull();
+  });
+
+  test('a written key with no legs, an unknown leg and a repeated one are refused', () => {
+    const cases = [
+      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order: [typed, typed]\n`, message: 'delivery_order names "typed" twice' },
+    ];
+    for (const one of cases) {
+      const checked = validateTeamFile(one.text);
+      expect(checked.ok).toBe(false);
+      if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual([one.message]);
+    }
+  });
+
+  test('a seat’s word is refused under the seat’s name', () => {
+    const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    delivery_order: [typed, typed]\n`));
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": delivery_order names "typed" twice']);
+  });
+});
+
+// `liveness` is a seat's own word on the three liveness windows: each a positive number of
+// seconds, under the same inheritance the watch's reports read. Omitted, the seat carries no
+// field and its digest is the one it had; writing one is an edit the owner re-approves.
+describe('liveness', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted map reads no field, and a written one reads the windows it names', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect('liveness' in (checked.team.seats[0] as object)).toBe(false);
+    const written = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    liveness:\n      idle_lead_seconds: 60\n      blind_after_seconds: 120\n`));
+    if (!written.ok) throw new Error('the liveness fixture does not validate');
+    expect(written.team.seats[0]?.liveness).toEqual({ idle_lead_seconds: 60, blind_after_seconds: 120 });
+  });
+
+  test('a map that is not one, an unknown key and a value that is not seconds are refused under the seat', () => {
+    const cases = [
+      {
+        text: `${LEAD_LAUNCH}    liveness: soon\n`,
+        message: 'seat "lead": liveness must be a map of thresholds',
+      },
+      {
+        text: `${LEAD_LAUNCH}    liveness:\n      idle_first: 60\n`,
+        message: 'seat "lead": liveness has no threshold "idle_first"; the keys are idle_lead_seconds, idle_owner_seconds, blind_after_seconds',
+      },
+      {
+        text: `${LEAD_LAUNCH}    liveness:\n      blind_after_seconds: 0\n`,
+        message: 'seat "lead": liveness "blind_after_seconds" must be a whole number of seconds, at least 1',
+      },
+      {
+        text: `${LEAD_LAUNCH}    liveness:\n      blind_after_seconds: 1.5\n`,
+        message: 'seat "lead": liveness "blind_after_seconds" must be a whole number of seconds, at least 1',
+      },
+    ];
+    for (const one of cases) {
+      const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, one.text));
+      expect(checked.ok).toBe(false);
+      if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual([one.message]);
+    }
+  });
 });
 
 // An approval record written by main's code today (test/fixtures/approval-main.json, its

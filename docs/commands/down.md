@@ -1,18 +1,20 @@
 # team down
 
-Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
+Stops the team: asks every running seat the live file names to exit, closes its workspace, and
 stops the herdr session — unless something was left in it: an agent still running at the end keeps
-the session up, and the last line says it is not stopped and counts what is left in it. A pane herdr names with something that copy does not carry is closed when
+the session up, and the last line says it is not stopped and counts what is left in it. A pane herdr names with something the file does not carry is closed when
 the state records that pane and that workspace for one seat, and left running when no seat record
 accounts for it: the name is not what decides. A pane with no name is closed on that same record.
 When the record also holds the process `up` launched, the pane is closed only while that process
 is still in the pane. Any other such pane is left as it is and named. A seat is only asked when it
-is free, so a working, blocked or half-typed seat is left running and named. `--dry-run` prints the
-plan and runs nothing.
+is free, so a working, blocked or half-typed seat is left running and named. A seat whose profile
+says herdr cannot report it (`herdr_status: unreliable`) is free when the profile's own screen
+reads idle, whatever herdr's status says, and it is stopped on its own exit key at that screen.
+`--dry-run` prints the plan and runs nothing.
 
 ## Synopsis
 
-    team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+    team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
 
 ## Flags
 
@@ -23,6 +25,7 @@ plan and runs nothing.
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it; a seat this run asks and cannot stop is closed in the same run |
 | `--session` | `<name>` | the herdr session to stop, instead of `team.session`; the owner's alone — a delegate is refused it by the gate |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone — a delegate is refused it by the gate |
+| `--json` | — | one `team.down` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -30,9 +33,8 @@ plan and runs nothing.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
-| a run with no terminal | nothing, including `--dry-run`: `team down: only the owner runs this, from a terminal outside herdr` |
-| the orchestrator's seat | stop the other seats, and leave its own seat and the operator's seat running. When the file has a `grant`, this needs `down` in that grant. `--abandon`, `--session` and `--file` stay the owner's |
-| the operator's seat | stop the team; never the orchestrator's or the operator's own seat |
+| a run with no terminal | nothing, including `--dry-run`: ``team down: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
+| the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | stop the other seats; never the orchestrator's or the operator's own seat |
 | the approved delegate, when the file's `delegates` section names it | stop the whole team, the orchestrator's and the operator's seats included; never `--abandon`, `--session` or `--file` |
 
 ## Output and exit codes
@@ -45,6 +47,16 @@ plan and runs nothing.
 | `--dry-run` | the plan; `dry run: nothing was run` | the refusal's own exit, else 0 |
 | the run was refused, or a step was held | `team down: <reason>` for a refusal; a held step ends on its own line instead, `<seat>: left out: <reason>` | 1 |
 | the invocation, the team file or herdr can't be read | `team down: <problem>` and the usage | 2 |
+
+`--json` prints one `team.down` document instead: `project`, `session`, the seat names the file
+declares as `seats`, the working lines as collapsed `notes`, and the closing line as
+`action_summary`; `dry_run` is `false` and `status` is `stopped`. A session that is not running is
+`status` `idle`, and every line it printed is a note. With `--dry-run` it prints the plan as
+`plan` — the warning first when there is one, then one step per plan line, `prefix` `+`, `!` or
+`skip` — with `dry_run` `true` and `status` `dry-run`. A refusal under `--json` prints the
+`team.error` document on stdout — its `id` is the contract row for that refusal (`down.caller`,
+`down.grant-scope`, …) — and nothing on stderr; a step that was held is the error document too,
+`down.held`.
 
 ## Example
 

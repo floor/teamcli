@@ -8,7 +8,7 @@ unless its owner abandons it.
 
 ## Synopsis
 
-    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]
+    team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
 
 ## Flags
 
@@ -18,6 +18,7 @@ unless its owner abandons it.
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--json` | — | one `team.remove` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -25,11 +26,11 @@ unless its owner abandons it.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
-| a caller outside herdr whose ancestry names a create-grant's `runner` | remove a named seat, for a file whose root and this call's folder both sit under the paths that record covers, before it expires; a lead seat, `--keep`, `--abandon`, `--session` and `--file` are not granted |
-| a run with no terminal | nothing, unless a create-grant's `runner` names the caller: `team remove: only the owner runs this, from a terminal outside herdr` |
-| the orchestrator's seat, the operator's seat | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` |
+| a seat an active create-grant names by its own registry id | remove a named seat, for a file whose root and this call's folder both sit under the paths that record covers, before it expires; a lead seat, `--keep`, `--abandon`, `--session` and `--file` are not granted |
+| a run with no terminal | nothing: ``team remove: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` — a caller outside herdr has no registry record, so no record admits it |
+| the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | remove another seat; never the orchestrator's or the operator's own seat, and never `--abandon` |
 | the approved delegate, when the file's `delegates` section names it | remove a named seat; never `--keep`, `--abandon`, `--session` or `--file` |
-| the orchestrator's seat, when the approved `grant` lists `swap` | `--keep` on the operator's seat (a swap) |
+| the orchestrator's seat, when the file's `grant` lists `swap` | `--keep` on the operator's seat (a swap) |
 | the approved delegate whose entry lists `swap` | `--keep` on the orchestrator's or the operator's seat (a swap) |
 
 ### Swapping a lead seat
@@ -40,7 +41,7 @@ The seat stays in the file, unedited, and stays the lead through the gap: a lead
 `stopped: true`. The stop is an ordinary one — a working seat, a seat holding unsent text, a
 prompt or an unrecognised screen is left as it is — and it is never the seat's own: closing its
 pane would end the call before the new agent starts (`<name> can't swap its own seat`). The
-owner may swap either lead; the orchestrator's seat may swap the operator's when the approved
+owner may swap either lead; the orchestrator's seat may swap the operator's when the file's
 `grant` lists `swap`; an approved delegate whose entry lists `swap` may swap either. The state
 records who started the swap (`swapping`), `team doctor` names it until the seat runs again, the
 log has one line for the stop and one for the start, and a granted or delegated swap adds its
@@ -49,6 +50,10 @@ audit line.
 A caller other than the owner meeting a seat herdr reports idle or done that is not free takes the
 seat out of the team and leaves its pane running: nothing typed, the workspace left open, the
 pane's agent renamed so it no longer answers the seat's name.
+
+A seat whose profile says herdr cannot report it (`herdr_status: unreliable`) is free when the
+profile's own screen reads idle, so the owner's removal stops it on its profile's exit key as it
+stops any free seat.
 
 ## Output and exit codes
 
@@ -59,6 +64,15 @@ pane's agent renamed so it no longer answers the seat's name.
 | a caller other than the owner took the seat out with its pane left running | `removed <name> (its pane <pane> was left running; nothing was typed; it now reads as <name>-left)` | 0 |
 | the run was refused, or the seat was left behind | `team remove: <reason>`, and the file is not edited | 1 |
 | the invocation, the team file or the state can't be read, or the edit would not validate | `team remove: <problem>` and the usage | 2 |
+
+`--json` prints one `team.remove` document instead: `project`, `session`, the seat name as
+`seat`, the working lines the stop printed as `notes`, and the closing line as `action_summary`;
+`dry_run` is `false` and `status` says what the run did — `removed`, `kept` (`--keep`),
+`temporary` (a temporary seat) or `swapped` (a lead seat stopped for `team add`). A refusal under
+`--json` prints the `team.error` document on stdout — its `id` is the contract row for that
+refusal (`remove.caller`, `remove.busy`, `remove.edit`, …) — and nothing on stderr; a stop that
+could not be completed is `remove.stop-failed` (`remove.no-launch` when the call cannot reach
+herdr at all).
 
 ## Example
 

@@ -136,21 +136,32 @@ export function stripControlStrings(text: string): string {
  *
  *  The C0/C1 line is the rule read directly: every C0 (U+0000–U+001F) and C1 (U+007F–U+009F)
  *  control goes, LF alone left for the fold. */
+function unescapeHtmlEntities(text: string): string {
+  if (!text.includes('&')) return text;
+  return text.replace(/&(lt|gt|amp);/g, (entity) => {
+    if (entity === '&lt;') return '<';
+    if (entity === '&gt;') return '>';
+    return '&';
+  });
+}
+
 export function plainText(text: string): string {
-  return stripControlStrings(
-    text
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-      // A one-byte C1 CSI may be written as its introducer plus the 7-bit tail, `\x9b[2J`: the
-      // `[` belongs to the mangled sequence, and the whole of it goes, not the introducer alone.
-      .replace(/\x9b\[?[0-?]*[ -/]*[@-~]/g, ''),
-  )
-    .replace(/\x1b./g, '')
-    // The line separators folded to the line feed, before anything else looks at a line break.
-    .replace(/[\p{Zl}\p{Zp}]/gu, '\n')
-    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, '')
-    // The Cf characters and the tag block whole; the exception is named as a constant below so it
-    // holds whatever a Unicode table calls the selectors.
-    .replace(/[\p{Cf}\u{e0000}-\u{e007f}]/gu, (character) => (VARIATION_SELECTOR.test(character) ? character : ''));
+  return unescapeHtmlEntities(
+    stripControlStrings(
+      text
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        // A one-byte C1 CSI may be written as its introducer plus the 7-bit tail, `\x9b[2J`: the
+        // `[` belongs to the mangled sequence, and the whole of it goes, not the introducer alone.
+        .replace(/\x9b\[?[0-?]*[ -/]*[@-~]/g, ''),
+    )
+      .replace(/\x1b./g, '')
+      // The line separators folded to the line feed, before anything else looks at a line break.
+      .replace(/[\p{Zl}\p{Zp}]/gu, '\n')
+      .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, '')
+      // The Cf characters and the tag block whole; the exception is named as a constant below so it
+      // holds whatever a Unicode table calls the selectors.
+      .replace(/[\p{Cf}\u{e0000}-\u{e007f}]/gu, (character) => (VARIATION_SELECTOR.test(character) ? character : '')),
+  );
 }
 
 /** The cleaning's one named exception: the variation selectors choose how the character before

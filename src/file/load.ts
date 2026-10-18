@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { resolveLobby, type FsReader } from '../lobby/gate.ts';
+import { type FsReader } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { protectedLanding } from '../worktree/place.ts';
 import { canonicalLanding, fixedFolder, isLegacyTrust, isMigratedTrust } from './paths.ts';
 import type { LoadResult, Problem, TeamFile } from './types.ts';
@@ -15,6 +16,25 @@ export const NOT_A_REPO = 'not inside a git repository: run team from a project,
 // The no-repository refusal when `.agents` or `team.yaml` is a link. The link is not followed.
 // `--file` still opens the path it names.
 export const LINK_NOT_FOLLOWED = `${NOT_A_REPO}: a link was found and not followed`;
+
+// The same refusal for a command whose options have no `--file`: the shared sentence ends by
+// offering one, and a command that takes none cannot keep it.
+export const NOT_A_REPO_NO_FILE = 'not inside a git repository: run team from a project';
+
+/** `message` with the `--file` offer removed when it is the no-repository refusal, unchanged
+ *  otherwise. A command that takes no `--file` prints this instead of the shared sentence. */
+export function withoutFileOffer(message: string): string {
+  return message.replace(NOT_A_REPO, NOT_A_REPO_NO_FILE);
+}
+
+/**
+ * Whether a `loadTeamFile` / `currentTeam` problem is a line-attributed parse/validation error
+ * (`problem.line > 0`, mapped to `*.file-invalid`) rather than an unparsed file-locate/read
+ * problem (`problem.line === 0`, mapped to `*.not-a-repo` or `*.file`).
+ */
+export function isParseError(problem: Problem): boolean {
+  return problem.line > 0;
+}
 
 // The team file in a folder that is not a git repository. The folder the process was given is
 // resolved first: when that path is itself a link, the real directory is the folder (the shell
@@ -67,7 +87,7 @@ export function findRoot(cwd: string): string | null {
 
 // Finds, reads and validates the team file. With `file`, the root is the folder that holds the
 // file's `.agents/`, or the file's own folder when it sits elsewhere.
-export function loadTeamFile(cwd: string, options: { file?: string; home?: string; checkOnly?: boolean; fs?: FsReader } = {}): LoadResult {
+export function loadTeamFile(cwd: string, options: { file?: string; home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {}): LoadResult {
   let path: string;
   let root: string;
   if (options.file) {
@@ -105,7 +125,7 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
         line: 0,
         message: options.file
           ? `no team file at ${options.file}`
-          : 'no team file here; it is private to each clone: run `team init`, or `team init --restore` to bring back the copy you last approved on this machine',
+          : 'no team file here; it is private to each clone: run `team init`, or `team init --restore` to bring back the copy this machine stored',
       }],
     };
   }
@@ -114,7 +134,7 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
   const result = validateTeamFile(text, { home: options.home, fs: options.fs, root });
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };
-  const errors = placedProblems(result.team, root, options.home, options.fs);
+  const errors = placedProblems(result.team, root, options.home, options.fs, options.session);
   return errors.length ? { ok: false, errors, path } : { ...result, root, path, text };
 }
 
@@ -129,7 +149,15 @@ function real(path: string): string {
 // What only shows once the root is known: a folder named by its own name can still be the
 // project's parent, as "../../Code/*" is for a project at ~/Code/acme. Validation on the text
 // alone can't see that; here every fixed folder is resolved, symlinks included.
-export function placedProblems(team: TeamFile, root: string, home: string = homedir(), fs?: FsReader): Problem[] {
+export function placedProblems(
+  team: TeamFile,
+  root: string,
+  home: string = homedir(),
+  fs?: FsReader,
+  /** The session the command addresses: the lobby trust must list is that session's recorded
+   *  one, which is the file's own unless the run names another (`up --session alt`). */
+  session: string = team.session,
+): Problem[] {
   const problems: Problem[] = [];
   const readLanding = (path: string) => {
     const res = canonicalLanding(path, fs);
@@ -175,7 +203,7 @@ export function placedProblems(team: TeamFile, root: string, home: string = home
   }
 
   if (isMigratedTrust(team.trust)) {
-    const lobby = resolveLobby(home, team);
+    const lobby = lobbyOf(home, root, { ...team, session });
     const lobbyRead = readLanding(lobby);
     const lobbyLanding = 'error' in lobbyRead ? null : lobbyRead.landing;
     if ('error' in lobbyRead) problems.push({ line: 0, message: `trust: ${lobbyRead.error}` });

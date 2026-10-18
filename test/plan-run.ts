@@ -206,9 +206,9 @@ try {
   console.log(glassA);
   const planSec = section(glassA, '--- plan ---');
   const helpSec = section(glassA, '--- help ---');
-  check(planSec.includes('t1  the urgent title\n  priority: 1\n  deadline: 2020-01-01T00:00:00Z (overdue)'), `plan did not mark t1 overdue:\n${planSec}`);
-  check(planSec.includes('t2  the later title'), `plan did not list t2:\n${planSec}`);
-  check(planSec.indexOf('t1  the urgent title') < planSec.indexOf('t2  the later title'), 'plan did not put the prioritised record first');
+  check(planSec.includes('  1     overdue  -      the urgent title\n'), `plan did not mark t1 overdue:\n${planSec}`);
+  check(planSec.includes('  2     open     -      the later title\n'), `plan did not list t2:\n${planSec}`);
+  check(planSec.indexOf('the urgent title') < planSec.indexOf('the later title'), 'plan did not put the prioritised record first');
   check(planSec.includes('exit:0'), `plan did not exit 0:\n${planSec}`);
   check(/\bplan\b/.test(helpSec), `--help did not list plan:\n${helpSec}`);
   check(helpSec.includes('exit:0'), `--help did not exit 0:\n${helpSec}`);
@@ -226,7 +226,9 @@ try {
   console.log('--- next glass ---');
   console.log(glassN);
   const nextSec = section(glassN, '--- next ---');
+  check(nextSec.includes('team acme, session "plan-evidence"\n'), `next printed no context line:\n${nextSec}`);
   check(nextSec.includes('t1  the urgent title\n  priority: 1\n  deadline: 2020-01-01T00:00:00Z\n'), `next did not print t1 with its unmarked deadline:\n${nextSec}`);
+  check(nextSec.includes('team next: claimed t1\n'), `next printed no closing summary line:\n${nextSec}`);
   check(!nextSec.includes('(overdue)'), `next's bytes gained the plan mark:\n${nextSec}`);
   check(nextSec.includes('exit:0'), `next did not exit 0:\n${nextSec}`);
   check(existsSync(join(root, '.agents', 'leases', 't1.json')), 'next wrote no lease');
@@ -260,6 +262,10 @@ try {
   const w1Line = w1Sec.indexOf('waiting every 2s');
   const w1Take = w1Sec.indexOf('t2  the later title');
   check(w1Answer < w1Line && w1Line < w1Take, `the wait's bytes are out of order:\n${w1Sec}`);
+  check(w1Sec.includes('team next: claimed t2\n'), `the wait's take printed no closing summary line:\n${w1Sec}`);
+  // The context line opens the run once, with the wait's first answer, and never again.
+  const w1Context = (w1Sec.match(/team acme, session "plan-evidence"/g) ?? []).length;
+  check(w1Context === 1, `the context line printed ${w1Context} times, not once:\n${w1Sec}`);
   check(w1Sec.includes('exit:0'), `the wait did not exit 0 after the take:\n${w1Sec}`);
   check(existsSync(join(root, '.agents', 'leases', 't2.json')), 'the wait took no lease');
 

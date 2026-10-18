@@ -10,7 +10,9 @@ import { loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
+import { runRegister, type RegisterSources } from '../../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
+import { runSeats, type SeatsSources } from '../../src/commands/seats.ts';
 import { runStatus, standingSource, type StatusSources } from '../../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { runWorktree, type WorktreeSources } from '../../src/commands/worktree.ts';
@@ -22,7 +24,8 @@ import { rulesText, seatRules, type RulesInput } from '../../src/launch/rules.ts
 import { defaultFs, findRepoRoot, lobbyDir, recheckLobby, verifyLobby, type FsReader } from '../../src/lobby/gate.ts';
 import { shippedStartupReads } from '../../src/profiles/index.ts';
 import { seatStart } from '../../src/worktree/place.ts';
-import { readState, updateState } from '../../src/state.ts';
+import { readState, SEAT_ID_PATTERN, updateState } from '../../src/state.ts';
+import { watchLabel } from '../../src/watch/pane.ts';
 import { approvalStanding, LEGACY_LINE, storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
 
@@ -273,6 +276,58 @@ async function runStatusCmd(argv: string[] = []) {
     home,
   };
   const code = await runStatus([...argv, ...FILE], io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+async function runSeatsCmd(argv: string[] = []) {
+  const io = testIo(root, OWNER);
+  const sources: SeatsSources = {
+    live: () => ({
+      running: true,
+      agents: [
+        { name: 'lead', agent: 'claude', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: root },
+        { name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: lobby },
+      ],
+      workspaces: [
+        { id: 'w0', label: 'lead' },
+        { id: 'w1', label: 'worker' },
+      ],
+      screens: {},
+    }),
+    branch: () => 'main',
+    standing: standingSource(home),
+    now: () => NOW,
+    home,
+  };
+  const code = await runSeats([...argv, ...FILE], io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+/** `team register` on a fake host: one agent on the pane, the processes a launch reads, and no
+ *  herdr write behind the sidebar relabel or the address refresh. */
+async function runRegisterCmd(
+  seat: string,
+  pane: string,
+  workspace: string,
+  over: Partial<RegisterSources> = {},
+) {
+  const io = testIo(root, OWNER);
+  const sources: RegisterSources = {
+    home,
+    sessionState: () => 'running',
+    agents: () => [{ name: seat, agent: 'claude', pane, workspace, status: 'idle', cwd: null }],
+    processInfo: () => ({ shell: 900, foreground: [901] }),
+    foreground: () => ['claude'],
+    paneText: () => IDLE,
+    renameWorkspace: () => true,
+    reportDisplayAgent: () => true,
+    refreshAddress: () => ({ address: null }),
+    now: () => NOW,
+    ...over,
+  };
+  // `team register` reads the file from the caller's folder (it takes no `--file`): the test's
+  // cwd is the project root, whose `.agents/team.yaml` the scene approved.
+  const code = await runRegister([seat], io, sources);
   return { code, out: io.out, err: io.err };
 }
 
@@ -530,14 +585,14 @@ describe('the lobby gate', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: will be created at the first launch\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: will be created at the first launch\n');
     expect(existsSync(lobby)).toBe(false);
 
     mkdirSync(lobby, { recursive: true });
     chmodSync(lobby, 0o700);
     const docVerified = await runDoctorCmd();
     expect(docVerified.code).toBe(0);
-    expect(docVerified.out).toContain(`the lobby ${lobby}: verified\n`);
+    expect(docVerified.out).toContain('the lobby ~/.config/team/lobby: verified\n');
   });
 
   test('refusal: mode 01700 (sticky) and 02700 (setgid) refused as not 0700', async () => {
@@ -971,13 +1026,13 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
 
     writeFileSync(join(lobby, 'CLAUDE.md'), 'plant\n');
     const miss = await runDoctorCmd();
     expect(miss.code).toBe(1);
-    expect(miss.out).toContain(`the lobby ${lobby}: CLAUDE.md${readBy}claude-code, cursor and grok\n`);
+    expect(miss.out).toContain(`the lobby ~/.config/team/lobby: CLAUDE.md${readBy}claude-code, cursor and grok\n`);
   });
 
   test('a lobby whose .claude holds only the lock passes up, add and doctor', async () => {
@@ -988,8 +1043,8 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
 
     const made = world();
     const run = await runUpCmd([], made);
@@ -999,7 +1054,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 
   test('up and add pass a lobby whose .claude holds only the lock, plus a readme and a notes folder', async () => {
@@ -1019,7 +1074,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 
   test('up and add refuse CLAUDE.md when each is about to start a seat in the lobby', async () => {
@@ -1098,7 +1153,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     const sentence = `${rel}${readBy}${by}`;
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(1);
-    expect(doc.out).toContain(`the lobby ${lobby}: ${sentence}\n`);
+    expect(doc.out).toContain(`the lobby ~/.config/team/lobby: ${sentence}\n`);
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(1);
@@ -1192,8 +1247,8 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
 
     const made = world();
     const run = await runUpCmd([], made);
@@ -1203,7 +1258,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 });
 
@@ -1305,7 +1360,7 @@ seats:
     // the folder, up starts the team in it, add starts one more seat in it.
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`the lobby ${lobby}: verified\n`);
+    expect(doc.out).toContain('the lobby ~/.config/team/lobby: verified\n');
 
     const upWorld = codexWorld();
     const run = await runUpCmd([], upWorld);
@@ -1330,7 +1385,7 @@ seats:
     // an owner reading the report knows who left it there and may remove it at the exit.
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(0);
-    expect(doc.out).toContain(`ok    the lobby ${lobby}: .claude/scheduled_tasks.lock is claude-code's\n`);
+    expect(doc.out).toContain("ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's\n");
   });
 
   test('CLAUDE.md: doctor misses, an up that starts no lobby seat does not refuse, add of a lobby seat does', async () => {
@@ -1342,7 +1397,7 @@ seats:
 
     const doc = await runDoctorCmd();
     expect(doc.code).toBe(1);
-    expect(doc.out).toContain(`the lobby ${lobby}: ${sentence}\n`);
+    expect(doc.out).toContain(`the lobby ~/.config/team/lobby: ${sentence}\n`);
 
     // The worker is stopped, so this up starts only the lead, in the project.
     const upWorld = codexWorld();
@@ -1876,7 +1931,7 @@ describe('legacy files and migration', () => {
     const docBefore = await runDoctorCmd();
     expect(docBefore.code).toBe(0);
     expect(docBefore.out).toContain(
-      `--    the file is legacy: migrate from ../worktrees/acme/.lobby to ${lobby} by writing:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`
+      `note  the file is legacy: migrate from ../worktrees/acme/.lobby to ~/.config/team/lobby by writing:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`
         + `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
         + `${join(base, 'worktrees', 'acme')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme/*"\n`,
     );
@@ -1916,7 +1971,7 @@ describe('legacy files and migration', () => {
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
     const added = made.workspaces.slice(before);
-    expect(added).toContainEqual({ label: 'worker-tmp-1', cwd: lobby });
+    expect(added).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 
   test('add refuses when trust has no lobby and leaves file untouched', async () => {
@@ -2211,13 +2266,13 @@ describe('the upgrade from 0.2.1', () => {
     const io = testIo(inside, OWNER);
     await runDoctor(['--file', '.agents/team.yaml'], io, runDoctorCmdSources());
     expect(io.out).toContain(
-      `workspace.path "../.config/{task}" would need ${join(home, '.config')}, which would cover `
-        + `${join(home, '.config', 'team')}, which holds the lobby and the approval store: trust a folder of the team's own; `
+      `workspace.path "../.config/{task}" would need ~/.config, which would cover `
+        + `~/.config/team, which holds the lobby and the approval store: trust a folder of the team's own; `
         + 'team cannot choose it for you: pick a folder yourself and write it into trust',
     );
     // The refused folder is not suggested; the suggestions stay at the lobby and the project root.
-    expect(blockOf(io.out)).toEqual(['~/.config/team/lobby', inside]);
-    expect(io.out).not.toContain(`  - ${join(home, '.config')}\n`);
+    expect(blockOf(io.out)).toEqual(['~/.config/team/lobby', '~/acme']);
+    expect(io.out).not.toContain('  - ~/.config\n');
   });
 
   // The fake host a named repair runs on: `remove --keep` types the exit into a free seat and
@@ -2264,7 +2319,7 @@ describe('the upgrade from 0.2.1', () => {
     };
   }
 
-  test("the identity note's repair works: remove --keep then add relaunches with the process recorded", async () => {
+  test("the identity note's repair works: register records the process where the seat stands", async () => {
     approveYaml(migratedTeamYaml());
     updateState(dir, (st) => {
       st.sessions['acme'] = { seats: { worker: { stage: 'ready', pane: 'w1:p1', workspace: 'w1' } }, worktrees: {} };
@@ -2272,25 +2327,25 @@ describe('the upgrade from 0.2.1', () => {
     const live = claudeLive('worker', 'w1:p1', 'w1');
     const before = await runDoctorCmd([], live);
     expect(before.out).toContain(
-      'worker: launched before team recorded its process; run `team remove worker --keep` then `team add worker` '
-        + '(or `team down` then `team up` for the whole team) to launch it again',
+      'worker: launched before team recorded its process; run `team register worker` to record its process',
     );
 
-    // Run the repair the line names, on the fake host, and read the note again.
-    expect(
-      await runRemove(['worker', '--keep', ...FILE], testIo(root, OWNER), removeKeepSources({ name: 'worker', pane: 'w1:p1', workspace: 'w1' }, 'claude', claudeBox)),
-    ).toBe(0);
-    const made = world();
-    made.session = 'running';
-    made.launch.processInfo = () => ({ shell: 900, foreground: [901] });
-    expect((await runAddCmd(['worker'], made)).code).toBe(0);
+    // Run the repair the line names, on the fake host: the pane the seat stands in is read
+    // again, and nothing is relaunched.
+    const registered = await runRegisterCmd('worker', 'w1:p1', 'w1');
+    expect(registered.code).toBe(0);
+    expect(registered.out).toContain('worker: already registered — pane w1:p1');
 
     const after = await runDoctorCmd([], live);
     expect(after.out).not.toContain('launched before team recorded its process');
     const worker = readState(dir).sessions['acme']?.seats.worker;
     expect(worker?.launched).toEqual({ shell: 900, cli: [901] });
-    expect(worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
+    expect(worker?.id).toMatch(SEAT_ID_PATTERN);
     expect(worker?.stage).toBe('ready');
+    // The record the repair writes is the one `team seats` reads its ID column from: the row
+    // that showed `-` before shows the seat's id.
+    const seats = await runSeatsCmd();
+    expect(seats.out).toContain(worker!.id!);
   });
 
   function codexCapture(name: string): string {
@@ -2459,8 +2514,8 @@ describe('the upgrade from 0.2.1', () => {
     expect(run.code).toBe(0);
     expect(run.out).toContain('worker: ready\n');
     expect(run.err).toContain(
-      '  already ready; left as it is; a relaunch records its process: '
-        + 'team remove worker --keep, then team add worker (or team down, then team up, for the whole team)\n',
+      '  already ready; left as it is; its process was never recorded: '
+        + 'run team register worker to record it, nothing relaunched\n',
     );
   });
 
@@ -2486,7 +2541,7 @@ describe('the upgrade from 0.2.1', () => {
     );
   });
 
-  test('coordinator and operator relaunch lines offer only whole-team repair, their rules-file line names team reload, and down/up clears both', async () => {
+  test('coordinator and operator draw no identity note, the register repair clears an ordinary seat\'s, their rules-file line names team reload, and down/up clears both', async () => {
     // Separate coordinator and operator seats
     const withOp = migratedTeamYaml()
       .replace('operator: lead', 'operator: opSeat')
@@ -2499,7 +2554,7 @@ describe('the upgrade from 0.2.1', () => {
     mkdirSync(oldLobby, { recursive: true });
     const oldLanding = canonicalLanding(oldLobby).landing;
 
-    // 1. Identity note: coordinator and operator name only team down/up; ordinary names both
+    // 1. Identity note: never for a lead's own seat; an ordinary seat names `team register`
     updateState(dir, (st) => {
       st.sessions['acme'] = {
         seats: {
@@ -2519,28 +2574,22 @@ describe('the upgrade from 0.2.1', () => {
       ],
     };
     const docIdent = await runDoctorCmd([], liveLeads);
-    expect(docIdent.out).toContain(
-      'lead: launched before team recorded its process; run `team down` then `team up` (to restart the whole team) to launch it again',
-    );
-    expect(docIdent.out).toContain(
-      'opSeat: launched before team recorded its process; run `team down` then `team up` (to restart the whole team) to launch it again',
-    );
+    // The orchestrator and the operator stand in the seat that reads the line: their own gaps
+    // draw no note, and no identity line names a whole-team restart any more.
+    expect(docIdent.out.split('\n').filter((line) => line.includes('launched before team recorded its process'))).toEqual([
+      'note  worker: launched before team recorded its process; run `team register worker` to record its process',
+    ]);
     expect(docIdent.out).not.toContain('team remove lead --keep');
     expect(docIdent.out).not.toContain('team remove opSeat --keep');
-    expect(docIdent.out).toContain('team remove worker --keep');
+    expect(docIdent.out).not.toContain('team remove worker --keep');
 
-    // Run whole-team repair on fake host; afterwards the identity note is gone
-    const seatsToDown = [
-      { name: 'lead', pane: 'w0:p1', workspace: 'w0' },
-      { name: 'opSeat', pane: 'w1:p1', workspace: 'w1' },
-      { name: 'worker', pane: 'w2:p1', workspace: 'w2' },
-    ];
-    expect(await runDown([...FILE], testIo(root, OWNER), downSourcesFor(seatsToDown))).toBe(0);
-    const madeUp = world();
-    madeUp.launch.processInfo = () => ({ shell: 900, foreground: [901] });
-    expect((await runUpCmd([], madeUp)).code).toBe(0);
+    // Run the repair the line names: the worker's record is completed where it stands.
+    const registered = await runRegisterCmd('worker', 'w2:p1', 'w2');
+    expect(registered.code).toBe(0);
+    expect(registered.out).toContain('worker: already registered — pane w2:p1');
     const docIdentAfter = await runDoctorCmd([], liveLeads);
     expect(docIdentAfter.out).not.toContain('launched before team recorded its process');
+    expect(readState(dir).sessions['acme']?.seats.worker?.id).toMatch(SEAT_ID_PATTERN);
 
     // 2. Rules-file warning: every seat, a lead included, is repaired with team reload — the
     // command that closes the ready seat and launches the file's line, which writes the rules file
@@ -2568,6 +2617,11 @@ describe('the upgrade from 0.2.1', () => {
     expect(docRules.out).not.toContain('team remove opSeat --keep');
 
     // Run whole-team repair on fake host; afterwards the rules warning is gone
+    const seatsToDown = [
+      { name: 'lead', pane: 'w0:p1', workspace: 'w0' },
+      { name: 'opSeat', pane: 'w1:p1', workspace: 'w1' },
+      { name: 'worker', pane: 'w2:p1', workspace: 'w2' },
+    ];
     const codexSeatsToDown = seatsToDown.map((s) => ({ ...s, cli: 'codex' }));
     expect(await runDown([...FILE], testIo(root, OWNER), downSourcesFor(codexSeatsToDown))).toBe(0);
     const madeCodex = world();
@@ -2662,7 +2716,7 @@ describe('the upgrade from 0.2.1', () => {
     });
     expect(docOldAfter.out).toContain('ok    the old lobby ../worktrees/acme/.lobby: may be removed\n');
 
-    // 4. up's skip line: coordinator and operator name only team down/up; ordinary names both
+    // 4. up's skip line: every seat, the lead's own included, names the one per-seat register run
     updateState(dir, (st) => {
       st.sessions['acme'] = {
         seats: {
@@ -2686,13 +2740,14 @@ describe('the upgrade from 0.2.1', () => {
     expect(upRun.out).toContain('lead: ready\n');
     expect(upRun.out).toContain('worker: ready\n');
     expect(upRun.out).toContain('opSeat: ready\n');
-    // The words main's skip line carried are each record's stderr detail now, in seat order:
-    // the coordinator and the operator name only the whole-team repair; an ordinary name both.
+    // Every record, the lead's own included, names the one per-seat register run: recording the
+    // identity where the seat stands, never a whole-team restart for one seat's bookkeeping.
     expect(upRun.err).toContain(
-      '  already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)\n'
-        + '  already ready; left as it is; a relaunch records its process: team remove worker --keep, then team add worker (or team down, then team up, for the whole team)\n'
-        + '  already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)\n',
+      '  already ready; left as it is; its process was never recorded: run team register lead to record it, nothing relaunched\n'
+        + '  already ready; left as it is; its process was never recorded: run team register worker to record it, nothing relaunched\n'
+        + '  already ready; left as it is; its process was never recorded: run team register opSeat to record it, nothing relaunched\n',
     );
+    expect(upRun.err).not.toContain('to restart the whole team');
     expect(upRun.err).not.toContain('team remove lead --keep');
     expect(upRun.err).not.toContain('team remove opSeat --keep');
 
@@ -2822,7 +2877,7 @@ describe('rules text', () => {
     expect(sharedRules).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (lead) in one line and keep working.',
-      'Never run `team trust` or `team approve`, and never edit `trust:` in the team file.',
+      'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
       'In a protected checkout, never switch the branch, reset or commit.',
       'Never break CI.',
       'Your signature in a commit message, as a trailer, in a last paragraph of its own that holds trailers only: Agent: Claude Opus 5.5 · implementer',
@@ -3157,7 +3212,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     const before = made.workspaces.length;
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made, { home: homeLink });
     expect(addRun.code).toBe(0);
-    expect(made.workspaces.slice(before)).toContainEqual({ label: 'worker-tmp-1', cwd: canonical });
+    expect(made.workspaces.slice(before)).toContainEqual({ label: 'worker-tmp-01', cwd: canonical });
   });
 
   test('an existing lobby with a looser mode is refused, never repaired', () => {
@@ -3227,7 +3282,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
       seatBudget: () => ({ kind: 'refuse', why: 'the account is spent' }),
     });
     expect(existsSync(lobby)).toBe(false);
-    expect(made.workspaces.some((workspace) => workspace.label !== 'watchdog')).toBe(false);
+    expect(made.workspaces.some((workspace) => workspace.label !== watchLabel('acme'))).toBe(false);
     expect(run.out).toContain('the account is spent');
   });
 });

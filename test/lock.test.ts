@@ -14,7 +14,9 @@ import {
   type LockIdentity,
   type LockSources,
 } from '../src/lock/machine.ts';
+import { LOCK_OUTPUT_SCHEMA, UNLOCK_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { gitEnv, testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const OWNER: LockIdentity = { team: 'beacon', by: 'owner' };
 const SEAT: LockIdentity = { team: 'beacon', by: 'claude-keeper' };
@@ -228,6 +230,21 @@ seats:
       at: '2026-10-04T09:00:00Z',
     });
   });
+
+  test('outside a repository, the refusal offers no --file: lock takes none', async () => {
+    const home = homeOf();
+    const io = testIo(base, { kind: 'owner' });
+    expect(await runLock(['heavy-run'], io, { home, now: () => new Date(AT), sleep: () => {} })).toBe(2);
+    expect(io.err).toBe('team lock: not inside a git repository: run team from a project\n');
+
+    const json = testIo(base, { kind: 'owner' });
+    expect(await runLock(['heavy-run', '--json'], json, { home, now: () => new Date(AT), sleep: () => {} })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'lock.project',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
+  });
 });
 
 describe('team unlock', () => {
@@ -241,6 +258,21 @@ describe('team unlock', () => {
     const again = testIo(base, { kind: 'owner' });
     expect(await runUnlock(['heavy-run'], again, sources(home, OWNER))).toBe(1);
     expect(again.err).toBe('heavy-run: not held\n');
+  });
+
+  test('outside a repository, the refusal offers no --file: unlock takes none', async () => {
+    const home = homeOf();
+    const io = testIo(base, { kind: 'owner' });
+    expect(await runUnlock(['heavy-run'], io, { home })).toBe(2);
+    expect(io.err).toBe('team unlock: not inside a git repository: run team from a project\n');
+
+    const json = testIo(base, { kind: 'owner' });
+    expect(await runUnlock(['heavy-run', '--json'], json, { home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'unlock.project',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
   });
 
   test('someone else is refused and the holder file is left as it was', async () => {
@@ -295,5 +327,80 @@ describe('team unlock', () => {
     expect(io.err).toContain('not a directory');
     expect(lstatSync(lockDirectory(home, 'heavy-run')).isSymbolicLink()).toBe(true);
     expect(readFileSync(join(outside, 'who'), 'utf8')).toBe('secret\n');
+  });
+
+  test('--json emits team.lock and team.unlock on success and team.error on refusals', async () => {
+    const home = homeOf();
+    const takeIo = testIo(base, { kind: 'owner' });
+    expect(await runLock(['heavy-run', '--for', 'release CI', '--json'], takeIo, sources(home, OWNER))).toBe(0);
+    expect(takeIo.err).toBe('');
+    const lockDoc = assertMatchesOutputSchema(takeIo.out, LOCK_OUTPUT_SCHEMA);
+    expect(lockDoc).toEqual({
+      schema: { name: 'team.lock', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'taken',
+      action_summary: 'heavy-run: taken',
+      project: 'beacon',
+      target: 'heavy-run',
+      value: 'release CI',
+      holder: {
+        team: 'beacon',
+        run: 'release CI',
+        by: 'owner',
+        at: '2026-10-04T09:00:00Z',
+      },
+    });
+
+    const heldIo = testIo(base, { kind: 'owner' });
+    expect(await runLock(['heavy-run', '--json'], heldIo, sources(home, SEAT))).toBe(1);
+    expect(heldIo.err).toBe('');
+    assertJsonErrorShape(heldIo.out, {
+      id: 'lock.held',
+      messageContains: 'heavy-run: held since 2026-10-04T09:00:00Z by owner (beacon)',
+      repair: null,
+    });
+
+    const notYoursIo = testIo(base, { kind: 'seat', name: 'claude-keeper', pane: 'w1:p1' });
+    expect(await runUnlock(['heavy-run', '--json'], notYoursIo, sources(home, SEAT))).toBe(1);
+    expect(notYoursIo.err).toBe('');
+    assertJsonErrorShape(notYoursIo.out, {
+      id: 'unlock.not-yours',
+      messageContains: 'not you',
+      repair: null,
+    });
+
+    const releaseIo = testIo(base, { kind: 'owner' });
+    expect(await runUnlock(['heavy-run', '--json'], releaseIo, sources(home, OWNER))).toBe(0);
+    expect(releaseIo.err).toBe('');
+    const unlockDoc = assertMatchesOutputSchema(releaseIo.out, UNLOCK_OUTPUT_SCHEMA);
+    expect(unlockDoc).toEqual({
+      schema: { name: 'team.unlock', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'released',
+      action_summary: 'heavy-run: released',
+      project: 'beacon',
+      target: 'heavy-run',
+      value: null,
+    });
+
+    const badLockIo = testIo(base, { kind: 'owner' });
+    expect(await runLock(['--nope', '--json'], badLockIo, sources(home, OWNER))).toBe(2);
+    expect(badLockIo.err).toBe('');
+    assertJsonErrorShape(badLockIo.out, {
+      id: 'lock.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
+
+    const badUnlockIo = testIo(base, { kind: 'owner' });
+    expect(await runUnlock(['--nope', '--json'], badUnlockIo, sources(home, OWNER))).toBe(2);
+    expect(badUnlockIo.err).toBe('');
+    assertJsonErrorShape(badUnlockIo.out, {
+      id: 'unlock.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
   });
 });

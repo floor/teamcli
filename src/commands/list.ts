@@ -3,19 +3,26 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { agentList, sessionList, type HerdrSession } from '../herdr.ts';
+import { agentList, paneRead, sessionList, type HerdrSession } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { findTeamFile, type FoundTeam } from '../list/find.ts';
+import { displayPath, hasJsonFlag, jsonEnvelope, pluralCount, ttyStyle, writeJsonError, type TtyStyle } from '../output/index.ts';
+import { herdrUnreliable } from '../profiles/index.ts';
 import { readTeams, teamsFile } from '../registry/teams.ts';
 import { isSeatId, readState } from '../state.ts';
+import { readScreen, screenWord } from '../watch/screen.ts';
 import { waitOrStop } from '../wait.ts';
+
+const PLAIN_STYLE = ttyStyle();
 
 export const USAGE = `Usage: team list [--all] [--seats] [--watch] [--json]
 
 Run from any folder. Lists the herdr sessions on this machine, the running ones unless --all is given, and changes nothing.
 
 A duplicate is two listed sessions whose team files resolve to the same directory, the real path of the folder that holds .agents. The same project name in two directories is two teams and is not flagged. Session names that match after lowercasing and removing hyphens, underscores and dots are near-duplicates. A pair the directory rule already names is not named again as near.
+
+Exits 0 when the sessions are listed (including when none are running or herdr is down), 2 when the invocation can't be read.
 `;
 
 /** One herdr session, as the list reads it. */
@@ -66,6 +73,8 @@ export type RegistryFile = { valid: boolean; seats: number | null };
 
 /** What `list` reads from outside itself, so a test stands in with fixtures and never a socket. */
 export type ListSources = {
+  /** Home directory for ~ shortening in human tables; defaults to homedir(). */
+  home?: string;
   /** Null when herdr cannot be asked. */
   sessions(): ListedSession[] | null;
   /** Null when this running session's roster cannot be read. Not called for a stopped session. */
@@ -137,6 +146,30 @@ type Draft = {
   root: string | null;
   bits: string[];
 };
+
+/** What a seat's row says it is doing. Herdr's word, with two changes — a blocked seat is
+ *  `waiting`, and herdr's `unknown` (or no word) is unread. For a profile herdr cannot report
+ *  (`herdr_status: unreliable`) the seat's own screen is the word, as it is in status, check and
+ *  the watch: idle or ready, working, every screen the profile reads but a running turn
+ *  `waiting`, and herdr's word only when the screen cannot be read either. */
+export function rosterStatus(
+  live: { status: string } | undefined,
+  cli: string | undefined,
+  stage: string | undefined,
+  screenText: string | null | undefined,
+): string | null {
+  if (!live) return 'stopped';
+  if (herdrUnreliable(cli)) {
+    const word = screenWord(readScreen(cli ?? '', screenText ?? ''));
+    if (word === 'working') return 'working';
+    if (word === 'idle') return stage === 'ready' ? 'ready' : 'idle';
+    if (word === 'blocked') return 'waiting';
+  }
+  if (live.status === 'blocked') return 'waiting';
+  if (live.status === 'idle' && stage === 'ready') return 'ready';
+  if (live.status && live.status !== 'unknown') return live.status;
+  return null;
+}
 
 export function activeSeatsOf(
   roster: RosterSeat[] | null,
@@ -384,12 +417,12 @@ function yesNo(value: boolean | null): string {
   return value === null ? '?' : value ? 'yes' : 'no';
 }
 
-function registryCells(row: RegistryRow): string[] {
+function registryCells(row: RegistryRow, home?: string): string[] {
   return [
     row.entity ?? '-',
     row.team,
     row.project ?? '-',
-    row.lobby ?? '-',
+    row.lobby ? displayPath(row.lobby, home) : '-',
     row.seats === null ? '?' : String(row.seats),
     yesNo(row.defined),
     yesNo(row.approved),
@@ -398,17 +431,30 @@ function registryCells(row: RegistryRow): string[] {
   ];
 }
 
+function padStyled(cell: string, width: number, styled: string): string {
+  const pad = Math.max(0, width - cell.length);
+  return `${styled}${' '.repeat(pad)}`;
+}
+
 /** The registry view's table. `--seats` prints each registered team's roster under its row,
  *  indented two spaces: seat, agent, role. A discovered row has no roster to print. */
-export function registryTable(rows: RegistryRow[], showSeats = false): string {
+export function registryTable(rows: RegistryRow[], showSeats = false, style: TtyStyle = PLAIN_STYLE, home?: string): string {
   const head = REGISTRY_HEAD;
-  const body = rows.map(registryCells);
+  const body = rows.map((row) => registryCells(row, home));
   const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
-  const line = (cells: string[]): string => cells
-    .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
-    .join('  ')
-    .trimEnd();
-  const out: string[] = [line(head)];
+  const line = (cells: string[], isHeader = false): string => {
+    const rendered = cells
+      .map((cell, index) => {
+        const isLast = index === cells.length - 1;
+        if (isHeader) return isLast ? cell : cell.padEnd(width[index] ?? 0);
+        const styled = cell === '-' ? style.dim(cell) : cell;
+        return isLast ? styled : padStyled(cell, width[index] ?? 0, styled);
+      })
+      .join('  ')
+      .trimEnd();
+    return isHeader ? style.bold(rendered) : rendered;
+  };
+  const out: string[] = [line(head, true)];
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index]!;
     out.push(line(body[index]!));
@@ -416,9 +462,13 @@ export function registryTable(rows: RegistryRow[], showSeats = false): string {
     const seatCells = row.roster.map((seat) => [seat.seat, seat.agent ?? '-', seat.role ?? '-']);
     const seatWidths = [0, 1, 2].map((col) => Math.max(1, ...seatCells.map((cells) => cells[col]?.length ?? 0)));
     for (const cells of seatCells) {
-      out.push(`  ${cells.map((cell, col) => (col === cells.length - 1 ? cell : cell.padEnd(seatWidths[col] ?? 0))).join('  ').trimEnd()}`);
+      out.push(`  ${cells.map((cell, col) => {
+        const styled = cell === '-' ? style.dim(cell) : cell;
+        return col === cells.length - 1 ? styled : padStyled(cell, seatWidths[col] ?? 0, styled);
+      }).join('  ').trimEnd()}`);
     }
   }
+  out.push(pluralCount(rows.length, 'session'));
   return `${out.join('\n')}\n`;
 }
 
@@ -436,32 +486,58 @@ export function registryJsonOf(rows: RegistryRow[], showSeats = false): string {
     source: row.source,
     ...(showSeats ? { roster: row.roster } : {}),
   }));
-  return `${JSON.stringify(documents, null, 2)}\n`;
+  return `${JSON.stringify(jsonEnvelope('team.list', { format: 1, rows: documents }), null, 2)}\n`;
 }
 
-function table(rows: ListRow[]): string {
+function table(rows: ListRow[], style: TtyStyle = PLAIN_STYLE): string {
   const head = ['TEAM', 'PROJECT', 'STATUS', 'SEATS', 'ACTIVITY', 'NOTE'];
   const body = rows.map((row) => [row.team, row.project, row.status, row.seats, row.activity, row.note]);
   const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
-  const line = (cells: string[]): string => cells
-    .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
-    .join('  ')
-    .trimEnd();
-  return `${[line(head), ...body.map(line)].join('\n')}\n`;
+  const headerLine = style.bold(
+    head
+      .map((cell, index) => (index === head.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
+      .join('  ')
+      .trimEnd(),
+  );
+  const rowLine = (cells: string[]): string => {
+    const lastNonEmpty = cells[cells.length - 1] === '' ? cells.length - 2 : cells.length - 1;
+    return cells
+      .slice(0, lastNonEmpty + 1)
+      .map((cell, index) => {
+        const styled = index === 2 || cell === '-' ? style.styleState(cell) : cell;
+        return index === lastNonEmpty ? styled : padStyled(cell, width[index] ?? 0, styled);
+      })
+      .join('  ')
+      .trimEnd();
+  };
+  return `${[headerLine, ...body.map(rowLine), pluralCount(rows.length, 'session')].join('\n')}\n`;
 }
 
-function tableWithSeats(rows: ListSeatsRow[]): string {
+function tableWithSeats(rows: ListSeatsRow[], style: TtyStyle = PLAIN_STYLE): string {
   const head = ['TEAM', 'PROJECT', 'STATUS', 'SEATS', 'ACTIVITY', 'NOTE'];
   const body = rows.map((row) => [row.team, row.project, row.status, row.seats, row.activity, row.note]);
   const width = head.map((label, index) => Math.max(label.length, ...body.map((cells) => cells[index]?.length ?? 0)));
-  const line = (cells: string[]): string => cells
-    .map((cell, index) => (index === cells.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
-    .join('  ')
-    .trimEnd();
-  const out: string[] = [line(head)];
+  const headerLine = style.bold(
+    head
+      .map((cell, index) => (index === head.length - 1 ? cell : cell.padEnd(width[index] ?? 0)))
+      .join('  ')
+      .trimEnd(),
+  );
+  const rowLine = (cells: string[]): string => {
+    const lastNonEmpty = cells[cells.length - 1] === '' ? cells.length - 2 : cells.length - 1;
+    return cells
+      .slice(0, lastNonEmpty + 1)
+      .map((cell, index) => {
+        const styled = index === 2 || cell === '-' ? style.styleState(cell) : cell;
+        return index === lastNonEmpty ? styled : padStyled(cell, width[index] ?? 0, styled);
+      })
+      .join('  ')
+      .trimEnd();
+  };
+  const out: string[] = [headerLine];
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index]!;
-    out.push(line(body[index]!));
+    out.push(rowLine(body[index]!));
     if (row.roster.length > 0) {
       const seatCells = row.roster.map((seat) => [
         seat.name ?? '-',
@@ -477,13 +553,17 @@ function tableWithSeats(rows: ListSeatsRow[]): string {
       for (const cells of seatCells) {
         out.push(
           `  ${cells
-            .map((cell, col) => (col === cells.length - 1 ? cell : cell.padEnd(seatWidths[col] ?? 0)))
+            .map((cell, col) => {
+              const styled = col === 2 || cell === '-' ? style.styleState(cell) : cell;
+              return col === cells.length - 1 ? styled : padStyled(cell, seatWidths[col] ?? 0, styled);
+            })
             .join('  ')
             .trimEnd()}`,
         );
       }
     }
   }
+  out.push(pluralCount(rows.length, 'session'));
   return `${out.join('\n')}\n`;
 }
 
@@ -496,7 +576,7 @@ function jsonOf(rows: ListRow[]): string {
     activity: row.activity,
     note: row.note,
   }));
-  return `${JSON.stringify(documents, null, 2)}\n`;
+  return `${JSON.stringify(jsonEnvelope('team.list', { format: 1, rows: documents }), null, 2)}\n`;
 }
 
 function jsonWithSeatsOf(rows: ListSeatsRow[]): string {
@@ -510,7 +590,7 @@ function jsonWithSeatsOf(rows: ListSeatsRow[]): string {
     roster: row.roster,
     note: row.note,
   }));
-  return `${JSON.stringify(documents, null, 2)}\n`;
+  return `${JSON.stringify(jsonEnvelope('team.list', { format: 1, rows: documents }), null, 2)}\n`;
 }
 
 export function realListSources(home: string = homedir()): ListSources {
@@ -520,6 +600,7 @@ export function realListSources(home: string = homedir()): ListSources {
     return cache;
   };
   return {
+    home,
     sessions() {
       cache = sessionList();
       if (cache === null) return null;
@@ -538,6 +619,10 @@ export function realListSources(home: string = homedir()): ListSources {
         }));
       }
       const state = ask(() => readState(join(resolved.found.root!, '.agents')).sessions[session], undefined);
+      // Only a seat whose profile herdr cannot report is read from its pane: every other row is
+      // the agent list's word alone, as it has always been.
+      const screenOf = (live: { pane: string } | undefined, cli: string | undefined): string | null =>
+        live !== undefined && herdrUnreliable(cli) ? ask(() => paneRead(live.pane, 200, session), null) ?? null : null;
       const matchedPanes = new Set<string>();
       const out: RosterSeat[] = [];
       for (const declared of resolved.team.seats) {
@@ -546,13 +631,10 @@ export function realListSources(home: string = homedir()): ListSources {
         const live = agents.find((agent) => agent.name === declared.name)
           ?? (recorded?.pane ? agents.find((agent) => agent.pane === recorded.pane) : undefined);
         if (live) matchedPanes.add(live.pane);
-        let status: string | null;
-        if (recorded?.waiting) status = 'waiting';
-        else if (!live) status = 'stopped';
-        else if (live.status === 'blocked') status = 'waiting';
-        else if (live.status === 'idle' && recorded?.stage === 'ready') status = 'ready';
-        else if (live.status && live.status !== 'unknown') status = live.status;
-        else status = null;
+        const cli = recorded?.cli ?? declared.cli;
+        const status: string | null = recorded?.waiting
+          ? 'waiting'
+          : rosterStatus(live, cli, recorded?.stage, screenOf(live, cli));
         const modelName = recorded?.model ?? declared.model;
         const modelVersion = recorded?.version ?? declared.version;
         const model = modelVersion ? `${modelName} ${modelVersion}` : modelName;
@@ -574,16 +656,13 @@ export function realListSources(home: string = homedir()): ListSources {
         const live = agents.find((agent) => agent.name === name)
           ?? (recorded.pane ? agents.find((agent) => agent.pane === recorded.pane) : undefined);
         if (live) matchedPanes.add(live.pane);
-        let status: string | null;
-        if (recorded.waiting) status = 'waiting';
-        else if (!live) status = 'stopped';
-        else if (live.status === 'blocked') status = 'waiting';
-        else if (live.status === 'idle' && recorded.stage === 'ready') status = 'ready';
-        else if (live.status && live.status !== 'unknown') status = live.status;
-        else status = null;
         const likeSeat = recorded.temporary
           ? resolved.team.seats.find((seat) => seat.name === recorded.temporary?.like)
           : undefined;
+        const cli = recorded.cli ?? likeSeat?.cli;
+        const status: string | null = recorded.waiting
+          ? 'waiting'
+          : rosterStatus(live, cli, recorded.stage, screenOf(live, cli));
         const modelName = recorded.model ?? likeSeat?.model ?? '-';
         const modelVersion = recorded.version ?? likeSeat?.version;
         const model = modelVersion ? `${modelName} ${modelVersion}` : modelName;
@@ -644,6 +723,7 @@ export default list;
 
 export async function runList(argv: string[], io: Io, sources: ListSources = realListSources()): Promise<number> {
   const args = readArgs(argv, [], ['all', 'seats', 'watch', 'json']);
+  const json = hasJsonFlag(argv);
   const contradictory = args.flags.has('watch') && args.flags.has('json');
   // An argument this command cannot use stops it before anything outside it is read.
   const early = args.error !== undefined || contradictory;
@@ -660,19 +740,23 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
       ? `unexpected "${args.rest[words]}"`
       : contradictory ? "--watch and --json can't be used together" : null);
   if (why !== null) {
-    io.stderr(`team list: ${why}\n${USAGE}`);
+    if (json) {
+      writeJsonError(io, 'list.invocation', why, null);
+    } else {
+      io.stderr(`team list: ${why}\n${USAGE}`);
+    }
     // exit: list.invocation
     return 2;
   }
   const all = args.flags.has('all');
   const showSeats = args.flags.has('seats');
-  const json = args.flags.has('json');
   const watching = args.flags.has('watch');
+  const style = ttyStyle(io, { json });
   const entity = registry === null ? null : (args.rest[0] ?? null);
   const registryText = (teams: RegistryTeam[]): { text: string; empty: boolean } => {
     const rows = registryRowsOf(teams, ask(() => sources.sessions(), null), sources, all, entity);
-    if (rows.length === 0) return { text: json ? '[]\n' : 'no teams\n', empty: true };
-    return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats), empty: false };
+    if (rows.length === 0) return { text: json ? jsonOf([]) : `no teams\n${pluralCount(0, 'team')}\n`, empty: true };
+    return { text: json ? registryJsonOf(rows, showSeats) : registryTable(rows, showSeats, style, sources.home), empty: false };
   };
   if (watching) {
     const wait = sources.wait ?? waitOrStop;
@@ -688,10 +772,10 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
           body = 'herdr is not running\n';
         } else if (showSeats) {
           const rows = seatRowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : tableWithSeats(rows);
+          body = rows.length === 0 ? (all ? `no sessions\n${pluralCount(0, 'session')}\n` : `no running sessions\n${pluralCount(0, 'session')}\n`) : tableWithSeats(rows, style);
         } else {
           const rows = rowsOf(listed, sources, all);
-          body = rows.length === 0 ? (all ? 'no sessions\n' : 'no running sessions\n') : table(rows);
+          body = rows.length === 0 ? (all ? `no sessions\n${pluralCount(0, 'session')}\n` : `no running sessions\n${pluralCount(0, 'session')}\n`) : table(rows, style);
         }
       }
       if (io.stdoutIsTTY) {
@@ -712,15 +796,15 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
     } else {
       const listed = ask(() => sources.sessions(), null);
       if (listed === null) {
-        io.stdout(json ? '[]\n' : 'herdr is not running\n');
+        io.stdout(json ? jsonOf([]) : 'herdr is not running\n');
         // exit: list.herdr-down
         return 0;
       }
       const rows = showSeats ? seatRowsOf(listed, sources, all) : rowsOf(listed, sources, all);
       empty = rows.length === 0;
-      if (empty) text = json ? '[]\n' : all ? 'no sessions\n' : 'no running sessions\n';
-      else if (showSeats) text = json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[]);
-      else text = json ? jsonOf(rows) : table(rows);
+      if (empty) text = json ? jsonOf([]) : all ? `no sessions\n${pluralCount(0, 'session')}\n` : `no running sessions\n${pluralCount(0, 'session')}\n`;
+      else if (showSeats) text = json ? jsonWithSeatsOf(rows as ListSeatsRow[]) : tableWithSeats(rows as ListSeatsRow[], style);
+      else text = json ? jsonOf(rows) : table(rows, style);
     }
     io.stdout(text);
     if (empty) {
@@ -731,4 +815,5 @@ export async function runList(argv: string[], io: Io, sources: ListSources = rea
   // exit: list.shown
   return 0;
 }
+
 

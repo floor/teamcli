@@ -102,22 +102,22 @@ describe('the one-glance cut of the up page', () => {
   test('the example that moved off the page stayed whole where it landed', () => {
     // The moved example is the only record of the skipped-seat shapes, and nothing executes it.
     // These are the binary's own strings (plan.ts builds them), so the page that moved them owes
-    // them whole: the fixture, both relaunch notes, the stopped seat, and the seat-caller refusal.
+    // them whole: the fixture, both register notes, the stopped seat, and the seat-caller refusal.
     const internal = prose(INTERNAL);
     expect(internal.includes('agents: [claude-keeper, claude-beacon]'), 'internal/up.md lost the fixture line').toBe(true);
     expect(internal.includes('name: gemini-qa'), 'internal/up.md lost the stopped seat').toBe(true);
     expect(internal.includes('stopped: true'), 'internal/up.md lost the stopped marker').toBe(true);
     expect(
       internal.includes(
-        'already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)',
+        'already ready; left as it is; its process was never recorded: run team register claude-keeper to record it, nothing relaunched',
       ),
-      'internal/up.md lost the lead relaunch note',
+      'internal/up.md lost the lead register note',
     ).toBe(true);
     expect(
       internal.includes(
-        'already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)',
+        'already ready; left as it is; its process was never recorded: run team register claude-beacon to record it, nothing relaunched',
       ),
-      'internal/up.md lost the implementer relaunch note',
+      'internal/up.md lost the implementer register note',
     ).toBe(true);
     expect(
       internal.includes('skip gemini-qa: stopped in the file; start it with `team add gemini-qa`'),

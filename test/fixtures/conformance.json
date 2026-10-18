@@ -659,9 +659,58 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/exit-typed.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/exit.txt",
+      "cli": "codex",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/idle-hint.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/idle.txt",
       "cli": "codex",
       "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/permission.txt",
+      "cli": "codex",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/trust.txt",
+      "cli": "codex",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/unsent.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/working.txt",
+      "cli": "codex",
+      "classify": "working",
       "composer": "idle",
       "provenance": "capture"
     },
@@ -1415,6 +1464,104 @@
       "provenance": "capture"
     },
     {
+      "file": "antigravity/1.4.0/exit.txt",
+      "cli": "antigravity",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.0/idle.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.0/permission.txt",
+      "cli": "antigravity",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.0/question.txt",
+      "cli": "antigravity",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.0/trust.txt",
+      "cli": "antigravity",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.0/unsent.txt",
+      "cli": "antigravity",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.0/working.txt",
+      "cli": "antigravity",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.1/exit.txt",
+      "cli": "antigravity",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.1/idle.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.1/permission.txt",
+      "cli": "antigravity",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.1/question.txt",
+      "cli": "antigravity",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.1/trust.txt",
+      "cli": "antigravity",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.1/unsent.txt",
+      "cli": "antigravity",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.1/working.txt",
+      "cli": "antigravity",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "cursor/2026.10.14/exit.txt",
       "cli": "cursor",
       "classify": "unknown",
@@ -1651,6 +1798,90 @@
       "classify": "idle",
       "composer": "idle",
       "provenance": "constructed"
+    },
+    {
+      "file": "claude-code/2.1.302/exit.txt",
+      "cli": "claude-code",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/held.txt",
+      "cli": "claude-code",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/idle.txt",
+      "cli": "claude-code",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/permission.txt",
+      "cli": "claude-code",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/question.txt",
+      "cli": "claude-code",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/trust.txt",
+      "cli": "claude-code",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/unsent.txt",
+      "cli": "claude-code",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.302/working.txt",
+      "cli": "claude-code",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/done.txt",
+      "cli": "jules",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/idle.txt",
+      "cli": "jules",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/wide.txt",
+      "cli": "jules",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/working.txt",
+      "cli": "jules",
+      "classify": "working",
+      "composer": "unknown",
+      "provenance": "capture"
     }
   ],
   "yaml": [

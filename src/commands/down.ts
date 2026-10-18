@@ -3,12 +3,14 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller } from '../caller.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeLevelNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { findRoot, loadTeamFile } from '../file/load.ts';
+import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
 import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
@@ -31,19 +33,21 @@ import {
   type PaneProcesses,
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import type { ExitTyping, Host } from '../launch/execute.ts';
+import type { ExitKeys, ExitTyping, Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { resetCliHookState } from '../launch/cli-hook.ts';
 import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
-import { profileFor } from '../profiles/index.ts';
+import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import { logLine } from '../log.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
+import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 
 // What `down` reads from outside the file, so tests can stand in for it.
 export type DownSources = {
@@ -107,6 +111,10 @@ function aim(session: string): string | undefined {
   return session === 'default' ? undefined : session;
 }
 
+/** One refusal this run carries to its single exit site: its contract row, the sentence, and
+ *  the repair when the gate named one. */
+type DownRefusal = { id: string; message: string; repair?: string | null };
+
 const realLaunch: DownLaunch = {
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
@@ -162,7 +170,7 @@ export const realSources: DownSources = {
 /** How long `--wait` gives a working seat, in seconds. */
 export const WAIT_SECONDS = 120;
 
-export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]\n';
+export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
 
 export const down: Command = (argv, io) => runDown(argv, io, realSources);
 export default down;
@@ -188,15 +196,15 @@ export function paneStillRunning(foreground: readonly string[] | null, processNa
 export function stateOfPane(
   status: string,
   screen: Screen,
-  pane: { foreground: readonly string[] | null; shellBack: boolean | null; processNames: readonly string[] },
+  pane: { foreground: readonly string[] | null; shellBack: boolean | null; processNames: readonly string[]; cli?: string },
 ): DownSeat['state'] {
   if (pane.shellBack === true && pane.processNames.length > 0 && !paneStillRunning(pane.foreground, pane.processNames)) {
     return 'exited';
   }
-  return stateOf(status, screen);
+  return stateOf(status, screen, pane.cli);
 }
 
-export function stateOf(status: string, screen: Screen): DownSeat['state'] {
+export function stateOf(status: string, screen: Screen, cli?: string): DownSeat['state'] {
   if (screen.kind === 'unsent') return 'unsent';
   // A framed exit question already on screen was left by an earlier stop. This run did not ask
   // it, so it is blocked: no key is sent, and `--abandon` closes it only as it closes every
@@ -206,6 +214,10 @@ export function stateOf(status: string, screen: Screen): DownSeat['state'] {
   // `--wait` waits for it, and it is never typed into.
   if (screen.kind === 'working') return 'working';
   if (screen.kind === 'unknown') return 'unknown';
+  // A profile herdr cannot report faithfully is read from its screen: the profile's own module
+  // read the seat as idle, which is its prompt. Every other screen kind above keeps its word —
+  // a working turn or a dialog is never made less cautious by this reading.
+  if (screen.kind === 'idle' && herdrUnreliable(cli)) return 'free';
   if (status === 'idle' || status === 'done') return 'free';
   if (status === 'working' || status === 'blocked') return status;
   return 'unknown';
@@ -242,7 +254,10 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   // The caller check that precedes every key: the CLI itself must be the pane's foreground
   // process at the key, not when the seat was read.
   const live = () => reportedLiveAgent(io.foreground(), names);
+  // A profile herdr cannot report faithfully is at rest when its own screen reads idle; the
+  // screen check below each call is the reading there, and it stays the gate for every key.
   const resting = () => {
+    if (herdrUnreliable(cli)) return true;
     const status = io.status();
     return status === 'idle' || status === 'done';
   };
@@ -381,6 +396,39 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   return { left: `its exit was not confirmed; the clearing key (${key}) left the screen reading ${after}; left running` };
 }
 
+/**
+ * The live key exit for one pane: a CLI whose TUI takes no exit text leaves on its own key at
+ * its idle screen. The caller check that precedes every key precedes each one, and the screen
+ * is read fresh right before it: a key goes only to a screen that reads idle, so a prompt that
+ * appeared between the planning and the key takes nothing. Every key is pressed at such a
+ * screen; once one is pressed the seat counts as asked, and the wait after the step says
+ * whether it left.
+ */
+export async function keyExit(io: ExitIo, cli: string, keys: readonly string[]): Promise<ExitKeys> {
+  const names = profileFor(cli)?.processNames ?? [];
+  // The caller check that precedes every key: the CLI itself must be the pane's foreground
+  // process at the key, not when the seat was read.
+  const live = () => reportedLiveAgent(io.foreground(), names);
+  // The same reading as `typeExit`: a profile whose herdr status is unreliable is at rest at
+  // its own idle screen, and the screen check right after this one is what gates the key.
+  const resting = () => {
+    if (herdrUnreliable(cli)) return true;
+    const status = io.status();
+    return status === 'idle' || status === 'done';
+  };
+  const kindOf = () =>
+    readScreen(cli, io.screen(), { cwd: io.foregroundCwd ? io.foregroundCwd() : undefined, home: io.home }).kind;
+  let pressed = 0;
+  for (const key of keys) {
+    if (!live()) return pressed > 0 ? true : 'no-agent';
+    if (!resting()) return pressed > 0 ? true : false;
+    if (kindOf() !== 'idle') return pressed > 0 ? true : false;
+    if (!io.sendKey(key)) return pressed > 0 ? true : false;
+    pressed++;
+  }
+  return true;
+}
+
 /** This seat's pane when the state records that pane and that workspace for exactly one seat.
  *  Herdr's name is not read: a title is not the seat's name, and a missing name is not a
  *  different pane. A record that also holds the launched process is this pane's only while
@@ -405,34 +453,42 @@ function leftNote(claim: { name: string; close: boolean } | null, pane: string):
 }
 
 export async function runDown(argv: string[], io: Io, sources: DownSources): Promise<number> {
-  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'wait', 'abandon']);
+  // A bad option stops the parser before `--json` is read when it comes first, and the
+  // structured refusal is still the one the caller asked for.
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'wait', 'abandon', 'json']);
+  // The lines plain output writes while it works ride on the document as notes under `--json`.
+  const jsonNotes: string[] = [];
+  const collect = (text: string): void => {
+    for (const line of text.split('\n')) if (line !== '') jsonNotes.push(line);
+  };
+  const note = (text: string): void => {
+    if (json) collect(text);
+    else io.stdout(`${text}\n`);
+  };
   if (args.error || args.rest.length) {
-    io.stderr(`team down: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
+    refuse(io, json, 'down', {
+      id: 'down.invocation',
+      message: args.error ?? `unexpected "${args.rest[0]}"`,
+      repair: null,
+      usage: USAGE,
+    });
     // exit: down.invocation
     return 2;
   }
-  // A create-grant's own runner is the one detached caller the record may name: this sentence is
-  // not for it, exactly as `init` asks it. Only the cwd's own repository is known this early,
-  // before any file is read, so this decision answers this refusal alone — the loaded root decides
-  // the caller rule below, and a team outside the granted paths still refuses there.
-  const detached = detachedRefusal(walkCaller(io));
-  // Asked only for the placement that would be refused, and only when a record exists, so a
-  // caller with none is refused without reading a repository or a clock.
-  let runnerGranted = false;
-  if (detached !== undefined && readEntityCreateGrants(sources.home ?? homedir()).length > 0) {
-    const hereRoot = findRoot(io.cwd);
-    runnerGranted = hereRoot !== null
-      && entityGrantAdmits(hereRoot, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
-  }
-  if (detached !== undefined && !runnerGranted) {
-    io.stderr(`team down: ${detached}\n`);
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none. This sentence is answered before any file is
+  // read, as `init` asks it; the route names who may run it, so the sentence does not send every
+  // reader to the owner.
+  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
+  if (detached !== undefined) {
+    refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
     // exit: down.detached
     return 1;
   }
   const dry = args.flags.has('dry-run');
-  // Set to exactly `1`. Anything else, including unset, leaves the caller refusal where it is.
-  const dev = io.env.TEAMCLI_DEV_MODE === '1';
-  const refusals: string[] = [];
+  // Dev mode is resolved from the run's file below, once its chain is known.
+  const refusals: DownRefusal[] = [];
 
   // --- the delegate branch -----------------------------------------------------------------
   // The gate is asked at most once, and only where the ordinary rule has just refused: a caller
@@ -493,9 +549,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (fileRefusal !== undefined) {
     const said = decide();
     if (said?.kind === 'refused' && placed) {
-      refusals.push(said.text);
+      refusals.push({ id: said.id, message: said.text });
     } else {
-      io.stderr(`team down: ${fileRefusal}\n`);
+      refuse(io, json, 'down', { id: 'down.file-owner', message: fileRefusal, repair: null });
       // exit: down.file-owner
       return 1;
     }
@@ -511,9 +567,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (!isOwner(walked)) {
       const said = decide();
       if (said?.kind === 'refused' && placed) {
-        refusals.push(said.text);
+        refusals.push({ id: said.id, message: said.text });
       } else {
-        io.stderr(`team down: ${sessionOwnerRefusal(walked)}\n`);
+        refuse(io, json, 'down', { id: 'down.session-owner', message: sessionOwnerRefusal(walked), repair: null });
         // exit: down.session-owner
         return 1;
       }
@@ -533,38 +589,62 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // load carries no delegate: today's path, with today's fallback and today's words, decides.
   const owner = isOwner(walkCaller(io));
   const liveNow = owner ? undefined : liveFile();
-  const current: Current = liveNow !== undefined && liveNow.team.delegates !== null
-    ? { ok: true, team: liveNow.team, root: liveNow.root, dir: liveNow.dir, warnings: [] }
-    : currentTeam(io.cwd, file, sources.now(), sources.home, false);
+  const liveCurrent: Current | undefined =
+    liveNow !== undefined && liveNow.team.delegates !== null
+      ? { ok: true, team: liveNow.team, root: liveNow.root, dir: liveNow.dir, warnings: [] }
+      : undefined;
+  // One clock reading serves the run's own file and the policy chain read beside it; the
+  // remembering below keeps its own, later reading.
+  const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
+  const current: Current = liveCurrent ?? currentTeam(io.cwd, file, loadedAt!, sources.home, false);
   if (!current.ok) {
-    for (const problem of current.errors) {
-      io.stderr(`team down: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
-    }
+    const said = current.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
+    const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
+      ? 'down.not-a-repo'
+      : current.errors.some((problem) => problem.line > 0) ? 'down.file-invalid' : 'down.file';
+    if (json) refuse(io, json, 'down', { id, message: said.join('; '), repair: null });
+    else for (const line of said) io.stderr(`team down: ${line}\n`);
     // exit: down.not-a-repo
     // exit: down.file
     // exit: down.file-invalid
     return 2;
   }
-  if (current.notice) io.stdout(`${current.notice}\n`);
+  if (current.notice) note(current.notice);
   const { team, dir, root } = current;
+  // Dev mode, from the file this run stops: a `dev-mode` value anywhere in the caller's chain
+  // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable set to
+  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  const devNow = loadedAt ?? sources.now();
+  const dev = resolveDevMode('down', io, {
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    team,
+    root,
+    now: devNow,
+  });
   // With no `--session` the session this run judges and stops is the caller's own placement: the
   // file's session first, then a session the state records this caller's pane in (`team up
   // --session <other>`) — never one a non-owner chose, and the plan then names that session. The
   // flag keeps aiming the run, for the owner alone. A delegated run stops the whole team, in the
   // session the file names: its caller is a pane outside that team, and no placement of it may
   // move the run onto another session — its own included.
+  // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
+  // speak: owner or `leads` for this team, decided from records — the registry roster's line
+  // where it stands, the file's own declaration where the registry holds no record of the team,
+  // and the standing's pane proof for a seat the map admits.
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, sources.home ?? homedir(), 'down', at, sources.now);
   const judged = branching()
     ? { caller: callerOf(io), session: team.session }
     : sessionFlag !== undefined
       ? { caller: callerOf(io, sessionFlag === 'default' ? undefined : sessionFlag), session: sessionFlag }
-      : judgeCallerIn(io, dir, team);
+      : judgeCallerIn(io, dir, team, verdictOf);
   let caller = judged.caller;
   let session = judged.session;
 
   // The ordinary caller rule, for the session the caller's own placement named. It is what decides
   // whether the gate is asked at all: a caller the rule accepts never enters the delegate branch,
   // and a run it accepts keeps its own session, its own plan and today's bytes exactly.
-  const rule = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
+  const rule = verdictOf(caller, standingOf(dir, session, caller));
   // A gate answer can move a run onto another session: the delegate branch always stops the team
   // the file names, whatever session the caller's placement pointed at. The two differ only for a
   // caller placed in a session the state holds (`team up --session <other>`), and the owner is
@@ -575,7 +655,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // session, where the checks below still come first: an idle one returns idle, as it would have.
   if (!owner && judged.session !== team.session && rule.kind !== 'ok') {
     const said = decide();
-    if (said?.kind === 'refused' && placed) refusals.push(said.text);
+    if (said?.kind === 'refused' && placed) refusals.push({ id: said.id, message: said.text });
     if (branching()) {
       caller = callerOf(io);
       session = team.session;
@@ -600,11 +680,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // and the owner stay on the rule above. A passed grant keeps this run a seat's run: both lead
   // seats stay in `keep`. A file that omits `grant` does not ask, and today's `down` stands.
   let grantSeat: string | undefined;
-  let grantRefusal: string | undefined;
+  let grantRefusal: DownRefusal | undefined;
   if (!branching() && rule.kind === 'ok' && caller.kind === 'seat' && caller.name === team.orchestrator && team.grant) {
     const said = (sources.grantGate ?? grantGate)({ act: 'down', io, home: sources.home });
     if (said.kind === 'passed') grantSeat = said.grant.seat;
-    else grantRefusal = said.text;
+    else {
+      grantRefusal = {
+        id: said.id === 'grant.scope' ? 'down.grant-scope' : 'down.grant-approval',
+        message: said.text,
+      };
+    }
   }
 
   // A caller the create-grant admits is not a refused caller: the run remembers its file exactly
@@ -629,8 +714,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       // A registry that cannot be read is said by the write below, which reads it again.
     }
     if (session !== addressed) return;
-    const unrecorded = noteTeam(sources.home, root, { ...team, session }, 'stopped', describeCaller(caller));
-    if (unrecorded) io.stderr(`team down: ${unrecorded}\n`);
+    const unrecorded = noteTeam(
+      sources.home,
+      root,
+      // The run notes the session it stopped; the file's own session keeps the same lobby.
+      { ...team, session, aliasSession: team.session },
+      'stopped',
+      describeCaller(caller),
+    );
+    if (unrecorded) {
+      if (json) collect(unrecorded);
+      else io.stderr(`team down: ${unrecorded}\n`);
+    }
   };
   // A session found already stopped has no agent left in it: the registry's agents that were
   // launched there are stopped, with their panes cleared. A seat closed by the run below is
@@ -638,27 +733,51 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const noteSessionEmpty = (): void => {
     if (dry || callerRefused || abandonRefused || sources.home === undefined) return;
     const unrecorded = registerSessionEnd({ home: sources.home, team, root, by: describeCaller(caller), session });
-    if (unrecorded) io.stderr(`team down: ${unrecorded.note}\n`);
+    if (unrecorded) {
+      if (json) collect(unrecorded.note);
+      else io.stderr(`team down: ${unrecorded.note}\n`);
+    }
   };
 
   const running = sources.sessionRunning(session);
   if (running === null) {
-    io.stderr("team down: herdr doesn't answer; is it installed and running?\n");
+    refuse(io, json, 'down', {
+      id: 'down.herdr',
+      message: "herdr doesn't answer; is it installed and running?",
+      repair: null,
+    });
     remember();
     // exit: down.herdr
     return 2;
   }
   if (!running && grantRefusal === undefined) {
-    io.stdout(`session ${session} is not running: nothing to stop${dry ? '\ndry run: nothing was run' : ''}\n`);
     remember();
     noteStopped();
     noteSessionEmpty();
+    if (json) {
+      writeJson(io, 'team.down', {
+        format: 1 as const,
+        dry_run: dry,
+        status: dry ? 'dry-run' : 'idle',
+        action_summary: dry ? 'dry run: nothing was run' : `session ${session} is not running: nothing to stop`,
+        project: team.project,
+        session,
+        seats: [],
+        ...(dry ? { notes: [`session ${session} is not running: nothing to stop`, ...jsonNotes] } : { notes: jsonNotes }),
+      });
+    } else {
+      io.stdout(`session ${session} is not running: nothing to stop${dry ? '\ndry run: nothing was run' : ''}\n`);
+    }
     // exit: down.idle
     return 0;
   }
   let agents = running ? sources.agents(session) : [];
   if (agents === null) {
-    io.stderr(`team down: the agents of session ${session} can't be read\n`);
+    refuse(io, json, 'down', {
+      id: 'down.agents',
+      message: `the agents of session ${session} can't be read`,
+      repair: null,
+    });
     remember();
     // exit: down.agents
     return 2;
@@ -677,16 +796,17 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     const said = decide();
     if (said === undefined) {
       if (rule.kind === 'no-pane') {
-        refusals.push(noPaneRefusal(rule.name));
+        refusals.push({ id: 'down.no-pane', message: noPaneRefusal(rule.name) });
       } else if (rule.kind === 'another-pane') {
-        refusals.push(anotherPaneRefusal(rule.name, rule.recordedPane));
+        refusals.push({ id: 'down.another-pane', message: anotherPaneRefusal(rule.name, rule.recordedPane) });
       } else {
-        refusals.push(
-          `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`,
-        );
+        refusals.push({
+          id: 'down.caller',
+          message: `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}${devModeExpiryNote(dev)}`,
+        });
       }
     } else if (said.kind === 'refused') {
-      refusals.push(said.text);
+      refusals.push({ id: said.id, message: said.text });
     }
   }
   // A delegated run never abandons: `--abandon` is the gate's refusal, and the plan holds every
@@ -694,23 +814,39 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // has answered is the run's only refusal: today's abandon line stays out of the way of its own.
   const abandon = args.flags.has('abandon') && granted === undefined;
   if (abandon && !callerOwns(caller) && verdict === undefined) {
-    refusals.push('only the owner abandons a team, from a terminal outside herdr');
+    refusals.push({
+      id: 'down.abandon',
+      message: 'only the owner abandons a team, from a terminal outside herdr',
+    });
   }
   const branchRun = branching();
 
   // Dev mode says the caller-placement line once, as a warning, and the stop continues.
   // Every other refusal stays a refusal. Unset, the list is unchanged. Nothing here writes
   // an approval, a key, or a grant.
-  const placement = `only the owner, the orchestrator or the operator stops the team; this call is ${describeCaller(caller)}`;
+  const placement = `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`;
   let warning = '';
-  if (dev) {
-    const kept: string[] = [];
+  if (dev.on) {
+    const kept: DownRefusal[] = [];
     for (const line of refusals) {
-      if (line === placement) warning = line;
+      if (line.message === placement) warning = line.message;
       else kept.push(line);
     }
-    if (warning) refusals.splice(0, refusals.length, ...kept);
+    if (warning) {
+      refusals.splice(0, refusals.length, ...kept);
+      // The variable's run prints the one override sentence every lifecycle command prints, its
+      // tail included; a run a governing policy admits names the level that set it instead.
+      warning = dev.by === 'env'
+        ? devModeCallerGate(dev, warning) ?? warning
+        : `warning: ${warning}${devModeLevelNote(dev)}`;
+    }
+    // The audit line the fold owes: written where the gate is used, on a real run, whether a
+    // later refusal stops the stop or the stop goes on. A dry run decides nothing and logs none.
+    if (warning && !dry) logDevMode(dir, 'down', describeCaller(caller), warning, devNow);
   }
+  // The configuration lines the run owes once: the variable ignored under a governing policy,
+  // and a policy source that would not load. A dry run writes none.
+  if (!dry) logDevModeState(dir, 'down', describeCaller(caller), dev, devNow);
 
   const state = readState(dir).sessions[session];
   const home = sources.home ?? homedir();
@@ -718,8 +854,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (refusals.length === 0) {
     const standing = sources.standing?.(root) ?? approvalStanding(root, home);
     if (standing.kind !== 'verified' && standing.kind !== 'none') {
-      if (warning) io.stderr(`team down: warning: ${warning}\n`);
-      io.stderr(`team down: ${notInForce(standing)}\n`);
+      if (warning) {
+        if (json) collect(warning);
+        else io.stderr(`team down: ${warning}\n`);
+      }
+      refuse(io, json, 'down', {
+        id: standing.kind === 'legacy' ? 'down.legacy' : 'down.refused',
+        message: notInForce(standing),
+        repair: null,
+      });
       // exit: down.never-approved
       // exit: down.legacy
       // exit: down.refused
@@ -751,6 +894,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           foreground: sources.foreground(session, agent.pane),
           shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
           processNames: profileFor(cli)?.processNames ?? [],
+          cli,
         });
         return state === 'working';
       });
@@ -836,12 +980,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       foreground: sources.foreground(session, agent.pane),
       shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
       processNames: profile?.processNames ?? [],
+      cli,
     });
     // An unsent box that holds exactly the profile's exit text — an earlier run typed it and
     // never confirmed it — is named as such either way: the profile's one clearing key decides
     // whether this run empties it and asks again (the plan's run step) or the owner does (its
     // skip line). Anything else unsent keeps the ordinary unsent line.
-    const exitInBox = reading === 'unsent' && profile !== null
+    const exitInBox = reading === 'unsent' && profile !== null && profile.exit !== null
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
     seats.push({
       name,
@@ -855,14 +1000,17 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
 
   const watch = state?.watch;
-  const watchAlive = Boolean(watch && sources.alive(watch.pid));
+  // Only a pid can be killed; a record whose pane's first pass has not written one yet is left
+  // as it is, as a watch whose process is not alive is.
+  const watchAlive = Boolean(watch && watch.pid !== undefined && sources.alive(watch.pid));
   if (watchAlive && refusals.length === 0) notes.push('watch: its pid is only in the state; left running');
-  for (const note of notes) io.stdout(`${note}\n`);
+  if (json) for (const line of notes) jsonNotes.push(line);
+  else for (const line of notes) io.stdout(`${line}\n`);
   const plan = downPlan({
     session,
     seats,
     extra,
-    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid : null,
+    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
@@ -873,17 +1021,21 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     unasked: 'team down --abandon closes it',
   });
 
-  if (dry) {
+  const seatNames = [...new Set(seats.map((seat) => seat.name))];
+  if (dry && !json) {
     // A refusal leaves through the real run's return below, so the status and the exit id
     // are that refusal's. The words stay the dry run's, and nothing is written.
-    if (warning) io.stdout(`! warning: ${warning}\n`);
-    for (const refusal of refusals) io.stdout(`! down would refuse: ${refusal}\n`);
+    if (warning) io.stdout(`! ${warning}\n`);
+    for (const refusal of refusals) io.stdout(`! down would refuse: ${refusal.message}\n`);
     io.stdout(formatPlan(plan));
   }
   if (refusals.length) {
-    if (!dry) {
-      if (warning) io.stderr(`team down: warning: ${warning}\n`);
-      for (const refusal of refusals) io.stderr(`team down: ${refusal}\n`);
+    const first = refusals[0] as DownRefusal;
+    if (json) {
+      refuse(io, json, 'down', { id: first.id, message: first.message, repair: first.repair ?? null });
+    } else if (!dry) {
+      if (warning) io.stderr(`team down: ${warning}\n`);
+      for (const refusal of refusals) io.stderr(`team down: ${refusal.message}\n`);
     }
     // exit: down.caller
     // exit: down.abandon
@@ -899,14 +1051,38 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.grant-scope
     return 1;
   }
-  if (!dry && warning) io.stderr(`team down: warning: ${warning}\n`);
+  if (!dry && warning) {
+    if (json) collect(warning);
+    else io.stderr(`team down: ${warning}\n`);
+  }
   if (dry) {
+    if (json) {
+      const steps: PlanStep[] = [
+        ...(warning ? [{ step: 'warning', detail: warning, prefix: '!' as const }] : []),
+        ...planStepsOf(plan),
+      ];
+      writeJson(io, 'team.down', {
+        format: 1 as const,
+        dry_run: true,
+        status: 'dry-run',
+        action_summary: 'dry run: nothing was run',
+        project: team.project,
+        session,
+        seats: seatNames,
+        plan: steps,
+        notes: jsonNotes,
+      });
+    }
     // exit: down.dry-run
     return 0;
   }
   const launch = sources.launch;
   if (!launch) {
-    io.stderr('team down: this call has no way to reach herdr\n');
+    refuse(io, json, 'down', {
+      id: 'down.no-launch',
+      message: 'this call has no way to reach herdr',
+      repair: null,
+    });
     // exit: down.no-launch
     return 1;
   }
@@ -917,7 +1093,11 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // (`launch/run-lock.ts`).
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    io.stderr(`team down: ${runLockText(runLock.held, session, dir)}\n`);
+    refuse(io, json, 'down', {
+      id: 'down.run-lock',
+      message: runLockText(runLock.held, session, dir),
+      repair: null,
+    });
     // exit: down.run-lock
     return 1;
   }
@@ -932,6 +1112,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (grantSeat !== undefined) (sources.grantAudit ?? logGranted)(dir, grantSeat, 'down', sources.now());
 
     const now = () => sources.now();
+    // The lines the plan's own steps print as they run: the last one is the run's outcome.
+    const said: string[] = [];
     const host: Host = {
       startServer: () => false,
       sessionUp: () => true,
@@ -956,6 +1138,22 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           sleep: sources.sleep ?? launch.sleep,
           now: () => sources.now().getTime(),
         }, cli, text);
+      },
+      async pressKeys(sessionName, pane, cli, keys) {
+        // As `typeLine`: the whole key sequence — the caller check, the fresh idle reading, the
+        // key itself — is `keyExit`'s, shared with `remove`.
+        return keyExit({
+          typeText: (line) => launch.typeText(sessionName, pane, line),
+          sendKey: (key) => launch.sendKey(sessionName, pane, key),
+          pressEnter: () => launch.pressEnter(sessionName, pane),
+          screen: () => sources.screenText(sessionName, pane, cli),
+          status: () => sources.status(sessionName, pane),
+          foreground: () => sources.foreground(sessionName, pane),
+          foregroundCwd: () => (sources.foregroundCwd ? sources.foregroundCwd(sessionName, pane) : null),
+          home: sources.home,
+          sleep: sources.sleep ?? launch.sleep,
+          now: () => sources.now().getTime(),
+        }, cli, keys);
       },
       renameAgent: () => false,
       closeWorkspace: launch.closeWorkspace,
@@ -998,6 +1196,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         });
       },
       classify: () => 'unknown',
+      // The departure wait of a profile herdr cannot report reads the pane's own process: herdr
+      // never lists such a pane, so its agent list would say "gone" before the key was pressed.
+      foreground: (sessionName, pane) => sources.foreground(sessionName, pane),
       sleep: sources.sleep ?? launch.sleep,
       now: () => now().getTime(),
       allow: () => null,
@@ -1019,6 +1220,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           }
           delete current.seats[name];
         });
+        // The seat's own hook reading goes with its record: a `working` left by a turn the stop
+        // interrupted must not answer for a seat that is no longer running.
+        resetCliHookState(dir, session, [name]);
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
         // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
         if (sources.home !== undefined) {
@@ -1027,14 +1231,39 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
             name,
             temporaryDropped ? 'retired' : 'stopped',
           );
-          if (ended) io.stderr(`team down: ${ended.note}\n`);
+          if (ended) {
+            if (json) collect(ended.note);
+            else io.stderr(`team down: ${ended.note}\n`);
+          }
         }
       },
-      say: (line) => io.stdout(line),
+      say: (line) => {
+        said.push(line.replace(/\n$/, ''));
+        if (!json) io.stdout(line);
+      },
       log: (who, what) => logLine(dir, 'down', describeCaller(caller), `${who}: ${what}`, now()),
     };
     const report = await executePlan(plan, session, host);
     if (!report.held) noteStopped();
+    if (json) {
+      const lines = said.filter((line) => line !== '');
+      const summary = lines.at(-1) ?? `session ${session}: stopped`;
+      const notes = [...jsonNotes, ...lines.slice(0, -1)];
+      if (report.held) {
+        refuse(io, true, 'down', { id: 'down.held', message: summary, repair: null });
+      } else {
+        writeJson(io, 'team.down', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'stopped',
+          action_summary: summary,
+          project: team.project,
+          session,
+          seats: seatNames,
+          notes,
+        });
+      }
+    }
     // exit: down.stopped
     // exit: down.held
     return report.held ? 1 : 0;

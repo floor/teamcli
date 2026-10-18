@@ -12,21 +12,22 @@ pane is read, no team file or state is written.
 
 Reads `herdr session list --json`, and for each session it keeps, that session's registry
 (`<session_dir>/session.json`, for each workspace's `identity_cwd`) and, when the registry does not
-name a team file, this machine's approval stores. A team file is `.agents/team.yaml` whose `session`
+name a team file, this machine's record stores. A team file is `.agents/team.yaml` whose `session`
 is the herdr session (an omitted `session` is the project name). A link standing in for the file is
-not opened. For a running session it also reads `herdr agent list` — the roster, not a pane. A
-stopped session is not asked for a roster.
+not opened. For a running session it also reads `herdr agent list` — the roster — and the pane of
+a seat whose profile says herdr cannot report it, for that seat's state. A stopped session is not
+asked for a roster.
 
 It writes nothing.
 
 A session with no team file is an orphan. A file that names the session but does not validate, a
-roster that cannot be read, and a seat whose status herdr gives as `unknown` or not at all, show
-`?`. None of those fail the list. When herdr cannot be asked, the command prints one sentence and
-exits 0; `--json` prints `[]`.
+roster that cannot be read, and a seat whose status herdr gives as `unknown` or not at all — and
+whose own screen reads nothing either — show `?`. None of those fail the list. When herdr cannot
+be asked, the command prints one sentence and exits 0; `--json` prints `[]`.
 
 ## Who may run it
 
-Anyone, from any folder. It needs no approval and no project of its own.
+Anyone, from any folder. It needs no project of its own.
 
 ## Flags
 
@@ -77,6 +78,10 @@ seat, with no header of its own: `name`, `id`, `status`, `cli`, `model`, `pane`.
 the team file do not give is `-`, a status that cannot be read is `?`, and `status` is herdr's own
 word with two changes: a blocked seat is `waiting`, and a seat the file declares that herdr does not
 have is `stopped` — so every declared seat has a row. A stopped session has no roster and no rows.
+For a seat whose profile says herdr cannot report it (`herdr_status: unreliable`), the word is the
+seat's own screen instead: its idle table or a box holding text is `idle` (or `ready` once the seat
+is up), a running turn is `working`, every other screen the profile reads is `waiting`, and `?` is
+left for a screen it cannot read.
 
 With `--seats`, `ACTIVITY` is that roster counted by readiness, an `idle` or `ready` seat counting
 as ready — `2 ready / 0 working / 0 waiting / 0 stopped` — and `--json` adds `roster` and
@@ -94,7 +99,7 @@ the same checkout.
 Session names that match after lowercasing and removing hyphens, underscores and dots are
 near-duplicates (`md3-io` and `md3io`). The note is `near <the other sessions>`. A pair the
 directory rule already names is not named again as near. A shared prefix is not enough:
-`radiooooo` and `radiooooo-ios` are different names, and so are `teamcli` and `teamcli.io`.
+`acme` and `acme-ios` are different names, and so are `teamcli` and `teamcli.io`.
 
 ## Exit codes
 
@@ -144,6 +149,7 @@ The fixture's session is running, and both seats are idle:
 $ team list ; echo "exit $?"
 TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE
 beacon  beacon   running  2      2 idle
+1 session
 exit 0
 ```
 
@@ -155,23 +161,31 @@ TEAM    PROJECT  STATUS   SEATS  ACTIVITY                                     NO
 beacon  beacon   running  2      2 ready / 0 working / 0 waiting / 0 stopped
   claude-keeper  -  idle  -  -  -
   claude-beacon  -  idle  -  -  -
+1 session
 exit 0
 ```
 
-`--json` prints the same rows as an array. The keys are stable, and an empty list is `[]`:
+`--json` prints the `team.list` envelope (`schema/list.schema.json`) with one object per row in `rows`:
 
 ```console
 $ team list --json ; echo "exit $?"
-[
-  {
-    "team": "beacon",
-    "project": "beacon",
-    "status": "running",
-    "seats": "2",
-    "activity": "2 idle",
-    "note": ""
-  }
-]
+{
+  "schema": {
+    "name": "team.list",
+    "version": 1
+  },
+  "format": 1,
+  "rows": [
+    {
+      "team": "beacon",
+      "project": "beacon",
+      "status": "running",
+      "seats": "2",
+      "activity": "2 idle",
+      "note": ""
+    }
+  ]
+}
 exit 0
 ```
 
@@ -180,6 +194,7 @@ A stopped session is left out unless `--all` is set. Herdr not answering is not 
 ```console herdr=stopped
 $ team list ; echo "exit $?"
 no running sessions
+0 sessions
 exit 0
 ```
 
@@ -187,6 +202,7 @@ exit 0
 $ team list --all ; echo "exit $?"
 TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE
 beacon  beacon   stopped  2      -
+1 session
 exit 0
 ```
 
@@ -198,7 +214,14 @@ exit 0
 
 ```console herdr=none
 $ team list --json ; echo "exit $?"
-[]
+{
+  "schema": {
+    "name": "team.list",
+    "version": 1
+  },
+  "format": 1,
+  "rows": []
+}
 exit 0
 ```
 
@@ -212,5 +235,8 @@ Usage: team list [--all] [--seats] [--watch] [--json]
 Run from any folder. Lists the herdr sessions on this machine, the running ones unless --all is given, and changes nothing.
 
 A duplicate is two listed sessions whose team files resolve to the same directory, the real path of the folder that holds .agents. The same project name in two directories is two teams and is not flagged. Session names that match after lowercasing and removing hyphens, underscores and dots are near-duplicates. A pair the directory rule already names is not named again as near.
+
+Exits 0 when the sessions are listed (including when none are running or herdr is down), 2 when the invocation can't be read.
 exit 2
 ```
+

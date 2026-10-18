@@ -19,16 +19,25 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
+import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
 import { claimLocal, releaseLocal } from '../tasks/lease.ts';
 import { waitOrStop } from '../wait.ts';
 
-export const USAGE = 'Usage: team next [--mine | --release] [--wait]\n';
+export const USAGE = `Usage: team next [--mine | --release] [--wait] [--json]
+
+Claims one record from the source the team file names and holds it with a lease in this clone;
+without one takeable it stands down. --release unlinks the caller's own lease. --wait re-reads
+the source every tasks.cadence while a pass finds nothing takeable, and cannot be read as one
+--json document. A claim is a local lease: the tracker is never written.
+
+Exits 0 when a task is claimed, released, or none is open, 1 when the caller, policy, broker, or file is refused, 2 when the invocation can't be read or this folder is not a git repository.
+`;
 
 export type NextSources = {
   home?: string;
@@ -44,37 +53,74 @@ export type NextSources = {
   wait?: (seconds: number) => Promise<boolean>;
 };
 
+/** The one run's output state: the context line's words, whether `--json` asked for the one
+ *  envelope, and whether the context line has printed. A wait prints it once, with its first
+ *  answer; every later event of the same run prints only its own line. */
+type Emit = {
+  context: string;
+  project: string;
+  session: string;
+  json: boolean;
+  printed: boolean;
+};
+
+export type NextTaskJson = {
+  id: string;
+  title: string;
+};
+
+export type NextStatus = 'claimed' | 'released' | 'none';
+
+export type NextAction = 'claim' | 'release' | 'none';
+
 export const next: Command = (argv, io) => runNext(argv, io);
 export default next;
 
 export async function runNext(argv: string[], io: Io, sources: NextSources = {}): Promise<number> {
-  const args = readArgs(argv, [], ['mine', 'release', 'wait']);
+  const args = readArgs(argv, [], ['mine', 'release', 'wait', 'json']);
+  // The raw argv, not the parser's flags: an unknown option before `--json`, or `--json=<value>`,
+  // must still route the refusal through the `team.next` error document on stdout.
+  const json = hasJsonFlag(argv);
+  // A wait prints its events as they happen; that stream is not one document, so the two are
+  // refused together, the same way `team seats` refuses --watch with --json.
+  if (args.flags.has('wait') && json) {
+    return invocation(io, '--wait and --json can\'t be used together', true, json);
+  }
   if (args.flags.has('mine') && args.flags.has('release')) {
-    return invocation(io, '--mine and --release are not used together', false);
+    return invocation(io, '--mine and --release are not used together', false, json);
   }
   if (args.flags.has('wait') && args.flags.has('release')) {
-    return invocation(io, '--wait and --release are not used together', false);
+    return invocation(io, '--wait and --release are not used together', false, json);
   }
   if (args.error || args.rest.length) {
-    return invocation(io, args.error ?? `unexpected "${args.rest[0]}"`, true);
+    return invocation(io, args.error ?? `unexpected "${args.rest[0]}"`, true, json);
   }
   const root = findRoot(io.cwd);
   if (!root) {
-    io.stderr(`team next: ${NOT_A_REPO}\n`);
+    // `team next` takes no `--file`, so the no-repository refusal must not offer one.
+    if (json) writeJsonError(io, 'next.not-a-repo', NOT_A_REPO_NO_FILE, 'run team next from inside the git checkout');
+    else io.stderr(`team next: ${NOT_A_REPO_NO_FILE}\n`);
     // exit: next.not-a-repo
     return 2;
   }
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
-  if (!loaded.ok) return file(io, loaded.errors[0]?.message ?? 'the team file can\'t be read');
+  if (!loaded.ok) return file(io, loaded.errors[0]?.message ?? 'the team file can\'t be read', json);
   const tasks = loaded.team.tasks;
-  if (!tasks) return file(io, 'the team file declares no task source');
+  if (!tasks) return file(io, 'the team file declares no task source', json);
+  const emit: Emit = {
+    context: contextLine(loaded.team.project, loaded.team.session),
+    project: loaded.team.project,
+    session: loaded.team.session,
+    json,
+    printed: false,
+  };
   const mine = args.flags.has('mine');
   if (args.flags.has('wait')) {
     const cadence = tasks.cadence;
     if (cadence === undefined) {
-      return invocation(io, '--wait needs tasks.cadence in the team file', false);
+      return invocation(io, '--wait needs tasks.cadence in the team file', false, json);
     }
-    return pass(io, loaded, tasks, sources, mine, false, true, {
+    return pass(io, loaded, tasks, sources, mine, false, true, emit, {
       loaded,
       tasks,
       sources,
@@ -84,7 +130,7 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
       now: sources.now ?? Date.now,
     });
   }
-  return pass(io, loaded, tasks, sources, mine, args.flags.has('release'), true, undefined);
+  return pass(io, loaded, tasks, sources, mine, args.flags.has('release'), true, emit, undefined);
 }
 
 /**
@@ -117,28 +163,30 @@ async function pass(
   mine: boolean,
   release: boolean,
   speak: boolean,
+  emit: Emit,
   hold: Hold | undefined,
 ): Promise<number> {
-  if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, hold);
+  if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold);
   const registry = sources.registry ?? fileRegistry;
   const adapter = registry[tasks.source];
-  if (!adapter) return file(io, 'tasks.source must be file');
+  if (!adapter) return file(io, 'tasks.source must be file', emit.json);
   const placed = place(loaded.team, loaded.root, io);
-  if (placed.kind === 'refused') return callerRefuse(io, placed.message);
+  if (placed.kind === 'refused') return callerRefuse(io, placed.message, emit.json);
   const now = sources.now ?? Date.now;
   const at = now();
   if (release) {
     const result = adapter.release
       ? adapter.release({ root: loaded.root, seat: placed.seat, pane: placed.pane, now: at })
       : releaseLocal(loaded.root, placed.seat, placed.pane, at);
-    if (result.kind === 'released') return released(io, result.id);
-    return none(io, 'nothing is held');
+    if (result.kind === 'released') return released(io, result.id, emit);
+    return none(io, 'nothing is held', speak, emit);
   }
   const read = adapter.read({ root: loaded.root, path: tasks.path });
-  if (read.kind === 'missing') return missing(io);
-  if (read.kind === 'outside') return file(io, 'tasks.path must stay inside the checkout');
+  if (read.kind === 'missing') return missing(io, emit.json);
+  if (read.kind === 'outside') return file(io, 'tasks.path must stay inside the checkout', emit.json);
   if (read.kind === 'not-a-list') {
-    io.stderr('team next: the task file is not a list\n');
+    if (emit.json) writeJsonError(io, 'next.shape', 'the task file is not a list', 'make the task file a YAML list');
+    else io.stderr('team next: the task file is not a list\n');
     return shape();
   }
   const claimFn = adapter.claim;
@@ -146,7 +194,7 @@ async function pass(
     ? (record: TaskRecord) =>
         claimFn({ root: loaded.root, path: tasks.path, record, seat: placed.seat, pane: placed.pane, now: at }).kind === 'held'
     : undefined;
-  return take(io, loaded.root, read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, claim, speak, hold);
+  return take(io, loaded.root, read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, claim, speak, emit, hold);
 }
 
 /**
@@ -163,34 +211,37 @@ async function nextFromBroker(
   mine: boolean,
   release: boolean,
   speak: boolean,
+  emit: Emit,
   hold: Hold | undefined,
 ): Promise<number> {
   const placed = place(loaded.team, loaded.root, io);
-  if (placed.kind === 'refused') return callerRefuse(io, placed.message);
+  if (placed.kind === 'refused') return callerRefuse(io, placed.message, emit.json);
   const now = sources.now ?? Date.now;
   const at = now();
   if (release) {
     // The tracker holds no claim: the lease is local, and `--release` unlinks it without
     // reaching the broker at all.
     const result = releaseLocal(loaded.root, placed.seat, placed.pane, at);
-    if (result.kind === 'released') return released(io, result.id);
-    return none(io, 'nothing is held');
+    if (result.kind === 'released') return released(io, result.id, emit);
+    return none(io, 'nothing is held', speak, emit);
   }
   const request: BrokerRequest = { op: 'read', seat: placed.seat, pane: placed.pane };
   const options = sources.deadlineMs === undefined ? {} : { deadlineMs: sources.deadlineMs };
   const outcome = await askBroker(loaded.root, request, options);
-  if (outcome.kind === 'unavailable') return broker(io, NOT_RUNNING);
-  if (outcome.kind === 'wrong') return broker(io, WRONG_ANSWER);
-  if (outcome.kind === 'deadline') return broker(io, DEADLINE);
+  if (outcome.kind === 'unavailable') return broker(io, NOT_RUNNING, emit.json);
+  if (outcome.kind === 'wrong') return broker(io, WRONG_ANSWER, emit.json);
+  if (outcome.kind === 'deadline') return broker(io, DEADLINE, emit.json);
   if (outcome.kind === 'refused') {
-    if (outcome.at === 'caller') return callerRefuse(io, outcome.message);
-    return readFail(io, outcome.message);
+    if (outcome.at === 'caller') return callerRefuse(io, outcome.message, emit.json);
+    return readFail(io, outcome.message, emit.json);
   }
   // This build's broker answers records for a linear source; any other read kind is an answer
   // the seat fails safe on, exactly like an unparseable line.
-  if (outcome.read.kind !== 'records') return broker(io, WRONG_ANSWER);
-  if (outcome.notice !== undefined) io.stderr(`team next: ${outcome.notice}\n`);
-  return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, hold);
+  if (outcome.read.kind !== 'records') return broker(io, WRONG_ANSWER, emit.json);
+  // A notice about the read is for a person reading the table; a `--json` run's stderr stays
+  // empty, the document on stdout being the whole answer.
+  if (outcome.notice !== undefined && !emit.json) io.stderr(`team next: ${outcome.notice}\n`);
+  return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, emit, hold);
 }
 
 /**
@@ -211,6 +262,7 @@ async function take(
   at: number,
   claim: ((record: TaskRecord) => boolean) | undefined,
   speak: boolean,
+  emit: Emit,
   hold: Hold | undefined,
 ): Promise<number> {
   const known = new Map(read.records.map((record) => [record.id, record]));
@@ -228,14 +280,17 @@ async function take(
   } else {
     outcome = claimLocal(root, { now: at, seat: placed.seat, pane: placed.pane, known, candidates });
   }
-  for (const refusal of read.refusals) {
-    const who = refusal.id ?? `record ${refusal.index}`;
-    io.stderr(`team next: ${who} is not a task: ${refusal.reason}\n`);
+  const refused = read.refusals.map((refusal) => `${refusal.id ?? `record ${refusal.index}`} is not a task: ${refusal.reason}`);
+  for (const line of refused) {
+    if (!emit.json) io.stderr(`team next: ${line}\n`);
   }
-  if (outcome.kind === 'held') return taken(io, outcome.record);
-  if (read.refusals.length) return shape();
-  if (outcome.kind === 'none' && mine) return blank(io, 'nothing is assigned to you', speak, hold);
-  return blank(io, 'nothing is takeable', speak, hold);
+  if (outcome.kind === 'held') return taken(io, outcome.record, emit);
+  if (read.refusals.length) {
+    if (emit.json) writeJsonError(io, 'next.shape', refused.join('; '), 'fix the named record or remove it from the task file');
+    return shape();
+  }
+  if (outcome.kind === 'none' && mine) return blank(io, 'nothing is assigned to you', speak, emit, hold);
+  return blank(io, 'nothing is takeable', speak, emit, hold);
 }
 
 /** The seat gate both `team next` and `team plan` run first: a named seat of this team, on the
@@ -285,23 +340,26 @@ function rank(record: TaskRecord): { kind: 0; n: number } | { kind: 1; text: str
   return { kind: 2 };
 }
 
-function invocation(io: Io, message: string, usage: boolean): number {
-  io.stderr(`team next: ${message}\n${usage ? USAGE : ''}`);
+function invocation(io: Io, message: string, usage: boolean, json = false): number {
+  if (json) writeJsonError(io, 'next.invocation', message, null);
+  else io.stderr(`team next: ${message}\n${usage ? USAGE : ''}`);
   // exit: next.invocation
   return 2;
 }
 
 /** The team file, or the tasks section's rules: the policy refusals leave through here too —
  *  the exit-codes suite's other face of this same return. */
-function file(io: Io, message: string): number {
-  io.stderr(`team next: ${message}\n`);
+function file(io: Io, message: string, json: boolean): number {
+  if (json) writeJsonError(io, 'next.file', message, null);
+  else io.stderr(`team next: ${message}\n`);
   // exit: next.file
   // exit: next.policy
   return 1;
 }
 
-function missing(io: Io): number {
-  io.stderr('team next: the task file is not there\n');
+function missing(io: Io, json: boolean): number {
+  if (json) writeJsonError(io, 'next.missing', 'the task file is not there', null);
+  else io.stderr('team next: the task file is not there\n');
   // exit: next.missing
   return 1;
 }
@@ -311,45 +369,90 @@ function shape(): number {
   return 1;
 }
 
-function callerRefuse(io: Io, message: string): number {
-  io.stderr(`team next: ${message}\n`);
+function callerRefuse(io: Io, message: string, json: boolean): number {
+  if (json) writeJsonError(io, 'next.caller', message, 'the owner records this seat\'s pane and runs `team up`');
+  else io.stderr(`team next: ${message}\n`);
   // exit: next.caller
   return 1;
 }
 
-function broker(io: Io, message: string): number {
-  io.stderr(`team next: ${message}\n`);
+function broker(io: Io, message: string, json: boolean): number {
+  if (json) writeJsonError(io, 'next.broker', message, 'the owner starts the broker with `team broker`');
+  else io.stderr(`team next: ${message}\n`);
   // exit: next.broker
   return 1;
 }
 
-function readFail(io: Io, message: string): number {
-  io.stderr(`team next: ${message}\n`);
+function readFail(io: Io, message: string, json: boolean): number {
+  if (json) writeJsonError(io, 'next.read', message, null);
+  else io.stderr(`team next: ${message}\n`);
   // exit: next.read
   return 1;
 }
 
-function none(io: Io, sentence: string, speak = true): number {
-  if (speak) io.stdout(`team next: ${sentence}\n`);
+/** The plain answer's context line, once per run: a wait's later events do not repeat it. */
+function contextOut(io: Io, emit: Emit): void {
+  if (emit.printed) return;
+  io.stdout(`${emit.context}\n`);
+  emit.printed = true;
+}
+
+/** The claimed record, as the `--json` envelope carries it: id and title, the contract's pair. */
+function taskJson(record: TaskRecord): NextTaskJson {
+  return { id: record.id, title: record.title };
+}
+
+function success(io: Io, emit: Emit, status: NextStatus, action: NextAction, actionSummary: string, task: NextTaskJson | null): void {
+  writeJson(io, 'team.next', {
+    format: 1 as const,
+    dry_run: false,
+    status,
+    action,
+    action_summary: actionSummary,
+    project: emit.project,
+    session: emit.session,
+    task,
+  });
+}
+
+function none(io: Io, sentence: string, speak: boolean, emit: Emit): number {
+  const summary = `team next: ${sentence}`;
+  if (emit.json) success(io, emit, 'none', 'none', summary, null);
+  else if (speak) {
+    contextOut(io, emit);
+    io.stdout(`${summary}\n`);
+  }
   // exit: next.none
   return 0;
 }
 
-function released(io: Io, id: string): number {
-  io.stdout(`team next: released ${id}\n`);
+function released(io: Io, id: string, emit: Emit): number {
+  const summary = `team next: released ${id}`;
+  if (emit.json) success(io, emit, 'released', 'release', summary, null);
+  else {
+    contextOut(io, emit);
+    io.stdout(`${summary}\n`);
+  }
   // exit: next.released
   return 0;
 }
 
-function taken(io: Io, record: TaskRecord): number {
-  io.stdout(formatRecords([record]));
+function taken(io: Io, record: TaskRecord, emit: Emit): number {
+  if (emit.json) {
+    success(io, emit, 'claimed', 'claim', `team next: claimed ${record.id}`, taskJson(record));
+  } else {
+    contextOut(io, emit);
+    io.stdout(formatRecords([record]));
+    io.stdout(`team next: claimed ${record.id}\n`);
+  }
   // exit: next.taken
   return 0;
 }
 
 /** The wait's own end: the signal, or a clock that did not advance. One line, exit 0, and the
  *  wait's own row — a take or a refusal ends the wait through its own printer instead. */
-function stopped(io: Io): number {
+function stopped(io: Io, emit: Emit): number {
+  contextOut(io, emit);
   io.stdout('team next: stopped waiting\n');
   // exit: next.wait
   return 0;
@@ -361,20 +464,21 @@ function stopped(io: Io): number {
  * waiting line, and the loop takes over; an empty re-pass is silent, and the loop's pace and
  * clock are the hold's.
  */
-async function blank(io: Io, sentence: string, speak: boolean, hold: Hold | undefined): Promise<number> {
-  if (!hold) return none(io, sentence, speak);
+async function blank(io: Io, sentence: string, speak: boolean, emit: Emit, hold: Hold | undefined): Promise<number> {
+  if (!hold) return none(io, sentence, speak, emit);
   if (speak) {
+    contextOut(io, emit);
     io.stdout(`team next: ${sentence}\n`);
-    return begin(io, hold);
+    return begin(io, hold, emit);
   }
-  return poll(io, hold);
+  return poll(io, hold, emit);
 }
 
 /** The wait's opening: the one waiting line, then the first poll. Reached from the first empty
  *  pass alone — that pass has already printed the shipped sentence once. */
-async function begin(io: Io, hold: Hold): Promise<number> {
+async function begin(io: Io, hold: Hold, emit: Emit): Promise<number> {
   io.stdout(`team next: waiting every ${hold.cadence}s\n`);
-  return poll(io, hold);
+  return poll(io, hold, emit);
 }
 
 /**
@@ -383,9 +487,9 @@ async function begin(io: Io, hold: Hold): Promise<number> {
  * stuck time must not spin a seat's pane forever. The re-pass is a full pass: a record taken,
  * and a refusal, end the wait through their own printers and their own bytes.
  */
-async function poll(io: Io, hold: Hold): Promise<number> {
+async function poll(io: Io, hold: Hold, emit: Emit): Promise<number> {
   const before = hold.now();
-  if (!(await hold.wait(hold.cadence))) return stopped(io);
-  if (hold.now() <= before) return stopped(io);
-  return pass(io, hold.loaded, hold.tasks, hold.sources, hold.mine, false, false, hold);
+  if (!(await hold.wait(hold.cadence))) return stopped(io, emit);
+  if (hold.now() <= before) return stopped(io, emit);
+  return pass(io, hold.loaded, hold.tasks, hold.sources, hold.mine, false, false, emit, hold);
 }

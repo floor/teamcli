@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
-import { coverageOf, documentOf } from '../../scripts/coverage.ts';
+import { coverageOf, documentOf, trustCaptureNames, trustCapturesModule } from '../../scripts/coverage.ts';
 
 const root = join(import.meta.dir, '..', '..');
 const shipped = join(root, 'test', 'fixtures');
@@ -122,4 +122,19 @@ test('the shipped fixtures state a provenance the READMEs evidence, and the docu
   const of = coverageOf(shipped);
   expect(of.problems).toEqual([]);
   expect(documentOf(shipped)).toBe(readFileSync(join(root, 'contract', 'capture-coverage.json'), 'utf8'));
+});
+
+test('the embedded captures are the manifest captures, and the module is current', () => {
+  const dir = scratch({
+    'conformance.json': `${JSON.stringify({
+      screens: [
+        { file: 'claude-code/trust.txt', cli: 'claude-code', classify: 'trust', provenance: 'capture' },
+        { file: 'claude-code/built.txt', cli: 'claude-code', classify: 'trust', provenance: 'constructed' },
+      ],
+    }, null, 2)}\n`,
+  });
+  expect(trustCaptureNames(dir)).toEqual(['claude-code claude-code/trust.txt']);
+  expect(trustCapturesModule(dir)).toContain('"claude-code claude-code/trust.txt"');
+  expect(trustCapturesModule(dir)).not.toContain('built.txt');
+  expect(trustCapturesModule(shipped)).toBe(readFileSync(join(root, 'src', 'profiles', 'trust-captures.ts'), 'utf8'));
 });

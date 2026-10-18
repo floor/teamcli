@@ -1,5 +1,6 @@
 // `team plan`: the takeable queue, in `team next`'s order, with no claim of any kind — the bytes
-// it prints are the issues block, and the only mark it adds is ` (overdue)`, which decides nothing.
+// it prints are the contract's STEP/STATE/OWNER/TITLE table, and the only mark it adds is the
+// STATE `overdue`, which decides nothing.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -8,13 +9,16 @@ import { join } from 'node:path';
 import { NOT_RUNNING } from '../src/broker/client.ts';
 import { startBroker } from '../src/broker/server.ts';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
+import { main } from '../src/cli.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runNext } from '../src/commands/next.ts';
-import { runPlan, type PlanSources } from '../src/commands/plan.ts';
-import { NOT_A_REPO } from '../src/file/load.ts';
+import { runPlan, USAGE, type PlanSources } from '../src/commands/plan.ts';
+import { NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { PLAN_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -125,19 +129,48 @@ describe('team plan', () => {
     const planned = await run();
     expect(planned).toEqual({
       code: 0,
-      out: 'm2  the second title\n  priority: 1\n\nm3  the third title\n  priority: alpha\n\nm1  the first title\n',
+      out:
+        'team acme, session "acme"\n' +
+        '  STEP  STATE  OWNER  TITLE\n' +
+        '  1     open   -      the second title\n' +
+        '  2     open   -      the third title\n' +
+        '  3     open   -      the first title\n' +
+        '3 tasks\n',
       err: '',
     });
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toBe('m1  the first title\n\nm2  the second title\n  priority: 1\n\nm3  the third title\n  priority: alpha\n');
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n' +
+        '  ID  STATE  ASSIGNEE  TITLE\n' +
+        '  m1  open   -         the first title\n' +
+        '  m2  open   -         the second title\n' +
+        '  m3  open   -         the third title\n' +
+        '3 issues\n',
+    );
     expect(planned.out).not.toBe(listed.out);
     ready(WITH, '- id: z\n  title: the z title\n- id: a\n  title: the a title\n');
-    expect(await run()).toMatchObject({ code: 0, out: 'z  the z title\n\na  the a title\n' });
+    expect(await run()).toMatchObject({
+      code: 0,
+      out:
+        'team acme, session "acme"\n' +
+        '  STEP  STATE  OWNER  TITLE\n' +
+        '  1     open   -      the z title\n' +
+        '  2     open   -      the a title\n' +
+        '2 tasks\n',
+    });
     project(`${WITH}  fallback: id\n`);
     list('- id: z\n  title: the z title\n- id: a\n  title: the a title\n');
     record();
-    expect(await run()).toMatchObject({ code: 0, out: 'a  the a title\n\nz  the z title\n' });
+    expect(await run()).toMatchObject({
+      code: 0,
+      out:
+        'team acme, session "acme"\n' +
+        '  STEP  STATE  OWNER  TITLE\n' +
+        '  1     open   -      the a title\n' +
+        '  2     open   -      the z title\n' +
+        '2 tasks\n',
+    });
   });
 
   test('a deadline the clock has passed is marked, and the mark decides nothing', async () => {
@@ -148,28 +181,33 @@ describe('team plan', () => {
     expect(await run()).toEqual({
       code: 0,
       out:
-        'past  the past title\n  deadline: 2026-01-01T00:00:00Z (overdue)\n\n' +
-        'future  the future title\n  deadline: 2026-12-31T00:00:00Z\n\n' +
-        'soon  the unreadable title\n  deadline: soon\n\n' +
-        'day  the date-only title\n  deadline: 2026-01-01 (overdue)\n',
+        'team acme, session "acme"\n' +
+        '  STEP  STATE    OWNER  TITLE\n' +
+        '  1     overdue  -      the past title\n' +
+        '  2     open     -      the future title\n' +
+        '  3     open     -      the unreadable title\n' +
+        '  4     overdue  -      the date-only title\n' +
+        '4 tasks\n',
       err: '',
     });
     // At the deadline itself the clock has not passed it: the comparison is strictly before now.
     const at = await run([], lead, { now: () => Date.parse('2026-01-01T00:00:00.000Z') });
     expect(at.code).toBe(0);
-    expect(at.out).toContain('past  the past title\n  deadline: 2026-01-01T00:00:00Z\n');
-    expect(at.out).toContain('day  the date-only title\n  deadline: 2026-01-01\n');
-    expect(at.out).not.toContain('(overdue)');
+    expect(at.out).toContain('  1     open   -      the past title\n');
+    expect(at.out).toContain('  4     open   -      the date-only title\n');
+    expect(at.out).not.toContain('overdue');
   });
 
-  test('the mark is plan\'s alone: next and issues blocks keep their bytes', async () => {
+  test('the mark is plan\'s alone: next and issues do not carry one', async () => {
     ready(WITH, '- id: past\n  title: the past title\n  deadline: 2026-01-01T00:00:00Z\n');
     const io = testIo(root, lead);
     expect(await runNext([], io, { home, now: () => now })).toBe(0);
-    expect(io.out).toBe('past  the past title\n  deadline: 2026-01-01T00:00:00Z\n');
+    expect(io.out).toBe('team acme, session "acme"\npast  the past title\n  deadline: 2026-01-01T00:00:00Z\nteam next: claimed past\n');
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toBe('past  the past title\n  deadline: 2026-01-01T00:00:00Z\n');
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n  ID    STATE  ASSIGNEE  TITLE\n  past  open   -         the past title\n1 issue\n',
+    );
   });
 
   test('a held record still appears, and nothing is written', async () => {
@@ -180,10 +218,15 @@ describe('team plan', () => {
     const leaseBefore = readFileSync(join(root, '.agents', 'leases', 'm1.json'), 'utf8');
     const stateBefore = stateBytes();
     const logBefore = logBytes();
+    const planned =
+      'team acme, session "acme"\n' +
+      '  STEP  STATE  OWNER  TITLE\n' +
+      '  1     open   -      the task title\n' +
+      '1 task\n';
     const mine = await run();
-    expect(mine).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(mine).toEqual({ code: 0, out: planned, err: '' });
     const theirs = await run([], worker);
-    expect(theirs).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(theirs).toEqual({ code: 0, out: planned, err: '' });
     expect(readFileSync(join(root, '.agents', 'leases', 'm1.json'), 'utf8')).toBe(leaseBefore);
     expect(leaseNames()).toEqual(['m1.json']);
     expect(stateBytes()).toBe(stateBefore);
@@ -192,7 +235,7 @@ describe('team plan', () => {
 
   test('an empty queue is one answer, exit 0', async () => {
     ready(WITH, '[]\n');
-    expect(await run()).toEqual({ code: 0, out: 'team plan: nothing is takeable\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: 'team acme, session "acme"\n0 tasks\n', err: '' });
     expect(leaseNames()).toEqual([]);
   });
 
@@ -229,21 +272,100 @@ describe('team plan', () => {
     list('- id: m1\n- id: m2\n  title: the second title\n');
     expect(await run()).toEqual({
       code: 0,
-      out: 'm2  the second title\n',
+      out:
+        'team acme, session "acme"\n' +
+        '  STEP  STATE  OWNER  TITLE\n' +
+        '  1     open   -      the second title\n' +
+        '1 task\n',
       err: 'team plan: m1 is not a task: title is required\n',
     });
   });
 
   test('the invocation and the folder are refused', async () => {
     ready();
-    expect(await run(['extra'])).toEqual({ code: 2, out: '', err: 'team plan: unexpected "extra"\nUsage: team plan\n' });
-    expect(await run(['--mine'])).toEqual({ code: 2, out: '', err: 'team plan: unknown option --mine\nUsage: team plan\n' });
-    expect(await run([], lead, {}, base)).toEqual({ code: 2, out: '', err: `team plan: ${NOT_A_REPO}\n` });
+    expect(await run(['extra'])).toEqual({ code: 2, out: '', err: `team plan: unexpected "extra"\n${USAGE}` });
+    expect(await run(['--mine'])).toEqual({ code: 2, out: '', err: `team plan: unknown option --mine\n${USAGE}` });
+    expect(await run([], lead, {}, base)).toEqual({ code: 2, out: '', err: `team plan: ${NOT_A_REPO_NO_FILE}\n` });
   });
 
   test('cadence in the file changes nothing about the queue', async () => {
     ready(`${WITH}  cadence: 10m\n`);
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({
+      code: 0,
+      out:
+        'team acme, session "acme"\n' +
+        '  STEP  STATE  OWNER  TITLE\n' +
+        '  1     open   -      the task title\n' +
+        '1 task\n',
+      err: '',
+    });
+  });
+});
+
+describe('team plan --json', () => {
+  test('--help prints the usage and exits 0, including with --json', async () => {
+    ready();
+    const plain = testIo(root, lead);
+    expect(await main(['plan', '--help'], plain)).toBe(0);
+    expect(plain.out).toBe(USAGE);
+    const json = testIo(root, lead);
+    expect(await main(['plan', '--json', '--help'], json)).toBe(0);
+    expect(json.out).toBe(USAGE);
+  });
+
+  test('one envelope carries the queue, each task with its step, state and record', async () => {
+    ready(WITH, '- id: m1\n  title: the task title\n  priority: 2\n  assignee: lead\n  deadline: 2026-01-01T00:00:00Z\n- id: m2\n  title: the open title\n');
+    const planned = await run(['--json']);
+    expect(planned).toMatchObject({ code: 0, err: '' });
+    const doc = assertMatchesOutputSchema<{
+      schema: { name: string; version: number };
+      format: number;
+      project: string;
+      session: string;
+      tasks: Array<Record<string, unknown>>;
+    }>(planned.out, PLAN_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.plan', version: 1 });
+    expect(doc).toMatchObject({ format: 1, project: 'acme', session: 'acme' });
+    expect(doc.tasks).toEqual([
+      { step: 1, state: 'overdue', owner: 'lead', id: 'm1', title: 'the task title', priority: 2, deadline: '2026-01-01T00:00:00Z' },
+      { step: 2, state: 'open', owner: null, id: 'm2', title: 'the open title' },
+    ]);
+    ready(WITH, '[]\n');
+    const empty = await run(['--json']);
+    expect(empty.code).toBe(0);
+    expect(assertMatchesOutputSchema<{ tasks: unknown[] }>(empty.out, PLAN_OUTPUT_SCHEMA).tasks).toEqual([]);
+  });
+
+  test('--json writes a team.error document on stdout for every refusal', async () => {
+    ready(WITH, null);
+    const missing = await run(['--json']);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toBe('');
+    expect(assertJsonErrorShape(missing.out, { id: 'plan.missing', messageContains: 'the task file is not there' }).error.repair).toBeNull();
+    list('- id: m1\n');
+    const shape = await run(['--json']);
+    expect(shape.code).toBe(1);
+    expect(shape.err).toBe('');
+    assertJsonErrorShape(shape.out, { id: 'plan.shape', messageContains: 'm1 is not a task: title is required' });
+    const invocation = await run(['--json', 'extra']);
+    expect(invocation.code).toBe(2);
+    expect(invocation.err).toBe('');
+    assertJsonErrorShape(invocation.out, { id: 'plan.invocation', messageContains: 'unexpected "extra"' });
+    // The raw argv is scanned before the parser runs: an unknown option ahead of `--json`, or a
+    // `--json=<value>` the parser refuses, still writes the error document and leaves stderr empty.
+    const nope = await run(['--nope', '--json']);
+    expect(nope.code).toBe(2);
+    expect(nope.err).toBe('');
+    assertJsonErrorShape(nope.out, { id: 'plan.invocation', messageContains: 'unknown option --nope' });
+    const inline = await run(['--json=1']);
+    expect(inline.code).toBe(2);
+    expect(inline.err).toBe('');
+    assertJsonErrorShape(inline.out, { id: 'plan.invocation', messageContains: 'unknown option --json' });
+    const folder = await run(['--json'], lead, {}, base);
+    expect(folder.code).toBe(2);
+    expect(folder.err).toBe('');
+    assertJsonErrorShape(folder.out, { id: 'plan.not-a-repo', messageContains: NOT_A_REPO_NO_FILE });
+    expect(folder.out).not.toContain('--file');
   });
 });
 
@@ -277,7 +399,11 @@ describe('team plan over the broker', () => {
     try {
       expect(await run()).toEqual({
         code: 0,
-        out: 'm1  the task title\n',
+        out:
+          'team acme, session "acme"\n' +
+          '  STEP  STATE  OWNER  TITLE\n' +
+          '  1     open   -      the task title\n' +
+          '1 task\n',
         err: 'team plan: the tracker holds more tasks than this read; the take still proceeds\n',
       });
     } finally {

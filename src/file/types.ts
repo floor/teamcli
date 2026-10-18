@@ -2,7 +2,16 @@ export type Problem = { line: number; message: string };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
+import type { DeliveryLeg, LivenessThresholds } from '../settings/inherit.ts';
+import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
+
+/**
+ * A field the file still reads and no longer acts on. Kept apart from `warnings`, which every
+ * command that loads the file prints: a deprecation is printed by `team check` alone, with the
+ * repair its record carries.
+ */
+export type Deprecation = { line: number; message: string; repair: string };
 
 /** The acts `grant.scope` may name. Closed: a word outside this list is refused at validation.
  *  `swap` lets the granted seat stop another lead seat for a replacement (`team remove <lead>
@@ -52,6 +61,14 @@ export type SeatReach = {
 export type Seat = {
   role: string;
   name: string;
+  /**
+   * The human name for this seat, when the file writes one: unique in its team, never another
+   * seat's name, and conferring nothing — the role keeps the grants. A send may address it as a
+   * bare name in its own team or `<nickname>@<team>` elsewhere (src/send/resolve.ts). A field of
+   * the built seat like every other, so it is part of the seat's digest and omitted when the
+   * file omits the key — every file that writes none keeps the digest it had.
+   */
+  nickname?: string;
   cli: string;
   vendor: string;
   /**
@@ -90,8 +107,30 @@ export type Seat = {
   mode: Mode;
   parked: boolean;
   stopped: boolean;
+  /**
+   * The entity's assistant: the seat the file marks with `assistant: true`. At most one seat
+   * carries it, and admission reads it as a place in the chain — the entity's first assistant,
+   * the one seat admitted to its coordinator — never a role's name. Absent means the seat is not
+   * the assistant, so a file that marks none keeps every digest it had; marking one is a change
+   * the owner approves, because the capability admits a send.
+   */
+  assistant?: true;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
+  /**
+   * The seat's own word on the delivery order, when the file writes one: the legs a send to this
+   * seat may walk, in order. Absent otherwise, so a file that writes none keeps the digest it
+   * had. Only the word's shape is settled here; whether it drops or reorders the order in force,
+   * or would add a leg, is settled when a send resolves the chain (`src/settings/inherit.ts`).
+   */
+  deliveryOrder?: DeliveryLeg[];
+  /**
+   * The seat's own word on the liveness defaults, when the file writes one: the idle-to-lead and
+   * idle-to-owner windows its reports run by, and the blind window its state is read by. Absent
+   * otherwise, so a file that writes none keeps the digest it had. Like every other field, a word
+   * written here is part of the seat's digest — writing one is a change the owner approves.
+   */
+  liveness?: Partial<LivenessThresholds>;
   // The entry's `name` and `count` as written, and this seat's place in it (1 for the first).
   declared: string;
   count: number;
@@ -102,6 +141,16 @@ export type Seat = {
 export type TeamFile = {
   format: 1;
   project: string;
+  /**
+   * The project this team sits in, by the name the file wrote, or null when it names none — a
+   * team with no project is its own. `project:` above is still the team's own name.
+   */
+  inProject: string | null;
+  /**
+   * Whether this team leads the project it sits in — the team-side `leads: true`. One team per
+   * project sets it (`team check` refuses two), and the file must name the project it leads.
+   */
+  projectLead: boolean;
   /** The entity the team belongs to, or null. Sets the team's lobby to
    *  `~/.config/team/lobbies/<slug>` unless `lobby` names one outright. */
   entity: string | null;
@@ -113,6 +162,16 @@ export type TeamFile = {
   /** The lead's seat, however the file spelled it: the `coordinator:` key or `leads: true`. */
   orchestrator: string;
   operator: string;
+  /**
+   * The file's own word on the delivery order, or null when it writes none: the order a send to
+   * any of its seats walks when the seat and the levels above say nothing. Non-owner and
+   * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
+   */
+  deliveryOrder: DeliveryLeg[] | null;
+  /**
+   * Owner-signed team-level policy declarations (Kernel amendment 02 §2.12), when present.
+   */
+  policies?: YamlValue;
   tools: Record<string, Record<string, string>>;
   identity: {
     signature: {
@@ -127,12 +186,6 @@ export type TeamFile = {
   };
   rules: string[];
   trust: string[];
-  /**
-   * Who may answer a folder-trust dialog. Omitted in the file means owner. The file may spell the
-   * second value `orchestrator`; it normalises to `coordinator` here, the value every record's
-   * digest was written with, so a file rewritten to the new word keeps its approval.
-   */
-  dialogs: { trust: 'owner' | 'coordinator' };
   workspace: {
     mode: Mode;
     path: string | null;
@@ -146,7 +199,12 @@ export type TeamFile = {
   // Durations in seconds.
   watch: {
     interval: number;
+    /** The idle lead threshold: how long a quiet seat waits before its lead is told. */
     idleFirst: number;
+    /** The idle owner threshold: how long after that the owner is told, once per idle period. */
+    idleOwner: number;
+    /** How long a seat no source has heard from may read unknown before it is blind. */
+    blindAfter: number;
     /** How often to repeat an idle report; absent when repeats are off (the default). */
     idleRepeat?: number;
     teamIdle: number;
@@ -216,9 +274,9 @@ export type TeamFile = {
 };
 
 export type ValidateResult =
-  | { ok: true; team: TeamFile; warnings: Problem[] }
+  | { ok: true; team: TeamFile; warnings: Problem[]; deprecations: Deprecation[] }
   | { ok: false; errors: Problem[] };
 
 export type LoadResult =
-  | { ok: true; team: TeamFile; root: string; path: string; warnings: Problem[]; text: string }
+  | { ok: true; team: TeamFile; root: string; path: string; warnings: Problem[]; deprecations?: Deprecation[]; text: string }
   | { ok: false; errors: Problem[]; path?: string };

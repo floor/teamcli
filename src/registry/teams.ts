@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { resolveLobby } from '../lobby/gate.ts';
+import * as projects from './projects.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -17,19 +18,36 @@ export type TeamLifecycle = 'defined' | 'running' | 'stopped' | 'archived';
 
 export const TEAM_LIFECYCLES: readonly TeamLifecycle[] = ['defined', 'running', 'stopped', 'archived'];
 
-/** One roster line: the agent's immutable ID, and the seat and role it holds in this team. */
-export type RosterEntry = { agent: string; seat: string; role: string };
+/** One roster line: the agent's immutable ID, the seat and role it holds in this team, and the
+ *  capabilities the team file marks on the seat `leads: true` grants — readable without knowing
+ *  any role name. `leads: true` is the seat the team file marks as its lead; `assistant: true` is
+ *  the seat whose place in the chain is the entity's assistant (src/send/admit.ts). Absent means
+ *  the seat is not known to hold it, so a registry written before the field reads unchanged.
+ *  `nickname` is the seat's human name as the file writes it: projected here so another team can
+ *  resolve `<nickname>@<team>` without loading this team's file. It confers nothing. */
+export type RosterEntry = { agent: string; seat: string; role: string; nickname?: string; leads?: boolean; assistant?: boolean };
 
 export type TeamProvenance = { registered_by: string; registered_at: string; updated_at: string };
 
 export type TeamRecord = {
   /** The team ID this record is stored under. Filled in when a record is read; never written. */
   id?: string;
+  /** The team's own name — today's `project:` key in the team file. Not the project it sits in. */
   project: string;
+  /** The project this team sits in, by project ID (src/registry/projects.ts), or null: a team no
+   *  project names is its own project. Written from the team file's `in_project` through sync. */
+  projectId: string | null;
   entity: string | null;
   session: string;
   root: string;
+  /** The lobby the team operates on in its `session`: recorded at registration and kept, so an
+   *  entity edit never moves a running fleet. It is also the `lobbies` entry for `session`. */
   lobby: string;
+  /** The lobby recorded for each session — `session` among them. The registry is keyed by the
+   *  root, and a checkout can hold another team file, or the same team can be launched with
+   *  `--session alt`: each session records its own entry without taking another's away. A file
+   *  written before the map existed reads as one entry, `{[session]: lobby}`. */
+  lobbies: Record<string, string>;
   roster: RosterEntry[];
   lifecycle: TeamLifecycle;
   provenance: TeamProvenance;
@@ -107,16 +125,23 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
       }
       record = {
         project: fields.project as string,
+        projectId: fields.projectId ?? null,
         entity: fields.entity ?? null,
         session: fields.session as string,
         root: fields.root as string,
         lobby: fields.lobby ?? '',
+        lobbies: fields.lobbies ?? (fields.lobby ? { [fields.session as string]: fields.lobby } : {}),
         roster: fields.roster ?? [],
         lifecycle: fields.lifecycle ?? 'defined',
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
+    if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
+    // A write of the primary session's lobby keeps that session's map entry in step; every other
+    // entry is left exactly as it was, which is what keeps the other sessions' lobbies.
+    record.lobbies = { ...(record.lobbies ?? {}) };
+    if (record.lobby) record.lobbies[record.session] = record.lobby;
     delete record.id;
     teams[id] = record;
     write(home, teams);
@@ -152,29 +177,103 @@ export function findTeam(home: string, key: string): TeamRecord | null {
 }
 
 /** What of a team file the registry keeps. */
-export type TeamSeed = { project: string; entity: string | null; session: string; lobby: string | null };
+export type TeamSeed = {
+  project: string;
+  entity: string | null;
+  session: string;
+  lobby: string | null;
+  /** The project the file names this team sits in, as written, or null when it names none — the
+   *  team is then its own project. Absent (undefined) leaves the registry's pointer as it is. */
+  inProject?: string | null;
+  /** The session the team file itself names, when this note runs under another (`up --session
+   *  alt`). That session records the same lobby too, unless it already has one, so a plain
+   *  `team check` — which reads the file's own session — finds the lobby back. */
+  aliasSession?: string;
+};
 
 /**
  * Records a team from its file: registers it, or brings the registered record in line with the
- * file, with the lifecycle given. The roster is kept as it is. Never throws: the registry is a
- * record of what the commands did, so a registry that cannot be written is a line for the caller
- * to say, not a reason for the command to fail. Returns that line, or null.
+ * file, with the lifecycle given. The roster is kept as it is. A seed that names the project its
+ * file points to also joins it: the project record is made if the registry has none, gains the
+ * team, and loses it if the file moves the team or stops naming a project. Never throws: the
+ * registry is a record of what the commands did, so a registry that cannot be written is a line
+ * for the caller to say, not a reason for the command to fail. Returns that line, or null.
  */
 export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: TeamLifecycle, by: string): string | null {
+  const real = realRoot(root);
+  const teamId = teamIdOf(real);
+  const inProject = seed.inProject;
+  let projectId: string | null | undefined;
   try {
-    const real = realRoot(root);
-    upsertTeam(home, teamIdOf(real), {
+    projectId = inProject === undefined ? undefined : inProject === null ? null : projects.projectIdOf(inProject);
+  } catch (error) {
+    return `the project registry was not updated: ${(error as Error).message}`;
+  }
+  try {
+    // The lobby is recorded once per session: a session the registry holds a lobby for keeps it,
+    // so editing the file's `entity` never moves a running team's seats. An explicit `lobby:` is
+    // the owner's own declaration, not a derivation, and is re-recorded; a session with no entry
+    // derives from the entity (`src/lobby/recorded.ts` reads the record back at every use). The
+    // map is what lets another session — `up --session alt`, or another team file in the same
+    // checkout, since the registry is keyed by the root — record its own lobby without taking
+    // this one's entry away. The file's own session is recorded alongside when the note runs
+    // under another name, unless it already holds an entry of its own.
+    const earlier = getTeam(home, teamId);
+    const prior = earlier?.lobbies[seed.session] ?? '';
+    const current = seed.lobby ? resolveLobby(home, { lobby: seed.lobby }) : prior || resolveLobby(home, { entity: seed.entity });
+    const lobbies: Record<string, string> = { ...(earlier?.lobbies ?? {}), [seed.session]: current };
+    if (seed.aliasSession && !lobbies[seed.aliasSession]) lobbies[seed.aliasSession] = current;
+    upsertTeam(home, teamId, {
       project: seed.project,
+      projectId,
       entity: seed.entity,
       session: seed.session,
       root: real,
-      lobby: resolveLobby(home, { entity: seed.entity, lobby: seed.lobby }),
+      lobby: current,
+      lobbies,
       lifecycle,
       by,
     });
-    return null;
   } catch (error) {
     return `the team registry was not updated: ${(error as Error).message}`;
+  }
+  if (inProject === undefined) return null;
+  try {
+    if (inProject === null) projectLeave(home, teamId, null);
+    else projectJoin(home, teamId, inProject, seed.entity, by);
+    return null;
+  } catch (error) {
+    return `the project registry was not updated: ${(error as Error).message}`;
+  }
+}
+
+/** The team joins the project the file names: the record is made if the registry has none — with
+ *  the name the file wrote and the team's entity — and lists the team. Keys by `projectIdOf`, so
+ *  the spelling the file chose is the display name and the ID is the same one every reader
+ *  derives. Then the team leaves every other project that named it. */
+function projectJoin(home: string, teamId: string, name: string, entity: string | null, by: string): void {
+  const id = projects.projectIdOf(name);
+  const held = projects.get(home, id);
+  if (!held) {
+    projects.upsertProject(home, id, { name, entity, teams: [teamId], by });
+  } else if (!held.teams.includes(teamId)) {
+    projects.upsertProject(home, id, { teams: [...held.teams, teamId] });
+  }
+  projectLeave(home, teamId, id);
+}
+
+/** The team leaves every project that names it except `keep` (null: every one). The project it
+ *  leaves also loses its lead when the lead on record is one of this team's agents: that id came
+ *  from this team's lead seat, so it goes with the team's place in the project rather than
+ *  staying admitted as a lead after its team left. Another team's lead is left alone. */
+function projectLeave(home: string, teamId: string, keep: string | null): void {
+  const roster = getTeam(home, teamId)?.roster ?? [];
+  for (const held of projects.list(home)) {
+    const id = held.id as string;
+    if (id === keep || !held.teams.includes(teamId)) continue;
+    const patch: projects.ProjectPatch = { teams: held.teams.filter((team) => team !== teamId) };
+    if (held.lead !== null && roster.some((line) => line.agent === held.lead)) patch.lead = null;
+    projects.upsertProject(home, id, patch);
   }
 }
 
@@ -250,6 +349,8 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
   }
   const entity = raw.entity ?? null;
   if (entity !== null && typeof entity !== 'string') bad('"entity" must be text or null');
+  const projectId = raw.project_id ?? null;
+  if (projectId !== null && typeof projectId !== 'string') bad('"project_id" must be a project ID or null');
   const roster = raw.roster ?? [];
   if (!Array.isArray(roster)) bad('"roster" must be a list');
   const entries = (roster as YamlValue[]).map((entry, i): RosterEntry => {
@@ -257,20 +358,52 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
     for (const key of ['agent', 'seat', 'role']) {
       if (typeof entry[key] !== 'string') bad(`roster line ${i + 1}: "${key}" must be text`);
     }
-    return { agent: entry.agent as string, seat: entry.seat as string, role: entry.role as string };
+    // Absent leaves the line as it was written before the field existed: not known to lead.
+    const leads = entry.leads;
+    if (leads !== undefined && typeof leads !== 'boolean') bad(`roster line ${i + 1}: "leads" must be true or false`);
+    // The same reading for the assistant capability: an absent field is a line written before it.
+    const assistant = entry.assistant;
+    if (assistant !== undefined && typeof assistant !== 'boolean') bad(`roster line ${i + 1}: "assistant" must be true or false`);
+    // A line written before the field existed carries none: no human name is known here.
+    const nickname = entry.nickname;
+    if (nickname !== undefined && typeof nickname !== 'string') bad(`roster line ${i + 1}: "nickname" must be text`);
+    return {
+      agent: entry.agent as string,
+      seat: entry.seat as string,
+      role: entry.role as string,
+      ...(typeof nickname === 'string' ? { nickname } : {}),
+      ...(typeof leads === 'boolean' ? { leads } : {}),
+      ...(typeof assistant === 'boolean' ? { assistant } : {}),
+    };
   });
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
   for (const key of ['registered_by', 'registered_at', 'updated_at']) {
     if (typeof prov[key] !== 'string') bad(`provenance: "${key}" must be text`);
   }
+  const session = text('session');
+  const lobby = typeof raw.lobby === 'string' ? raw.lobby : '';
+  // A record written before the map existed knows one lobby: the one its session holds. Read
+  // that way, every reader sees a session's lobby without a migration write.
+  const lobbies: Record<string, string> = {};
+  const map = raw.lobbies;
+  if (map !== undefined) {
+    if (!isMap(map)) bad('"lobbies" must be a map of sessions to lobbies');
+    for (const [name, value] of Object.entries(map as { [key: string]: YamlValue })) {
+      if (typeof value !== 'string' || !value) bad(`lobbies: "${name}" must be a lobby path`);
+      lobbies[name] = value as string;
+    }
+  }
+  if (lobby) lobbies[session] = lobby;
   return {
     id,
     project: text('project'),
+    projectId: projectId as string | null,
     entity: entity as string | null,
-    session: text('session'),
+    session,
     root: text('root'),
-    lobby: typeof raw.lobby === 'string' ? raw.lobby : '',
+    lobby,
+    lobbies,
     roster: entries,
     lifecycle: lifecycle as TeamLifecycle,
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
@@ -302,14 +435,29 @@ function emit(teams: Record<string, TeamRecord>): string {
     const team = teams[id] as TeamRecord;
     lines.push(`  ${scalar(id)}:`);
     lines.push(`    project: ${scalar(team.project)}`);
+    lines.push(`    project_id: ${nullable(team.projectId)}`);
     lines.push(`    entity: ${nullable(team.entity)}`);
     lines.push(`    session: ${scalar(team.session)}`);
     lines.push(`    root: ${scalar(team.root)}`);
     lines.push(`    lobby: ${scalar(team.lobby)}`);
+    // Only sessions with a lobby of their own are written: a record whose map is just its
+    // `session` entry reads back from `lobby`, so single-session files stay byte for byte.
+    const others = Object.entries(team.lobbies ?? {})
+      .filter(([session, lobby]) => session !== team.session || lobby !== team.lobby)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    if (others.length) {
+      lines.push('    lobbies:');
+      for (const [session, lobby] of others) lines.push(`      ${scalar(session)}: ${scalar(lobby)}`);
+    }
     if (team.roster.length) {
       lines.push('    roster:');
       for (const entry of team.roster) {
-        lines.push(`      - { agent: ${scalar(entry.agent)}, seat: ${scalar(entry.seat)}, role: ${scalar(entry.role)} }`);
+        // Only the line that holds a capability says so: `false` and an absent field mean the same.
+        // A nickname is written where the file writes one, before the capabilities.
+        const nickname = entry.nickname !== undefined ? `, nickname: ${scalar(entry.nickname)}` : '';
+        const leads = entry.leads === true ? ', leads: true' : '';
+        const assistant = entry.assistant === true ? ', assistant: true' : '';
+        lines.push(`      - { agent: ${scalar(entry.agent)}, seat: ${scalar(entry.seat)}, role: ${scalar(entry.role)}${nickname}${leads}${assistant} }`);
       }
     } else {
       lines.push('    roster: []');

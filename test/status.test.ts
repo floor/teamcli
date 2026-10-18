@@ -1,21 +1,25 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { saveReadings, saveSpendReadings, type Seen } from '../src/budgets/readings.ts';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runStatus } from '../src/commands/status.ts';
 import type { StatusSources } from '../src/commands/status.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Seat, TeamFile } from '../src/file/types.ts';
 import { rulesOf } from '../src/launch/rules.ts';
 import { rulesFileHash, rulesFilePathOf, writeRulesFile } from '../src/launch/rules-file.ts';
+import { overridesPath } from '../src/profiles/overrides.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas } from './helpers.ts';
+import { assertJsonErrorShape } from './helpers/output.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const NOW = new Date('2026-10-03T14:10:00Z');
@@ -42,7 +46,7 @@ function built(): Live {
     ],
     workspaces: [
       { id: 'w1', label: 'claude opus 5.5' }, { id: 'w2', label: 'gpt sol 6' },
-      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: 'watchdog' },
+      { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: watchLabel('acme-web') },
     ],
     screens: { 'w1:p1': claudeScreen('Opus 5.5') },
   };
@@ -102,14 +106,17 @@ function approveOnDisk() {
 }
 
 describe('team status', () => {
-  test('a team that matches its file reads clean and exits 0', async () => {
+  test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
     const { code, out } = await status();
     expect(out).toContain('team acme-web, session "acme-web"');
+    expect(out).toContain('  SEAT                     STATE                                 MODEL                         PANE   REACH');
     expect(out).toMatch(/claude-coordinator-acme\s+working\s+Claude Opus 5\.5\s+w1:p1/);
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
-    expect(out).toMatch(/grok-acme\s+stopped/);
+    expect(out).not.toMatch(/grok-acme\s+stopped/);
+    const all = await status('--all');
+    expect(all.out).toMatch(/grok-acme\s+-\s+-\s+reviewer\s+grok\s+Grok 4\.7\s+-\s+stopped/);
     // The suffix is a reading, not a difference: a team that matches its file still reads clean.
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -150,8 +157,8 @@ describe('team status', () => {
   test('a missing seat, with its repair', async () => {
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const { code, out } = await status();
-    expect(out).toContain('difference: deepseek-acme-2 is in the file and is not running\n  repair: team add deepseek-acme-2');
-    expect(out).toContain('1 difference(s)');
+    expect(out).toContain('difference: deepseek-acme-2 is in the file and is not running\n  repair: team restart deepseek-acme-2');
+    expect(out).toContain('1 difference');
     expect(code).toBe(1);
   });
 
@@ -159,9 +166,9 @@ describe('team status', () => {
     live = { running: false, agents: [], workspaces: [], screens: {} };
     const { code, out } = await status();
     expect(out).toContain('note: the herdr session "acme-web" is not running');
-    expect(out).toContain('repair: the owner runs team up');
+    expect(out).toContain('repair: team up');
     expect(out).not.toContain('grok-acme is in the file');
-    expect(out).toContain('4 difference(s)');
+    expect(out).toContain('4 differences');
     expect(code).toBe(1);
   });
 
@@ -188,20 +195,20 @@ describe('team status', () => {
     expect(out).toMatch(/deepseek-acme\s+wrong name\s+\(unread\)\s+w3:p1/);
     expect(out).not.toMatch(/codex-acme\s+wrong name\s+GPT-6 Sol/);
     expect(out).not.toMatch(/deepseek-acme\s+wrong name\s+DeepSeek/);
-    expect(out).toContain('2 difference(s)');
+    expect(out).toContain('2 differences');
   });
 
   test('an agent the file doesn\'t hold; the watch\'s own workspace is not one', async () => {
     live = { ...built(), agents: [...built().agents, agent('stranger', 'w7'), agent(null, 'w9')] };
     const { out } = await status();
     expect(out).toContain('difference: stranger (w7:p1) is running and is not in the file');
-    expect(out).toContain('1 difference(s)');
+    expect(out).toContain('1 difference');
   });
 
   test('a seat that runs another model than the file\'s', async () => {
     live = { ...built(), screens: { 'w1:p1': claudeScreen('Fable 5.1') } };
     const { code, out } = await status();
-    expect(out).toContain('difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5');
+    expect(out).toContain('difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5');
     expect(code).toBe(1);
   });
 
@@ -215,13 +222,18 @@ describe('team status', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
-        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
+      'difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5\n' +
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n' +
+        "  who: the team's lead\n",
     );
     expect(out).toContain(
-      'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol\n' +
-        '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file\n',
+      'difference: codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol\n' +
+        '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file\n' +
+        '  who: the owner\n',
     );
+    // The chain's second leg is `team add`, the owner's alone: the line belongs to the owner,
+    // and the closing count follows the who the row prints.
+    expect(out).toContain('2 differences, 1 for the owner\n');
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
   });
 
@@ -242,7 +254,7 @@ describe('team status', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+      'difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5\n' +
         '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
@@ -255,7 +267,7 @@ describe('team status', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'difference: claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5\n' +
+      'difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5\n' +
         '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
     );
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
@@ -267,7 +279,7 @@ describe('team status', () => {
   test('a codex seat whose captured status line names another model', async () => {
     live = { ...built(), screens: { ...built().screens, 'w2:p1': codexScreen('idle') } };
     const { code, out } = await status();
-    expect(out).toContain('difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol');
+    expect(out).toContain('difference: codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol');
     expect(code).toBe(1);
   });
 
@@ -278,8 +290,8 @@ describe('team status', () => {
     live = { ...built(), screens: { ...built().screens, 'w2:p1': codexScreen('idle') } };
     const { out } = await status();
     expect(out).toContain('(file: GPT-6 Sol)');
-    expect(out).toContain('the file says GPT-6 Sol');
-    expect(out).not.toContain('the file says GPT Sol 6');
+    expect(out).toContain('file says GPT-6 Sol');
+    expect(out).not.toContain('file says GPT Sol 6');
   });
 
   test('a status-line id the map doesn\'t know is unread: a note, never a difference', async () => {
@@ -337,19 +349,25 @@ describe('team status', () => {
     });
     live = { ...built(), agents: [...built().agents, agent('codex-acme-tmp-1', 'w6', 'working', 'codex')] };
     const { out } = await status();
-    expect(out).toContain('codex-acme: its launch stopped at "named"\n  repair: the owner runs team up (it resumes the launch)');
-    expect(out).toContain('deepseek-acme: its rules were not delivered');
+    expect(out).toContain('codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
+    // `team remove --keep, then team add` has an owner-only leg: the line is the owner's, and
+    // the count says so; the other three rows are the lead's or the owner's in their own right.
+    expect(out).toContain(
+      "difference: deepseek-acme: its rules were not delivered\n" +
+        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme\n' +
+        '  who: the owner\n',
+    );
     expect(out).toContain('note: codex-acme-tmp-1 is temporary, until merged:fix/select-width');
     expect(out).toContain('codex-acme-tmp-2: a temporary seat is recorded and is not running');
     expect(out).toContain('worktree select-width: its setup failed\n  repair: team worktree remove select-width');
-    expect(out).toContain('4 difference(s)');
+    expect(out).toContain('4 differences, 1 for the owner\n');
   });
 
   test('a watch whose last pass is older than two intervals, and no watch at all', async () => {
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ?? emptySession()).watch = { pid: 1, heartbeat: '2026-10-03T14:00:00Z' };
     });
-    expect((await status()).out).toContain('the watch\'s last pass was 10 minute(s) ago\n  repair: team watch --session acme-web');
+    expect((await status()).out).toContain('the watch\'s last pass was 10 minutes ago\n  repair: team watch --session acme-web');
     updateState(join(dir, '.agents'), (state) => {
       delete state.sessions['acme-web']?.watch;
     });
@@ -381,7 +399,7 @@ describe('team status', () => {
     standing = { kind: 'none' };
     const unrecorded = await status();
     expect(unrecorded.out).not.toContain('never approved');
-    expect(unrecorded.out).toContain('0 difference(s)');
+    expect(unrecorded.out).toContain('no differences');
     expect(unrecorded.code).toBe(0);
   });
 
@@ -397,7 +415,7 @@ describe('team status', () => {
     writeFileSync(file, example.replace('format: 1', 'format: 9'));
     const { code, out } = await status();
     expect(out.split('\n')[0]).toBe('team.yaml is invalid (line 1: format must be 1: this version of team reads no other); using the copy of 2026-10-03T14:10:00.000Z');
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
@@ -570,31 +588,74 @@ describe('team status', () => {
     live = null;
     expect(await status()).toMatchObject({ code: 2, err: expect.stringContaining('herdr doesn\'t answer') });
     expect(await status('--fix')).toMatchObject({ code: 2, err: expect.stringContaining('unknown option --fix') });
-    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--all] [--json]\n');
+    expect((await status('--fix')).err).toContain('Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]\n');
+
+    const badAfter = await status('--nope', '--json');
+    expect(badAfter.code).toBe(2);
+    expect(badAfter.err).toBe('');
+    assertJsonErrorShape(badAfter.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --nope',
+      repair: null,
+    });
+
+    const badEquals = await status('--json=1');
+    expect(badEquals.code).toBe(2);
+    expect(badEquals.err).toBe('');
+    assertJsonErrorShape(badEquals.out, {
+      id: 'status.invocation',
+      messageContains: 'unknown option --json',
+      repair: null,
+    });
+
+    const herdrJson = await status('--json');
+    expect(herdrJson.code).toBe(2);
+    expect(herdrJson.err).toBe('');
+    assertJsonErrorShape(herdrJson.out, {
+      id: 'status.herdr',
+      messageContains: "herdr doesn't answer",
+      repair: 'start herdr and run `team status` again',
+    });
   });
 
   test('--json: pins the stable format 1 shape on a clean team', async () => {
     const { code, out, err } = await status('--json');
     expect(code).toBe(0);
-    expect(err).toBe(WARNING);
+    expect(err).toBe('');
     const doc = JSON.parse(out);
-    expect(Object.keys(doc).sort()).toEqual(['differences', 'format', 'notes', 'notice', 'project', 'rows', 'session']);
+    expect(Object.keys(doc).sort()).toEqual([
+      'differences',
+      'format',
+      'notes',
+      'notice',
+      'project',
+      'rows',
+      'schema',
+      'session',
+      'summary',
+    ]);
+    expect(doc.schema).toEqual({ name: 'team.status', version: 1 });
     expect(doc.format).toBe(1);
     expect(doc.project).toBe('acme-web');
     expect(doc.session).toBe('acme-web');
     expect(doc.notice).toBeNull();
     expect(doc.differences).toEqual([]);
+    expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });
     expect(doc.notes).toEqual([
       'codex-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme: version unread (its screen doesn\'t show the model)',
       'deepseek-acme-2: version unread (its screen doesn\'t show the model)',
+      // The watch the state records, after the seats' notes: `status` lists it on every run.
+      'watch: pane not recorded, pid 1, last heartbeat 60s ago',
     ]);
+    // `state` stays the comparison's phrase about the record, byte for byte as it published;
+    // each row also carries the seat's own reading beside it, seat_state/seat_state_source —
+    // the table's STATE and SOURCE columns — and no `blind` key here: every row reads a word.
     expect(doc.rows).toEqual([
-      { name: 'claude-coordinator-acme', state: 'working', model: 'Claude Opus 5.5', pane: 'w1:p1' },
-      { name: 'codex-acme', state: 'idle (screen not recognised), parked', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
-      { name: 'deepseek-acme', state: 'done (screen not recognised)', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
-      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
-      { name: 'grok-acme', state: 'stopped', model: 'Grok 4.7', pane: '-' },
+      { name: 'claude-coordinator-acme', state: 'working', seat_state: 'idle', seat_state_source: 'cli', model: 'Claude Opus 5.5', pane: 'w1:p1' },
+      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
+      { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
+      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
     ]);
   });
 
@@ -623,8 +684,9 @@ describe('team status', () => {
     const doc = JSON.parse(out);
     expect(doc.format).toBe(1);
     expect(doc.differences).toEqual([
-      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team add deepseek-acme-2' },
+      { what: 'deepseek-acme-2 is in the file and is not running', repair: 'team restart deepseek-acme-2', who: "the team's lead" },
     ]);
+    expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
   });
 
   test('--json: includes notice when falling back to last valid copy', async () => {
@@ -662,14 +724,14 @@ describe('team status', () => {
 
     const missingWatch = await status();
     expect(missingWatch.code).toBe(1);
-    const add1 = missingWatch.out.indexOf('difference: deepseek-acme is in the file and is not running\n  repair: team add deepseek-acme\n');
-    const add2 = missingWatch.out.indexOf('difference: deepseek-acme-2 is in the file and is not running\n  repair: team add deepseek-acme-2\n');
+    const restart1 = missingWatch.out.indexOf('difference: deepseek-acme is in the file and is not running\n  repair: team restart deepseek-acme\n');
+    const restart2 = missingWatch.out.indexOf('difference: deepseek-acme-2 is in the file and is not running\n  repair: team restart deepseek-acme-2\n');
     const watch = missingWatch.out.indexOf('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
-    expect(add1).toBeGreaterThanOrEqual(0);
-    expect(add2).toBeGreaterThanOrEqual(0);
+    expect(restart1).toBeGreaterThanOrEqual(0);
+    expect(restart2).toBeGreaterThanOrEqual(0);
     // The differences keep the order they were created in: the watch's, made after them, stays after them.
-    expect(watch).toBeGreaterThan(add1);
-    expect(watch).toBeGreaterThan(add2);
+    expect(watch).toBeGreaterThan(restart1);
+    expect(watch).toBeGreaterThan(restart2);
     expect(missingWatch.out).not.toContain('(after:');
 
     // 2. A record the verification refused: the record's own row first, then the repairs that
@@ -680,8 +742,8 @@ describe('team status', () => {
     expect(refused.code).toBe(1);
     const approve = refused.out.indexOf(`difference: ${REFUSED_WHY}\n  repair: the live file is what the commands read`);
     expect(approve).toBeGreaterThanOrEqual(0);
-    expect(refused.out).toContain('repair: team add deepseek-acme (after: the live file is what the commands read)');
-    expect(refused.out).toContain('repair: team add deepseek-acme-2 (after: the live file is what the commands read)');
+    expect(refused.out).toContain('repair: team restart deepseek-acme (after: the live file is what the commands read)');
+    expect(refused.out).toContain('repair: team restart deepseek-acme-2 (after: the live file is what the commands read)');
     expect(refused.out.indexOf('difference: deepseek-acme is in the file and is not running')).toBeGreaterThan(approve);
     expect(refused.out).toContain('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
   });
@@ -693,21 +755,24 @@ describe('team status', () => {
     const approveRun = await status();
     expect(approveRun.out).toContain('repair: the live file is what the commands read');
 
-    // 2. the owner runs team up
+    // 2. team up: with the session down a lead cannot prove its pane, so the repair is the
+    // owner's, named by the who line rather than the repair
     const validTeam = validateTeamFile(example);
     if (!validTeam.ok) throw new Error('invalid example');
     standing = verifiedOf(validTeam.team, example, dir, NOW);
     live = { running: false, agents: [], workspaces: [], screens: {} };
     const upRun = await status();
-    expect(upRun.out).toContain('repair: the owner runs team up');
+    expect(upRun.out).toContain('repair: team up');
 
-    // 3. the owner runs team up (it resumes the launch)
+    // 3. team up (it resumes the launch): the map's `up` row admits a lead, so the who line
+    // names the team's lead and there is no owner count
     live = built();
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ??= emptySession()).seats['codex-acme'] = { stage: 'launched' };
     });
     const resumeRun = await status();
-    expect(resumeRun.out).toContain('repair: the owner runs team up (it resumes the launch)');
+    expect(resumeRun.out).toContain('repair: team up (it resumes the launch)');
+    expect(resumeRun.out).not.toContain('for the owner');
 
     // 4. the owner switches it back: git -C <shown> switch <base>
     branch = 'fix/other';
@@ -729,13 +794,14 @@ describe('team status', () => {
       "repair: the owner clears or sends it in the pane; team does not type into a box it can't verify",
     );
 
-    // 6. the owner clears or sends it in the pane, then runs team up (it resumes the launch)
+    // 6. clear or send it in the pane, then team up (it resumes the launch): the who line
+    // names the team's lead
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ??= emptySession()).seats['codex-acme'] = { stage: 'named' };
     });
     const mergedRun = await status();
     expect(mergedRun.out).toContain(
-      'repair: the owner clears or sends it in the pane, then runs team up (it resumes the launch)',
+      'repair: clear or send it in the pane, then team up (it resumes the launch)',
     );
   });
 
@@ -761,7 +827,7 @@ describe('team status', () => {
     });
     const namedRes = await status();
     expect(namedRes.out).toContain('difference: codex-acme: its launch stopped at "named", and it holds text in its input box that was never sent');
-    expect(namedRes.out).toContain('repair: the owner clears or sends it in the pane, then runs team up (it resumes the launch)');
+    expect(namedRes.out).toContain('repair: clear or send it in the pane, then team up (it resumes the launch)');
     expect(namedRes.out).not.toContain('difference: codex-acme holds text in its input box that was never sent');
 
     // seat that reads unknown: no unsent reading; the row says what herdr's word could not
@@ -771,7 +837,7 @@ describe('team status', () => {
     };
     const unknownRes = await status();
     expect(unknownRes.out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
-    expect(unknownRes.out).toContain('difference: codex-acme: its launch stopped at "named"\n  repair: the owner runs team up (it resumes the launch)');
+    expect(unknownRes.out).toContain('difference: codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
     expect(unknownRes.out).not.toContain('unsent text');
     expect(unknownRes.out).not.toContain('holds text in its input box that was never sent');
   });
@@ -847,7 +913,7 @@ describe('team status', () => {
     expect(temp.out).toMatch(/deepseek-acme-tmp-1\s+done \(rate limit on deepseek, resets at 11:00\), temporary/);
   });
 
-  test('a seat waiting at a permission or trust prompt is a difference for the owner', async () => {
+  test('a permission prompt is the lead\'s difference, a trust prompt the owner\'s', async () => {
     const codexPane = built().agents.find((one) => one.name === 'codex-acme')?.pane ?? '';
     const permScreen = codexScreen('permission');
     live = {
@@ -857,10 +923,11 @@ describe('team status', () => {
     const permRes = await status();
     expect(permRes.code).toBe(1);
     expect(permRes.out).toContain(
-      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
-        '  repair: the owner answers it in the pane\n',
+      "difference: codex-acme waits at a permission prompt: its lead's to answer, or its owner's\n" +
+        '  repair: its lead answers it in the pane\n' +
+        "  who: the team's lead\n",
     );
-    expect(permRes.out).toContain('1 difference(s), 1 for the owner\n');
+    expect(permRes.out).toContain('1 difference\n');
 
     const trustScreen = codexScreen('trust-folder');
     live = {
@@ -870,35 +937,37 @@ describe('team status', () => {
     const trustRes = await status();
     expect(trustRes.code).toBe(1);
     expect(trustRes.out).toContain(
-      "difference: codex-acme waits at a permission prompt: its owner's to answer\n" +
-        '  repair: the owner answers it in the pane\n',
+      "difference: codex-acme waits at a trust prompt: the owner's to answer\n" +
+        '  repair: the owner answers it in the pane\n' +
+        '  who: the owner\n',
     );
+    expect(trustRes.out).toContain('1 difference, 1 for the owner\n');
   });
 
   test('D: summary line: with and without an owner repair', async () => {
-    // 1. Without an owner repair: only a missing seat (repair: team add <seat>)
+    // 1. Without an owner repair: only a missing seat (repair: team restart <seat>)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const noOwner = await status();
-    expect(noOwner.out).toContain('1 difference(s)\n');
+    expect(noOwner.out).toContain('1 difference\n');
     expect(noOwner.out).not.toContain('for the owner');
 
     // 2. With an owner repair: a refused record (repair: the live file is what the commands read)
     live = built();
     standing = { kind: 'refused', why: REFUSED_WHY };
     const withOwner = await status();
-    expect(withOwner.out).toContain('1 difference(s), 1 for the owner\n');
+    expect(withOwner.out).toContain('1 difference, 1 for the owner\n');
 
-    // 3. Mixed: 1 owner repair (the record's row) + 1 non-owner repair (add)
+    // 3. Mixed: 1 owner repair (the record's row) + 1 non-owner repair (restart)
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const mixed = await status();
-    expect(mixed.out).toContain('2 difference(s), 1 for the owner\n');
+    expect(mixed.out).toContain('2 differences, 1 for the owner\n');
   });
 });
 
 // A pane is its seat only while the process team launched is still in it. Each case records a
 // launch for codex-acme and hands the comparison one process-info reading for its pane.
 describe('a pane that no longer holds the process team launched', () => {
-  const GONE_REPAIR = '  repair: the owner runs team up\n';
+  const GONE_REPAIR = '  repair: team up\n';
 
   function recordCodex(patch: Record<string, unknown> = {}) {
     updateState(join(dir, '.agents'), (state) => {
@@ -923,11 +992,18 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(out).toContain(
       'difference: codex-acme: its pane runs no CLI (the CLI ended or the session was restored)\n' + GONE_REPAIR,
     );
-    expect(out).toContain('1 difference(s), 1 for the owner\n');
+    // `team up` admits a lead: the difference is one the lead repairs, not one counted for the
+    // owner.
+    expect(out).toContain('1 difference\n');
+    expect(out).not.toContain('for the owner');
     const doc = JSON.parse((await status('--json')).out);
+    // The comparison's own 'missing' is a certainty: the reading is done, from the process,
+    // even while herdr still lists the agent in the pane.
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
       state: 'missing',
+      seat_state: 'done',
+      seat_state_source: 'process',
       model: 'GPT-6 Sol',
       pane: 'w2:p1',
     });
@@ -945,7 +1021,8 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(readable.out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
     expect(readable.out).toContain(
       'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol; the process in its pane is not the one team launched\n' +
-        '  repair: team remove codex-acme --keep, then team add codex-acme\n',
+        '  repair: team restart codex-acme\n' +
+        "  who: the team's lead\n",
     );
     expect(readable.out).not.toContain('note: codex-acme: its pane runs');
     expect(readable.out).not.toMatch(/codex-acme\s+restored, not launched by team\s+GPT/);
@@ -970,9 +1047,16 @@ describe('a pane that no longer holds the process team launched', () => {
     );
     expect(out).not.toContain('difference: codex-acme: the process in its pane is not the one team launched');
     const doc = JSON.parse((await status('--json')).out);
+    // A pane `team` did not launch is not the seat's process, and its word is not 'done' either —
+    // nor is herdr's idle word about whatever runs there the seat's. It is untrusted: the reading
+    // is TeamCLI's own records or nothing, and this record carries no trace — unknown, and past
+    // the blind threshold the stale record is blind, which counts as not working.
     expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toEqual({
       name: 'codex-acme',
       state: 'restored, not launched by team',
+      seat_state: 'unknown',
+      seat_state_source: 'none',
+      blind: true,
       model: '-',
       pane: 'w2:p1',
     });
@@ -1005,11 +1089,14 @@ describe('a pane that no longer holds the process team launched', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).not.toMatch(/deepseek-acme\s+restored, not launched by team/);
+    // An ordinary seat is repaired seat by seat, never by stopping the whole team.
     expect(out).toContain(
       'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
-        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme\n',
+        '  repair: team restart deepseek-acme\n' +
+        "  who: the team's lead\n",
     );
-    expect(out).not.toContain('repair: the owner runs team up\n');
+    expect(out).not.toContain('team down, then team up');
+    expect(out).not.toContain('repair: team up\n');
   });
 
   test('a launcher the record cannot tie names the model and the restart', async () => {
@@ -1033,11 +1120,66 @@ describe('a pane that no longer holds the process team launched', () => {
     // The launch line is: it starts a launcher, and this process is not the one team launched.
     expect(out).toContain(
       'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
-        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme\n',
+        '  repair: team restart deepseek-acme\n' +
+        "  who: the team's lead\n",
     );
+    expect(out).not.toContain('team down, then team up');
     expect(out).not.toContain('deepseek-acme runs');
     expect(out).not.toContain('repair: look at the pane\n');
-    expect(out).not.toContain('repair: the owner runs team up\n');
+    expect(out).not.toContain('repair: team up\n');
+  });
+
+  test('a lead whose launcher the record cannot tie draws the note, never a restart', async () => {
+    // The live state: the lead's record holds the launch but no agent session, so this pane is
+    // not tied to it, and the launch line starts a launcher.
+    writeFileSync(file, example.replace('    launch: claude --model claude-opus-5-5', '    launch: team-claude'));
+    approveOnDisk();
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['claude-coordinator-acme'] = {
+        stage: 'ready',
+        pane: 'w1:p1',
+        workspace: 'w1',
+        launched: { shell: 400, cli: [401] },
+      };
+    });
+    live = { ...built(), processes: { 'w1:p1': { shell: 400, foreground: [500] } } };
+    const { out } = await status();
+    expect(out).toMatch(/claude-coordinator-acme\s+restored, not launched by team\s+-\s+w1:p1/);
+    // A lead's own seat is never restarted alone: the reading is a note, and no repair stops
+    // the team.
+    expect(out).toContain('note: claude-coordinator-acme: started by a launcher; team cannot tell its process from the one it launched\n');
+    expect(out).not.toContain('difference: claude-coordinator-acme: its launch line starts a launcher');
+    expect(out).not.toContain('difference: claude-coordinator-acme runs');
+    expect(out).not.toContain('team restart claude-coordinator-acme');
+    expect(out).not.toContain('team down, then team up');
+  });
+
+  test('a lead whose untied pane runs another model draws the note, never a restart', async () => {
+    // The same live state, on a screen that names a model the file does not carry: the note says
+    // what the pane runs, and there is still no command that stops the team.
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['claude-coordinator-acme'] = {
+        stage: 'ready',
+        pane: 'w1:p1',
+        workspace: 'w1',
+        launched: { shell: 400, cli: [401] },
+      };
+    });
+    live = {
+      ...built(),
+      processes: { 'w1:p1': { shell: 400, foreground: [500] } },
+      screens: { ...built().screens, 'w1:p1': claudeScreen('Opus 4.6') },
+    };
+    const { out } = await status();
+    expect(out).toMatch(/claude-coordinator-acme\s+restored, not launched by team\s+-\s+w1:p1/);
+    expect(out).toContain(
+      'note: claude-coordinator-acme runs Claude Opus 4.6; the file says Claude Opus 5.5; the process in its pane is not the one team launched\n',
+    );
+    expect(out).not.toContain('difference: claude-coordinator-acme runs');
+    expect(out).not.toContain('team restart claude-coordinator-acme');
+    expect(out).not.toContain('team down, then team up');
   });
 
   test('gone with no agent listed: its pane is read, not called a missing seat', async () => {
@@ -1077,7 +1219,7 @@ describe('a pane that no longer holds the process team launched', () => {
       'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
         '  repair: look at the pane\n',
     );
-    expect(out).not.toContain('repair: the owner runs team up\n');
+    expect(out).not.toContain('repair: team up\n');
     expect(out).not.toContain('is named "stranger"');
     expect(out).not.toContain('agent rename');
   });
@@ -1103,7 +1245,7 @@ describe('a pane that no longer holds the process team launched', () => {
       'difference: codex-acme: its pane runs no CLI and its process was never recorded\n' +
         '  repair: team remove codex-acme --abandon, then team up\n',
     );
-    expect(out).not.toContain('the owner runs team up');
+    expect(out).not.toContain('repair: team up');
     expect(out).not.toMatch(/codex-acme\s+idle/);
   });
 
@@ -1114,7 +1256,7 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(code).toBe(1);
     expect(out).toContain('repair: team remove codex-acme --abandon, then team up');
     expect(out).not.toContain('it resumes the launch');
-    expect(out).not.toContain('the owner runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a shell in the recorded pane, with no agent listed and no identity, is not a seat team up starts', async () => {
@@ -1131,7 +1273,7 @@ describe('a pane that no longer holds the process team launched', () => {
         '  repair: team remove codex-acme --abandon, then team up\n',
     );
     expect(out).not.toContain('codex-acme is in the file and is not running');
-    expect(out).not.toContain('the owner runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a model mismatch on a seat with no process identity names abandon, not remove --keep', async () => {
@@ -1143,10 +1285,10 @@ describe('a pane that no longer holds the process team launched', () => {
     };
     const { code, out } = await status();
     expect(code).toBe(1);
-    expect(out).toContain('codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol; its process was never recorded');
+    expect(out).toContain('codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol; its process was never recorded');
     expect(out).toContain('repair: team remove codex-acme --abandon, then team up');
     expect(out).not.toContain('team remove codex-acme --keep');
-    expect(out).not.toContain('the owner runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a lead whose record has no process identity and whose screen is another model names down --abandon', async () => {
@@ -1162,11 +1304,11 @@ describe('a pane that no longer holds the process team launched', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toContain(
-      'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5; its process was never recorded',
+      'claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5; its process was never recorded',
     );
     expect(out).toContain('repair: team down --abandon, then team up');
     expect(out).not.toContain('team remove claude-coordinator-acme');
-    expect(out).not.toContain('the owner runs team up');
+    expect(out).not.toContain('repair: team up');
   });
 
   test('a model mismatch on the process team launched still names remove --keep', async () => {
@@ -1177,7 +1319,7 @@ describe('a pane that no longer holds the process team launched', () => {
       screens: { ...built().screens, 'w2:p1': codexScreen('idle') },
     };
     const { out } = await status();
-    expect(out).toContain('codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol');
+    expect(out).toContain('codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol');
     expect(out).toContain('team remove codex-acme --keep, then team add codex-acme');
     expect(out).not.toContain('--abandon');
   });
@@ -1236,15 +1378,20 @@ describe('the rules files of message seats', () => {
   test('a team whose files hold the file\'s rules reads clean', async () => {
     writeAll(teamOf());
     const { code, out } = await status();
-    expect(out).toContain('0 difference(s)');
+    expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
 
-  test('a file that differs from the team file\'s rules is a difference the owner repairs with reload', async () => {
+  test('a file that differs from the team file\'s rules is a difference a grant holder repairs with reload', async () => {
     writeAll(teamOf(), (seat) => (seat.cli === 'codex' ? 'other rules entirely' : rulesOf(teamOf(), seat, dir)));
     const { code, out } = await status();
     expect(out).toContain("codex-acme: its rules file differs from the team file's rules");
     expect(out).toContain('repair: team reload codex-acme');
+    // The repair names `team reload`, a grant scope: the owner or an approved grant holder may
+    // run it, and no `owner: true` narrows the row to the owner alone — the summary does not
+    // count it among the owner's differences.
+    expect(out).toContain('1 difference\n');
+    expect(out).not.toContain('for the owner');
     expect(code).toBe(1);
   });
 
@@ -1261,5 +1408,87 @@ describe('the rules files of message seats', () => {
     const wide = await status();
     expect(wide.out).toContain('codex-acme: its rules file has mode 0644, not 0600');
     expect(wide.code).toBe(1);
+  });
+});
+
+describe('dev mode: the approval and override state lines are quiet notes', () => {
+  // A home, because the overrides live in the approval store and the policy chain is signed
+  // there: no home is a test that stands in for no store at all, and neither is read.
+  let home: string;
+  beforeEach(() => {
+    home = join(dir, 'home');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true, mode: 0o700 });
+    sources.home = home;
+  });
+  afterEach(() => {
+    delete sources.home;
+  });
+
+  /** The chain value the quiet count reads: a signed team-level `dev-mode`, the shape `team
+   *  policy set` writes. Once it governs, `TEAMCLI_DEV_MODE` is ignored — the variable alone is
+   *  not the reading. */
+  function setDevMode(value: 'on' | 'off'): void {
+    const written = writePolicySet(home, { level: 'team', target: dir, teamRoot: dir, name: 'dev-mode', value }, { now: NOW });
+    if (!written.ok) throw new Error(written.why);
+  }
+
+  async function statusDev() {
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runStatus(['--file', file], io, sources);
+    return { code, out: io.out, err: io.err };
+  }
+
+  test('a refused record is one quiet note under a governing on, and no repair waits on an approval', async () => {
+    // One seat not running: a `team add` repair `orderAndAnnotateDifferences` would mark
+    // `(after: …)` while the refused record stands.
+    live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme') };
+    standing = { kind: 'refused', why: REFUSED_WHY };
+
+    const forced = await status();
+    expect(forced.out).toContain(`difference: ${REFUSED_WHY}`);
+    expect(forced.out).toContain('  repair: the live file is what the commands read');
+    expect(forced.out).toContain('repair: team restart deepseek-acme (after: the live file is what the commands read)');
+
+    setDevMode('on');
+    const dev = await statusDev();
+    expect(dev.out).toContain(`note: ${REFUSED_WHY}; dev mode does not compare it`);
+    expect(dev.out).not.toContain(`difference: ${REFUSED_WHY}`);
+    // No approval row, so nothing waits on one: the annotation goes with it.
+    expect(dev.out).toContain('repair: team restart deepseek-acme\n');
+    expect(dev.out).not.toContain('(after: the live file is what the commands read)');
+  });
+
+  test('overrides drift is one counted note under dev mode, and its rows are not differences', async () => {
+    const parsed = validateTeamFile(example);
+    if (!parsed.ok) throw new Error('the example fixture does not validate');
+    const path = overridesPath(parsed.team.project, dir, home);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `format: 1
+profiles:
+  claude-code:
+    screen:
+      permission:
+        - any: ['Owner dialog']
+`);
+
+    const forced = await status();
+    expect(forced.out).toContain('difference: the overrides differ from the stored copy: `overrides` changed');
+    expect(forced.out).toContain('  who: the owner');
+
+    setDevMode('on');
+    const dev = await statusDev();
+    expect(dev.out).toContain('note: 1 override difference; dev mode does not compare them');
+    expect(dev.out).not.toContain('difference: the overrides differ from the stored copy');
+  });
+
+  test('a governing off retires the variable: the state row stays a difference under TEAMCLI_DEV_MODE=1', async () => {
+    standing = { kind: 'refused', why: REFUSED_WHY };
+    setDevMode('off');
+    const io = testIo(dir, { kind: 'owner' });
+    io.env.TEAMCLI_DEV_MODE = '1';
+    const code = await runStatus(['--file', file], io, sources);
+    expect(io.out).toContain(`difference: ${REFUSED_WHY}`);
+    expect(io.out).not.toContain('dev mode does not compare it');
+    expect(code).toBe(1);
   });
 });

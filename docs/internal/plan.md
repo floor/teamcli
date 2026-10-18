@@ -28,10 +28,11 @@ The mark is against this clone's clock. Another machine's clock may disagree.
 ## What it reads and writes
 
 Reads the git checkout (`findRoot`), the team file, and the YAML list at `tasks.path`. The path
-is relative to the checkout. A record's `id` and `title` are required. The printed block is the
-`team issues` block: the takeable records, one block each, in `team next`'s order — priority
-first (a number before a text, ascending), then the `tasks.fallback` tie-break. A record with
-`blocked-by`, `repos`, or `needs` is not takeable and is not printed.
+is relative to the checkout. A record's `id` and `title` are required. The plain plan is the
+contract's table: one row per takeable record, in `team next`'s order — priority first (a number
+before a text, ascending), then the `tasks.fallback` tie-break — with the queue position, the
+STATE mark, the owner or `-`, and the title. Every other field the record carries is in the
+`--json` task. A record with `blocked-by`, `repos`, or `needs` is not takeable and is not printed.
 
 On a broker source it reads the same git checkout and team file, then asks the broker over
 `.agents/broker.sock`: one request line carrying the caller's seat and pane, one answer line
@@ -48,16 +49,22 @@ may plan, not only the orchestrator. The owner is refused. A name that is not a 
 refused the same way. The refusals are `team next`'s, with this command's prefix:
 
 ```text
-team plan: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up`
-team plan: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`)
+team plan: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
+team plan: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`)
 ```
 
 ## What it prints
 
-The takeable records, one issues block per record. A deadline the clock has passed gains
-` (overdue)` after its text.
+The context line, then the takeable records as the contract's `STEP  STATE  OWNER  TITLE` table,
+then `1 task` / `<n> tasks`. A deadline the clock has passed reads `overdue` in the STATE column; the mark
+decides nothing.
 
-`team plan: nothing is takeable` when no record is takeable. That is one answer, exit 0.
+The context line and `0 tasks` when no record is takeable. That is one answer, exit 0.
+
+With `--json`, the same queue is one document: the context's `project` and `session`, and one
+task per record carrying its `step`, its `state` (`open` or `overdue`), the owner or `null`, and
+the whole record. A refusal writes one `team.error` document on stdout instead, with the same
+sentence as its `message`, and the exit is the same.
 
 `team plan: the tracker holds more tasks than this read; the take still proceeds` on stderr when
 the broker's answer says the tracker holds another page — the same notice `team next` prints.
@@ -128,7 +135,9 @@ seats:
 
 ```console caller=claude-keeper
 $ team plan ; echo "exit $?"
-m1  the task title
-  deadline: 2026-01-01T00:00:00Z (overdue)
+team beacon, session "beacon"
+  STEP  STATE    OWNER  TITLE
+  1     overdue  -      the task title
+1 task
 exit 0
 ```

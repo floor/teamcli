@@ -39,7 +39,7 @@ describe("status's no-terminal refusal for --file and --session", () => {
     expect(caller).toContain(
       "export const DETACHED_REFUSAL = 'only the owner runs this, from a terminal outside herdr';",
     );
-    expect(caller).toContain("caller.kind === 'owner-no-tty' ? DETACHED_REFUSAL : undefined");
+    expect(caller).toContain("if (caller.kind !== 'owner-no-tty') return undefined;");
     // The pages' "or" is this ??: the detached sentence first, the owner's-flag line only when
     // the run has a terminal.
     expect(caller).toContain('detachedRefusal(walked) ?? `--file is the owner\'s, from a terminal outside herdr');

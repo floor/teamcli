@@ -15,6 +15,7 @@ import type { RemoveSources } from '../../src/commands/remove.ts';
 import type { RegisterSources } from '../../src/commands/register.ts';
 import type { RestartSources } from '../../src/commands/restart.ts';
 import type { ListSources } from '../../src/commands/list.ts';
+import type { ProjectSources } from '../../src/commands/projects.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
 import type { Launch, UpSources } from '../../src/commands/up.ts';
 import type { WatchSources } from '../../src/commands/watch.ts';
@@ -25,6 +26,7 @@ import type { HerdrAgent } from '../../src/herdr.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor } from '../../src/profiles/index.ts';
+import * as projectRegistry from '../../src/registry/projects.ts';
 import { readScreen } from '../../src/watch/screen.ts';
 import type { ScreenKind, Spec, ToolState } from './spec.ts';
 
@@ -33,6 +35,18 @@ export const WATCH_PID = 4242;
 
 /** The pid a `team watch` run in a page has: never the recorded one, as a person's is not. */
 export const RUN_WATCH_PID = 9001;
+
+/** The project registry's reads, bound to one home: what a page's `~/.config/team/projects.yaml`
+ *  holds. `team projects`, `team status --project` and `team send --list` read the fixture's own
+ *  registry file through this, so a page's `yaml file=../../.config/team/projects.yaml` fence is
+ *  the registry its examples are read against. */
+export function projectsAt(home: string): ProjectSources {
+  return {
+    list: () => projectRegistry.list(home),
+    byName: (name) => projectRegistry.byName(home, name),
+    ofTeam: (team) => projectRegistry.ofTeam(home, team),
+  };
+}
 
 /** One live agent, or a workspace herdr made before its agent started. */
 type Slot = {
@@ -250,6 +264,9 @@ export type World = {
   releaseKeyReader(): KeyReader;
   /** The pane a running seat of the fixture is in, or undefined when nothing runs it. */
   paneOf(name: string): string | undefined;
+  /** What the watch a run just started does before a reader types the next line: its pane's
+   *  command is up, so its first pass has run — the pid `team status` and the checks read. */
+  settle(): void;
   setScreen(seat: string, kind: ScreenKind): void;
   setMachine(kind: Spec['machine']): void;
   /** One CLI's installed-and-logged-in state, on top of the fixture's own. */
@@ -276,6 +293,8 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
   let herdr = spec.herdr;
   // A watch that is already alive, or one the plan starts: `up` must not start a second.
   let watchPid: number | null = spec.watch === 'alive' || spec.watch === 'stale' ? WATCH_PID : null;
+  // The pane a run started a watch in, until `settle` records the pass it reaches next.
+  let startedWatch: string | null = null;
   let made = 0;
   const slots: Slot[] = [];
   // What each pane holds once text was typed into it, so a read-back reads the typed text.
@@ -366,15 +385,17 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     paneRun(_session: string, pane: string, command: string) {
       did.runs.push(command);
       const slot = agentOf(pane);
-      // The watchdog pane runs a shell command, not an agent: herdr lists no agent in it.
+      // The watch's pane runs a shell command, not an agent: herdr lists no agent in it.
       const watch = /\bteam watch\b/.test(command);
       if (slot && !watch) slot.agent = true;
-      // A started watch records itself, and its heartbeat, exactly as the real one does.
+      // A watch a run starts is settled once the run is done: its own first pass, which a real
+      // one reaches the moment its command starts, is what records the process beside the pane.
       if (watch) {
         watchPid = WATCH_PID;
+        startedWatch = pane;
         updateState(dir, (state) => {
           const record = (state.sessions[session] ??= emptySession());
-          record.watch = { pid: WATCH_PID, heartbeat: now().toISOString() };
+          record.watch = { pane, heartbeat: now().toISOString() };
         });
       }
       return true;
@@ -425,15 +446,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     sessionUp: action.sessionUp,
     createWorkspace: action.createWorkspace,
     paneRun: action.paneRun,
-    spawnWatch(command: string) {
-      did.runs.push(command);
-      watchPid = WATCH_PID;
-      updateState(dir, (state) => {
-        const record = (state.sessions[session] ??= emptySession());
-        record.watch = { pid: WATCH_PID, heartbeat: now().toISOString() };
-      });
-      return WATCH_PID;
-    },
     renameAgent: action.renameAgent,
     closeWorkspace: action.closeWorkspace,
     agentPanes: action.agentPanes,
@@ -615,6 +627,16 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     setHerdr(kind) {
       herdr = kind;
     },
+    settle() {
+      if (!startedWatch) return;
+      const pane = startedWatch;
+      startedWatch = null;
+      updateState(dir, (state) => {
+        const record = (state.sessions[session] ??= emptySession());
+        const workspace = record.watch?.workspace;
+        record.watch = { pid: WATCH_PID, heartbeat: now().toISOString(), pane, ...(workspace ? { workspace } : {}) };
+      });
+    },
     upSources(): UpSources {
       return {
         sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),
@@ -684,6 +706,10 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         paneText: (_session, pane) => action.paneText('', pane),
         // The address a register records: the fixture runs no sockets, so the stub answers null.
         refreshAddress: () => ({ address: null }),
+        // The two sidebar writes an adoption re-applies: noops that report "done", so an example
+        // spawns no herdr.
+        renameWorkspace: () => true,
+        reportDisplayAgent: () => true,
         now,
       };
     },
@@ -695,6 +721,7 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         now,
         home,
         machine,
+        projects: projectsAt(home),
       };
     },
     listSources(): ListSources {

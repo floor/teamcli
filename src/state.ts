@@ -42,7 +42,7 @@ export type SeatState = {
    */
   start_cwd?: string;
   cli_version?: string;
-  rules?: 'option' | 'message' | 'undelivered';
+  rules?: 'option' | 'message' | 'prepend' | 'undelivered';
   worked?: boolean;
   /**
    * The process `team` launched for this seat, read after its idle prompt appeared: the pane's
@@ -89,6 +89,17 @@ export type SeatState = {
 /** A seat's waiting record, as the seat shape above stores it. Named for the plan and the
  *  pause, which carry it between the state and the prompt. */
 export type WaitingRecord = NonNullable<SeatState['waiting']>;
+
+/**
+ * Whether a state seat's record is one the team file still speaks for: a seat the file
+ * declares, or a temporary seat — `team add --temporary` never writes one into the file, so
+ * its record is the only place it exists. Any other record names a seat the file no longer
+ * has, and the commands that resolve who holds a pane read past it: the file is the truth,
+ * and only `team check --repair` drops the record.
+ */
+export function seatOfFile(name: string, seat: SeatState, declared: ReadonlySet<string>): boolean {
+  return seat.temporary !== undefined || declared.has(name);
+}
 
 export type WorktreeState = {
   path: string;
@@ -140,18 +151,23 @@ export type SessionState = {
    */
   swapping?: Record<string, SwapRecord>;
   worktrees: Record<string, WorktreeState>;
-  watch?: { pid: number; heartbeat: string; pane?: string; workspace?: string };
+  /**
+   * The watch: the pane and workspace it runs in, the process once a pass has recorded one, and
+   * the last heartbeat. `pid` is absent from the moment `up` — or an owner's own run — starts the
+   * watch until that pane's first pass records its process; `pane` is absent only on a record an
+   * older detached watch left.
+   */
+  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string };
   /**
    * The team file this session was launched from. A lead in the lobby resolves it from a pane
    * the state records, and from no other path. Absent on a session started before it was written.
    */
   launched_file?: string;
   /**
-   * The team file `up` resolved, and who may read it. Written before the watch process is
-   * spawned, and left in place when that process exits: a flagless watch started in the project
-   * folder would miss this file or read another one. `pane` is set only for a watch an older
-   * `up` started in a pane. The process `up` records on `watch.pid`, or that pane, may read it.
-   * Any other non-owner is refused.
+   * The team file `up` resolved, and who may read it. Written before the watch's pane runs its
+   * command, because a flagless watch started in the project folder would miss this file or read
+   * another one. The pane the record names, or the process a pass records on `watch.pid`, may
+   * read it. Any other non-owner is refused.
    */
   watchdog?: { file: string; pane?: string };
   nudge?: { pending_since: string | null };
@@ -179,6 +195,12 @@ export type State = {
    * absent once `until` has passed. A hold is the project's, not one session's.
    */
   hold?: HoldRecord;
+  /**
+   * Unsigned markers of expired policy declarations whose expiry reading has already been logged
+   * to `team.log`, so the expiry reading is logged at most once per expired entry while leaving
+   * the signed policy file untouched.
+   */
+  expired_policies?: string[];
   sessions: Record<string, SessionState>;
 };
 
@@ -239,6 +261,11 @@ export function readState(dir: string): State {
   // dropped here, so the reason, the name and the instants later readers print are the ones
   // the command wrote, never a hand-edited file's.
   if (state.hold !== undefined && !isHoldRecord(state.hold)) delete state.hold;
+  if (Array.isArray(state.expired_policies)) {
+    state.expired_policies = state.expired_policies.filter((item): item is string => typeof item === 'string');
+  } else if (state.expired_policies !== undefined) {
+    delete state.expired_policies;
+  }
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};
     session.worktrees ??= {};

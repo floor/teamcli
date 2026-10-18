@@ -6,13 +6,15 @@ import { join } from 'node:path';
 import { approvedFingerprints } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import { commands, main } from '../src/cli.ts';
-import { runIssues } from '../src/commands/issues.ts';
+import { runIssues, USAGE } from '../src/commands/issues.ts';
+import { ISSUES_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { taskPathStaysInside } from '../src/file/sections/tasks.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { emptySession } from '../src/state.ts';
 import type { TaskAdapter } from '../src/tasks/adapter.ts';
 import { newMemory, pass, RING_TEXT } from '../src/watch/pass.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -34,6 +36,14 @@ const WITH = `${TEAM}tasks:
   source: file
   path: .agents/tasks.yaml
 `;
+
+const CONTEXT = 'team acme, session "acme"\n';
+
+// The contract's issues table: headers, one row per record, the closing count.
+const TABLE = '  ID  STATE  ASSIGNEE  TITLE\n';
+const OPEN_M1 = '  m1  open   -         the task title\n';
+const ONE_OPEN = `${CONTEXT}${TABLE}${OPEN_M1}1 issue\n`;
+const ONE_BLOCKED = `${CONTEXT}  ID  STATE    ASSIGNEE  TITLE\n  m1  blocked  -         the task title\n1 issue\n`;
 
 let base: string;
 let root: string;
@@ -67,11 +77,11 @@ describe('team issues', () => {
   test('a list prints id and title, and a later priority stays below an unprioritised record', async () => {
     project();
     list('- id: m1\n  title: the task title\n');
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
     list('- id: m1\n  title: the task title\n- id: m2\n  title: another title\n  priority: 1\n');
     expect(await run()).toEqual({
       code: 0,
-      out: 'm1  the task title\n\nm2  another title\n  priority: 1\n',
+      out: `${CONTEXT}${TABLE}${OPEN_M1}  m2  open   -         another title\n2 issues\n`,
       err: '',
     });
   });
@@ -88,7 +98,7 @@ describe('team issues', () => {
     list('- id: m1\n- id: m2\n  title: another title\n');
     expect(await run()).toEqual({
       code: 1,
-      out: 'm2  another title\n',
+      out: `${CONTEXT}${TABLE}  m2  open   -         another title\n1 issue\n`,
       err: 'team issues: m1 is not a task: title is required\n',
     });
   });
@@ -97,18 +107,20 @@ describe('team issues', () => {
     project();
     list('- id: m1\n  title: the task title\n');
     const listed = await run();
-    expect(listed.out).toBe('m1  the task title\n');
+    expect(listed.out).toBe(ONE_OPEN);
     for (const word of ['priority', 'assignee', 'milestone', 'deadline', 'blocked-by', 'repos', 'needs', 'description']) {
       expect(listed.out).not.toContain(word);
     }
   });
 
-  test('blocked-by is shown and does not drop the record', async () => {
+  test('blocked-by marks the record blocked and does not drop it', async () => {
     project();
     list('- id: m1\n  title: the task title\n  blocked-by: [m0]\n- id: m2\n  title: another title\n');
     const listed = await run();
     expect(listed.code).toBe(0);
-    expect(listed.out).toBe('m1  the task title\n  blocked-by: m0\n\nm2  another title\n');
+    expect(listed.out).toBe(
+      `${CONTEXT}  ID  STATE    ASSIGNEE  TITLE\n  m1  blocked  -         the task title\n  m2  open     -         another title\n2 issues\n`,
+    );
   });
 
   test('a broker source is refused by name, and the task file is not read', async () => {
@@ -147,21 +159,21 @@ describe('team issues', () => {
   test('an empty list, a missing file, and a file with no task source', async () => {
     project();
     list('[]\n');
-    expect(await run()).toEqual({ code: 0, out: 'team issues: nothing is waiting\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CONTEXT}0 issues\n`, err: '' });
     rmSync(join(root, '.agents', 'tasks.yaml'));
     expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: the task file is not there\n' });
     project(TEAM);
     expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: the team file declares no task source\n' });
   });
 
-  test('repos and needs are shown and not judged', async () => {
+  test('repos and needs mark the record blocked; --json carries both and judges neither', async () => {
     project();
     list('- id: m1\n  title: the task title\n  repos: [other]\n  needs: [review]\n');
-    expect(await run()).toEqual({
-      code: 0,
-      out: 'm1  the task title\n  repos: other\n  needs: review\n',
-      err: '',
-    });
+    expect(await run()).toEqual({ code: 0, out: ONE_BLOCKED, err: '' });
+    const listed = await run(['--json']);
+    expect(listed).toMatchObject({ code: 0, err: '' });
+    const doc = assertMatchesOutputSchema<{ issues: Array<Record<string, unknown>> }>(listed.out, ISSUES_OUTPUT_SCHEMA);
+    expect(doc.issues[0]).toMatchObject({ id: 'm1', state: 'blocked', repos: ['other'], needs: ['review'], assignee: null });
   });
 
   test('team plan is a command of this build, and the owner is refused', async () => {
@@ -210,7 +222,11 @@ describe('team issues', () => {
         return { kind: 'records', records: [{ id: 's1', title: 'from the stub' }], refusals: [] };
       },
     };
-    expect(await run([], { file: stub })).toEqual({ code: 0, out: 's1  from the stub\n', err: '' });
+    expect(await run([], { file: stub })).toEqual({
+      code: 0,
+      out: `${CONTEXT}${TABLE}  s1  open   -         from the stub\n1 issue\n`,
+      err: '',
+    });
     expect(read).toBe(true);
     const missed = await run([], {});
     expect(missed).toEqual({ code: 1, out: '', err: 'team issues: tasks.source must be file\n' });
@@ -241,7 +257,7 @@ describe('team issues', () => {
       err: 'team issues: m1 is not a task: title must be a single line\n',
     });
     list('- id: m1\n  title: the task title\n');
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
     const fields: Array<[string, string]> = [
       ['assignee: "a\\rb"', 'assignee must be text'],
       ['milestone: "a\\rb"', 'milestone must be text'],
@@ -255,19 +271,18 @@ describe('team issues', () => {
       expect(await run()).toEqual({ code: 1, out: '', err: `team issues: m1 is not a task: ${reason}\n` });
     }
     list('- id: m1\n  title: the task title\n  description: "first\\rsecond"\n');
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n  description: first\rsecond\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
   });
 
   test('a description may contain newlines, and one trailing newline is not an extra line', async () => {
     project();
-    const block = 'm1  the task title\n  description: first\n    second\n';
     list('- id: m1\n  title: the task title\n  description: "first\\nsecond"\n');
-    expect(await run()).toEqual({ code: 0, out: block, err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
     // The value a `|` block denotes, including its closing newline.
     list('- id: m1\n  title: the task title\n  description: "first\\nsecond\\n"\n');
-    expect(await run()).toEqual({ code: 0, out: block, err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
     list('- id: m1\n  title: the task title\n  description: "first\\n\\nsecond"\n');
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n  description: first\n\n    second\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
     list(`- id: m1\n  title: the task title\n  description: "${'a'.repeat(3999)}\\n"\n`);
     expect((await run()).code).toBe(0);
     list(`- id: m1\n  title: the task title\n  description: "${'a'.repeat(4000)}\\n"\n`);
@@ -292,13 +307,13 @@ describe('team issues', () => {
     expect(validateTeamFile(direct, { root }).ok).toBe(true);
     expect(taskPathStaysInside('..tasks/tasks.yaml', root)).toBe(true);
     writeFileSync(join(root, '.agents', 'team.yaml'), direct);
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
 
     symlinkSync(join(root, '..tasks'), join(root, 'via'));
     const via = `${TEAM}tasks:\n  source: file\n  path: via/tasks.yaml\n`;
     expect(validateTeamFile(via, { root }).ok).toBe(true);
     writeFileSync(join(root, '.agents', 'team.yaml'), via);
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: ONE_OPEN, err: '' });
 
     for (const path of ['../outside.yaml', '/tmp/outside.yaml', 'foo\\bar.yaml', '~/x', 'a\0b']) {
       expect(taskPathStaysInside(path, root)).toBe(false);
@@ -317,6 +332,91 @@ describe('team issues', () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), linked);
     expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: tasks.path must stay inside the checkout\n' });
     rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  test('--help prints the usage and exits 0, including with --json', async () => {
+    project();
+    const plain = testIo(root, { kind: 'owner' });
+    expect(await main(['issues', '--help'], plain)).toBe(0);
+    expect(plain.out).toBe(USAGE);
+    const json = testIo(root, { kind: 'owner' });
+    expect(await main(['issues', '--json', '--help'], json)).toBe(0);
+    expect(json.out).toBe(USAGE);
+  });
+
+  test('--json prints one envelope whose issue rows are the table, with the whole record', async () => {
+    project();
+    list('- id: m1\n  title: the task title\n  priority: 2\n  assignee: lead\n  deadline: 2026-12-31T00:00:00Z\n');
+    const listed = await run(['--json']);
+    expect(listed).toMatchObject({ code: 0, err: '' });
+    const doc = assertMatchesOutputSchema<{
+      schema: { name: string; version: number };
+      format: number;
+      project: string;
+      session: string;
+      issues: Array<Record<string, unknown>>;
+    }>(listed.out, ISSUES_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.issues', version: 1 });
+    expect(doc).toMatchObject({ format: 1, project: 'acme', session: 'acme' });
+    expect(doc.issues).toEqual([
+      {
+        id: 'm1',
+        title: 'the task title',
+        state: 'open',
+        assignee: 'lead',
+        priority: 2,
+        deadline: '2026-12-31T00:00:00Z',
+      },
+    ]);
+    list('[]\n');
+    const empty = await run(['--json']);
+    expect(empty.code).toBe(0);
+    expect(assertMatchesOutputSchema<{ issues: unknown[] }>(empty.out, ISSUES_OUTPUT_SCHEMA).issues).toEqual([]);
+  });
+
+  test('--json writes a team.error document on stdout for every refusal', async () => {
+    project(WITH);
+    const missing = await run(['--json']);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toBe('');
+    expect(assertJsonErrorShape(missing.out, { id: 'issues.missing', messageContains: 'the task file is not there' }).error.repair).toBeNull();
+    list('- id: m1\n');
+    const shape = await run(['--json']);
+    expect(shape.code).toBe(1);
+    expect(shape.err).toBe('');
+    assertJsonErrorShape(shape.out, { id: 'issues.shape', messageContains: 'm1 is not a task: title is required' });
+    const invocation = await run(['--json', 'extra']);
+    expect(invocation.code).toBe(2);
+    expect(invocation.err).toBe('');
+    assertJsonErrorShape(invocation.out, { id: 'issues.invocation', messageContains: 'unexpected "extra"' });
+    // The raw argv is scanned before the parser runs: an unknown option ahead of `--json`, or a
+    // `--json=<value>` the parser refuses, still writes the error document and leaves stderr empty.
+    const nope = await run(['--nope', '--json']);
+    expect(nope.code).toBe(2);
+    expect(nope.err).toBe('');
+    assertJsonErrorShape(nope.out, { id: 'issues.invocation', messageContains: 'unknown option --nope' });
+    const inline = await run(['--json=1']);
+    expect(inline.code).toBe(2);
+    expect(inline.err).toBe('');
+    assertJsonErrorShape(inline.out, { id: 'issues.invocation', messageContains: 'unknown option --json' });
+  });
+
+  test('outside a repository, the refusal offers no --file: issues takes none', async () => {
+    project();
+    const outside = join(base, 'outside');
+    mkdirSync(outside);
+    const plain = testIo(outside);
+    expect(await runIssues([], plain, { home })).toBe(2);
+    expect(plain.err).toBe('team issues: not inside a git repository: run team from a project\n');
+
+    const json = testIo(outside);
+    expect(await runIssues(['--json'], json, { home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'issues.not-a-repo',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
+    expect(json.out).not.toContain('--file');
   });
 
   test('an old approval adopts an omitted tasks section, and adding one differs', () => {

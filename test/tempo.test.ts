@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { approvalOf, approvedFingerprints, watchInForceOf } from '../src/approve/approval.ts';
 import { compare, describe as describeDifference, fingerprints } from '../src/approve/fingerprint.ts';
-import { runTempo, setTempo } from '../src/commands/tempo.ts';
+import { runTempo, setTempo, USAGE } from '../src/commands/tempo.ts';
+import { TEMPO_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 import { applyTempo } from '../src/file/sections/tempo.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { defaultWatch, validateTeamFile } from '../src/file/validate.ts';
@@ -139,13 +141,13 @@ describe('team tempo', () => {
     const where = place();
     const io = testIo(where.root, { kind: 'owner' });
     expect(await runTempo(['urgent'], io, { home: where.home })).toBe(0);
-    expect(io.out).toBe('tempo: urgent\n');
+    expect(io.out).toBe('team acme, session "acme"\ntempo: urgent\n');
     expect(io.err).toBe('');
     expect(readFileSync(where.file, 'utf8').startsWith('format: 1\ntempo: urgent\n')).toBe(true);
     const again = testIo(where.root, { kind: 'owner' });
     const before = readFileSync(where.file, 'utf8');
     expect(await runTempo(['urgent'], again, { home: where.home })).toBe(0);
-    expect(again.out).toBe('tempo: urgent\n');
+    expect(again.out).toBe('team acme, session "acme"\ntempo: urgent\n');
     expect(again.err).toBe('');
     expect(readFileSync(where.file, 'utf8')).toBe(before);
   });
@@ -154,7 +156,7 @@ describe('team tempo', () => {
     const where = place();
     const io = testIo(where.root, { kind: 'owner' });
     expect(await runTempo(['normal'], io, { home: where.home })).toBe(0);
-    expect(io.out).toBe('tempo: normal\n');
+    expect(io.out).toBe('team acme, session "acme"\ntempo: normal\n');
     expect(io.err).toBe('');
     const seat = testIo(where.root, { kind: 'seat', name: 'lead', pane: 'w1:p1' });
     const before = readFileSync(where.file, 'utf8');
@@ -173,5 +175,70 @@ describe('team tempo', () => {
     expect(await runTempo(['urgent'], io, { home: where.home })).toBe(1);
     expect(io.err).toBe('team tempo: only the owner runs this, from a terminal outside herdr\n');
     expect(readFileSync(where.file, 'utf8')).toBe(before);
+  });
+
+  test('outside a repository, the no-repository refusal offers no --file: tempo takes none', async () => {
+    const where = place();
+    const bare = join(where.root, 'outside');
+    mkdirSync(bare);
+    const io = testIo(bare, { kind: 'owner' });
+    expect(await runTempo(['urgent'], io, { home: where.home })).toBe(2);
+    expect(io.err).toBe('team tempo: not inside a git repository: run team from a project\n');
+
+    const json = testIo(bare, { kind: 'owner' });
+    expect(await runTempo(['urgent', '--json'], json, { home: where.home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'tempo.not-a-repo',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
+  });
+
+  test('--json carries the action envelope under the registered schema', async () => {
+    const where = place();
+    const io = testIo(where.root, { kind: 'owner' });
+    expect(await runTempo(['urgent', '--json'], io, { home: where.home })).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, TEMPO_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.tempo', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'set',
+      action_summary: 'tempo: urgent',
+      project: 'acme',
+      session: 'acme',
+      value: 'urgent',
+    });
+    const again = testIo(where.root, { kind: 'owner' });
+    expect(await runTempo(['urgent', '--json'], again, { home: where.home })).toBe(0);
+    const same = assertMatchesOutputSchema<Record<string, unknown>>(again.out, TEMPO_OUTPUT_SCHEMA);
+    expect(same.status).toBe('same');
+    expect(USAGE).toContain('Exits 0 when the tempo is set or already matches');
+  });
+
+  test('--json: a refusal is the team.error document on stdout, stderr empty', async () => {
+    const where = place();
+    const seat = testIo(where.root, { kind: 'seat', name: 'lead', pane: 'w1:p1' });
+    expect(await runTempo(['relaxed', '--json'], seat, { home: where.home })).toBe(1);
+    expect(seat.err).toBe('');
+    assertJsonErrorShape(seat.out, { id: 'tempo.not-owner', messageContains: 'only the owner runs tempo' });
+    const bad = testIo(where.root, { kind: 'owner' });
+    expect(await runTempo(['faster', '--json'], bad, { home: where.home })).toBe(2);
+    expect(bad.err).toBe('');
+    assertJsonErrorShape(bad.out, { id: 'tempo.word', messageContains: 'must be relaxed, normal or urgent' });
+  });
+
+  test('--json is read before the parser: a bad option, or --json=<value>, still writes the error document', async () => {
+    const where = place();
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['--json=1'], 'unknown option --json'],
+    ] as const) {
+      const io = testIo(where.root, { kind: 'owner' });
+      expect(await runTempo([...argv], io, { home: where.home })).toBe(2);
+      expect(io.err).toBe('');
+      assertJsonErrorShape(io.out, { id: 'tempo.invocation', messageContains, repair: null });
+    }
   });
 });

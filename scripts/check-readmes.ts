@@ -22,8 +22,10 @@
 //   - the comment beside `team --version` in an example ("team --version # 0.2.1").
 //
 // Every claim must name package.json's version: exact for an x.y.z claim, the
-// major.minor for a Status: or Version sentence naming x.y. Older and newer both
-// fail: the READMEs describe the build in this tree, and the release pull request
+// major.minor for a Status: or Version sentence naming x.y. During a release
+// candidate its prerelease (`0.5.0-rc.4`) is part of that exact claim: the
+// candidate's READMEs describe the candidate. Older and newer both fail: the
+// READMEs describe the build in this tree, and the release pull request
 // moves package.json's version and the example lines together. A claim whose
 // line carries a past marker (since, before, earlier, older, prior, until,
 // previously, upgraded from, upgrading from) is a sentence about the past, and
@@ -47,10 +49,10 @@ const PLACEHOLDER = "OPENING SENTENCE PENDING: THE OWNER'S CHOICE";
 /** A line carrying one of these is about the past, and its versions are history. */
 const PAST = /\b(since|before|earlier|older|prior|until|previously|upgraded from|upgrading from)\b/i;
 
-const STATUS_CLAIM = /\bStatus:\s*\**\s*(\d+\.\d+(?:\.\d+)?)/i;
-const VERSION_SENTENCE = /(?:^|\*\*)\s*Version\s+(\d+\.\d+(?:\.\d+)?)/;
+const STATUS_CLAIM = /\bStatus:\s*\**\s*(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)/i;
+const VERSION_SENTENCE = /(?:^|\*\*)\s*Version\s+(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)/;
 const VERSION_EXAMPLE = /\bteam --version\b/;
-const VERSION_COMMENT = /#\s*v?(\d+\.\d+(?:\.\d+)?)\b/;
+const VERSION_COMMENT = /#\s*v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)\b/;
 
 type Claim = { line: number; version: string };
 
@@ -101,9 +103,10 @@ function claimsOf(markdown: string): Claim[] {
   return claims;
 }
 
-/** An x.y claim names the major.minor; an x.y.z claim the exact version. */
+/** An x.y claim names the major.minor; an x.y.z claim the exact version, prerelease included. */
 function names(claim: string, version: string): boolean {
-  const wanted = claim.split('.').length === 3 ? version : version.split('.').slice(0, 2).join('.');
+  const exact = (claim.split('-')[0] ?? '').split('.').length === 3;
+  const wanted = exact ? version : (version.split('-')[0] ?? '').split('.').slice(0, 2).join('.');
   return claim === wanted;
 }
 

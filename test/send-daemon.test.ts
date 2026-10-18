@@ -12,13 +12,14 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { acquireSeatLock, seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   daemonDropDir,
   daemonLockPath,
@@ -31,8 +32,9 @@ import {
   type DaemonHost,
   type SendDaemonHandle,
 } from '../src/send/daemon.ts';
-import { historyPath, readHistory } from '../src/send/history.ts';
+import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
+import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { filed } from './send-native-fixtures.ts';
@@ -277,8 +279,8 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     const [c1, c2] = await Promise.all([p1, p2]);
     expect(c1).toBe(0);
     expect(c2).toBe(0);
-    expect(io1.out).toBe('native: delivered\n');
-    expect(io2.out).toBe('native: delivered\n');
+    expect(io1.out).toBe('team acme, session "acme"\nnative: delivered\n');
+    expect(io2.out).toBe('team acme, session "acme"\nnative: delivered\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
@@ -426,7 +428,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io = ownerIo(w.root);
     const code = await runSend(['native', 'deliver after turn'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toBe('native: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: delivered\n');
     expect(polls).toBeGreaterThanOrEqual(3);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
@@ -460,11 +462,15 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io = ownerIo(w.root);
     const code = await runSend(['native', 'do not clobber working seat', '--json'], io, host);
     expect(code).toBe(1);
-    const parsed = JSON.parse(io.out.trim()) as { seat: string; status: string; exit: number; error: string };
-    expect(parsed.seat).toBe('native');
-    expect(parsed.status).toBe('held');
-    expect(parsed.exit).toBe(1);
-    expect(parsed.error).toContain('the seat is working');
+    const parsed = JSON.parse(io.out.trim()) as {
+      schema: { name: string; version: number };
+      error: { id: string; message: string; repair: null };
+    };
+    expect(parsed.schema).toEqual({ name: 'team.error', version: 1 });
+    expect(parsed.error.id).toBe('send.held');
+    expect(parsed.error.message).toStartWith('native: held: ');
+    expect(parsed.error.message).toContain('the seat is working');
+    expect(parsed.error.repair).toBeNull();
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
 
@@ -506,7 +512,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io1 = ownerIo(w.root);
     expect(await runSend(['native', 'waited for seat lock'], io1, host)).toBe(0);
-    expect(io1.out).toBe('native: delivered\n');
+    expect(io1.out).toBe('team acme, session "acme"\nnative: delivered\n');
 
     // Now hold seat lock past deliverWaitMs: daemon must return held without typing.
     host.typed.length = 0;
@@ -544,7 +550,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io = ownerIo(w.root);
     expect(await runSend(['native', 'reclaim stale seat-lock'], io, host)).toBe(0);
-    expect(io.out).toBe('native: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: delivered\n');
   });
 });
 
@@ -593,11 +599,18 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).toContain('held: the screen reads question');
+    // The daemon's drop folder is not the one a watch scans, so its line promises no retry.
+    expect(io.err).not.toContain('a running watch retries it');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
+
+    // The drop is on disk in the daemon's own folder, with no pending record beside it.
+    const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'lead');
+    expect(readPending(drops)).toHaveLength(0);
+    expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
   });
 
-  test('single-Enter discipline: does not press a second Enter when screen is unknown and trigger is not in box', async () => {
+  test('single-Enter discipline: a screen that cannot be read as a box takes the line once, and the send is taken', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       native: {
@@ -615,9 +628,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
       },
     });
 
-    // Direct
+    // Direct: the screen is not an unsent box and never holds the trigger, so the box the
+    // delivery sees is empty after Enter — the line left it, taken but not yet confirmed.
     const directIo = ownerIo(w.root);
-    expect(await runSend(['lead', 'single enter direct'], directIo, host)).toBe(1);
+    expect(await runSend(['lead', 'single enter direct'], directIo, host)).toBe(0);
+    expect(directIo.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(directIo.err).toBe('');
     expect(host.enters.length).toBe(1);
 
     // Daemon
@@ -626,7 +642,8 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    expect(await runSend(['lead', 'single enter test'], io, host)).toBe(1);
+    expect(await runSend(['lead', 'single enter test'], io, host)).toBe(0);
+    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
     expect(host.enters.length).toBe(2);
   });
 
@@ -655,18 +672,16 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(host.enters).toEqual([]);
   });
 
-  test('routes --wait socket sends through the daemon and returns answered reply', async () => {
+  test('--wait is refused on both sides: the CLI never asks, and the daemon refuses an older caller', async () => {
     const w = setupWorld();
     writeFileSync(join(w.sockets, '222.sock'), '');
+    // A deliver that would prove a dial: it counts the attempt and throws, so a swallow
+    // somewhere on the path still leaves the count behind.
+    let dialed = 0;
     const host = makeHost(w, {
-      deliver: async (_sock, frame) => {
-        host.frames.push(frame);
-        const replySock = createConnection(join(w.sockets, `${String(process.pid)}.sock`));
-        replySock.on('error', () => {});
-        replySock.on('connect', () => {
-          replySock.end(`${JSON.stringify({ type: 'user', message: { role: 'user', content: 'ack from lead' }, msg_id: 'rep-1' })}\n`);
-        });
-        return { ok: true };
+      deliver: async () => {
+        dialed += 1;
+        throw new Error('the socket was dialed');
       },
     });
 
@@ -674,17 +689,64 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     if (started.kind !== 'serving') throw new Error(started.kind);
     handles.push(started.handle);
 
+    // The CLI's own --wait refuses before the daemon is ever asked.
     const io = ownerIo(w.root);
     const code = await runSend(['lead', 'ping over socket', '--wait'], io, host);
-    expect(code).toBe(0);
-    expect(io.out).toBe('lead: answered\nack from lead\n');
+    expect(code).toBe(1);
+    expect(io.err).toContain('needs the native leg');
 
+    // An older CLI that still asks the daemon for a waited send gets the same refusal from the
+    // daemon's own gate, and the daemon dials nothing either.
+    const asked = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'owner',
+      to: 'lead',
+      body: 'from an older caller',
+      wait: true,
+      timeout_s: 1,
+    });
+    const refused = asked && 'outcome' in asked ? asked : null;
+    expect(refused?.outcome).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toContain('needs the native leg');
+    expect(dialed).toBe(0);
+
+    // Neither refusal writes a history line: nothing was sent.
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
-    if (hist.ok) {
-      expect(hist.entries[0]?.outcome).toBe('answered');
-      expect(existsSync(historyPath('acme', w.root, w.home))).toBe(true);
-    }
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([]);
+  });
+
+  test('the daemon refuses a stopped seat for a caller that reaches it directly, and starts no worker', async () => {
+    const w = setupWorld();
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('  - role: reviewer', '  - role: reviewer\n    stopped: true'));
+    const loaded = loadTeamFile(w.root, { home: w.home });
+    if (!loaded.ok) throw new Error('fixture team.yaml failed to reload');
+    const host = makeHost(w);
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: loaded.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    // An older caller that still asks the daemon directly is refused at the queue, and no leg runs.
+    const asked = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'owner',
+      to: 'native',
+      body: 'from an older caller',
+    });
+    const refused = asked && 'outcome' in asked ? asked : null;
+    expect(refused?.outcome).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toBe('native is stopped');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([]);
   });
 
   test('trigger points at state-folder drop path when delivered through the daemon', async () => {
@@ -757,7 +819,55 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
-    expect(io2.out).toBe('native: delivered\n');
+    expect(io2.out).toBe('team acme, session "acme"\nnative: delivered\n');
+  });
+
+  test('a nickname sent through the daemon keeps the spec and the id it resolved to in history', async () => {
+    const w = setupWorld();
+    // The lead seat carries a human name, and the registry holds it: the daemon's own history
+    // line must keep both what the caller wrote and the record it reached.
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('    launch: claude\n  - role: implementer', '    launch: claude\n    nickname: zeus\n  - role: implementer'));
+    const loaded = loadTeamFile(w.root, { home: w.home });
+    if (!loaded.ok) throw new Error('fixture team.yaml failed to reload with the nickname');
+    const id = teamIdOf(w.root);
+    const lead = registerAgent(w.home, {
+      name: 'lead',
+      signing: { model: 'Test', version: '1', role: 'coordinator' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: id, seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    upsertTeam(w.home, id, {
+      project: 'acme',
+      entity: 'acme',
+      session: 'acme',
+      root: w.root,
+      lobby: lobbyDir(w.home),
+      roster: [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' }],
+      lifecycle: 'running',
+    });
+    const host = makeHost(w);
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: loaded.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const io = ownerIo(w.root);
+    expect(await runSend(['zeus', 'by the human name'], io, host)).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([
+      expect.objectContaining({ to: 'lead', spec: 'zeus', resolved: lead.id, outcome: 'delivered' }),
+    ]);
   });
 });
 

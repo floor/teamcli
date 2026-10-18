@@ -23,7 +23,7 @@ import type { Key } from './terminal.ts';
 // is polled. A pane is never typed into, and the workspace of a seat this run did not create is
 // never closed.
 //
-// Under a `dialogs.trust` that names the lead the prompt is also re-read on a tick: `team answer`
+// Under a `dialogs.trust` team grant the prompt is also re-read on a tick: `team answer`
 // may be racing this run, so every timeout and every return takes the lock, reads the state and
 // the pane fresh, and follows what it finds — a seat that became ready, a recovery `answer` left
 // behind (which is shown and offers the same keys), or the screen's own reading. No trust key is
@@ -524,7 +524,7 @@ async function refresh(input: PauseInput, host: PauseHost, view: View): Promise<
 /** The ask ran out its idle timeout with no key. The seat stays as it is: nothing focused,
  *  nothing closed, the waiting record kept, and the run goes on to the next seat. */
 function unanswered(seconds: number): PauseResult {
-  return { kind: 'left out', reason: `timed out after ${seconds} s waiting for its owner; left as it is`, detail: '' };
+  return { kind: 'left out', reason: `timed out after ${seconds} s waiting for an answer; left as it is`, detail: '' };
 }
 
 /** The seat was made ready under this run's feet, by the orchestrator's `team answer`. */

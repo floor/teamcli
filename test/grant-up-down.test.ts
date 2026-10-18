@@ -1,6 +1,8 @@
-// A granted orchestrator runs the ordinary up and down of the default file: up brings a
-// stopped seat up and does not relaunch the caller, and down stops another seat and leaves
-// the caller's seat running. The audit line is written before either effect.
+// An orchestrator the map's row admits runs the ordinary up and down of the default file,
+// whether or not the file's grant would have passed: the row is the admission, and the grant
+// is only the fallback for a caller the row refused. Up brings the team up; down stops another
+// seat and leaves the caller's seat running. The grant's audit line belongs to that fallback
+// path alone, so an admitted run writes none.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -138,7 +140,7 @@ afterEach(() => {
 });
 
 describe('the granted orchestrator', () => {
-  test('up brings a stopped seat up and does not relaunch the caller', async () => {
+  test('up runs the ordinary plan on the map\'s own admission, with no grant audit line', async () => {
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
     const panes = new Map<string, string>();
     let n = 0;
@@ -197,10 +199,12 @@ describe('the granted orchestrator', () => {
     const workerAt = canonicalLanding(lobby).landing;
     expect({ code, out: io.out, err: io.err, audits, workspaces, closed }).toMatchObject({
       code: 0,
-      audits: [{ seat: 'lead', act: 'up', made: 0 }],
+      audits: [],
       closed: [],
     });
-    expect(io.err).toContain("skip lead: left as it is; a granted up does not relaunch or close the orchestrator's seat\n");
+    // The grant's own skip belongs to the fallback path: on the map's admission the lead is
+    // planned like every other seat, and nothing is logged as granted.
+    expect(io.err).not.toContain('a granted up does not relaunch');
     expect(workspaces).toContainEqual({ label: 'worker', cwd: workerAt });
     expect(workspaces).not.toContainEqual({ label: 'worker', cwd: root });
     expect(workspaces.length).toBeGreaterThan(0);

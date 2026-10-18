@@ -1,0 +1,49 @@
+# Jules's TUI, captured from @google/jules 0.1.42 (herdr 0.7.1, a 54x23 pane, 2026-10-17).
+#
+# `jules` with no subcommand opens the session table; `jules new "<task>"` creates a session
+# without the TUI and is not this cut. `jules version` printed `Version: v0.1.42`; the binary
+# answers no `--version` (`Error: unknown flag: --version`, exit 1), which is what `doctor`
+# runs, so its version reads unread for this CLI.
+#
+# The ready screen is the session table: its first line reads
+# ` > Search sessions or type / to use`. A new session's task box asks
+# `What do you want Jules to work on?` under the ` Type the task description` label.
+#
+# The TUI has no standing session: every brief is a new remote session, created through the
+# TUI's own screens, so `rules: prepend` rides the rules with each brief a send types, and
+# the compose module walks the screens (`jules-compose.ts`).
+format: 1
+cli: jules
+binary: jules
+# `herdr pane process-info` listed `argv0: "jules"`, `name: "jules"` for the pane's only
+# foreground process while the TUI was at its table.
+process_names:
+  - jules
+tested:
+  from: '0.1.42'
+  to: '0.1.42'
+# The TUI has no auto-approve flag to pass: its screens are its own, and the compose module
+# walks them.
+unattended: []
+rules: prepend
+# The TUI's `ctrl+d` deletes a session for the whole account, not just this seat, and a delete
+# cannot be undone. The profile never sends it, and this line rides every brief the seat gets.
+standing_rules:
+  - Never delete a Jules session.
+# herdr 0.7.1 reports a jules pane as no agent, or `unknown`, while the TUI runs (captured: a
+# pane whose `pane process-info` listed `jules` was absent from `agent list`, and its status
+# stayed `unknown` after the rename). The screen module is the reading there: an idle table
+# counts as free, and nothing waits on a word herdr cannot give.
+herdr_status: unreliable
+login:
+  hint: jules login
+# One ctrl+c at the table quits: pressed at the table, a read 1.5s later showed the shell.
+# The TUI asks nothing on the way out.
+exit_keys:
+  - ctrl+c
+timeouts:
+  idle: 90s
+  exit: 30s
+compose_module: jules-compose.ts
+screen:
+  screen_module: jules-screen.ts

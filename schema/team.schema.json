@@ -22,6 +22,16 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "in_project": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "$comment": "the project this team belongs to, by name; absent, the team is its own project"
+    },
+    "project_lead": {
+      "type": "boolean",
+      "$comment": "this team leads the project it sits in; one team per project declares it"
+    },
     "entity": {
       "type": "string",
       "minLength": 1,
@@ -39,24 +49,11 @@
         "type": "string",
         "minLength": 1
       },
-      "$comment": "absolute paths the seats may work in, including the machine lobby ~/.config/team/lobby and the project root"
+      "$comment": "absolute paths the seats may work in, including the team's lobby (the default ~/.config/team/lobby) and the project root"
     },
     "dialogs": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "trust"
-      ],
-      "properties": {
-        "trust": {
-          "enum": [
-            "owner",
-            "orchestrator",
-            "coordinator"
-          ]
-        }
-      },
-      "$comment": "who may answer a folder-trust dialog. Omitted means owner, and then no command sends a trust key"
+      "deprecated": true,
+      "$comment": "the 0.4 line's trust-dialog setting: read and ignored, and it grants nothing — trust answering is the owner's team grant"
     },
     "limits": {
       "type": "object",
@@ -389,7 +386,18 @@
         },
         "idle_first": {
           "type": "string",
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$"
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long an idle seat waits before its lead is told; a team may tighten it, never loosen it"
+        },
+        "idle_owner": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long after that the owner is told, once per idle period; a team may tighten it, never loosen it"
+        },
+        "blind_after": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a seat no source has heard from reads unknown before it is blind; a team may tighten it, never loosen it"
         },
         "idle_repeat": {
           "type": "string",
@@ -411,7 +419,7 @@
         "nudge": {
           "type": "string",
           "minLength": 1,
-          "description": "text sent to each idle worker after idle_first; the report line when omitted"
+          "description": "text the work drop asks each idle worker to read after idle_first; the fixed watch line when omitted"
         },
         "quota_marks": {
           "type": "array",
@@ -461,7 +469,13 @@
           },
           "name": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "$comment": "a seat named \"lead\" still loads: lead@<team> always addresses the seat holding leads, and team check notes the name"
+          },
+          "nickname": {
+            "type": "string",
+            "pattern": "^(?!lead$)[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "$comment": "a human name for this seat: unique in its team and never another seat's name, and \"lead\" is reserved for the team's lead address; a send addresses it bare in its own team, as @<nickname>, or as <nickname>@<team>, and it confers nothing — the role keeps the grants"
           },
           "cli": {
             "enum": [
@@ -471,7 +485,8 @@
               "grok",
               "antigravity",
               "gemini",
-              "muse"
+              "muse",
+              "jules"
             ]
           },
           "vendor": {
@@ -516,6 +531,41 @@
             "minLength": 1,
             "$comment": "optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it"
           },
+          "delivery_order": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "native",
+                "mcp-inbox",
+                "typed"
+              ]
+            },
+            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and never adds a leg, which the walk settles"
+          },
+          "liveness": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "idle_lead_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "$comment": "how long this seat may sit idle before its lead is told; tighter, never looser"
+              },
+              "idle_owner_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "$comment": "how long after that its owner is told, once per idle period; tighter, never looser"
+              },
+              "blind_after_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "$comment": "how long this seat may read unknown before it is blind; a project may open it, and this seat closes it for itself"
+              }
+            },
+            "$comment": "the seat's own word on the liveness defaults, in seconds; it tightens a window the chain above set, and is set aside where it would loosen one"
+          },
           "mode": {
             "enum": [
               "worktree",
@@ -531,6 +581,10 @@
           "leads": {
             "type": "boolean",
             "$comment": "the seat that leads: exactly one seat carries it"
+          },
+          "assistant": {
+            "type": "boolean",
+            "$comment": "the entity's assistant: at most one seat carries it"
           },
           "count": {
             "type": "integer",
@@ -588,6 +642,66 @@
         ],
         "$comment": "account must name a key of budgets.accounts; the workspace title is the written label, or the seat name and role when none is written; display and effort are the pane display; a seat with count is neither lead"
       }
+    },
+    "delivery_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "native",
+          "mcp-inbox",
+          "typed"
+        ]
+      },
+      "$comment": "the legs a send may walk, outermost first: native, mcp-inbox, typed; a level may drop or reorder the legs in force and may never add one"
+    },
+    "policies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "value",
+          "setter",
+          "date",
+          "kind",
+          "generation",
+          "signature"
+        ],
+        "properties": {
+          "value": {},
+          "setter": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "expiry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "enforced",
+              "advised"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "$comment": "owner-signed team-level policy declarations (Kernel amendment 02 §2.12)"
     },
     "releases": {
       "type": "array",

@@ -120,6 +120,15 @@ describe('the version claims', () => {
     expect(run(fixture({ readme: example('0.2.1') }))).toEqual([]);
   });
 
+  test('a candidate names its prerelease exactly; the release it precedes fails, and x.y still passes', () => {
+    const example = (claimed: string): string => `# team\n\n${SENTENCE}\n\n\`\`\`sh\nteam --version # ${claimed}\n\`\`\`\n`;
+    expect(run(fixture({ version: '0.5.0-rc.4', readme: example('0.5.0-rc.4') }))).toEqual([]);
+    expect(run(fixture({ version: '0.5.0-rc.4', readme: example('0.5') }))).toEqual([]);
+    expect(run(fixture({ version: '0.5.0-rc.4', readme: example('0.5.0') }))[0]?.message).toContain('0.5.0-rc.4');
+    const status = run(fixture({ version: '0.5.0-rc.4', readme: `# team\n\n${SENTENCE}\n\n**Status: 0.5.0-rc.4, a candidate.**\n` }));
+    expect(status).toEqual([]);
+  });
+
   test('a sentence about the past may name an older version', () => {
     const readme = `# team\n\n${SENTENCE}\n\nSince 0.2 the file is private to each clone.\n\nUpgrading from 0.1: run team approve once.\n`;
     expect(run(fixture({ readme }))).toEqual([]);

@@ -28,6 +28,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--like",
           "repeatable": false,
           "takesValue": true
@@ -80,8 +86,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]",
-        "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]"
+        "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
+        "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {
@@ -150,6 +156,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--key",
           "repeatable": false,
           "takesValue": true
@@ -178,7 +190,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team ask-show <request_id> --ask <path> --marker <path> --key <path>"
+        "team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]"
       ]
     },
     {
@@ -220,9 +232,21 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--pr",
           "repeatable": false,
           "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--repair",
+          "repeatable": false,
+          "takesValue": false
         },
         {
           "hidden": false,
@@ -254,7 +278,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team check [--session <name>] [--file <path>]",
+        "team check [--session <name>] [--file <path>] [--repair] [--json]",
         "team check <ref> [--pr <file>] [--since <ref>] [--file <path>]"
       ]
     },
@@ -293,6 +317,12 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--since",
               "repeatable": false,
               "takesValue": true
@@ -315,12 +345,12 @@
           ],
           "subcommands": [],
           "usage": [
-            "team commits check <ref> [--since <ref>] [--file <path>]"
+            "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team commits check <ref> [--since <ref>] [--file <path>]"
+        "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
       ]
     },
     {
@@ -352,6 +382,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -369,7 +405,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team delegate <session/pane> --commands <act,...> [--dry-run]"
+        "team delegate <session/pane> --commands <act,...> [--dry-run] [--json]"
       ]
     },
     {
@@ -383,6 +419,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -410,7 +452,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team doctor [--session <name>] [--file <path>] [--login]"
+        "team doctor [--session <name>] [--file <path>] [--login] [--json]"
       ]
     },
     {
@@ -441,6 +483,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -463,7 +511,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]"
+        "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {
@@ -535,15 +583,39 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--capabilities",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
         },
         {
           "hidden": false,
+          "name": "--expires",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--name",
+          "repeatable": false,
+          "takesValue": true
         },
         {
           "hidden": false,
@@ -563,13 +635,19 @@
       "positionals": [
         {
           "name": "seat",
-          "optional": false,
+          "optional": true,
+          "repeatable": false
+        },
+        {
+          "name": "seat|@team",
+          "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team grant <seat> --scope <act,...> [--dry-run]"
+        "team grant <seat> --scope <act,...> [--dry-run] [--json]",
+        "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]"
       ]
     },
     {
@@ -587,6 +665,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -620,8 +704,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team hold <reason> [--until <time>]",
-        "team hold --release"
+        "team hold <reason> [--until <time>] [--json]",
+        "team hold --release [--json]"
       ]
     },
     {
@@ -629,6 +713,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -650,7 +740,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team init [--restore]"
+        "team init [--restore] [--json]"
       ]
     },
     {
@@ -658,6 +748,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -673,7 +769,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team issues"
+        "team issues [--json]"
       ]
     },
     {
@@ -739,6 +835,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--wait",
           "repeatable": false,
           "takesValue": true
@@ -761,7 +863,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team lock <name> [--for <text>] [--wait <seconds>]"
+        "team lock <name> [--for <text>] [--wait <seconds>] [--json]"
       ]
     },
     {
@@ -856,6 +958,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -867,7 +975,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team messages"
+        "team messages [--json]"
       ]
     },
     {
@@ -875,6 +983,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -908,7 +1022,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team next [--mine | --release] [--wait]"
+        "team next [--mine | --release] [--wait] [--json]"
       ]
     },
     {
@@ -916,6 +1030,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -931,7 +1051,208 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team plan"
+        "team plan [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "policy",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--entity",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--kind",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--project",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--until",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "level",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "name",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "value",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--entity",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--project",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "unset",
+          "positionals": [
+            {
+              "name": "level",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "name",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
+          ]
+        }
+      ],
+      "usage": [
+        "team policy [--seat <name>] [--file <path>] [--json]",
+        "team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]",
+        "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
       ]
     },
     {
@@ -968,6 +1289,12 @@
               "takesValue": false
             },
             {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -985,12 +1312,12 @@
           ],
           "subcommands": [],
           "usage": [
-            "team pr check <file> [--file <path>]"
+            "team pr check <file> [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team pr check <file> [--file <path>]"
+        "team pr check <file> [--file <path>] [--json]"
       ]
     },
     {
@@ -1017,6 +1344,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1050,7 +1383,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team proc add <name> [--pid <pid>] [--note <text>]"
+            "team proc add <name> [--pid <pid>] [--note <text>] [--json]"
           ]
         },
         {
@@ -1058,6 +1391,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1079,7 +1418,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team proc done <name>"
+            "team proc done <name> [--json]"
           ]
         },
         {
@@ -1113,9 +1452,38 @@
         }
       ],
       "usage": [
-        "team proc add <name> [--pid <pid>] [--note <text>]",
+        "team proc add <name> [--pid <pid>] [--note <text>] [--json]",
         "team proc list [--json]",
-        "team proc done <name>"
+        "team proc done <name> [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "projects",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team projects [--json]"
       ]
     },
     {
@@ -1131,6 +1499,18 @@
           "name": "--help",
           "repeatable": false,
           "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--pane",
+          "repeatable": false,
+          "takesValue": true
         },
         {
           "hidden": false,
@@ -1156,7 +1536,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team register <seat> [--session <name>] [--dry-run]"
+        "team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]"
       ]
     },
     {
@@ -1239,6 +1619,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1256,7 +1642,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team reload <seat> [--file <path>]"
+        "team reload <seat> [--file <path>] [--json]"
       ]
     },
     {
@@ -1276,6 +1662,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -1309,7 +1701,72 @@
       ],
       "subcommands": [],
       "usage": [
-        "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>]"
+        "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--renumber",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "rename",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": true,
+          "repeatable": false
+        },
+        {
+          "name": "new-seat",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]",
+        "team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {
@@ -1340,6 +1797,12 @@
         },
         {
           "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1362,14 +1825,26 @@
       ],
       "subcommands": [],
       "usage": [
-        "team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]"
+        "team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -1382,7 +1857,13 @@
       ],
       "hidden": false,
       "name": "revoke",
-      "positionals": [],
+      "positionals": [
+        {
+          "name": "name",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
       "subcommands": [
         {
           "flags": [
@@ -1395,6 +1876,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1416,7 +1903,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team revoke delegate <session/pane> [--dry-run]"
+            "team revoke delegate <session/pane> [--dry-run] [--json]"
           ]
         },
         {
@@ -1434,6 +1921,12 @@
               "takesValue": false
             },
             {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -1445,13 +1938,55 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team revoke grant [--dry-run]"
+            "team revoke grant [--dry-run] [--json]"
           ]
         }
       ],
       "usage": [
-        "team revoke grant [--dry-run]",
-        "team revoke delegate <session/pane> [--dry-run]"
+        "team revoke grant [--dry-run] [--json]",
+        "team revoke delegate <session/pane> [--dry-run] [--json]",
+        "team revoke <name> [--dry-run] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "route",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team route <seat> [--json] [--dry-run]"
       ]
     },
     {
@@ -1511,6 +2046,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--channel",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -1538,6 +2079,18 @@
           "name": "--list",
           "repeatable": false,
           "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--ms",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--record",
+          "repeatable": false,
+          "takesValue": true
         },
         {
           "hidden": false,
@@ -1576,6 +2129,8 @@
       "usage": [
         "team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]",
         "team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]",
+        "team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]",
+        "team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]",
         "team send --list [--json]"
       ]
     },
@@ -1607,6 +2162,12 @@
         },
         {
           "hidden": false,
+          "name": "--project",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1623,7 +2184,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team status [--session <name>] [--file <path>] [--all] [--json]"
+        "team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]"
       ]
     },
     {
@@ -1631,6 +2192,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -1652,7 +2219,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team tempo <word>"
+        "team tempo <word> [--json]"
       ]
     },
     {
@@ -1660,6 +2227,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -1681,7 +2254,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team unlock <name>"
+        "team unlock <name> [--json]"
       ]
     },
     {
@@ -1701,6 +2274,12 @@
         {
           "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
           "repeatable": false,
           "takesValue": false
         },
@@ -1728,7 +2307,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team up [--dry-run] [--serial] [--session <name>] [--file <path>]"
+        "team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]"
       ]
     },
     {
@@ -1752,6 +2331,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--tree",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1763,7 +2348,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team usage [--json] [--all]"
+        "team usage [--json] [--all] [--tree]"
       ]
     },
     {
@@ -1848,6 +2433,12 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--session",
               "repeatable": false,
               "takesValue": true
@@ -1864,7 +2455,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team worktree list [--session <name>] [--file <path>]"
+            "team worktree list [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
@@ -1878,6 +2469,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1917,7 +2514,7 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]"
+            "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
@@ -1937,6 +2534,12 @@
             {
               "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
               "repeatable": false,
               "takesValue": false
             },
@@ -1964,14 +2567,14 @@
           ],
           "subcommands": [],
           "usage": [
-            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
+            "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
-        "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>]",
-        "team worktree list [--session <name>] [--file <path>]",
-        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>]"
+        "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]",
+        "team worktree list [--session <name>] [--file <path>] [--json]",
+        "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
       ]
     }
   ],
@@ -1979,7 +2582,19 @@
     "flags": [
       {
         "hidden": false,
+        "name": "--about",
+        "repeatable": false,
+        "takesValue": false
+      },
+      {
+        "hidden": false,
         "name": "--help",
+        "repeatable": false,
+        "takesValue": false
+      },
+      {
+        "hidden": true,
+        "name": "--json",
         "repeatable": false,
         "takesValue": false
       },

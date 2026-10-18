@@ -158,11 +158,11 @@ describe('a threshold edit, and the approval', () => {
     // A thousand-hour live interval keeps a ten-minute-old heartbeat inside two intervals.
     write(source({ interval: '1000h' }));
     state(new Date(NOW.getTime() - 10 * 60_000));
-    expect(await status()).not.toContain("the watch's last pass was 10 minute(s) ago");
+    expect(await status()).not.toContain("the watch's last pass was 10 minutes ago");
     // A ten-second live interval makes the three-minute-old heartbeat stale.
     write(source({ interval: '10s' }));
     state(new Date(NOW.getTime() - 3 * 60_000));
-    expect(await status()).toContain("the watch's last pass was 3 minute(s) ago");
+    expect(await status()).toContain("the watch's last pass was 3 minutes ago");
   });
 
   test('an approval recorded before the section existed stays valid while the section is unchanged', async () => {

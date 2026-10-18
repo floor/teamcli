@@ -10,8 +10,9 @@ import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
+import { startSendDaemon, daemonDropDir, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
+import { readPending } from '../src/send/pending.ts';
 import { filed } from './send-native-fixtures.ts';
 import { testIo } from './helpers.ts';
 
@@ -167,18 +168,20 @@ describe('the composer read-back at its boundaries', () => {
     expect(host.enters.length).toBe(1);
     expect(outcomes(world)).toEqual(['not-submitted']);
 
-    // The body waits in the drop file, whole, for the seat to pick up.
+    // The body waits in the drop file, whole, for the seat to pick up, with the retry record
+    // the watch reads beside it.
     const drops = join(world.dir, 'send-drops', 'acme', 'lead');
-    const files = readdirSync(drops);
+    const files = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
     expect(files.length).toBe(1);
     expect(readFileSync(join(drops, files[0]!), 'utf8')).toBe(filed('the pane refused the Enter'));
+    expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
   });
 
-  test('a box that stops holding the trigger after the first Enter gets no second Enter', async () => {
+  test('a box that stops holding the trigger after the first Enter is delivered as taken, and gets no second Enter', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The first Enter is taken but herdr never reports the seat working, and the composer now
-    // holds a draft that is not the trigger.
+    // holds a draft that is not the trigger: the line left the box, so the seat took it.
     host.native.pressEnter = (_session, pane) => {
       host.enters.push(pane);
       return true;
@@ -194,13 +197,19 @@ describe('the composer read-back at its boundaries', () => {
     };
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'never submitted'], io, host)).toBe(1);
-    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
+    expect(await runSend(['lead', 'never submitted'], io, host)).toBe(0);
+    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['not-submitted']);
+    const history = readHistory('acme', world.root, world.home);
+    if (!history.ok) throw new Error('history could not be read');
+    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['delivered', 'taken, not yet confirmed']]);
+
+    // A taken line is never retyped: no retry record is left beside the drop.
+    const drops = join(world.dir, 'send-drops', 'acme', 'lead');
+    expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(0);
   });
 
-  test('the same box through the daemon: one Enter, and the same not-submitted word', async () => {
+  test('the same box through the daemon: one Enter, and the same taken word', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     host.native.pressEnter = (_session, pane) => {
@@ -222,10 +231,19 @@ describe('the composer read-back at its boundaries', () => {
     handles.push(started.handle);
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(1);
-    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 1 Enter; the box holds "a draft that is not the trigger"');
+    expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(0);
+    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(io.err).not.toContain('not-submitted');
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['not-submitted']);
+    const history = readHistory('acme', world.root, world.home);
+    if (!history.ok) throw new Error('history could not be read');
+    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['delivered', 'taken, not yet confirmed']]);
+
+    // The daemon keeps no retry record in the folder a watch scans — and a taken line is never
+    // typed again either way.
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
+    expect(readPending(drops)).toHaveLength(0);
+    expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
   });
 
   test('a dialog between typing and the first Enter is never a read-back mismatch', async () => {
@@ -240,7 +258,7 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'into a dialog'], io, host)).toBe(1);
-    expect(io.err).toContain('unreachable: not reached; the screen reads question');
+    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle; the drop file is at');
     // The pane is a dialog by the time the line has settled: no Enter goes to it.
     expect(host.enters.length).toBe(0);
     expect(outcomes(world)).toEqual(['unreachable']);

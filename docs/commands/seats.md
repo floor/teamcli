@@ -1,8 +1,8 @@
 # team seats
 
 Shows the seat registry for the team: one row per seat whose STATUS is not `stopped`, or every seat
-when `--all` is given, with its stable seat handle (`seat_<12 hex>`), role, CLI, model, effort, status, last active time,
-and pane.
+when `--all` is given, with its human name when the file writes one, its stable seat handle
+(`seat_<12 hex>`), role, CLI, model, effort, status, state, last active time, and pane.
 
 ## Synopsis
 
@@ -16,7 +16,7 @@ and pane.
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
-| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`) |
+| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` where it applies |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Columns
@@ -24,12 +24,15 @@ and pane.
 | Column | Meaning |
 | --- | --- |
 | SEAT | the seat name |
+| NICKNAME | the seat's human name from the file ([`nickname`](../team-file.md#seats)), or `-` when it writes none |
 | ID | the stable seat handle (`seat_<12 hex>`), or `-` before first launch |
 | ROLE | the seat's role (`temporary` when no declared seat matches) |
 | CLI | the CLI profile (`claude-code`, `codex`, `cursor`, `antigravity`, `grok`) |
 | MODEL | the live model reading or declared display |
 | EFFORT | the effort level, or `-` when unset |
-| STATUS | the seat's live state |
+| STATUS | the comparison's phrase for the seat against the session (`working`, `missing`, `stopped`, …) |
+| STATE | the seat's own reading, best source first — `working`, `idle`, `done`, `blocked`, `held`, `unreachable` or `unknown`; an `unknown` past the blind threshold (five minutes shipped, tightened by the machine, an entity, a project, the team or the seat, and opened again only by a project) reads `unknown (blind)` |
+| SOURCE | where that reading came from — `cli`, `cli-hook`, `herdr`, `trace`, `process`, `hold` or `none` |
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
 
@@ -64,6 +67,7 @@ workspace:
 seats:
   - role: coordinator
     name: claude-keeper
+    nickname: agamemnon
     leads: true
     label: coordinator
     cli: claude-code
@@ -101,8 +105,10 @@ Without `--all`, stopped seats are omitted:
 
 ```console
 $ team seats ; echo "exit $?"
-SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   LAST ACTIVE  PANE
-claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  2m ago       -
+team beacon, session "beacon"
+SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
+claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
+1 seat
 exit 0
 ```
 
@@ -110,8 +116,45 @@ With `--all`, stopped seats are included:
 
 ```console
 $ team seats --all ; echo "exit $?"
-SEAT           ID                 ROLE         CLI          MODEL            EFFORT  STATUS   LAST ACTIVE  PANE
-claude-keeper  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  2m ago       -
-claude-beacon  seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  1h ago       -
+team beacon, session "beacon"
+SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
+claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
+claude-beacon  -          seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -
+2 seats
+exit 0
+```
+
+`--json` prints the same registry as one document: each seat's `status` is the comparison's
+phrase about the record, and its own reading — the table's `STATE` and `SOURCE` — rides beside it
+as `state` and `state_source`, with `blind: true` only where it applies:
+
+```console
+$ team seats --json ; echo "exit $?"
+{
+  "schema": {
+    "name": "team.seats",
+    "version": 1
+  },
+  "format": 1,
+  "project": "beacon",
+  "session": "beacon",
+  "seats": [
+    {
+      "name": "claude-keeper",
+      "nickname": "agamemnon",
+      "id": "seat_0123456789ab",
+      "role": "coordinator",
+      "cli": "claude-code",
+      "model": "Claude Opus 5.5",
+      "effort": "max",
+      "status": "missing",
+      "state": "done",
+      "state_source": "process",
+      "last_active": "2026-10-04T08:58:00.000Z",
+      "pane": null,
+      "launch_line": "claude --model claude-opus-5-5"
+    }
+  ]
+}
 exit 0
 ```

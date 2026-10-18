@@ -92,13 +92,15 @@ function statusRowAt(
 
 /**
  * The index of the composer's status line in the window, or -1. A `status-last` composer pins it
- * as the last non-blank line; a `status-then-one` composer allows one chrome line below it. Where
- * the profile pins the row's place, a candidate that is not in its place is ordinary text: the
- * scan skips it (the lines below a lower candidate are then not the frame a place needs, so a
- * higher one fails too). A row the profile exempts from the place test keeps the trailing rule
- * the other profiles read it by. The classification and the quota read both take their line
- * from here,
- * so the two cannot disagree about which line the composer's status line is.
+ * as the last non-blank line; a `status-then-one` composer allows one chrome line below it, and
+ * a composer that declares `chrome` allows only a line matching that vocabulary: the pane's own
+ * hint row, never text the seat printed, so a status-shaped line followed by arbitrary output is
+ * never read as the row a quota figure comes from. Where the profile pins the row's place, a
+ * candidate that is not in its place is ordinary text: the scan skips it (the lines below a
+ * lower candidate are then not the frame a place needs, so a higher one fails too). A row the
+ * profile exempts from the place test keeps the trailing rule the other profiles read it by.
+ * The classification and the quota read both take their line from here, so the two cannot
+ * disagree about which line the composer's status line is.
  */
 function statusIndex(
   composer: Extract<ScreenData['composer'], { mode: 'status-last' | 'status-then-one' }>,
@@ -108,6 +110,7 @@ function statusIndex(
   expectedCwd?: string | null,
   home?: string,
 ): number | 'stop' {
+  const chrome = composer.mode === 'status-then-one' ? composer.chrome : undefined;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (tick()) return 'stop';
     if (!statusMatches(composer, lines[i] ?? '')) continue;
@@ -119,8 +122,14 @@ function statusIndex(
     if (allowOneTrailing) {
       if (trailing.length === 0) return i;
       if (trailing.some((line) => composer.prompt.test(line))) return -1;
-      if (trailing.length === 1) return i;
-      // Multiple trailing lines: whole-line grammar matching foreground_cwd
+      if (trailing.length === 1) {
+        if (chrome !== undefined && !chrome.some((pattern) => pattern.test(trailing[0] ?? ''))) return -1;
+        return i;
+      }
+      // Multiple trailing lines: a declared chrome vocabulary names exactly one row, so more
+      // than one line below the status row is never the pane's chrome.
+      if (chrome !== undefined) return -1;
+      // Whole-line grammar matching foreground_cwd
       if (expectedCwd) {
         let joined = trailing.map((l) => l.trim()).join('');
         if (home && (joined === '~' || joined.startsWith('~/'))) {
@@ -377,6 +386,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const start = now();
     const tick = () => now() - start > budget;
     const plain = plainLines(lines);
+    const live = () => liveRegion(data, plain, lines, tick, expectedCwd, home);
 
     // Rule (a): Every hatch predicate is monotone toward caution: hatch OR data, for working,
     // every dialog (trust, permission, the CLI's own exit question, question, a vendor notice,
@@ -408,7 +418,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       }
       if (stage) {
         for (const rule of stage.rules) {
-          const hit = ruleMatches(data, plain, rule, tick);
+          const hit = ruleMatches(data, plain, rule, tick, live);
           if (hit === 'stop') return { kind: 'unknown' };
           if (hit) return asScreen(kind, plain);
         }
@@ -450,6 +460,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
     const start = now();
     const tick = () => now() - start > budget;
     const plain = plainLines(lines);
+    const live = () => liveRegion(data, plain, lines, tick, expectedCwd, home);
 
     const composerFn = getProfileFn(data.profile, 'composer');
     if (composerFn !== undefined) {
@@ -475,7 +486,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
         }
         if (stage) {
           for (const rule of stage.rules) {
-            const hit = ruleMatches(data, plain, rule, tick);
+            const hit = ruleMatches(data, plain, rule, tick, live);
             if (hit === 'stop') return { kind: 'unknown' };
             if (hit) return { kind: 'unknown' };
           }
@@ -508,7 +519,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
 
     if (data.unknown) {
       for (const rule of data.unknown.rules) {
-        const hit = ruleMatches(data, plain, rule, tick);
+        const hit = ruleMatches(data, plain, rule, tick, live);
         if (hit === 'stop') return { kind: 'unknown' };
         if (hit) return { kind: 'unknown' };
       }
@@ -518,7 +529,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
     for (const stage of [data.provider_error, data.rate_limit]) {
       if (!stage) continue;
       for (const rule of stage.rules) {
-        const hit = ruleMatches(data, plain, rule, tick);
+        const hit = ruleMatches(data, plain, rule, tick, live);
         if (hit === 'stop' || hit) return { kind: 'unknown' };
       }
     }
@@ -569,17 +580,50 @@ export function composerBox(data: ScreenData, lines: string[], options?: ScreenO
   return { first: rest.trimStart(), indent, rows, wrap: 'wrap' in data.composer ? data.composer.wrap : undefined };
 }
 
-function ruleMatches(data: ScreenData, lines: string[], rule: Rule, tick: () => boolean): boolean | 'stop' {
+/**
+ * The rows a `live` rule's patterns are read on: the composer's own region — every row from its
+ * frame to the window's end, the box's rows, rules and footers among them — and the newest turn
+ * of transcript above it: the run of non-blank rows directly above the frame, once the blank
+ * margin the captures draw is skipped. A sentence further up is a turn the pane has scrolled
+ * past, not the live screen. Null when the composer cannot be read, and the rule then reads the
+ * whole window, as a rule without `live` does.
+ */
+function liveRegion(
+  data: ScreenData,
+  plain: string[],
+  styled: string[],
+  tick: () => boolean,
+  expectedCwd?: string | null,
+  home?: string,
+): Set<number> | null {
+  const hit = compose(data, plain, styled, tick, expectedCwd, home);
+  if (hit.kind === 'stop' || hit.kind === 'unknown') return null;
+  const region = new Set<number>();
+  for (let i = Math.max(0, hit.from); i < plain.length; i++) region.add(i);
+  let i = hit.from - 1;
+  while (i >= 0 && !(plain[i] ?? '').trim()) i--;
+  while (i >= 0 && (plain[i] ?? '').trim()) {
+    region.add(i);
+    i--;
+  }
+  return region;
+}
+
+function ruleMatches(data: ScreenData, lines: string[], rule: Rule, tick: () => boolean, live?: () => Set<number> | null): boolean | 'stop' {
   const where = rule.onFooter ? [footerLine(data, lines)] : lines;
   const inWindow = where === lines;
+  // A `live` rule's patterns are read on the live region alone, so a sentence the transcript
+  // has scrolled past is not the dialog. A region the composer cannot place leaves the whole
+  // window, as a rule without the field reads it.
+  const region = rule.live && inWindow ? live?.() ?? null : null;
   if (rule.any) {
-    const hit = anyLine(data, where, rule.any, tick, inWindow);
+    const hit = anyLine(data, where, rule.any, tick, inWindow, region ?? undefined);
     if (hit === 'stop') return 'stop';
     if (!hit) return false;
   }
   if (rule.all) {
     for (const pattern of rule.all) {
-      const hit = lineSomewhere(data, where, pattern, tick, inWindow);
+      const hit = lineSomewhere(data, where, pattern, tick, inWindow, region ?? undefined);
       if (hit === 'stop') return 'stop';
       if (!hit) return false;
     }
@@ -769,17 +813,18 @@ function lastAnchor(data: ScreenData, lines: string[], anchor: LinePattern, tick
   return at;
 }
 
-function anyLine(data: ScreenData, lines: string[], patterns: LinePattern[], tick: () => boolean, inWindow = true): boolean | 'stop' {
+function anyLine(data: ScreenData, lines: string[], patterns: LinePattern[], tick: () => boolean, inWindow = true, region?: Set<number>): boolean | 'stop' {
   for (const pattern of patterns) {
-    const hit = lineSomewhere(data, lines, pattern, tick, inWindow);
+    const hit = lineSomewhere(data, lines, pattern, tick, inWindow, region);
     if (hit === 'stop') return 'stop';
     if (hit) return true;
   }
   return false;
 }
 
-function lineSomewhere(data: ScreenData, lines: string[], pattern: LinePattern, tick: () => boolean, inWindow = true): boolean | 'stop' {
+function lineSomewhere(data: ScreenData, lines: string[], pattern: LinePattern, tick: () => boolean, inWindow = true, region?: Set<number>): boolean | 'stop' {
   for (let i = 0; i < lines.length; i++) {
+    if (region !== undefined && !region.has(i)) continue;
     const hit = matches(data, lines, i, pattern, tick, inWindow);
     if (hit === 'stop') return 'stop';
     if (hit) return true;
@@ -790,8 +835,10 @@ function lineSomewhere(data: ScreenData, lines: string[], pattern: LinePattern, 
 /**
  * The line a rule's footer must be: the last non-blank one. The composer's own chrome is the one
  * thing allowed below it — a `status-last` mode pins the status line to the pane's last line, and
- * a dialog drawn above it is still the dialog its footer belongs to. Any other line below the
- * footer means the footer is not the dialog's, and the rule doesn't match.
+ * a `status-then-one` mode lets one chrome row stand under the status line, so the status row
+ * and that row are both chrome and a dialog drawn above them is still the dialog its footer
+ * belongs to. Any other line below the footer means the footer is not the dialog's, and the
+ * rule doesn't match.
  */
 function footerLine(data: ScreenData, lines: string[]): string {
   const nonBlank = lines.filter((line) => line.trim());
@@ -799,6 +846,12 @@ function footerLine(data: ScreenData, lines: string[]): string {
   const composer = data.composer;
   if (composer.mode === 'status-last' && statusMatches(composer, last)) {
     return (nonBlank[nonBlank.length - 2] ?? '').trim();
+  }
+  if (composer.mode === 'status-then-one') {
+    if (statusMatches(composer, last)) return (nonBlank[nonBlank.length - 2] ?? '').trim();
+    if (statusMatches(composer, nonBlank[nonBlank.length - 2] ?? '')) {
+      return (nonBlank[nonBlank.length - 3] ?? '').trim();
+    }
   }
   return last.trim();
 }

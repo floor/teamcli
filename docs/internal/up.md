@@ -8,7 +8,7 @@ The lines that begin with `-` are as they stood there.
 ## Starting state: a stopped session, the lobby, trust
 
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
-declares and this machine can run, and the watch, started detached with no workspace. Seats already ready
+declares and this machine can run, and the watch, in a workspace of its own. Seats already ready
 are left as they are; a seat stopped in the file is left out until `team add` starts it. `--dry-run`
 prints the plan and runs nothing.
 
@@ -17,16 +17,18 @@ started from the beginning. A stopped session the state does not record is refus
 (`session <name> is stopped`); that line names no herdr command. A recorded session that does
 not clear is refused too (`session <name> is stopped and did not clear`).
 
-Every seat, shared and worktree-mode alike, starts in `~/.config/team/lobby`, with one exception: a
+Every seat, shared and worktree-mode alike, starts in the team's lobby, with one exception: a
 lead, the seat the file names orchestrator or operator, starts in the project folder itself. The
-lobby is shared by all projects on the machine. Before creating anything, `team` verifies the
+team's lobby is the file's `lobby:`, else the lobby the registry recorded for this session, else
+`<home>/.config/team/lobbies/<entity>` for a team that names `entity:`, else the machine-global
+`~/.config/team/lobby`. Before creating anything, `team` verifies the
 lobby gate:
 ownership by the invoking user, no symbolic links anywhere in the chain, directory mode exactly
 `0700`, nothing but the files the profiles the tool ships declare (claude-code declares
 `.claude/scheduled_tasks.lock`), and not inside a git repository or worktree. The set is the
-same for every team on the machine: the lobby is one folder shared by all of them, so what it
-may hold cannot depend on this team's seats — a lock another team's claude-code seat wrote
-must not block a team with no claude-code seat. The launch uses
+same for every team on the machine: what a lobby may hold cannot depend on this team's seats — a
+lock another team's claude-code seat wrote must not block a team with no claude-code seat. Two
+teams share a lobby only where they resolve to the same folder. The launch uses
 that verified path. The lobby is checked again — the gate's checks, plus that it is still the
 folder the gate read: the same canonical path, device and inode — directly before every
 workspace this run creates in it, with nothing between that confirmation and herdr's create
@@ -59,13 +61,13 @@ Reads the team file (or the one `--file` names), this machine's approval store, 
 (`.agents/team.state.json`, for each seat's stage), herdr (whether the session is up, its agents and
 workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
-with; a waiting seat's classification, process identity and `manual` flag; the watch's pid and
-heartbeat), `.agents/team.log`, the machine lobby folder
-(`~/.config/team/lobby`) every seat starts in, and, through herdr: the server, one workspace per seat
-each seat's launch, and the watch as a detached process. A real run holds the session mutator
-lock (`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove`
-share, from before its first effect to its end — its first effect being the make of an absent
-lobby, itself under the lock, so two fresh runs cannot race their components. One session-mutating
+with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
+heartbeat), `.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
+starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
+workspace and pane for the watch. A real run holds the session mutator lock
+(`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove` share, from
+before its first effect to its end — its first effect being the make of an absent lobby, itself
+under the lock, so two fresh runs cannot race their components. One session-mutating
 run per session at a time, under a name no seat can have (a leading dot; `seat-locks` otherwise
 holds one lock per seat, the launch's and `answer`'s). A second real run, delegated or not, stops
 on it before the first step, with the refusals below; `--dry-run` takes no lock, makes nothing and
@@ -73,16 +75,17 @@ still plans.
 
 ## Who may run it
 
-The owner, from a terminal outside herdr. A run with no terminal is refused with
-`only the owner runs this, from a terminal outside herdr` and launches nothing. An admitted run
-that is not that owner — the grant, a delegate, the token — never reads stdin and never prompts,
-so every dialog is left for the owner (below). `--dry-run` is open to anyone: it reaches nothing and
+The owner, from a terminal outside herdr; and a seat this team's record marks `leads` — its
+orchestrator, or a registry roster line that says `leads` — on this folder's own team file. A run
+with no terminal is refused with ``only the owner or a `leads` seat runs this, from a terminal
+outside herdr or its own pane`` and launches nothing. An admitted run that is not that owner — a lead's, the grant's, a delegate's, the
+token's — never reads stdin and never prompts, so every dialog is left for the owner (below). `--dry-run` is open to anyone: it reaches nothing and
 changes nothing, prints the refusals it would hit as `! up would refuse: …` above the plan. A caller
 the run does not admit — not the owner, no grant, no delegate, no token — is refused with the word
 `deny` alone on a real run: no reason, no plan, exit 1. Its `--dry-run` is never
-denied: the same `! up would refuse:` line carries the placement reason, `! to unblock:` carries the
-owner's own run of this folder, and the plan follows when no `--file` or `--session` kept the file
-unread — a flagged target is read on the real run's own terms, never to fill a plan.
+denied: the same `! up would refuse:` line carries the placement reason, `! to unblock:` carries
+the run that admits the caller — a `leads` seat's own, from its pane, or the owner's, from a
+terminal outside herdr — and the plan follows when no `--file` or `--session` kept the file unread — a flagged target is read on the real run's own terms, never to fill a plan.
 A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
 
 - `up.no-launch`, this call has no way to reach herdr (`src/commands/up.ts:1176`)
@@ -132,13 +135,15 @@ A seat already ready is left as it is, and the words it was left with are the de
 record. Before that skip, when the seat has a pane and a workspace, the plan renames the workspace
 to the file's title and reports the file's display line. A dry run prints both; a real run does
 them and still does not type into the pane or launch the seat again. A ready seat the state records without its process identity, or with a start outside the
-machine lobby, is left as it is too — only a relaunch repairs either — and its detail says so:
-`  already ready; left as it is; a relaunch records its process: team remove <seat> --keep, then
-team add <seat> (or team down, then team up, for the whole team)`, or the same words saying `a
-relaunch moves it into the lobby`. For a seat the file names as orchestrator or operator, the detail
-offers only `team down, then team up (to restart the whole team)`; and a lead whose process the
-state records, started in the project folder itself, is left with no relaunch note at all — the
-project folder is home for a lead too.
+team's lobby, is left as it is too. The identity is recorded where the seat stands, without a
+relaunch: `  already ready; left as it is; its process was never recorded: run team register <seat>
+to record it, nothing relaunched` — for the lead's own seat too. A seat recorded with a process but
+started outside the team's lobby is repaired by a relaunch, and its detail says so: `  already
+ready; left as it is; a relaunch moves it into the lobby: team remove <seat> --keep, then team add
+<seat> (or team down, then team up, for the whole team)`, or for a seat the file names as
+orchestrator or operator, `team down, then team up (to restart the whole team)`; and a lead whose
+process the state records, started in the project folder itself, is left with no relaunch note at
+all — the project folder is home for a lead too.
 
 A ready seat whose recorded process is still in its pane, and that pane is still named as the
 seat, is read once while the plan is built. The model is taken the way `status` takes it. When
@@ -253,6 +258,18 @@ and only then is Enter pressed, once. A box that already holds exactly today's l
 stopped after typing it) is verified and sent, never typed onto again. `up` never clears a box it
 could not verify: a stop leaves the text where it is.
 
+Under `--json` the run writes one `team.up` v1 document on stdout, its `schema` tag first:
+`format`, `dry_run`, `status` (`dry-run`, or `ready` on a real run), `action_summary`, `project`,
+`session`, `seats` — every name the file carries, once — and `notes`. A dry run's document is the
+plan instead of the records: `action_summary` is `dry run: nothing was run`, and `plan` holds one
+`{ step, seat?, detail, prefix? }` per plan line — a run step prefixed `+`, a skip `skip`, a wait
+with none — with a folded warning leading as `{ step: "warning", prefix: "!" }` when there is one.
+On a real run `action_summary` is the run's closing record — the last `<seat>: ready` line, or
+`the team is ready` when the file has no seat to record — and the records before it travel in
+`notes`. A refusal under `--json` writes a `team.error` v1 document on stdout instead — the
+refusal's own `id`, its `message` and `repair`, and `rule` where the refusal carries one — and
+stderr stays empty. The exit code is the same as without `--json`.
+
 ### Waiting for the owner
 
 A seat that stops at anything that isn't idle and that `team` may not answer — `trust` under either
@@ -271,7 +288,7 @@ The ask waits at most the profile's idle timeout (90 s today). That bound covers
 permission prompt too, including one re-read on each tick while the lead may answer it. When it
 ends with no `o`, `s` or `q`, the seat is left exactly as it is — workspace and waiting record
 kept, nothing focused, nothing closed — with `<seat>: left out: timed out after <n> s waiting
-for its owner; left as it is`, and `up` goes on to the next seat. The next `up` asks again, with
+for an answer; left as it is`, and `up` goes on to the next seat. The next `up` asks again, with
 the same cap. Pressing `o` spends the open-pane poll's own timeout and then starts a new ask.
 
 `o`, `s` and `q` are the whole answer. One chunk is one key only when it is exactly one byte and
@@ -371,7 +388,7 @@ team) for any other, to establish one by a run. A stored classification is valid
 own read against the closed list above: anything else the file holds reads `unknown` in the record,
 the log line, the prompt, `team status` and `team doctor`.
 
-Under `dialogs.trust: orchestrator`, a seat waiting at `trust` is also re-read on a tick: every
+Under a `dialogs.trust` team grant in force for this project's team id (read fresh on every run), a seat waiting at `trust` is also re-read on a tick: every
 prompt timeout and every return from `o` takes the lock and reads the state and the pane fresh,
 and follows what they show — a seat `team answer` made ready in the meantime, the
 `trust-sent-recovery` state it may have left behind (shown as
@@ -547,11 +564,10 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 
 | Reason |
 | --- |
-| ``only the owner runs this, from a terminal outside herdr`` — a run with no terminal. ``only the owner runs `up`, from a terminal outside herdr; this call is <caller>`` — any other caller the ordinary rule refuses. With a `delegates` section in the file, that other refusal is the delegate gate's to say, in its own words below |
+| ``only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` — a run with no terminal. ``only the owner or `leads` starts the team; this call is <caller>`` — any other caller the ordinary rule refuses. With a `delegates` section in the file, that other refusal is the delegate gate's to say, in its own words below |
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
 | the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |
-| ``the file was never approved on this machine `` — dev mode only, as a warning; a missing record is not a refusal |
 | ``approved before records were signed`` — the record was written by an earlier `team` |
 | the case a refused record names — a signed record that does not verify |
 | a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |
@@ -560,8 +576,8 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | `session beacon is stopped` — herdr lists it stopped and this team's state does not record it, so `up` does not clear it |
 | `session <session> is stopped and did not clear` — herdr lists it stopped, this team's state records it, and the clear did not happen |
 | ``session beacon has 2 agents this file's state doesn't record: `up` never touches a running team`` — an agent on a pane no record names, or on a pane this state records for a seat at another stage: a seat at `named` or `ready` whose pane now holds a foreign agent is refused here, with the whole team. An agent on the pane this state records for a seat left at `launched` — the run stopped after its pane was made and before its rename — is not refused: it is the run's own half-finished seat, and this run finishes it, the idle wait and the rename like any launched seat |
-| ``the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` — followed by the whole `trust:` block to paste: every entry the next `up` requires, one line saying which key of the file each entry comes from, and, for an entry a rule of `trust` refuses, one line naming the key that forces it |
-| ``the lobby ~/.config/team/lobby: <check>`` — gate check failed (symbolic link, permissions, mode, a file a shipped CLI reads at start, inside git repo) |
+| ``the file is legacy: migrate trust to absolute paths including the lobby <lobby>: ...`` — `<lobby>` is the team's lobby, `~/.config/team/lobby` when the defaults apply — followed by the whole `trust:` block to paste: every entry the next `up` requires, one line saying which key of the file each entry comes from, and, for an entry a rule of `trust` refuses, one line naming the key that forces it |
+| ``the lobby <lobby>: <check>`` — the team's lobby; gate check failed (symbolic link, permissions, mode, a file a shipped CLI reads at start, inside git repo) |
 | ``the lobby <path>: failed to create <component>: <code>`` — the run had to make an absent lobby, and the make itself failed at `<component>`: a component that cannot be written, or one another process took first. The read-only check above found the lobby missing and made nothing; the make runs under the run lock, after a delegated run's audit line and before any seat's own effect, and the run stops here (exit 1) |
 | ``seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` — the folder the file gives it, or its lobby, is a protected checkout |
 | ``another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share: this run stopped before its first step, and a delegated run gets the same line. The line names no command, because the lock is shared and its token records only a pid. `--dry-run` takes no lock and never shows it |
@@ -592,7 +608,7 @@ coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobby      # the team's lobby; the default when the file sets none
   - ~/Code/beacon
 
 workspace:
@@ -644,13 +660,14 @@ the watch this session has never had:
 $ team up --dry-run ; echo "exit $?"
 + herdr --session beacon workspace rename w1 coordinator
 + herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
+  skip claude-keeper: already ready; left as it is; its process was never recorded: run team register claude-keeper to record it, nothing relaunched
 + herdr --session beacon workspace rename w2 implementer
 + herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
+  skip claude-beacon: already ready; left as it is; its process was never recorded: run team register claude-beacon to record it, nothing relaunched
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
-+ 'team watch --session beacon'
-    (detached; the state records its pid)
++ herdr --session beacon workspace create --cwd . --label 'Watch · beacon' --no-focus
++ herdr --session beacon pane run <pane of Watch · beacon> 'team watch --session beacon'
+    (a desktop notification follows when the watch exits)
 dry run: nothing was run
 exit 0
 ```
@@ -660,19 +677,19 @@ The same command for real runs exactly that:
 ```console
 $ team up ; echo "exit $?"
 claude-keeper: ready
-  already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
+  already ready; left as it is; its process was never recorded: run team register claude-keeper to record it, nothing relaunched
 claude-beacon: ready
-  already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
+  already ready; left as it is; its process was never recorded: run team register claude-beacon to record it, nothing relaunched
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 watch: started
 exit 0
 ```
 
-A seat is not the owner, so it can read a plan but not start a team:
+A seat this team's record does not mark `leads` cannot start the team; it can read the plan:
 
 ```console caller=claude-beacon
 $ team up ; echo "exit $?"
-team up: only the owner runs `up`, from a terminal outside herdr; this call is claude-beacon
+team up: only the owner or `leads` starts the team; this call is claude-beacon
 exit 1
 ```
 
@@ -698,7 +715,7 @@ coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobby      # the team's lobby; the default when the file sets none
   - ~/Code/beacon
 
 limits:
@@ -741,10 +758,10 @@ seats:
 $ team up --dry-run ; echo "exit $?"
 + herdr --session beacon workspace rename w1 coordinator
 + herdr --session beacon pane report-metadata w1:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-keeper: already ready; left as it is; a relaunch records its process: team down, then team up (to restart the whole team)
+  skip claude-keeper: already ready; left as it is; its process was never recorded: run team register claude-keeper to record it, nothing relaunched
 + herdr --session beacon workspace rename w2 implementer
 + herdr --session beacon pane report-metadata w2:p1 --source team --display-agent 'Claude Opus 5.5 default'
-  skip claude-beacon: already ready; left as it is; a relaunch records its process: team remove claude-beacon --keep, then team add claude-beacon (or team down, then team up, for the whole team)
+  skip claude-beacon: already ready; left as it is; its process was never recorded: run team register claude-beacon to record it, nothing relaunched
   skip gemini-qa: stopped in the file; start it with `team add gemini-qa`
 dry run: nothing was run
 exit 0

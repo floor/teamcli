@@ -59,18 +59,20 @@ A team that has never been started has no recorded pane, so a seat cannot pull u
 has recorded one:
 
 ```text
-team next: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up`
+team next: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
 ```
 
 The wrong pane is refused with the pane the state records:
 
 ```text
-team next: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`)
+team next: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`)
 ```
 
 ## What it prints
 
-One record, the issues block. Nothing else on stdout when a record was claimed.
+The context line, `team <project>, session "<session>"`, then the claimed record's block (the
+`team issues` block, one record), then one closing summary line, `team next: claimed <id>`. The
+context line prints once per run: a wait's later events print only their own lines.
 
 `team next: nothing is takeable` when the takeable set is empty. That is one answer, not a
 poll and not a stand-down.
@@ -87,8 +89,16 @@ The wait polls at a constant pace; a refused read ends it — back-off is not im
 
 With `--wait` and an empty takeable set, the one answer above prints once, then
 `team next: waiting every <n>s` with `<n>` the cadence in seconds, and the wait begins. A re-read
-that finds a record prints that record's block; an empty re-read prints nothing;
+that finds a record prints that record's block and its `team next: claimed <id>` line; an empty
+re-read prints nothing;
 `team next: stopped waiting` when a stop signal, or a clock that did not advance, ends the wait.
+
+Under `--json` the run prints one `team.next` document instead of those plain lines: `format`,
+`dry_run: false`, `status`, `action` (`claim`, `release`, or `none`), the same closing
+`action_summary` line, `project`, `session`, and `task` — the claimed record's `id` and `title`,
+or `null` for a release or an empty answer. A refusal writes a `team.error` document on stdout
+and leaves stderr empty. `--wait` and `--json` together are refused, because a wait's events are
+not one document.
 
 `team next: the tracker holds more tasks than this read; the take still proceeds` on stderr when
 the broker's answer says the tracker holds another page. The read is bounded, and it says so: the
@@ -98,7 +108,7 @@ take proceeds with the notice, never with a silent truncation.
 
 ```text
 team next: only a seat of this team pulls a task; this call is owner
-team next: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up`
+team next: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
 team next: the team file declares no task source
 team next: tasks.source must be file
 team next: tasks.path must stay inside the checkout
@@ -107,6 +117,7 @@ team next: the task file is not a list
 team next: m1 is not a task: title is required
 team next: --mine and --release are not used together
 team next: --wait and --release are not used together
+team next: --wait and --json can't be used together
 team next: --wait needs tasks.cadence in the team file
 team next: the broker is not running; the owner starts it with `team broker`
 team next: the broker's answer is not one this build knows; the owner restarts it
@@ -167,6 +178,8 @@ seats:
 
 ```console caller=claude-keeper
 $ team next ; echo "exit $?"
+team beacon, session "beacon"
 m1  the task title
+team next: claimed m1
 exit 0
 ```

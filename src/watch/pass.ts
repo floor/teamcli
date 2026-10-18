@@ -1,7 +1,7 @@
 // One pass of the watch: the core. It builds one observation per seat before any check runs,
-// runs the registered checks in the order it owns, applies the report-once rule, and dials the
-// nudge. A check never reads herdr, a screen or the file itself — only the observation it is
-// handed (RFC 0002 § 4.2).
+// runs the registered checks in the order it owns, applies the report-once rule, and names the
+// work drops and the ring. A check never reads herdr, a screen or the file itself — only the
+// observation it is handed (RFC 0002 § 4.2).
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -12,8 +12,12 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { usesLauncher } from '../launch/line.ts';
-import { profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
+import { herdrUnreliable, profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
+import { livenessOf, type LivenessThresholds, type SettingLevel, type StateThresholds } from '../settings/inherit.ts';
+import { stateThresholds, thresholdRefusals, type ThresholdRefusal } from '../settings/resolve.ts';
+import { watchWords } from '../settings/declared.ts';
+import type { Tempo } from '../file/sections/tempo.ts';
 import type { SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
@@ -59,12 +63,14 @@ export type Memory = {
   slots: Record<string, unknown>;
   // Conditions that were reported and have not cleared since.
   active: Set<string>;
-  pending: string[];
-  pendingSince: number | null;
-  // The nudge line this watch typed itself and has not seen sent, recorded at the typing: the
-  // pane, and the exact text. Only this record — never the text, which is one fixed public
-  // constant — can make an unsent box the watch's own, and it lives in this process: a restarted
-  // watch has none, and text it did not type is left as its owner left it.
+  // The active conditions a check did not report on the last pass. One unseen pass is forgiven
+  // — a screen can flicker — and a second one in a row drops the condition, so it reports again
+  // only after it has genuinely cleared.
+  grace: Set<string>;
+  // The line this watch typed itself and has not seen sent, recorded at the typing: the pane,
+  // and the exact text. Only this record — never the text alone — can make an unsent box the
+  // watch's own, and it lives in this process: a restarted watch has none, and text it did not
+  // type is left as its owner left it.
   ownNudge: { pane: string; text: string } | null;
   // `${recipient}/${id}` this process has already told the owner about. Two seats can hold the
   // same id. A restarted watch has none, so an old unacked record is said again; a receipt
@@ -79,7 +85,7 @@ export type Memory = {
 
 export function newMemory(): Memory {
   return {
-    history: {}, slots: {}, active: new Set(), pending: [], pendingSince: null, ownNudge: null, mailboxTold: new Set(),
+    history: {}, slots: {}, active: new Set(), grace: new Set(), ownNudge: null, mailboxTold: new Set(),
     seatLabels: {},
   };
 }
@@ -94,9 +100,10 @@ export function ownUnsent(memory: Memory, pane: string, text: string, cli: strin
 
 export type { Report } from './check.ts';
 
-// The one line the watch types into an idle seat's pane. Fixed, and free of report text: a dialog
-// can open between the screen read and the typing, and a digit in the line would answer it. The
-// reports go to the log and to the desktop notification; the line only says where they are.
+// The default body of a work drop, when the file sets no `watch.nudge`: what the seat reads from
+// the drop file. It is never typed into a pane, and it is not the report line — reports go to the
+// log and to the desktop notification, and no report text is ever put in front of a seat the
+// report does not concern.
 export const NUDGE_TEXT = 'Team watch: reports are waiting in .agents/team.log';
 
 // The one line the watch types into a seat's pane when a message is waiting. Fixed, and not the
@@ -116,17 +123,11 @@ export type MailboxWaiting = {
 
 export type PassResult = {
   reports: Report[];
-  // The one line to type into an idle seat's pane, when one is free. `pending` holds the
-  // report texts it stands for, so a delivery that fails puts them back rather than losing them.
-  // `seat` is that seat's name and `cli` the CLI its screen is read with.
-  nudge: { pane: string; text: string; pending: string[]; seat: string; cli: string } | null;
   // One drop per idle worker that has reached `idle_first`, and again every `idle_repeat`
-  // when that is set. `body` is `watch.nudge`, or the report line when the file omits it.
+  // when that is set. `body` is `watch.nudge`, or the fixed line when the file omits it.
   // The command writes the drop and types the short trigger; this pass types nothing.
   work: { pane: string; seat: string; cli: string; body: string }[];
-  // What to notify instead, when a nudge has waited too long.
-  fallback: string | null;
-  // The one line to type when a message is waiting and this pass is not already typing a nudge.
+  // The one line to type when a message is waiting for a free seat.
   ring: { pane: string; text: string; cli: string; to: string; id: string } | null;
   // One owner line when an unacked message is older than `nudge_wait` and its box is not free.
   mailboxNote: string | null;
@@ -137,6 +138,9 @@ export type PassResult = {
   // does, and records `title` and `line` only after the call returns true. A seat with neither
   // half changed is absent.
   labels: { name: string; pane: string; workspace: string; title?: string; displayAgent?: string }[];
+  // Liveness words the chain set aside, each with the rule it broke. Not reports: they are
+  // configuration facts, said once by the command, never nudged into a seat.
+  refusals: ThresholdRefusal[];
 };
 
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
@@ -149,10 +153,14 @@ export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, approval, load, memory
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
 // permission prompt as idle, so the screen decides first. `team check` reads it too, over a pane
 // the state records for a seat of this team: one reading, two readers, and no second rule.
-export function attentionOf(screen: Screen, status: string, quiet: boolean): Attention {
+// `theirWord` is a profile herdr cannot report: the screen alone is the reading there, so an idle
+// table, a running turn or a limit the CLI draws itself is never "herdr's word is unknown", and
+// only a screen no profile reads is.
+export function attentionOf(screen: Screen, status: string, quiet: boolean, theirWord = false): Attention {
   if (screen.kind === 'permission' || screen.kind === 'trust') return 'permission';
   if (screen.kind === 'question' || screen.kind === 'exit question') return 'question';
   if (screen.kind === 'vendor notice') return 'vendor notice';
+  if (theirWord) return screen.kind === 'unknown' ? 'unknown' : null;
   if (status === 'blocked') return 'blocked';
   // A quiet seat on a screen no profile reads is not "nothing to report": it is the shape a
   // stalled seat leaves — herdr says idle or done, and nothing may ever free it. The report is
@@ -201,6 +209,17 @@ export type PassInput = {
   // watch says it itself, once; the pass's approval check reads it and adds nothing.
   approvalReason?: string | null;
   watch: TeamFile['watch'];
+  // The liveness words of the levels above the team, already read: the machine's settings file,
+  // the entity's and the project's records. The team's own words come from `watch` — its
+  // `idle_first`, `idle_owner` and `blind_after` — and the seat's from its file entry; a caller
+  // never repeats those here.
+  liveness?: Partial<Record<SettingLevel, Partial<StateThresholds> | undefined>>;
+  /** The team's own liveness words from the watch section as written, before `tempo` scaled it.
+   *  Omitted, they are read from `watch` itself. */
+  livenessTeam?: Partial<StateThresholds>;
+  /** The tempo in force. It scales the idle window after the tighten-only check, so a longer
+   *  tempo word is the owner's dial on the timing, never a team's loosening. */
+  tempo?: Tempo;
   outcomes?: readonly CheckOutcome[];
   budgets?: TeamFile['budgets'];
   readings?: readonly Seen[];
@@ -216,9 +235,6 @@ export type PassInput = {
   readScreen?: (cli: string, screen: string | undefined) => Screen;
   /** Quota patterns in force, shipped plus the approved override. The shipped list, when omitted. */
   quotaFor?: (cli: string) => readonly QuotaPattern[];
-  /** Kept so a caller can still pass it. The nudge does not read it: a missing approval
-   *  types the report line and still sends the work drop. The name here is not the pane. */
-  nudgeOperator?: { name: string; cli: string } | null;
   /** Unacked messages already verified. Omitted, the pass rings nothing. */
   mailbox?: readonly MailboxWaiting[];
 };
@@ -234,6 +250,9 @@ export function pass({
   approval,
   approvalReason,
   watch,
+  liveness: declaredLiveness,
+  livenessTeam,
+  tempo = 'normal',
   outcomes = [],
   budgets = team.budgets,
   readings: stored = [],
@@ -246,7 +265,9 @@ export function pass({
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
-  // Reported when it starts, and again only after it has cleared.
+  // Reported when it starts, and again only after it has cleared. Clearing is judged at the end
+  // of the pass, with one pass of grace: a condition the check does not report on stays active
+  // through that pass, and only two in a row drop it.
   const once = (key: string, text: string, to: Report['to'] = 'operator'): Report | null => {
     current.add(key);
     return memory.active.has(key) ? null : { key, text, to };
@@ -292,7 +313,33 @@ export function pass({
     }),
   ];
 
+  // The team's own word is the section in force minus the values that section ships: a default
+  // the file never wrote is no declaration, and passing it would make a tighter word above look
+  // like a loosening attempt. Each seat resolves the same chain with its own word on top, and
+  // every word the chain set aside is collected once, however many seats repeat it.
+  const teamWords = livenessTeam ?? watchWords(watch);
+  const above = declaredLiveness ?? {};
+  const refused: ThresholdRefusal[] = [];
+  const toldRefusals = new Set<string>();
+  const factor = tempo === 'relaxed' ? 2 : tempo === 'urgent' ? 0.5 : 1;
+  const limitsFor = (seat: Seat | undefined): LivenessThresholds => {
+    const chain = { ...above, team: teamWords, ...(seat?.liveness !== undefined ? { seat: seat.liveness } : {}) };
+    for (const refusal of thresholdRefusals(chain)) {
+      const key = `${refusal.setting}:${refusal.level}:${refusal.value}`;
+      if (toldRefusals.has(key)) continue;
+      toldRefusals.add(key);
+      refused.push(refusal);
+    }
+    const resolved = livenessOf(stateThresholds(chain));
+    // `tempo` is the owner's dial on how fast the watch runs, applied to the window the chain
+    // resolved: a longer word here is not a level loosening a threshold, and `relaxed` still
+    // slows the idle nudge while `urgent` quickens it.
+    if (factor === 1) return resolved;
+    return { ...resolved, idle_lead_seconds: Math.max(1, Math.round(resolved.idle_lead_seconds * factor)) };
+  };
+
   for (const { name, cli, vendor, account, parked, stopped, seat } of seats) {
+    const liveness = limitsFor(seat);
     const agent = live.agents.find((candidate) => candidate.name === name);
     const lead = name === team.orchestrator || name === team.operator;
     if (!agent) {
@@ -322,13 +369,20 @@ export function pass({
         attention: null,
         model: null,
         history: { lastWorking: undefined, idleSince: undefined },
+        liveness,
       });
       continue;
     }
     known.add(agent.pane);
     const pane = live.screens[agent.pane];
     const screen = read(cli, pane);
-    const quiet = agent.status === 'idle' || agent.status === 'done';
+    // Herdr's word, unless the profile says herdr cannot report this CLI: its own screen is the
+    // reading there, and the two states `team` types into are an idle table and a composer
+    // holding text. A screen it cannot read is not quiet.
+    const theirWord = herdrUnreliable(cli);
+    const quiet = theirWord
+      ? screen.kind === 'idle' || screen.kind === 'unsent'
+      : agent.status === 'idle' || agent.status === 'done';
     // Working is herdr's word or the screen's: a seat mid-turn is never idle, whatever its
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
@@ -372,9 +426,10 @@ export function pass({
       lead,
       parked,
       stopped,
-      attention: attentionOf(screen, agent.status, quiet),
+      attention: attentionOf(screen, agent.status, quiet, theirWord),
       model: seat ? seatModel(seat, live.screens[agent.pane]) : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
+      liveness,
     });
     if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory));
   }
@@ -397,13 +452,17 @@ export function pass({
     const declared = team.seats.find((one) => one.name === seat.name)
       ?? team.seats.find((one) => one.name === state.seats[seat.name]?.temporary?.like);
     for (const figure of seat.quota) {
-      if (declared && seat.identity !== 'gone' && seat.identity !== 'replaced') {
-        const pool = payingPoolOf(declared);
-        machineReadings.push({ ...figure, account: payingAccountOf(declared), ...(pool ? { pool } : {}) });
-      }
       const payer = declared === undefined ? seat.account : payingAccountOf(declared);
       const backing = declared === undefined ? seat.vendor : payingAccountOf({ ...declared, account: undefined });
       const account = figure.account === backing ? payer : figure.account === seat.vendor ? seat.account : figure.account;
+      if (declared && seat.identity !== 'gone' && seat.identity !== 'replaced') {
+        const pool = payingPoolOf(declared);
+        // The figure is stored under the account it MEASURES, never under the account that pays
+        // the seat: a DeepSeek seat on Claude Code shows the Claude subscription's own L:/W:
+        // bar, and that bar is Anthropic's reading. Storing it under the paying account is what
+        // made the report read another subscription's figure as DeepSeek's (owner, 2026-10-17).
+        machineReadings.push({ ...figure, account, ...(pool ? { pool } : {}) });
+      }
       const entry = budgets.accounts[account];
       if (entry !== undefined ? entry.sources.includes('status_line') : machineAccounts.includes(account) && (figure.account === backing || figure.account === payer)) {
         readings = observe(readings, { ...figure, account }, seat.name, now);
@@ -460,64 +519,33 @@ export function pass({
   }
   for (const check of TEAM_CHECKS) if (enabled(check.name)) reports.push(...check.run(teamObservation, ctx));
 
-  memory.active = current;
+  // One pass of grace for an attention key that stops being named: a screen can flicker, and a
+  // report for every flicker is noise. An attention key stays active through the first pass that
+  // does not name it, and two in a row drop it — so a flicker reports once, and a condition that
+  // really cleared reports again when it comes back. Every other key keeps the drop-on-first-
+  // clear rule, and a check turned off drops its keys at once. A key `keep` carried through an
+  // unreadable pass is named above, and that clears its grace.
+  const attentionKeys: [prefix: string, check: string][] = [
+    ['blocked:', 'attention'],
+    ['question:', 'attention'],
+    ['vendor notice:', 'attention'],
+    ['unknown:', 'attention'],
+    ['unsent:', 'unsent'],
+  ];
+  const flickers = (key: string): boolean =>
+    attentionKeys.some(([prefix, check]) => key.startsWith(prefix) && enabled(check));
+  const next = new Set(current);
+  const grace = new Set<string>();
+  for (const key of memory.active) {
+    if (current.has(key) || memory.grace.has(key) || !flickers(key)) continue;
+    next.add(key);
+    grace.add(key);
+  }
+  memory.active = next;
+  memory.grace = grace;
 
-  // The nudge: kept until an idle seat is free — an empty idle prompt, or a box holding the line
-  // this watch typed itself and never saw sent, which is sent rather than typed again — and
-  // typed into nothing else. The operator is not that seat: an idle operator never acts on it.
-  for (const report of reports) {
-    if (report.to === 'operator' && !memory.pending.includes(report.text)) {
-      memory.pending.push(report.text);
-    }
-  }
-  let nudge: PassResult['nudge'] = null;
-  let fallback: string | null = null;
-  if (memory.pending.length) {
-    memory.pendingSince ??= now;
-    // A missing approval does not stop this. The operator and the orchestrator are not choices.
-    const choices: { pane: string; cli: string; seat: string; since: number }[] = [];
-    for (const obs of observations) {
-      if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) continue;
-      const named = live.agents.filter((agent) => agent.name === obs.name);
-      if (named.length !== 1) continue;
-      const agent = named[0]!;
-      const raw = live.screens[agent.pane];
-      const screen = read(obs.cli, raw);
-      // An empty idle prompt is free to type into, and so is a box still holding the line
-      // this watch typed itself, recorded in memory at the typing. The line is one fixed
-      // public constant, so the text alone proves nothing: the same text typed by a person
-      // or an agent, or found by a restarted watch, is someone's text — never typed over,
-      // sent or cleared, and left to them or to the next stop.
-      const mine = screen.kind === 'unsent' && ownUnsent(memory, agent.pane, NUDGE_TEXT, obs.cli, raw);
-      const free = (agent.status === 'idle' || agent.status === 'done') && (screen.kind === 'idle' || mine);
-      if (!free) continue;
-      choices.push({
-        pane: agent.pane,
-        cli: obs.cli,
-        seat: obs.name,
-        since: obs.history.lastWorking ?? obs.history.idleSince ?? now,
-      });
-    }
-    choices.sort((a, b) => a.since - b.since || a.seat.localeCompare(b.seat));
-    const chosen = choices[0];
-    if (chosen) {
-      nudge = {
-        pane: chosen.pane,
-        text: NUDGE_TEXT,
-        pending: memory.pending.slice(),
-        seat: chosen.seat,
-        cli: chosen.cli,
-      };
-    } else if (now - memory.pendingSince >= watch.nudgeWait * 1000) {
-      fallback = `no idle seat could be nudged for ${minutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
-    }
-    if (nudge || fallback) {
-      memory.pending = [];
-      memory.pendingSince = null;
-    }
-  }
-  // A report nudge is the one typed line of this pass. A ring is typed only when this pass is
-  // not already typing that nudge. The record stays either way: the receipt is what clears it.
+  // The ring is typed only when this pass types no work drop. The record stays: the receipt is
+  // what clears it.
   let ring: PassResult['ring'] = null;
   let mailboxNote: string | null = null;
   const ordered = [...mailbox].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
@@ -527,7 +555,7 @@ export function pass({
       && ownUnsent(memory, record.pane, RING_TEXT, record.cli, record.screen);
     const free = record.pane !== null && (record.status === 'idle' || record.status === 'done')
       && (screen?.kind === 'idle' || mine);
-    if (nudge === null && free && ring === null && record.pane !== null) {
+    if (free && ring === null && record.pane !== null) {
       ring = { pane: record.pane, text: RING_TEXT, cli: record.cli, to: record.to, id: record.id };
       continue;
     }
@@ -537,7 +565,7 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, nudge, work: workDrops(team, live, observations, watch, now, memory, read), fallback, ring, mailboxNote, readings, machineReadings, labels };
+  return { reports, work: workDrops(team, live, observations, watch, now, memory, read), ring, mailboxNote, readings, machineReadings, labels, refusals: refused };
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
@@ -572,7 +600,7 @@ function workDrops(
     }
     const since = now - (obs.history.lastWorking ?? obs.history.idleSince ?? now);
     const at = sent[obs.name];
-    const waiting = since >= watch.idleFirst * 1000
+    const waiting = since >= obs.liveness.idle_lead_seconds * 1000
       && (at === undefined || (watch.idleRepeat !== undefined && now - at >= watch.idleRepeat * 1000));
     if (!waiting) continue;
     const screen = read(obs.cli, live.screens[obs.agent.pane]);
@@ -580,7 +608,12 @@ function workDrops(
     // in this same stretch still gets the drop.
     if (screen.kind !== 'idle') continue;
     sent[obs.name] = now;
-    due.push({ pane: obs.agent.pane, seat: obs.name, cli: obs.cli, body });
+    due.push({
+      pane: obs.agent.pane,
+      seat: obs.name,
+      cli: obs.cli,
+      body: body.replaceAll('<your seat name>', obs.name),
+    });
   }
   return due;
 }

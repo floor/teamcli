@@ -25,7 +25,7 @@ function teamFile(root: string, lobby: string): string {
   return `format: 1
 project: acme
 coordinator: lead
-operator: helper
+operator: lead
 session: acme
 workspace:
   mode: shared

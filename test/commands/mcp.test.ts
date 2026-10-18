@@ -15,6 +15,8 @@ import {
   type PathKind,
   type PathStat,
 } from '../../src/commands/mcp.ts';
+import { MCP_OUTPUT_SCHEMA } from '../../src/output/index.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 import { testIo } from '../helpers.ts';
 
 const HOME = '/fake/home';
@@ -178,6 +180,10 @@ describe('team mcp status', () => {
     fake.process = true;
     const { rc, out } = await run(['status'], fake);
     expect(rc).toBe(0);
+    expect(out.split('\n')[0]).toBe('mcp ~/.config/team/lobby');
+    expect(out).toContain('  NAME');
+    expect(out).toContain('  STATE');
+    expect(out).toContain('  DETAIL');
     expect(out).toContain('state: up');
     expect(out).toContain('desk -> seat-desk-1');
     expect(out).toContain('running');
@@ -194,7 +200,8 @@ describe('team mcp status', () => {
     fake.process = true;
     const { rc, out } = await run(['status', '--json'], fake);
     expect(rc).toBe(0);
-    const doc = JSON.parse(out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(out, MCP_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.mcp', version: 1 });
     expect(doc.format).toBe(1);
     expect(doc.lobby_dir).toBe(LOBBY);
     expect(doc.state).toBe('up');
@@ -221,7 +228,7 @@ describe('team mcp status', () => {
     fake.http.set('up|https://bridge.example.test/connector', 404);
     const { rc, out } = await run(['status', '--json'], fake);
     expect(rc).toBe(1);
-    const doc = JSON.parse(out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(out, MCP_OUTPUT_SCHEMA);
     expect(doc.state).toBe('down');
     expect(doc.bridges[0].bridge_process).toBe('down');
     expect(doc.bridges[0].signer_socket.state).toBe('refused');
@@ -236,7 +243,7 @@ describe('team mcp status', () => {
     expect(plain.out).toContain('state: not-set-up');
     expect(plain.out).toContain('no bridge configuration');
     const json = await run(['status', '--json'], fake);
-    const doc = JSON.parse(json.out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(json.out, MCP_OUTPUT_SCHEMA);
     expect(doc.state).toBe('not-set-up');
     expect(doc.bridges).toEqual([]);
     expect(doc.front).toEqual({ origin: null, mcp_status: null, connector_status: null, tls_valid_to: null, tls_authorized: null });
@@ -248,7 +255,7 @@ describe('team mcp status', () => {
     fake.file(CONFIG, bridgeConfigText({ connector_token: 'too-short' }));
     const { rc, out } = await run(['status', '--json'], fake);
     expect(rc).toBe(1);
-    const doc = JSON.parse(out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(out, MCP_OUTPUT_SCHEMA);
     expect(doc.bridges[0].config).toBe('invalid');
     expect(doc.bridges[0].problem).toContain('connector_token');
     expect(doc.state).toBe('down');
@@ -261,9 +268,10 @@ describe('team mcp doctor', () => {
     fake.process = true;
     const { rc, out } = await run(['doctor'], fake);
     expect(rc).toBe(0);
+    expect(out.split('\n')[0]).toBe('mcp ~/.config/team/lobby');
     expect(out).toContain('nothing missing');
     const json = await run(['doctor', '--json'], fake);
-    const doc = JSON.parse(json.out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(json.out, MCP_OUTPUT_SCHEMA);
     expect(doc.format).toBe(1);
     expect(doc.missing).toBe(0);
     expect(doc.warnings).toBe(0);
@@ -288,7 +296,7 @@ describe('team mcp doctor', () => {
     expect(out).toContain('fix: [owner]');
     expect(out).not.toContain(PRIVATE_KEY_TEXT.split('\n')[0]! + '\nnot a real key');
     const json = await run(['doctor', '--json'], fake);
-    const doc = JSON.parse(json.out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(json.out, MCP_OUTPUT_SCHEMA);
     expect(doc.missing).toBeGreaterThanOrEqual(4);
     const missingTexts = doc.findings.filter((finding: { level: string }) => finding.level === 'miss').map((finding: { text: string }) => finding.text);
     expect(missingTexts.some((text: string) => text.includes('the bridge is not running'))).toBe(true);
@@ -300,7 +308,7 @@ describe('team mcp doctor', () => {
     fake.dir(LOBBY, 0o700).list(LOBBY, []);
     const { rc, out } = await run(['doctor', '--json'], fake);
     expect(rc).toBe(1);
-    const doc = JSON.parse(out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(out, MCP_OUTPUT_SCHEMA);
     const noBridge = doc.findings.find((finding: { text: string }) => finding.text.includes('no bridge configuration'));
     expect(noBridge.level).toBe('miss');
     expect(noBridge.fix).toContain('[owner]');
@@ -312,7 +320,7 @@ describe('team mcp doctor', () => {
     fake.process = true;
     fake.file(AUDIT, '{"ts":"2026-10-10T19:16:27.121Z","event":"late_reply"}\n');
     const { rc, out } = await run(['doctor', '--json'], fake);
-    const doc = JSON.parse(out);
+    const doc = assertMatchesOutputSchema<Record<string, any>>(out, MCP_OUTPUT_SCHEMA);
     const fault = doc.findings.find((finding: { text: string }) => finding.text.includes('late_reply'));
     expect(fault.level).toBe('warn');
     expect(doc.warnings).toBeGreaterThanOrEqual(1);
@@ -338,6 +346,26 @@ describe('team mcp invocation', () => {
     const { rc, err } = await run(['status', '--nope'], fake);
     expect(rc).toBe(2);
     expect(err).toContain('unknown option --nope');
+  });
+
+  test('--json: the invocation refusal is the structured error document', async () => {
+    const fake = new Fake();
+    const { rc, out, err } = await run(['status', 'extra', '--json'], fake);
+    expect(rc).toBe(2);
+    expect(err).toBe('');
+    assertJsonErrorShape(out, { id: 'mcp.invocation', messageContains: 'unexpected "extra"', repair: null });
+
+    // --json read from raw argv: the parser's own error must not lose the structured face.
+    for (const [argv, messageContains] of [
+      [['--nope', '--json'], 'unknown option --nope'],
+      [['status', '--json=1'], 'unknown option --json'],
+    ] as const) {
+      const bad = new Fake();
+      const result = await run([...argv], bad);
+      expect(result.rc).toBe(2);
+      expect(result.err).toBe('');
+      assertJsonErrorShape(result.out, { id: 'mcp.invocation', messageContains, repair: null });
+    }
   });
 
   test('the walk test’s contract: usage lines carry both subcommands and --json', () => {

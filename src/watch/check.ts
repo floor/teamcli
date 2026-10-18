@@ -10,6 +10,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { HerdrAgent } from '../herdr.ts';
 import type { ReplacedContinuity, SeatProcessVerdict } from '../launch/identity.ts';
 import type { QuotaFigure } from '../profiles/quota.ts';
+import type { LivenessThresholds } from '../settings/inherit.ts';
 import type { Live } from '../status/compare.ts';
 import type { SessionState } from '../state.ts';
 import type { Machine } from './machine.ts';
@@ -83,6 +84,10 @@ export type SeatObservation = {
   // The model the seat's screen shows it running, when it has a file seat and the screen says.
   model: { model: string; version: string } | null;
   history: SeatHistory;
+  // The liveness defaults as this seat's own chain resolves them — the levels above the team and
+  // the seat's own word, resolved in the one `stateThresholds` call the pass makes for it. The
+  // idle check reports at these windows, and every seat is handed its own answer.
+  liveness: LivenessThresholds;
 };
 
 // Everything a team check may read about the team it is handed, built after the seat loop.

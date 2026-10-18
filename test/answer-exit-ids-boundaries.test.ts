@@ -8,7 +8,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { anotherPaneRefusal, DETACHED_REFUSAL } from '../src/caller.ts';
+import { anotherPaneRefusal } from '../src/caller.ts';
+
+const ANSWER_ROUTE = 'only the owner or the orchestrator from its own seat runs this, from a terminal outside herdr or its own seat';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { updateState } from '../src/state.ts';
@@ -130,7 +132,7 @@ describe("the answer table's two ids it lacked", () => {
     const io = testIo(root, { kind: 'owner-no-tty' });
     const code = await runAnswer(['lead', 'trust'], io, host(home));
     expect(code).toBe(1);
-    expect(io.err).toBe(`team answer: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(`team answer: ${ANSWER_ROUTE}\n`);
     expect(io.out).toBe('');
     expect(existsSync(join(dir, 'team.log'))).toBe(false);
   });

@@ -11,9 +11,11 @@ import { loadConfig, USAGE as CHECK_USAGE } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { runRelease, USAGE as RELEASE_USAGE } from '../../src/commands/release.ts';
 import { main } from '../../src/cli.ts';
+import { RELEASE_OUTPUT_SCHEMA } from '../../src/output/index.ts';
 import { realFetch, BODY_LIMIT } from '../../src/release/http.ts';
 import type { KeyReader } from '../../src/release/keychain.ts';
 import { gitEnv, testIo, type TestIo } from '../helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 import {
   KEY, URLS, activityFile, fakeFetch, fixture, happy, happyRecords, json, linearAnswer, withChange, type Answers, type Recorded,
 } from './world.ts';
@@ -56,21 +58,45 @@ function specAnswers(): Answers {
   return new Map([...happy(), [URLS.compare, json({ ...fixture('github-compare.json'), status: 'behind' })]]);
 }
 
-const SPEC_TABLE = `check      status   detail
-npm        pass     exact version, checksums, and provenance found
-tag        missing  tag commit is not an ancestor of the default branch
-github     pass     published release matches SemVer channel
-changelog  pass     changelog entry has a valid release date
+const SPEC_TABLE = `package material, version 3.0.2
+  CHECK      STATE    DETAIL
+  npm        pass     exact version, checksums, and provenance found
+  tag        missing  tag commit is not an ancestor of the default branch
+  github     pass     published release matches SemVer channel
+  changelog  pass     changelog entry has a valid release date
+4 checks, 1 missing
 `;
 
 const SPEC_JSON = `{
+  "schema": {
+    "name": "team.release",
+    "version": 1
+  },
+  "format": 1,
   "package": "material",
   "version": "3.0.2",
   "checks": {
-    "npm": { "status": "pass", "detail": "exact version, checksums, and provenance found" },
-    "tag": { "status": "missing", "detail": "tag commit is not an ancestor of the default branch" },
-    "github": { "status": "pass", "detail": "published release matches SemVer channel" },
-    "changelog": { "status": "pass", "detail": "changelog entry has a valid release date" }
+    "npm": {
+      "status": "pass",
+      "detail": "exact version, checksums, and provenance found"
+    },
+    "tag": {
+      "status": "missing",
+      "detail": "tag commit is not an ancestor of the default branch"
+    },
+    "github": {
+      "status": "pass",
+      "detail": "published release matches SemVer channel"
+    },
+    "changelog": {
+      "status": "pass",
+      "detail": "changelog entry has a valid release date"
+    }
+  },
+  "summary": {
+    "checks": 4,
+    "missing": 1,
+    "unknown": 0
   }
 }
 `;
@@ -122,6 +148,7 @@ describe('the output', () => {
     const { code, io } = await run(['check', 'material@3.0.2', '--json'], specAnswers());
     expect(code).toBe(1);
     expect(io.out).toBe(SPEC_JSON);
+    assertMatchesOutputSchema(io.out, RELEASE_OUTPUT_SCHEMA);
     expect(io.err).toBe('');
   });
 
@@ -133,28 +160,32 @@ describe('the output', () => {
   test('a stale next tag adds one warn line after the table, changing no status and no exit', async () => {
     const { code, io } = await run(['check', 'material@3.0.2'], staleNext(specAnswers()));
     expect(code).toBe(1);
-    expect(io.out).toBe(`${SPEC_TABLE}warn  ${STALE_NEXT}\n`);
+    expect(io.out).toBe(SPEC_TABLE.replace('4 checks, 1 missing\n', `warn  ${STALE_NEXT}\n4 checks, 1 missing\n`));
     expect(io.err).toBe('');
   });
 
   test('a warning on an otherwise passing run: every row pass, still exit 0', async () => {
     const { code, io } = await run(['check', 'material@3.0.2'], staleNext(happy()));
     expect(code).toBe(0);
-    expect(io.out).toBe(`check      status  detail
-npm        pass    exact version, checksums, and provenance found
-tag        pass    tag resolves to a commit on the default branch
-github     pass    published release matches SemVer channel
-changelog  pass    changelog entry has a valid release date
+    expect(io.out).toBe(`package material, version 3.0.2
+  CHECK      STATE  DETAIL
+  npm        pass   exact version, checksums, and provenance found
+  tag        pass   tag resolves to a commit on the default branch
+  github     pass   published release matches SemVer channel
+  changelog  pass   changelog entry has a valid release date
 warn  ${STALE_NEXT}
+4 checks, 0 missing
 `);
   });
 
-  test('--json carries the warning as a fourth key after the checks, and only when there is one', async () => {
+  test('--json carries the warning after the checks, and only when there is one', async () => {
     const stale = await run(['check', 'material@3.0.2', '--json'], staleNext(specAnswers()));
     expect(stale.code).toBe(1);
-    expect(stale.io.out.endsWith(`  },\n  "warning": ${JSON.stringify(STALE_NEXT)}\n}\n`)).toBe(true);
+    assertMatchesOutputSchema(stale.io.out, RELEASE_OUTPUT_SCHEMA);
+    expect(JSON.parse(stale.io.out).warning).toBe(STALE_NEXT);
     const level = await run(['check', 'material@3.0.2', '--json'], happy());
     expect(level.code).toBe(0);
+    assertMatchesOutputSchema(level.io.out, RELEASE_OUTPUT_SCHEMA);
     expect(level.io.out).not.toContain('warning');
   });
 
@@ -163,7 +194,7 @@ warn  ${STALE_NEXT}
     answers.set(URLS.npm, [json({}, 500), json({}, 500)]);
     const { code, io } = await run(['check', 'material@3.0.2'], answers);
     expect(code).toBe(2);
-    expect(io.out).toContain('npm        unknown');
+    expect(io.out).toContain('  npm        unknown');
   });
 
   test('one full run requests exactly the twelve endpoints, all HTTPS, in order', async () => {
@@ -201,25 +232,55 @@ function gadgetsAnswers(): Answers {
 const okKey: KeyReader = () => Promise.resolve({ ok: true, key: KEY });
 
 describe('the output with the records configured', () => {
-  const WIDGETS_TABLE = `check      status  detail
-npm        pass    exact version and checksums found
-tag        pass    tag resolves to a commit on the default branch
-github     pass    published release matches SemVer channel
-changelog  pass    changelog entry has a valid release date
-linear     pass    Linear milestone is complete and a qualifying status update exists
-activity   pass    public activity marker found
+  const WIDGETS_TABLE = `package widgets, version 3.0.2
+  CHECK      STATE  DETAIL
+  npm        pass   exact version and checksums found
+  tag        pass   tag resolves to a commit on the default branch
+  github     pass   published release matches SemVer channel
+  changelog  pass   changelog entry has a valid release date
+  linear     pass   Linear milestone is complete and a qualifying status update exists
+  activity   pass   public activity marker found
+6 checks, 0 missing
 `;
 
   const WIDGETS_JSON = `{
+  "schema": {
+    "name": "team.release",
+    "version": 1
+  },
+  "format": 1,
   "package": "widgets",
   "version": "3.0.2",
   "checks": {
-    "npm": { "status": "pass", "detail": "exact version and checksums found" },
-    "tag": { "status": "pass", "detail": "tag resolves to a commit on the default branch" },
-    "github": { "status": "pass", "detail": "published release matches SemVer channel" },
-    "changelog": { "status": "pass", "detail": "changelog entry has a valid release date" },
-    "linear": { "status": "pass", "detail": "Linear milestone is complete and a qualifying status update exists" },
-    "activity": { "status": "pass", "detail": "public activity marker found" }
+    "npm": {
+      "status": "pass",
+      "detail": "exact version and checksums found"
+    },
+    "tag": {
+      "status": "pass",
+      "detail": "tag resolves to a commit on the default branch"
+    },
+    "github": {
+      "status": "pass",
+      "detail": "published release matches SemVer channel"
+    },
+    "changelog": {
+      "status": "pass",
+      "detail": "changelog entry has a valid release date"
+    },
+    "linear": {
+      "status": "pass",
+      "detail": "Linear milestone is complete and a qualifying status update exists"
+    },
+    "activity": {
+      "status": "pass",
+      "detail": "public activity marker found"
+    }
+  },
+  "summary": {
+    "checks": 6,
+    "missing": 0,
+    "unknown": 0
   }
 }
 `;
@@ -231,17 +292,18 @@ activity   pass    public activity marker found
     expect(io.err).toBe('');
   });
 
-  test('the JSON object has exactly the six keys in the fixed order', async () => {
+  test('the JSON object has the six keys in the fixed order', async () => {
     const { code, io } = await run(['check', 'widgets@3.0.2', '--json'], widgetsAnswers(), okKey);
     expect(code).toBe(0);
     expect(io.out).toBe(WIDGETS_JSON);
+    assertMatchesOutputSchema(io.out, RELEASE_OUTPUT_SCHEMA);
     expect(io.err).toBe('');
   });
 
   test('a check that is not configured is absent: the activity pair alone adds one row', async () => {
     const { code, io } = await run(['check', 'gadgets@3.0.2'], gadgetsAnswers());
     expect(code).toBe(0);
-    expect(io.out).toContain('activity   pass    public activity marker found');
+    expect(io.out).toContain('  activity   pass   public activity marker found');
     expect(io.out).not.toContain('linear');
   });
 
@@ -339,7 +401,7 @@ describe('the key appears nowhere but the one request header', () => {
     calls.length = 0;
     const { code, io, requests } = await run(['check', 'widgets@3.0.2', '--json'], widgetsAnswers(), recording);
     expect(code).toBe(0);
-    expect(io.out).toContain('"linear": { "status": "pass"');
+    expect(io.out).toContain('"linear": {\n      "status": "pass"');
     expect(searched(io, requests, undefined)).toBe(1);
   });
 
@@ -479,7 +541,8 @@ describe('the usage and configuration errors', () => {
   test('with --json a misuse is the exact error object on stdout, nothing on stderr', async () => {
     const { code, io } = await run(['check', 'material@v3.0.2', '--json'], happy());
     expect(code).toBe(64);
-    expect(io.out).toBe('{"error":{"code":"usage","message":"the version \\"v3.0.2\\" is not a Semantic Versioning 2.0.0 version"}}\n');
+    const doc = assertJsonErrorShape(io.out, { id: 'release.usage', repair: null });
+    expect(doc.error.message).toBe('the version "v3.0.2" is not a Semantic Versioning 2.0.0 version');
     expect(io.err).toBe('');
   });
 
@@ -490,7 +553,8 @@ describe('the usage and configuration errors', () => {
     ]) {
       const { code, io } = await run(argv, happy());
       expect({ argv, code }).toEqual({ argv, code: 64 });
-      expect(io.out).toBe('{"error":{"code":"usage","message":"unknown option --bogus"}}\n');
+      const doc = assertJsonErrorShape(io.out, { id: 'release.usage', repair: null });
+      expect(doc.error.message).toBe('unknown option --bogus');
       expect(io.err).toBe('');
     }
   });
@@ -499,16 +563,16 @@ describe('the usage and configuration errors', () => {
     writeFileSync(join(project, '.agents', 'team.yaml'), 'format: 1\nproject: acme\n');
     const { code, io } = await run(['check', 'material@v3.0.2', '--json'], happy());
     expect(code).toBe(64);
-    expect(JSON.parse(io.out)).toEqual({ error: { code: 'usage', message: 'the version "v3.0.2" is not a Semantic Versioning 2.0.0 version' } });
+    const doc = assertJsonErrorShape(io.out, { id: 'release.usage', repair: null });
+    expect(doc.error.message).toBe('the version "v3.0.2" is not a Semantic Versioning 2.0.0 version');
   });
 
   test('a valid argument with an invalid file is configuration', async () => {
     writeFileSync(join(project, '.agents', 'team.yaml'), 'format: 1\nproject: acme\n');
     const { code, io } = await run(['check', 'material@3.0.2', '--json'], happy());
     expect(code).toBe(64);
-    const parsed = JSON.parse(io.out) as { error: { code: string; message: string } };
-    expect(parsed.error.code).toBe('configuration');
-    expect(parsed.error.message.length).toBeGreaterThan(0);
+    const doc = assertJsonErrorShape(io.out, { id: 'release.configuration', repair: null });
+    expect(doc.error.message.length).toBeGreaterThan(0);
     expect(io.err).toBe('');
 
     const plain = await run(['check', 'material@3.0.2'], happy());
@@ -521,21 +585,22 @@ describe('the usage and configuration errors', () => {
   test('an undeclared package is usage, with and without a releases section', async () => {
     const { code, io } = await run(['check', 'other@3.0.2', '--json'], happy());
     expect(code).toBe(64);
-    expect(JSON.parse(io.out)).toEqual({ error: { code: 'usage', message: 'other is not declared in the team file\'s releases' } });
+    const doc = assertJsonErrorShape(io.out, { id: 'release.usage', repair: null });
+    expect(doc.error.message).toBe('other is not declared in the team file\'s releases');
 
     writeFileSync(join(project, '.agents', 'team.yaml'), TEAM.replace(/^releases:\n(?:  .*\n)+/m, ''));
     const bare = await run(['check', 'material@3.0.2', '--json'], happy());
     expect(bare.code).toBe(64);
-    expect(JSON.parse(bare.io.out)).toEqual({ error: { code: 'usage', message: 'material is not declared in the team file\'s releases' } });
+    const bareDoc = assertJsonErrorShape(bare.io.out, { id: 'release.usage', repair: null });
+    expect(bareDoc.error.message).toBe('material is not declared in the team file\'s releases');
   });
 
   test('a file that fails validation because of its releases section is configuration', async () => {
     writeFileSync(join(project, '.agents', 'team.yaml'), TEAM.replace('seats:', '  - package: material\n    github: floor/other\nseats:'));
     const { code, io } = await run(['check', 'material@3.0.2', '--json'], happy());
     expect(code).toBe(64);
-    const parsed = JSON.parse(io.out) as { error: { code: string; message: string } };
-    expect(parsed.error.code).toBe('configuration');
-    expect(parsed.error.message).toContain('releases names "material" twice');
+    const doc = assertJsonErrorShape(io.out, { id: 'release.configuration', repair: null });
+    expect(doc.error.message).toContain('releases names "material" twice');
   });
 });
 
@@ -563,9 +628,8 @@ describe('the --file option', () => {
     const json = await run(['check', 'material@3.0.2', '--file', 'missing.yaml', '--json'], happy());
     expect(json.code).toBe(64);
     expect(json.io.err).toBe('');
-    expect(JSON.parse(json.io.out)).toEqual({
-      error: { code: 'configuration', message: `${join(project, 'missing.yaml')}: no team file at missing.yaml` },
-    });
+    const doc = assertJsonErrorShape(json.io.out, { id: 'release.configuration', repair: null });
+    expect(doc.error.message).toBe(`${join(project, 'missing.yaml')}: no team file at missing.yaml`);
     expect(json.requested).toEqual([]);
   });
 
@@ -582,9 +646,8 @@ describe('the --file option', () => {
     const json = await run(['check', 'material@3.0.2', '--file', 'invalid.yaml', '--json'], happy());
     expect(json.code).toBe(64);
     expect(json.io.err).toBe('');
-    const parsed = JSON.parse(json.io.out) as { error: { code: string; message: string } };
-    expect(parsed.error.code).toBe('configuration');
-    expect(parsed.error.message).toContain('invalid.yaml');
+    const doc = assertJsonErrorShape(json.io.out, { id: 'release.configuration', repair: null });
+    expect(doc.error.message).toContain('invalid.yaml');
     expect(json.requested).toEqual([]);
   });
 
@@ -602,7 +665,8 @@ describe('the --file option', () => {
     }
     const withJson = await run(['check', 'material@3.0.2', '--json', '--file'], happy());
     expect(withJson.code).toBe(64);
-    expect(withJson.io.out).toBe('{"error":{"code":"usage","message":"--file needs a value"}}\n');
+    const doc = assertJsonErrorShape(withJson.io.out, { id: 'release.usage', repair: null });
+    expect(doc.error.message).toBe('--file needs a value');
     expect(withJson.io.err).toBe('');
     expect(withJson.requested).toEqual([]);
 
@@ -624,7 +688,10 @@ describe('the --file option', () => {
     expect(consumed.io.err).toBe(`team release: ${join(project, '--json')}: no team file at --json\n`);
     expect(consumed.requested).toEqual([]);
 
-    const marked = { error: { code: 'configuration', message: `${join(project, '--json')}: no team file at --json` } };
+    const marked = {
+      schema: { name: 'team.error', version: 1 },
+      error: { id: 'release.configuration', message: `${join(project, '--json')}: no team file at --json`, repair: null },
+    };
     for (const argv of [
       ['check', 'material@3.0.2', '--json', '--file', '--json'],
       ['check', 'material@3.0.2', '--file', '--json', '--json'],
@@ -632,7 +699,7 @@ describe('the --file option', () => {
       const { code, io, requested } = await run(argv, happy());
       expect({ argv, code }).toEqual({ argv, code: 64 });
       expect(io.err).toBe('');
-      expect(JSON.parse(io.out)).toEqual(marked);
+      expect(assertJsonErrorShape(io.out)).toEqual(marked);
       expect(requested).toEqual([]);
     }
   });
@@ -652,7 +719,8 @@ describe('the --file option', () => {
     const named = await run(['check', 'material@3.0.2', '--file', '.agents/team.yaml', '--json'], happy(), undefined, worktree);
     expect(named.code).toBe(64);
     expect(named.io.err).toBe('');
-    expect(JSON.parse(named.io.out)).toEqual({ error: { code: 'usage', message: 'material is not declared in the team file\'s releases' } });
+    const doc = assertJsonErrorShape(named.io.out, { id: 'release.usage', repair: null });
+    expect(doc.error.message).toBe('material is not declared in the team file\'s releases');
     expect(named.requested).toEqual([]);
 
     // The same option can name the main checkout's file from the worktree.
@@ -664,14 +732,14 @@ describe('the --file option', () => {
     writeFileSync(join(project, 'invalid.yaml'), 'format: 2\n');
     const both = await run(['check', 'material@v3.0.2', '--file', 'invalid.yaml', '--json'], happy());
     expect(both.code).toBe(64);
-    expect(JSON.parse(both.io.out)).toEqual({ error: { code: 'usage', message: 'the version "v3.0.2" is not a Semantic Versioning 2.0.0 version' } });
+    const doc = assertJsonErrorShape(both.io.out, { id: 'release.usage', repair: null });
+    expect(doc.error.message).toBe('the version "v3.0.2" is not a Semantic Versioning 2.0.0 version');
     expect(both.requested).toEqual([]);
 
     const undeclared = await run(['check', 'other@3.0.2', '--file', 'missing.yaml', '--json'], happy());
     expect(undeclared.code).toBe(64);
-    const parsed = JSON.parse(undeclared.io.out) as { error: { code: string; message: string } };
-    expect(parsed.error.code).toBe('configuration');
-    expect(parsed.error.message).toContain('no team file at missing.yaml');
+    const undeclaredDoc = assertJsonErrorShape(undeclared.io.out, { id: 'release.configuration', repair: null });
+    expect(undeclaredDoc.error.message).toContain('no team file at missing.yaml');
     expect(undeclared.requested).toEqual([]);
   });
 
@@ -745,7 +813,13 @@ describe('the --file option', () => {
       expect({ label: row.label, code }).toEqual({ label: row.label, code: 64 });
       expect(requested).toEqual([]);
       if (row.json) {
-        expect({ label: row.label, out: JSON.parse(io.out) }).toEqual({ label: row.label, out: { error: { code: row.code, message: row.message } } });
+        expect({ label: row.label, out: assertJsonErrorShape(io.out) }).toEqual({
+          label: row.label,
+          out: {
+            schema: { name: 'team.error', version: 1 },
+            error: { id: `release.${row.code}`, message: row.message, repair: null },
+          },
+        });
         expect(io.err).toBe('');
       } else {
         expect({ label: row.label, err: io.err }).toEqual({ label: row.label, err: `team release: ${row.message}\n` });

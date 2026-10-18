@@ -1,15 +1,15 @@
 /**
- * A command an approved delegate pane may be allowed to run. `approve` is grantable like the
- * rest, under the gate's ordinary-change guard: a delegated approval admits a roster or
- * `rules` change and refuses, fail-closed, every other owner section — `delegates`,
- * `budgets`, `limits`, identity, `trust`, the workspace, and any section added later — so a
- * delegate can never approve a change to its own authority.
+ * A command an approved delegate pane may be allowed to run. `approve` is accepted but acts on
+ * nothing: `team approve` was removed, and the word stays in the list only so a file that already
+ * names it loads unchanged — `team check` prints a note asking for it to be dropped. The other
+ * five are the words a delegated run reaches.
  */
 export type DelegateCommand = 'up' | 'down' | 'add' | 'remove' | 'approve' | 'swap';
 
-/** The six, in the order the documentation lists them. `swap` is not a command of its own: it is
- *  the word that admits `remove <lead> --keep` and `add <lead>` — the replacement of the agent on
- *  the orchestrator's or the operator's seat. `remove` alone never admits a lead. */
+/** The six the file may name, in the schema's order. `swap` is not a command of its own: it is the
+ *  word that admits `remove <lead> --keep` and `add <lead>` — the replacement of the agent on the
+ *  orchestrator's or the operator's seat; `remove` alone never admits a lead. `approve` is accepted
+ *  and inert, as above. */
 export const DELEGATE_COMMANDS: readonly DelegateCommand[] = ['up', 'down', 'add', 'remove', 'approve', 'swap'];
 
 /** The words that are commands: every exit id the gate defines is one of these. */

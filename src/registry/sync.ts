@@ -5,8 +5,10 @@
 //
 // A registry that cannot be written is a note for the command's log, never a refusal: the launch
 // or the stop is done, and the next launch writes the record again. Every function here catches.
-import { findAgent, readAgents, registerAgent, updateAgent } from '../registry/agents.ts';
+import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
+import * as projects from '../registry/projects.ts';
+import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 
 /** What every writer here is told about the team it writes for. */
@@ -18,6 +20,19 @@ export type RegistryTeam = {
   /** The herdr session the command launched in or stopped. Absent: the file's. `up --session x`
    *  launches under `x`, and the registry must address the panes where they are. */
   session?: string;
+  /** The run had dev mode on: the caller gate was folded into a warning. The record keeps the
+   *  mark in its provenance while the write stands. A run without the mark takes it off only
+   *  when it is the owner's: the finding the mark raises is the owner's to answer. */
+  devMode?: boolean;
+  /** The run is the owner's, at a terminal outside herdr. Only its write in force takes an
+   *  earlier dev-mode mark off the record; a seat's, a lead's or a delegate's write in force
+   *  leaves the mark where it is, for the owner's own register or relaunch. */
+  owner?: boolean;
+  /** The delegation a delegated run was admitted by: the pane the gate passed, and the one
+   *  command the mark speaks for. The file's `delegates` section is the authority, so the record
+   *  names the owner as signer and this pane as actor; a delegate authorizes nothing by itself.
+   *  Absent: this write ran under no delegation. */
+  delegated?: { actor: string; command: ActingCommand };
 };
 
 /** How a seat's agent ends: `stopped` comes back to the same agent, `retired` never does. */
@@ -33,21 +48,83 @@ function noteOf(error: unknown): string {
  *  `noteTeam` never throws; the line it returns is why the record was not written. */
 function ensureTeam(input: RegistryTeam): string | null {
   const { team, root, home, by } = input;
-  const seed = { project: team.project, entity: team.entity, session: input.session ?? team.session, lobby: team.lobby };
+  // `up --session alt` records the session it launches; the file's own session records the same
+  // lobby beside it, so a plain `team check` still reads it back.
+  const seed = {
+    project: team.project,
+    entity: team.entity,
+    session: input.session ?? team.session,
+    lobby: team.lobby,
+    inProject: team.inProject,
+    aliasSession: team.session,
+  };
   return noteTeam(home, root, seed, 'running', by);
 }
 
-/** One roster entry set (an agent) or taken out (null); every other entry stays as it is. */
+/** One roster entry set (an agent) or taken out (null). Every line's `nickname`, `leads` and
+ *  `assistant` are re-resolved to the file's own word — the human name the file writes on that
+ *  seat, the lead seat `team.orchestrator`, whatever `leads: true` or `coordinator:` it was
+ *  spelled with, and the seat the file marks `assistant: true` — the capabilities and the name,
+ *  never a role name. So a mark that moved between launches does not linger on a line that no
+ *  longer holds it. */
 function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: { agent: string; role: string } | null): void {
-  const roster = (getTeam(input.home, teamId)?.roster ?? []).filter((item) => item.seat !== seat);
-  if (entry) roster.push({ agent: entry.agent, seat, role: entry.role });
+  const leadSeat = input.team.orchestrator;
+  const assistantSeat = input.team.seats.find((candidate) => candidate.assistant === true)?.name ?? null;
+  const nicknames = new Map(input.team.seats.flatMap((candidate) => candidate.nickname === undefined ? [] : [[candidate.name, candidate.nickname] as const]));
+  const mark = (line: { agent: string; seat: string; role: string }): { agent: string; seat: string; role: string; nickname?: string; leads?: boolean; assistant?: boolean } => {
+    const nickname = nicknames.get(line.seat);
+    return {
+      ...line,
+      ...(nickname !== undefined ? { nickname } : {}),
+      ...(line.seat === leadSeat ? { leads: true } : {}),
+      ...(line.seat === assistantSeat ? { assistant: true } : {}),
+    };
+  };
+  const roster = (getTeam(input.home, teamId)?.roster ?? [])
+    .filter((item) => item.seat !== seat)
+    .map(({ leads: _stale, assistant: _staleAssistant, nickname: _staleNickname, ...item }) => mark(item));
+  if (entry) roster.push(mark({ agent: entry.agent, seat, role: entry.role }));
   setRoster(input.home, teamId, roster);
+}
+
+/** This team leads the project its file names: the project's `lead` is the agent of the seat the
+ *  file marks as the team's lead — the `leads: true` seat, or the older `coordinator:` key, both
+ *  resolved to `team.orchestrator`; the capability, never a role name. Re-resolved on every
+ *  launch, from the roster just written, so it follows the mark when the file moves it. A lead
+ *  seat with no agent yet leaves the project with none, which teams read as ordinary. A file that
+ *  drops `project_lead` clears the lead this team set, so no reader keeps admitting a seat the
+ *  team no longer leads with: only an agent of this team's roster, so another team's lead is
+ *  that team's to move. A team that leaves the project clears its lead in `projectLeave`
+ *  (src/registry/teams.ts), with the project it left. */
+function recordProjectLead(input: RegistryTeam, teamId: string): void {
+  const { team, home } = input;
+  if (team.inProject === null) return;
+  const projectId = projects.projectIdOf(team.inProject);
+  const roster = getTeam(home, teamId)?.roster ?? [];
+  if (!team.projectLead) {
+    const held = projects.get(home, projectId);
+    if (held !== null && held.lead !== null && roster.some((line) => line.agent === held.lead)) {
+      projects.upsertProject(home, projectId, { lead: null });
+    }
+    return;
+  }
+  const lead = roster.find((item) => item.seat === team.orchestrator)?.agent ?? null;
+  projects.upsertProject(home, projectId, { lead });
 }
 
 /**
  * A seat launched in `pane`: its agent is registered when the (team, seat) has none, else it is
  * re-pointed (same id, new pane, running). The signing triple, the lab, the cli and the launch
  * line are the launch's own, so a reload that changes the model rewrites them on the same agent.
+ * The run's provenance is stated too: every launch-command writer that can run with dev mode on
+ * (`register`, `up`, `add`, `restart`) says with the write whether it did — and, when it did,
+ * the `by` caller it was run by, so a record the owner registered and a folded run re-wrote
+ * names the caller that run admitted, not the owner — and `reload`, the launch-command writer
+ * with no dev mode to state, writes one in force. A write in force takes an earlier mark off
+ * the record only when the owner makes it; anyone else's leaves the mark for the owner's own
+ * register or relaunch to answer. A delegated run states its delegation beside the mark — the
+ * owner as signer, the pane as actor, the one command it speaks for — and the owner's own write
+ * in force takes that off too; another caller's routine write leaves it.
  * Returns the agent's id, or the note to log.
  */
 export function registerLaunch(
@@ -61,22 +138,87 @@ export function registerLaunch(
     const teamId = teamIdOf(input.root);
     const unrecorded = ensureTeam(input);
     if (unrecorded) return { note: unrecorded };
-    const known = findAgent(home, { team: teamId, seat: seat.name });
+    const known = findAgent(home, {
+      team: teamId,
+      seat: seat.name,
+      seatHandle: SEAT_HANDLE.test(handle ?? '') ? handle : null,
+    });
+    const priorSeat = known && known.reach.seat !== seat.name ? known.reach.seat : null;
     // The seat's stable handle, kept on the agent for continuity: set when the agent has none, and
     // never changed after, so a handle the state minted later does not rewrite the record.
     const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known?.seat_handle ? { seat_handle: handle as string } : {};
     const reach = { team: teamId, seat: seat.name, session: input.session ?? team.session, pane, address: known?.reach.address ?? null };
     const signing = { model: seat.model, version: seat.version, role: seat.role };
+    const devMode = input.devMode === true;
+    // A write's provenance: a dev-mode run states its mark and the caller it admitted; a run in
+    // force takes an earlier mark off only when the owner makes it. Another caller's write in
+    // force changes nothing about the mark — a seat's `reload` or a lead's `restart` is routine,
+    // and it does not answer the finding the mark raises.
+    //
+    // The delegation is stated beside it: a delegated run records the owner as the signer (the
+    // approved `delegates` section is the authority) and the pane the gate passed as the actor,
+    // bounded to the command it names. The owner's own write in force takes an earlier mark off —
+    // the last write was not a delegate's; another caller's routine write leaves it, as it leaves
+    // the dev-mode mark.
+    const delegation: AgentDelegation | null | undefined = input.delegated === undefined
+      ? input.owner === true ? null : undefined
+      : { signer: 'owner', actor: input.delegated.actor, command: input.delegated.command };
+    const provenance: AgentProvenancePatch = {
+      ...(devMode ? { dev_mode: true, dev_mode_by: by } : input.owner === true ? { dev_mode: false } : {}),
+      ...(delegation === undefined ? {} : { delegated: delegation }),
+    };
+    const stated = Object.keys(provenance).length === 0 ? undefined : provenance;
     const agent = known
       ? updateAgent(home, known.id, {
-        signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach, ...seatHandle,
+        name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
+        ...(stated === undefined ? {} : { provenance: stated }), ...seatHandle,
       })
       : registerAgent(home, {
         name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launcher: null, launch: seat.launch,
-        reach, mcp: [], skills: [], lifecycle: 'running', by, ...seatHandle,
+        reach, mcp: [], skills: [], lifecycle: 'running', by, devMode,
+        ...(delegation === undefined || delegation === null ? {} : { delegated: delegation }), ...seatHandle,
       });
+    if (priorSeat) writeRoster(input, teamId, priorSeat, null);
     writeRoster(input, teamId, seat.name, { agent: agent.id, role: seat.role });
+    recordProjectLead(input, teamId);
     return { id: agent.id };
+  } catch (error) {
+    return { note: noteOf(error) };
+  }
+}
+
+/**
+ * A seat was renamed from `fromSeat` to `toSeat`: its agent record keeps the same `agt_…` id
+ * (so grants keyed by agent id continue to cover the seat) while `name` and `reach.seat` move
+ * to `toSeat` and the team's roster is re-keyed. Returns `{ id }` when an agent record was
+ * updated, `{ id: null }` when no live agent record existed yet, or `{ note }` on failure.
+ */
+export function registerRename(
+  input: RegistryTeam,
+  fromSeat: string,
+  toSeat: string,
+  handle?: string,
+): { id: string | null } | { note: string } {
+  try {
+    const { home, team } = input;
+    const teamId = teamIdOf(input.root);
+    const known = findAgent(home, {
+      team: teamId,
+      seat: fromSeat,
+      seatHandle: SEAT_HANDLE.test(handle ?? '') ? handle : null,
+    });
+    if (!known) return { id: null };
+    const seat = team.seats.find((candidate) => candidate.name === toSeat);
+    const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known.seat_handle ? { seat_handle: handle as string } : {};
+    const updated = updateAgent(home, known.id, {
+      name: toSeat,
+      reach: { ...known.reach, seat: toSeat },
+      ...seatHandle,
+    });
+    writeRoster(input, teamId, fromSeat, null);
+    writeRoster(input, teamId, toSeat, { agent: updated.id, role: seat?.role ?? updated.signing.role });
+    recordProjectLead(input, teamId);
+    return { id: updated.id };
   } catch (error) {
     return { note: noteOf(error) };
   }

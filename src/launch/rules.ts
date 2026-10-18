@@ -8,6 +8,9 @@ export interface RulesInput {
   orchestrator: string;
   /** The file's own `rules`. */
   rules: readonly string[];
+  /** The seat's profile's own rules, over the file's: a safety line the CLI makes necessary.
+   *  Empty when the profile carries none. */
+  profileRules?: readonly string[];
   /** The seat's signature lines, already rendered. */
   signature: { commit: string; pullRequest: string; commitPosition: 'last-line' | 'trailer' | 'anywhere' };
   workspace: {
@@ -26,15 +29,15 @@ const COMMIT_PLACE: Record<RulesInput['signature']['commitPosition'], string> = 
 
 /**
  * The rules a seat gets at launch, one per line, in this order: the profile's
- * own (what `team` itself depends on), the file's, the seat's signature, the
- * workspace's.
+ * own (what `team` itself depends on), the rules the profile carries for
+ * every seat of its CLI, the file's, the seat's signature, the workspace's.
  */
 export function seatRules(input: RulesInput): string[] {
   const { signature, workspace } = input;
   const own = [
     'End every commit message and every pull request body with your signature, given below.',
     `Never stop at a question: tell the orchestrator (${input.orchestrator}) in one line and keep working.`,
-    'Never run `team trust` or `team approve`, and never edit `trust:` in the team file.',
+    'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     'In a protected checkout, never switch the branch, reset or commit.',
   ];
   const signing = [
@@ -53,22 +56,25 @@ export function seatRules(input: RulesInput): string[] {
   } else if (workspace.mode === 'shared' && workspace.cwd) {
     working.push(`Change to ${workspace.cwd} before any project work.`);
   }
-  return [...own, ...input.rules, ...signing, ...working];
+  return [...own, ...(input.profileRules ?? []), ...input.rules, ...signing, ...working];
 }
 
-/** How the rules reach a seat: typed as its first message, or carried as a launch option. */
-export type RulesDelivery = 'message' | 'option';
+/** How the rules reach a seat: typed as its first message, carried as a launch option, or
+ *  prepended to every brief a send types into its pane. */
+export type RulesDelivery = 'message' | 'option' | 'prepend';
 
 /**
  * The line each form ends with. The message says what the rules are and never that they are not a
  * task, so some models start complying by investigating instead of waiting for a brief. A first
  * message is answered once, so it can ask for the ready reply; a system prompt (a launch option)
  * stays in force on every later turn, so it must not: a Claude seat could answer "ready" to its
- * real brief.
+ * real brief. Prepended rules ride every brief — there is no standing session to keep them —
+ * so they carry no ready reply either, and say the brief follows.
  */
 const CLOSING: Record<RulesDelivery, string> = {
   message: 'These are standing rules, not a task: reply ready and wait for your brief.',
   option: 'These are standing rules, not a task.',
+  prepend: 'These are standing rules for this session. The brief follows.',
 };
 
 /** The rules as the one text a launch option or a first message carries, the closing line last. */
@@ -86,11 +92,12 @@ export function rulesText(input: RulesInput, delivery: RulesDelivery): string {
 export function rulesOf(team: TeamFile, seat: Seat, root: string): string {
   const { commits, pullRequests } = team.identity.signature;
   const profile = profileFor(seat.cli);
-  const delivery = profile && profile.rulesOption !== null ? 'option' : 'message';
+  const delivery: RulesDelivery = profile?.rulesMode ?? 'message';
   return rulesText(
     {
       orchestrator: team.orchestrator,
       rules: team.rules,
+      profileRules: profile?.standingRules ?? [],
       signature: {
         commit: renderSignature(commits.template, seat),
         pullRequest: renderSignature(pullRequests.template, seat),

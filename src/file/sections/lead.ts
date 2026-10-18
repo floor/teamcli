@@ -23,8 +23,10 @@ export function readLeadField(
   entry: YamlEntry | undefined, marks: readonly LeadMark[], seats: DraftSeat[], broken: Set<string>, check: Check,
 ): string {
   if (marks.length > 1) {
-    // Refused at the second mark's line: the one that makes it more than one.
-    check.fail(marks[1]!.line, '`leads` is on more than one seat: a team has one orchestrator');
+    // Refused at the second mark's line: the one that makes it more than one. Every marked seat
+    // is named, so the sentence repairs the file on its own.
+    const holding = marks.map((mark) => `"${mark.name}"`).join(', ');
+    check.fail(marks[1]!.line, `\`leads\` is on ${marks.length} seats: ${holding}; a team has one lead`);
     return '';
   }
   const mark = marks[0];
@@ -88,17 +90,6 @@ export function relaunchRepair(
   return lead
     ? 'team down, then team up (to restart the whole team)'
     : `team remove ${name} --keep, then team add ${name} (or team down, then team up, for the whole team)`;
-}
-
-/** The restart a report names. An ordinary seat is removed and added again. A lead cannot
- *  be removed, so the whole team is started again. Nothing here starts the seat. */
-export function seatRestartRepair(
-  team: { orchestrator: string; operator: string },
-  name: string,
-): string {
-  return isLeadSeat(team, name)
-    ? 'team down, then team up (to restart the whole team)'
-    : `team remove ${name} --keep, then team add ${name}`;
 }
 
 /**

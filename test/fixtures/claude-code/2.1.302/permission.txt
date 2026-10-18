@@ -1,0 +1,23 @@
+  synthetic-note.txt in the workspace with the       
+  single word synthetic. Do not use the question     
+  tool and do not ask me anything. I will approve    
+  the write in the dialog.                           
+
+⏺ Creating the file now.
+
+⏺ Write(synthetic-note.txt)
+
+─────────────────────────────────────────────────────
+ Create file
+ synthetic-note.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1 synthetic
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to create synthetic-note.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve 
+      file edits and common file commands) for this
+      session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend

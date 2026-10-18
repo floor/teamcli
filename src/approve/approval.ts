@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import type { ApprovedCheck } from '../budgets/checks.ts';
+import { renameSeat } from '../file/lines.ts';
 import type { TeamFile } from '../file/types.ts';
 import { defaultBudgets, defaultWatch, validateTeamFile } from '../file/validate.ts';
 import {
@@ -13,19 +14,23 @@ import {
   type Standing,
 } from '../store/store.ts';
 import { applyTempo, type Tempo } from '../file/sections/tempo.ts';
-import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigest, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
+import { parseYaml } from '../yaml.ts';
+import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigests, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
 
 /** The launch ceilings declared in the file. An approval also stores a snapshot of them. */
 export function ceilingsOf(team: TeamFile): Ceilings {
   return { seats: team.limits.seats, temporary: team.limits.temporary, vendors: { ...team.limits.vendors } };
 }
 
-/** The record an approval of this file writes. */
+/** The record an approval of this file writes. `actor` is the approved delegate pane that
+ *  submitted it, on a delegated approval: the approving word stays the owner's, and the
+ *  submission is written beside the signature so the record names who ran it. */
 export function approvalOf(
   team: TeamFile,
   root: string,
   now: Date = new Date(),
   checks: Record<string, ApprovedCheck> = {},
+  actor?: string,
 ): Approval {
   return {
     format: 2,
@@ -34,6 +39,7 @@ export function approvalOf(
     fingerprints: fingerprints(team),
     ceilings: ceilingsOf(team),
     checks,
+    ...(actor !== undefined ? { actor } : {}),
   };
 }
 
@@ -85,9 +91,13 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
     const omitted = fingerprints({ ...checked.team, tempo: 'normal' }).sections.tempo;
     if (omitted !== undefined) sections = { ...sections, tempo: omitted };
   }
-  if (checked.ok && checked.team.watch.idleRepeat === undefined) {
-    const legacy = legacyWatchDigest(checked.team);
-    if (legacy && stored.sections['watch'] === legacy) {
+  // A record written before `idle_owner` and `blind_after` joined `watch` — or before
+  // `idle_repeat` defaulted to off — carries a digest of the section as it read then. The
+  // arrival alone is not an edit: a stored digest in one of the earlier shapes is adopted as the
+  // current one, so a later edit is judged against the section as it reads now.
+  if (checked.ok) {
+    const legacy = legacyWatchDigests(checked.team, !wroteKey(record.file, 'watch', 'idle_first'));
+    if (stored.sections['watch'] !== undefined && legacy.includes(stored.sections['watch'])) {
       const currentWatch = fingerprints(checked.team).sections['watch'];
       if (currentWatch && sections['watch'] !== currentWatch) {
         sections = { ...sections, watch: currentWatch };
@@ -100,13 +110,29 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
 }
 
 /**
+ * Whether the approved copy writes `section.key` at the top level. The parsed team cannot tell a
+ * default from a written value; the record's copy of the text can, and the digest a record
+ * stored was computed from that text.
+ */
+function wroteKey(text: string, section: string, key: string): boolean {
+  try {
+    const root = parseYaml(text);
+    if (root.kind !== 'map') return false;
+    const entry = root.entries.find((one) => one.key === section);
+    if (entry === undefined || entry.value.kind !== 'map') return false;
+    return entry.value.entries.some((one) => one.key === key);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A record from before `parked` and `stopped` were in the digest, or from when
  * an omitted label was the seat's name, still names the seat as it was
  * approved, read from the stored copy. A digest already in the new shape is
  * left alone, so a later edit of the file is not adopted from a stale copy.
  * A copy that can't be read is left alone.
- */
-function adoptLegacyDigests(stored: Record<string, string>, team: TeamFile): Record<string, string> {
+ */function adoptLegacyDigests(stored: Record<string, string>, team: TeamFile): Record<string, string> {
   const current = fingerprints(team).seats;
   const legacyFlags = legacySeatDigests(team);
   const legacyLabels = legacyLabelDigests(team);
@@ -163,6 +189,69 @@ export function recordSeatDigestOf(standing: Standing, team: TeamFile, root: str
 /** `recordSeatDigest` as a command uses it: the caller's own standing, read once. */
 export function recordSeatDigest(team: TeamFile, root: string, name: string, home: string = homedir()): void {
   recordSeatDigestOf(approvalStanding(root, home), team, root, name, home);
+}
+
+/**
+ * Carries the approved record across `team rename` by applying the rename to `record.file`
+ * and moving a seat or lead section digest only when the live file matches the renamed record.
+ */
+export function recordSeatRenameOf(
+  standing: Standing,
+  team: TeamFile,
+  root: string,
+  renames: ReadonlyArray<{ from: string; to: string }>,
+  home: string = homedir(),
+): void {
+  if (standing.kind !== 'verified' || renames.length === 0) return;
+  const store = storePath(team.project, root, home);
+  const record = standing.record;
+  if (!validateTeamFile(record.file).ok) return;
+  let renamedRecordFile = record.file;
+  for (const { from, to } of renames) {
+    renamedRecordFile = renameSeat(renamedRecordFile, from, to);
+  }
+  const renamedRecord = validateTeamFile(renamedRecordFile);
+  if (!renamedRecord.ok) return;
+  const approved = approvedFingerprints(record);
+  const expectedAfter = fingerprints(renamedRecord.team);
+  const live = fingerprints(team);
+
+  const nextSeats = { ...record.approval.fingerprints.seats };
+  for (const { from, to } of renames) {
+    const after = expectedAfter.seats[to];
+    if (approved.seats[from] !== undefined && after !== undefined && live.seats[to] === after) {
+      delete nextSeats[from];
+      nextSeats[to] = after;
+    }
+  }
+
+  const nextSections = { ...record.approval.fingerprints.sections };
+  for (const section of ['orchestrator', 'operator', 'grant'] as const) {
+    const after = expectedAfter.sections[section];
+    if (
+      record.approval.fingerprints.sections[section] !== undefined &&
+      after !== undefined &&
+      live.sections[section] === after
+    ) {
+      nextSections[section] = after;
+    }
+  }
+
+  writeApproval(
+    store,
+    {
+      approval: {
+        ...record.approval,
+        fingerprints: {
+          sections: nextSections,
+          seats: nextSeats,
+        },
+      },
+      file: renamedRecordFile,
+    },
+    [],
+    home,
+  );
 }
 
 /** The differences of a file against one verified snapshot: the caller's own standing, read once. */

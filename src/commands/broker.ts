@@ -11,7 +11,7 @@
 // not an authenticity one, and the page says so. Nothing starts or restarts the broker.
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
 import { keychainReader, realSecurityRun, type KeyReader } from '../release/keychain.ts';
@@ -59,8 +59,9 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   // The start is the owner's, and this gate comes before every other prerequisite: a call placed
   // as a seat, in a pane, under herdr, or with no terminal is refused here, before the credential
   // is read and before the socket is bound. A run with no terminal gets the one sentence; the
-  // Keychain is not asked. Dev mode converts the owner-only line to a warning once the file is
-  // read — except for the orchestrator's and the operator's own seats, refused in every mode.
+  // Keychain is not asked. Dev mode does not reach this gate: serving is never a dev-mode command
+  // (`dev_mode.ts`), so the orchestrator's and the operator's seats are refused as every other
+  // caller is.
   const caller = callerOf(io);
   const detached = detachedRefusal(caller);
   if (detached !== undefined) {
@@ -71,24 +72,14 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   const placement = `only the owner runs \`broker\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
   const owner = isOwner(caller);
   if (!owner) {
-    // Set to exactly `1`. Dev mode says the owner-only line once, as a warning, and the start
-    // continues. The orchestrator's and the operator's own seats stay refused in every mode:
-    // the peek reads the file for those two names and nothing else.
-    const dev = io.env.TEAMCLI_DEV_MODE === '1';
-    const peeked = dev ? loadTeamFile(io.cwd, { home: sources.home }) : null;
-    const held = !dev
-      || (peeked !== null && peeked.ok && caller.kind === 'seat'
-        && (caller.name === peeked.team.orchestrator || caller.name === peeked.team.operator));
-    if (held) {
-      io.stderr(`team broker: ${placement}\n`);
-      // exit: broker.not-owner
-      return 1;
-    }
-    io.stderr(`team broker: warning: ${placement}; dev mode continues\n`);
+    io.stderr(`team broker: ${placement}\n`);
+    // exit: broker.not-owner
+    return 1;
   }
   const root = findRoot(io.cwd);
   if (!root) {
-    io.stderr(`team broker: ${NOT_A_REPO}\n`);
+    // `team broker` takes no `--file`, so the no-repository refusal must not offer one.
+    io.stderr(`team broker: ${NOT_A_REPO_NO_FILE}\n`);
     // exit: broker.not-a-repo
     return 2;
   }

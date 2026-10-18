@@ -16,6 +16,7 @@ import { readState } from '../../src/state.ts';
 import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { readScreen } from '../../src/watch/screen.ts';
+import { watchLabel } from '../../src/watch/pane.ts';
 import { CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
@@ -170,7 +171,7 @@ function table() {
       const id = `w${n}`;
       const pane = `${id}:p1`;
       panes.set(pane, { text: IDLE, agent: false, name: null });
-      if (label === 'watchdog') scripts.add(pane);
+      if (label === watchLabel(SESSION)) scripts.add(pane);
       spaces.set(id, label);
       created.push(label);
       return { pane, workspace: id };
@@ -357,6 +358,9 @@ function stateOf(seat: string) {
   return readState(join(root, '.agents')).sessions[SESSION]?.seats[seat];
 }
 
+/** A waiting record as an older build left it: stage launched, its pane and workspace, waiting,
+ *  and no `launched` identity. A current run names its panes at creation; these scenes keep
+ *  proving the repairs for panes such builds left unnamed, or named only at their dialog. */
 function seed(seat: string): void {
   writeFileSync(
     join(root, '.agents/team.state.json'),
@@ -422,16 +426,12 @@ async function prove(seat: string, pane: 'unnamed' | 'dialog', both = false): Pr
   const first = quietIo();
   const refused = await runUp(FILE, first, made.up());
   exitOf(refused, 1, first, 'the refusal run');
-  expect(first.out).toContain(
-    pane === 'unnamed'
-      ? `${seat}: left out: its waiting pane is gone\n`
-      : `${seat}: left out: its waiting record has no process identity\n`,
-  );
-  expect(first.err).toContain(
-    pane === 'unnamed'
-      ? `  its record still names it; ${repair(seat)}, clears it\n`
-      : `  ${step(pane)}, then run ${repair(seat)}, to establish one by a run\n`,
-  );
+  // The record here is one an older build left: stage launched, waiting, no process identity.
+  // A waiting seat is found by its recorded pane now — named, or left unnamed by such a build —
+  // so the proof refuses on the missing identity before it looks at the pane, and its detail
+  // still names the first step (close an unnamed pane, answer a dialog) and this seat's repair.
+  expect(first.out).toContain(`${seat}: left out: its waiting record has no process identity\n`);
+  expect(first.err).toContain(`  ${step(pane)}, then run ${repair(seat)}, to establish one by a run\n`);
   if (LEAD.has(seat)) expect(first.err).not.toContain('remove');
 
   // 2. The sequence without its first step. A dialog stays: `down` never answers a prompt, so

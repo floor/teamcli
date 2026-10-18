@@ -53,18 +53,19 @@ One line per finding, the level first, then two spaces:
 
     warn  claude-beacon: its name repeats "beacon"; the session already carries it
     warn  claude-beacon: the launch starts Claude Opus 5.5, the file says Claude Sonnet 5.5
-    --    codex-scribe: the model is chosen by its launcher; checked on the running seat
+    note  codex-scribe: the model is chosen by its launcher; checked on the running seat
     MISS  install `codex`: it is not on the PATH (codex: codex-scribe)
-    --    session beacon is running
+    note  session beacon is running
 
 | Level | Meaning |
 | --- | --- |
 | `ok  ` | as it should be |
 | `warn` | worth knowing; `up` and `add` go ahead |
 | `MISS` | a reason to refuse: something has to be installed or logged in first, or a record the machine cannot verify |
-| `--  ` | neither: a note, like whether the session is running |
+| `note` | neither: a note, like whether the session is running |
 
-The findings come in order: the file's own warnings, one warning per seat whose name or label
+The findings come in order: the file's own warnings — each deprecated key among them, with the
+repair `team check` prints — one warning per seat whose name or label
 repeats the project or the session (the session already carries it; the warning never refuses the
 file), the approval — no line when there is no record or the record verifies, and one `MISS` with the case when the record is legacy (`approved before records were signed`) or refused — the override file when it is not the approved copy or cannot be parsed (a
 missing line either way: `up` and `add` refuse, and the approved copy stays in force — or the
@@ -81,12 +82,13 @@ delivery happens only at a launch — which `up` skips for a ready seat, so the 
 time (its version, its login, then each of its seats' launchers and models), one line per seat whose launch
 line can't run where the seat starts (the `MISS` names the start folder, the program that is missing
 or not executable, and when the same file resolves from the project root, its path to write
-instead; a line only said to be unchecked, or a relative path that exists nowhere yet, is a `--  `
+instead; a line only said to be unchecked, or a relative path that exists nowhere yet, is a `note`
 note — `not checked: the command may create it`), one note per seat the state records from a launch
-that predates the process identity — `--    <seat>: launched before team recorded its process; run
-\`team remove <seat> --keep\` then \`team add <seat>\` (or \`team down\` then \`team up\` for the whole
-team) to launch it again` (for an orchestrator or operator, `team down` then `team up` (to restart the whole
-team)), the relaunch being what records the identity — one note per live seat
+that predates the process identity — `note  <seat>: launched before team recorded its process; run
+\`team register <seat>\` to record its process` — the registration being what completes the record
+(the seat's id and the pane's process identity, nothing relaunched). A lead's own seat — the
+orchestrator or the operator — draws no such note: it is the seat reading this line, and a
+whole-team restart is never the repair — one note per live seat
 whose file still carries the placeholder `version: "0"` `init` writes, saying what it runs and the
 one edit that pins it (or a warning when the model family differs, so the one edit covers both) — the watch, and the
 `trust` note. A seat the file
@@ -128,8 +130,8 @@ The first is a launch that runs another program; the second, the CLI's own binar
 that cannot name the declared model, so nothing would flag a seat that runs something else; the
 third, a CLI this version knows to start on its last-used model. A seat may say outright that its
 launcher chooses the model, with `model_from: launcher`: the owner wrote the key and approved it,
-and the finding is a note — `--    <seat>: the model is chosen by its launcher; checked on the
-running seat`, or, when the screen cannot name the declared model, `--    <seat>: the model is
+and the finding is a note — `note  <seat>: the model is chosen by its launcher; checked on the
+running seat`, or, when the screen cannot name the declared model, `note  <seat>: the model is
 chosen by its launcher (declared in the file); this version can't read <declared> on this CLI's
 screen, so nothing checks it`. A real multi-vendor file may still warn; every one of these lines
 names what the owner can do. The model the file declares is spelled by the seat's `display` in
@@ -137,7 +139,7 @@ every line that names it.
 
 The placeholder `version: "0"` a fresh `init` writes before the owner fills the release number no
 longer stops a seat's first launch — the launch compares the model family only — so a seat that
-runs despite it is said as information: `--    <seat>: runs Claude Opus 5.5; the file's version "0"
+runs despite it is said as information: `note  <seat>: runs Claude Opus 5.5; the file's version "0"
 is the placeholder init writes — write "5.5" into the file. The note is
 said only for a live seat whose screen names a model of the family the file declares; a seat on
 another family keeps the launch's own line. No other spelling is the placeholder: `version: "0.0"`
@@ -148,7 +150,7 @@ A seat the state records waiting at **trust** gets one line of its own. A fresh 
 must show the recorded trust dialog — the same reading `team answer` checks, and the reason the
 line moves to `warn` when it does not:
 
-    --    claude-beacon: waiting for owner at trust
+    note  claude-beacon: waiting for owner at trust
     warn  claude-beacon: waiting at trust; its pane can't be read
     warn  claude-beacon: waiting at trust; the pane is not the trust dialog
     warn  claude-beacon: waiting at trust; this version has no trust answer
@@ -156,7 +158,7 @@ line moves to `warn` when it does not:
 
 Every `warn` is a `warn` and never a `MISS`: it blocks `team answer` and every key `team` could
 send, and leaves the owner's own path through `team up` open. A seat in `trust-sent-recovery` is a
-`warn` with its repair — `warn  <seat>: trust sent; recovery required; the owner runs team up` —
+`warn` with its repair — `warn  <seat>: trust sent; recovery required; a lead runs team up` —
 and the line never claims a trust dialog is still on screen. A seat waiting at any other
 classification prints nothing new here: [team status](status.md) carries it.
 
@@ -178,11 +180,21 @@ account read only by a check is fine.
 `--login` reads the logins alone: one line per CLI the file's seats use, in the order the seats first
 name them, then the same last line. A login check that passed is `ok  `; one that failed is `MISS`,
 with the command that logs in; a CLI that can't be asked — one with no login check, or no launch
-profile in this version — is `--  `.
+profile in this version — is `note`.
 
 A watch that has not run, or whose heartbeat is old, is `MISS` here but not a reason for `up` to
 refuse: `up` starts the watch itself. A recorded pane the session no longer has is `MISS` too.
 This miss is not a reason for `up` to refuse.
+
+Under `--json` the run writes one `team.doctor` v1 document on stdout, its `schema` tag first:
+`format`, `project`, `session`, `login_only`, every finding as `{ level, text, blocks_launch }` —
+the same levels and lines the plain report prints, with `blocks_launch` the `up`/`add` rule — and
+`summary` with `missing`, `warnings` and `blockers`, the plain closing line's own figures, plus
+`must_not_pretend` (with each plain sentence and its Kernel `ref` when not `--login`). An invocation
+or file refusal under `--json` writes a
+`team.error` v1 document on stdout instead — `id` `doctor.invocation`, `doctor.not-a-repo`,
+`doctor.file` or `doctor.file-invalid`, its `message` and a null `repair` — and stderr stays
+empty. The exit code is the same as without `--json`.
 
 ## Refusals
 
@@ -250,16 +262,23 @@ Everything here is as it should be:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 0
 ```
 
@@ -282,17 +301,24 @@ later `up` can meet a different one:
 
 ```console machine="small-swap"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 warn  the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 0
 ```
 
@@ -310,16 +336,23 @@ herdr's own version line says only where it sits, for the same reason:
 
 ```console tools="claude-code=old"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 warn  claude 2.1.200 is older than the tested 2.1.288: its screens are untested with this version; a seat that isn't read at launch is left out, never typed into
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 0
 ```
 
@@ -328,16 +361,23 @@ everything else is as the owner's:
 
 ```console caller=claude-beacon
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
---    the budget checks were not run: only the owner runs them
+note  the budget checks were not run: only the owner runs them
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 0
 ```
 
@@ -392,17 +432,24 @@ seats:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 MISS  install `codex`: it is not on the PATH (codex: codex-scribe)
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: 1 missing, 2 warnings: 1 of them block `up` and `add`
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 1
 ```
 
@@ -457,11 +504,12 @@ seats:
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 warn  claude-beacon: the launch starts Claude Opus 5.5, the file says Claude Sonnet 5.5
@@ -469,6 +517,12 @@ MISS  install `codex`: it is not on the PATH (codex: codex-scribe)
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: 1 missing, 3 warnings: 1 of them block `up` and `add`
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 1
 ```
 
@@ -535,11 +589,12 @@ seats:
 
 ```console tools="codex=fine"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 ok    codex 0.157.0
@@ -548,6 +603,12 @@ warn  codex-scribe: the launch runs team-codex, not codex, and names no model: i
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 0
 ```
 
@@ -614,19 +675,26 @@ seats:
 
 ```console tools="codex=fine"
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 ok    the check for openai reads weekly 40% used
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 ok    codex 0.157.0
 ok    codex: logged in
---    codex-scribe: the model is chosen by its launcher; checked on the running seat
+note  codex-scribe: the model is chosen by its launcher; checked on the running seat
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 0
 ```
 
@@ -739,16 +807,23 @@ echo "weekly 99% used"
 
 ```console
 $ team doctor ; echo "exit $?"
+team beacon, session "beacon"
 warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 warn  claude-beacon: its name repeats "beacon"; the session already carries it
 warn  the check for openai changed after approval and was not run; that account reads unknown
 ok    herdr 0.7.1
---    session beacon is running
+note  session beacon is running
 ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 3 warnings
+what 0.5.0 must not pretend:
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
+  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
+  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
+  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
+  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
 exit 0
 ```
 
@@ -757,6 +832,7 @@ An option it doesn't know stops it before it reads anything:
 ```console
 $ team doctor --nope ; echo "exit $?"
 team doctor: unknown option --nope
-Usage: team doctor [--session <name>] [--file <path>] [--login]
+Usage: team doctor [--session <name>] [--file <path>] [--login] [--json]
+Exits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can't be read.
 exit 2
 ```

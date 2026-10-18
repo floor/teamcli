@@ -13,14 +13,17 @@ import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts
 import { main } from '../src/cli.ts';
 import { runBroker } from '../src/commands/broker.ts';
 import { runIssues } from '../src/commands/issues.ts';
-import { runNext, type NextSources } from '../src/commands/next.ts';
+import { runNext, USAGE, type NextSources } from '../src/commands/next.ts';
+import { NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { NEXT_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import type { Fetch } from '../src/release/http.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { TaskAdapter } from '../src/tasks/adapter.ts';
 import { LEASE_MS } from '../src/tasks/lease.ts';
 import { newMemory, pass, RING_TEXT } from '../src/watch/pass.ts';
 import { gitEnv, testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -79,6 +82,9 @@ let base: string;
 let root: string;
 let home: string;
 let now = Date.parse('2026-10-08T09:00:00.000Z');
+
+/** The context line every plain success answer opens with: the fixture's project and session. */
+const CTX = 'team acme, session "acme"\n';
 
 afterEach(() => {
   if (base) rmSync(base, { recursive: true, force: true });
@@ -146,11 +152,16 @@ function git(cwd: string, ...args: string[]): string {
 describe('team next', () => {
   test('a placed seat claims the record and the lease names that seat and pane', async () => {
     ready();
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
     expect(lease()).toMatchObject({ format: 1, id: 'm1', seat: 'lead', pane: 'w1:p1' });
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toBe('m1  the task title\n');
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n' +
+        '  ID  STATE  ASSIGNEE  TITLE\n' +
+        '  m1  open   -         the task title\n' +
+        '1 issue\n',
+    );
   });
 
   test('team plan is a command, and the owner is refused', async () => {
@@ -214,8 +225,8 @@ describe('team next', () => {
 
   test('two seats in one clone leave one lease file', async () => {
     ready(WITH_BOTH);
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
-    expect(await run([], worker)).toEqual({ code: 0, out: 'team next: nothing is takeable\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
+    expect(await run([], worker)).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
     expect(leaseNames()).toEqual(['m1.json']);
     expect(lease().seat).toBe('lead');
   });
@@ -227,84 +238,84 @@ describe('team next', () => {
     git(root, 'commit', '-q', '-m', 'first');
     const worktree = join(base, 'wt');
     git(root, 'worktree', 'add', '-q', worktree, '-b', 'task');
-    expect(await run([], lead, undefined, worktree)).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run([], lead, undefined, worktree)).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
     expect(existsSync(join(root, '.agents', 'leases', 'm1.json'))).toBe(true);
     expect(existsSync(join(worktree, '.agents', 'leases', 'm1.json'))).toBe(false);
-    expect(await run([], worker)).toEqual({ code: 0, out: 'team next: nothing is takeable\n', err: '' });
+    expect(await run([], worker)).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
   });
 
   test('another seat is not taken unless the file says so, and --mine does not widen', async () => {
     ready(WITH, '- id: m1\n  title: the task title\n  assignee: other\n');
-    expect(await run()).toEqual({ code: 0, out: 'team next: nothing is takeable\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
     expect(leaseNames()).toEqual([]);
     project(`${WITH}  pull: any\n`);
     list('- id: m1\n  title: the task title\n  assignee: other\n');
     record();
-    expect(await run(['--mine'])).toEqual({ code: 0, out: 'team next: nothing is assigned to you\n', err: '' });
+    expect(await run(['--mine'])).toEqual({ code: 0, out: `${CTX}team next: nothing is assigned to you\n`, err: '' });
     expect(leaseNames()).toEqual([]);
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n  assignee: other\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}m1  the task title\n  assignee: other\nteam next: claimed m1\n`, err: '' });
     expect(lease().seat).toBe('lead');
   });
 
   test('a number is taken before a string, and a record with no priority is last', async () => {
     ready(WITH, '- id: m0\n  title: plain\n- id: m2\n  title: numbered\n  priority: 2\n- id: m1\n  title: labeled\n  priority: "1"\n');
-    expect((await run()).out).toBe('m2  numbered\n  priority: 2\n');
-    expect(await run(['--release'])).toEqual({ code: 0, out: 'team next: released m2\n', err: '' });
+    expect((await run()).out).toBe(`${CTX}m2  numbered\n  priority: 2\nteam next: claimed m2\n`);
+    expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m2\n`, err: '' });
     // Release records no progress, so the number is back at the head of the queue.
-    expect((await run()).out).toBe('m2  numbered\n  priority: 2\n');
+    expect((await run()).out).toBe(`${CTX}m2  numbered\n  priority: 2\nteam next: claimed m2\n`);
     ready(WITH_BOTH, '- id: m0\n  title: plain\n- id: m1\n  title: labeled\n  priority: "1"\n');
-    expect((await run()).out).toBe('m1  labeled\n  priority: 1\n');
-    expect((await run([], worker)).out).toBe('m0  plain\n');
+    expect((await run()).out).toBe(`${CTX}m1  labeled\n  priority: 1\nteam next: claimed m1\n`);
+    expect((await run([], worker)).out).toBe(`${CTX}m0  plain\nteam next: claimed m0\n`);
   });
 
   test('fallback id orders only the records that have no priority', async () => {
     ready(`${WITH}  fallback: id\n`, '- id: b\n  title: second\n- id: a\n  title: first\n');
-    expect((await run()).out).toBe('a  first\n');
+    expect((await run()).out).toBe(`${CTX}a  first\nteam next: claimed a\n`);
     ready(`${WITH}  fallback: id\n`, '- id: b\n  title: plain\n- id: a\n  title: numbered\n  priority: 1\n');
-    expect((await run()).out).toBe('a  numbered\n  priority: 1\n');
+    expect((await run()).out).toBe(`${CTX}a  numbered\n  priority: 1\nteam next: claimed a\n`);
     ready(WITH, '- id: b\n  title: second\n- id: a\n  title: first\n');
-    expect((await run()).out).toBe('b  second\n');
+    expect((await run()).out).toBe(`${CTX}b  second\nteam next: claimed b\n`);
   });
 
   test('a non-empty blocked-by, repos, or needs is not taken, and an empty list is', async () => {
     ready(WITH, '- id: m1\n  title: the task title\n  blocked-by: [m0]\n');
-    expect(await run()).toEqual({ code: 0, out: 'team next: nothing is takeable\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
     expect(leaseNames()).toEqual([]);
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(0);
-    expect(listed.out).toContain('blocked-by: m0');
+    expect(listed.out).toContain('m1  blocked  -         the task title');
     list('- id: m1\n  title: the task title\n  blocked-by: []\n');
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
 
     ready(WITH, '- id: m1\n  title: the task title\n  repos: [other]\n- id: m2\n  title: another title\n  needs: [review]\n');
-    expect(await run()).toEqual({ code: 0, out: 'team next: nothing is takeable\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
     const shown = testIo(root);
     expect(await runIssues([], shown, { home })).toBe(0);
-    expect(shown.out).toContain('repos: other');
-    expect(shown.out).toContain('needs: review');
+    expect(shown.out).toContain('m1  blocked');
+    expect(shown.out).toContain('m2  blocked');
   });
 
   test('an expired lease can be taken, a live one renews, and release frees the next id', async () => {
     ready(WITH_BOTH, '- id: m1\n  title: the task title\n- id: m2\n  title: another title\n');
-    expect((await run()).out).toBe('m1  the task title\n');
+    expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
     const first = lease();
     now += 1000;
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
     const renewed = lease();
     expect(renewed.acquiredAt).toBe(first.acquiredAt);
     expect(Date.parse(renewed.until)).toBe(Date.parse(first.until) + 1000);
     expect(leaseNames()).toEqual(['m1.json']);
     now += LEASE_MS;
-    expect(await run([], worker)).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run([], worker)).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
     expect(lease().seat).toBe('worker');
-    expect(await run(['--release'], worker)).toEqual({ code: 0, out: 'team next: released m1\n', err: '' });
+    expect(await run(['--release'], worker)).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });
     expect(leaseNames()).toEqual([]);
-    expect((await run()).out).toBe('m1  the task title\n');
-    expect((await run([], worker)).out).toBe('m2  another title\n');
+    expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
+    expect((await run([], worker)).out).toBe(`${CTX}m2  another title\nteam next: claimed m2\n`);
   });
 
   test('a repeated id is refused and renewal reprints the first record', async () => {
-    const block = 'm1  first version\n';
+    const block = `${CTX}m1  first version\nteam next: claimed m1\n`;
     const repeat = 'team next: m1 is not a task: its id repeats an earlier record\n';
     ready(WITH, '- id: m1\n  title: first version\n- id: m1\n  title: second version\n');
     expect(await run()).toEqual({ code: 0, out: block, err: repeat });
@@ -319,9 +330,14 @@ describe('team next', () => {
     expect(Date.parse(renewed.until)).toBe(Date.parse(first.until) + 1000);
     const listed = testIo(root);
     expect(await runIssues([], listed, { home })).toBe(1);
-    expect(listed.out).toBe(block);
+    expect(listed.out).toBe(
+      'team acme, session "acme"\n' +
+        '  ID  STATE  ASSIGNEE  TITLE\n' +
+        '  m1  open   -         first version\n' +
+        '1 issue\n',
+    );
     expect(listed.err).toBe('team issues: m1 is not a task: its id repeats an earlier record\n');
-    expect(await run(['--release'])).toEqual({ code: 0, out: 'team next: released m1\n', err: '' });
+    expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });
     expect(leaseNames()).toEqual([]);
     expect(await run()).toEqual({ code: 0, out: block, err: repeat });
     ready(WITH, '- id: m1\n  title: first version\n- id: m1\n');
@@ -333,7 +349,7 @@ describe('team next', () => {
     ready(WITH, '- id: m1\n- id: m1\n  title: second version\n');
     expect(await run()).toEqual({
       code: 0,
-      out: 'm1  second version\n',
+      out: `${CTX}m1  second version\nteam next: claimed m1\n`,
       err: 'team next: m1 is not a task: title is required\n',
     });
   });
@@ -342,7 +358,7 @@ describe('team next', () => {
     ready(WITH, '- id: m1\n- id: m2\n  title: another title\n');
     expect(await run()).toEqual({
       code: 0,
-      out: 'm2  another title\n',
+      out: `${CTX}m2  another title\nteam next: claimed m2\n`,
       err: 'team next: m1 is not a task: title is required\n',
     });
     ready(WITH, '- id: m1\n');
@@ -385,9 +401,9 @@ describe('team next', () => {
       claim: (input) => (input.record.id === 's1' ? { kind: 'busy' } : { kind: 'held' }),
       release: () => ({ kind: 'released', id: 's2' }),
     };
-    expect(await run([], lead, { file: stub })).toEqual({ code: 0, out: 's2  later\n', err: '' });
+    expect(await run([], lead, { file: stub })).toEqual({ code: 0, out: `${CTX}s2  later\nteam next: claimed s2\n`, err: '' });
     expect(leaseNames()).toEqual([]);
-    expect(await run(['--release'], lead, { file: stub })).toEqual({ code: 0, out: 'team next: released s2\n', err: '' });
+    expect(await run(['--release'], lead, { file: stub })).toEqual({ code: 0, out: `${CTX}team next: released s2\n`, err: '' });
     expect(leaseNames()).toEqual([]);
   });
 
@@ -421,12 +437,12 @@ describe('team next', () => {
 
   test('the same seat name on another pane does not renew or steal', async () => {
     ready(WITH, '- id: m1\n  title: the task title\n- id: m2\n  title: another title\n');
-    expect((await run()).out).toBe('m1  the task title\n');
+    expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
     updateState(join(root, '.agents'), (state) => {
       const session = (state.sessions.acme ??= emptySession());
       session.seats.lead = { stage: 'ready', pane: 'w9:p1' };
     });
-    expect(await run([], otherPane)).toEqual({ code: 0, out: 'm2  another title\n', err: '' });
+    expect(await run([], otherPane)).toEqual({ code: 0, out: `${CTX}m2  another title\nteam next: claimed m2\n`, err: '' });
     expect(lease('m1')).toMatchObject({ seat: 'lead', pane: 'w1:p1' });
     expect(lease('m2')).toMatchObject({ seat: 'lead', pane: 'w9:p1' });
   });
@@ -435,7 +451,7 @@ describe('team next', () => {
     ready();
     mkdirSync(join(root, '.agents', 'leases'));
     writeFileSync(join(root, '.agents', 'leases', 'm1.json'), 'not json\n');
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
     expect(lease().seat).toBe('lead');
   });
 
@@ -450,18 +466,18 @@ describe('team next', () => {
     expect(await run(['extra'])).toEqual({
       code: 2,
       out: '',
-      err: 'team next: unexpected "extra"\nUsage: team next [--mine | --release] [--wait]\n',
+      err: `team next: unexpected "extra"\n${USAGE}`,
     });
     const io = testIo(base, lead);
     expect(await runNext([], io, { home, now: () => now })).toBe(2);
-    expect(io.err).toContain('not inside a git repository');
+    expect(io.err).toBe(`team next: ${NOT_A_REPO_NO_FILE}\n`);
   });
 
   test('a release of nothing, and of another seat, leaves that seat\'s file', async () => {
     ready(WITH_BOTH);
-    expect(await run(['--release'])).toEqual({ code: 0, out: 'team next: nothing is held\n', err: '' });
-    expect((await run()).out).toBe('m1  the task title\n');
-    expect(await run(['--release'], worker)).toEqual({ code: 0, out: 'team next: nothing is held\n', err: '' });
+    expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: nothing is held\n`, err: '' });
+    expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
+    expect(await run(['--release'], worker)).toEqual({ code: 0, out: `${CTX}team next: nothing is held\n`, err: '' });
     expect(lease().seat).toBe('lead');
   });
 
@@ -508,7 +524,7 @@ describe('team next --wait', () => {
       return true;
     });
     expect(sleeps).toBe(0);
-    expect(result).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(result).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
     expect(leaseNames()).toEqual(['m1.json']);
   });
 
@@ -526,7 +542,7 @@ describe('team next --wait', () => {
     expect(polls).toEqual([600, 600]);
     expect(result).toEqual({
       code: 0,
-      out: 'team next: nothing is takeable\nteam next: waiting every 600s\nm1  the task title\n',
+      out: `${CTX}team next: nothing is takeable\nteam next: waiting every 600s\nm1  the task title\nteam next: claimed m1\n`,
       err: '',
     });
     expect(lease()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'w1:p1' });
@@ -536,12 +552,12 @@ describe('team next --wait', () => {
     ready(`${WITH}  cadence: 10m\n`, '[]\n');
     expect(await waiting(['--wait'], async () => false)).toEqual({
       code: 0,
-      out: 'team next: nothing is takeable\nteam next: waiting every 600s\nteam next: stopped waiting\n',
+      out: `${CTX}team next: nothing is takeable\nteam next: waiting every 600s\nteam next: stopped waiting\n`,
       err: '',
     });
     expect(await waiting(['--wait', '--mine'], async () => false)).toEqual({
       code: 0,
-      out: 'team next: nothing is assigned to you\nteam next: waiting every 600s\nteam next: stopped waiting\n',
+      out: `${CTX}team next: nothing is assigned to you\nteam next: waiting every 600s\nteam next: stopped waiting\n`,
       err: '',
     });
     expect(leaseNames()).toEqual([]);
@@ -557,7 +573,7 @@ describe('team next --wait', () => {
     expect(sleeps).toBe(1);
     expect(result).toEqual({
       code: 0,
-      out: 'team next: nothing is takeable\nteam next: waiting every 600s\nteam next: stopped waiting\n',
+      out: `${CTX}team next: nothing is takeable\nteam next: waiting every 600s\nteam next: stopped waiting\n`,
       err: '',
     });
   });
@@ -571,7 +587,7 @@ describe('team next --wait', () => {
     });
     expect(result).toEqual({
       code: 1,
-      out: 'team next: nothing is takeable\nteam next: waiting every 600s\n',
+      out: `${CTX}team next: nothing is takeable\nteam next: waiting every 600s\n`,
       err: 'team next: the task file is not there\n',
     });
   });
@@ -592,6 +608,17 @@ describe('team next --wait', () => {
     expect(leaseNames()).toEqual([]);
   });
 
+  test('--wait and --json together are refused: the error document --json asks for', async () => {
+    ready(`${WITH}  cadence: 10m\n`, '[]\n');
+    const result = await run(['--wait', '--json']);
+    expect(result).toMatchObject({ code: 2, err: '' });
+    assertJsonErrorShape(result.out, {
+      id: 'next.invocation',
+      messageContains: "--wait and --json can't be used together",
+    });
+    expect(leaseNames()).toEqual([]);
+  });
+
   test('a zero cadence is refused before the wait begins: no pause, no waiting line', async () => {
     ready(`${WITH}  cadence: 0s\n`, '[]\n');
     let sleeps = 0;
@@ -601,6 +628,93 @@ describe('team next --wait', () => {
     });
     expect(sleeps).toBe(0);
     expect(result).toEqual({ code: 1, out: '', err: 'team next: tasks.cadence must be greater than zero\n' });
+  });
+});
+
+describe('team next --json', () => {
+  test('--help prints the usage and exits 0, including with --json', async () => {
+    ready();
+    const plain = testIo(root, lead);
+    expect(await main(['next', '--help'], plain)).toBe(0);
+    expect(plain.out).toBe(USAGE);
+    const json = testIo(root, lead);
+    expect(await main(['next', '--json', '--help'], json)).toBe(0);
+    expect(json.out).toBe(USAGE);
+  });
+
+  test('one envelope carries the claim, the release and the empty answer', async () => {
+    ready();
+    const claimed = await run(['--json']);
+    expect(claimed).toMatchObject({ code: 0, err: '' });
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(claimed.out, NEXT_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.next', version: 1 });
+    expect(doc).toMatchObject({
+      format: 1,
+      dry_run: false,
+      status: 'claimed',
+      action: 'claim',
+      action_summary: 'team next: claimed m1',
+      project: 'acme',
+      session: 'acme',
+      task: { id: 'm1', title: 'the task title' },
+    });
+    // The take is the same local lease a plain run writes.
+    expect(lease()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'w1:p1' });
+    const released = await run(['--json', '--release']);
+    expect(released).toMatchObject({ code: 0, err: '' });
+    const releasedDoc = assertMatchesOutputSchema<Record<string, unknown>>(released.out, NEXT_OUTPUT_SCHEMA);
+    expect(releasedDoc).toMatchObject({
+      status: 'released',
+      action: 'release',
+      action_summary: 'team next: released m1',
+      task: null,
+    });
+    ready(WITH, '[]\n');
+    const empty = await run(['--json']);
+    expect(empty).toMatchObject({ code: 0, err: '' });
+    const emptyDoc = assertMatchesOutputSchema<Record<string, unknown>>(empty.out, NEXT_OUTPUT_SCHEMA);
+    expect(emptyDoc).toMatchObject({
+      status: 'none',
+      action: 'none',
+      action_summary: 'team next: nothing is takeable',
+      task: null,
+    });
+  });
+
+  test('--json writes a team.error document on stdout for every refusal', async () => {
+    ready();
+    const caller = await run(['--json'], { kind: 'owner' });
+    expect(caller).toMatchObject({ code: 1, err: '' });
+    expect(assertJsonErrorShape(caller.out, { id: 'next.caller', messageContains: 'only a seat of this team pulls a task' }).error.repair).toContain('team up');
+    ready(WITH, null);
+    const missing = await run(['--json']);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toBe('');
+    expect(assertJsonErrorShape(missing.out, { id: 'next.missing', messageContains: 'the task file is not there' }).error.repair).toBeNull();
+    list('- id: m1\n');
+    const shape = await run(['--json']);
+    expect(shape.code).toBe(1);
+    expect(shape.err).toBe('');
+    assertJsonErrorShape(shape.out, { id: 'next.shape', messageContains: 'm1 is not a task: title is required' });
+    const invocation = await run(['--json', 'extra']);
+    expect(invocation.code).toBe(2);
+    expect(invocation.err).toBe('');
+    assertJsonErrorShape(invocation.out, { id: 'next.invocation', messageContains: 'unexpected "extra"' });
+    // The raw argv is scanned before the parser runs: an unknown option ahead of `--json`, or a
+    // `--json=<value>` the parser refuses, still writes the error document and leaves stderr empty.
+    const nope = await run(['--nope', '--json']);
+    expect(nope.code).toBe(2);
+    expect(nope.err).toBe('');
+    assertJsonErrorShape(nope.out, { id: 'next.invocation', messageContains: 'unknown option --nope' });
+    const inline = await run(['--json=1']);
+    expect(inline.code).toBe(2);
+    expect(inline.err).toBe('');
+    assertJsonErrorShape(inline.out, { id: 'next.invocation', messageContains: 'unknown option --json' });
+    const folder = await run(['--json'], lead, undefined, base);
+    expect(folder.code).toBe(2);
+    expect(folder.err).toBe('');
+    assertJsonErrorShape(folder.out, { id: 'next.not-a-repo', messageContains: NOT_A_REPO_NO_FILE });
+    expect(folder.out).not.toContain('--file');
   });
 });
 
@@ -727,14 +841,14 @@ tasks:
     ready(LINEAR_POLICY);
     const tracker = world([brokerNode({ priority: 1 })]);
     const broker = await command(tracker.fetch);
-    expect(await run()).toEqual({ code: 0, out: 'm1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}m1  the task title\nteam next: claimed m1\n`, err: '' });
     expect(lease()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'w1:p1' });
     expect(tracker.requests.length).toBe(1);
     expect(broker.reads()).toBe(1);
     broker.finish();
     expect(await broker.running).toBe(0);
     // The lease is local: --release works with the broker gone, and claims nothing from it.
-    expect(await run(['--release'])).toEqual({ code: 0, out: 'team next: released m1\n', err: '' });
+    expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });
     expect(leaseNames()).toEqual([]);
   });
 
@@ -745,7 +859,7 @@ tasks:
 `);
     const tracker = world([brokerNode({ identifier: 'https://linear.app/acme/issue/ACME-1' })]);
     const broker = await command(tracker.fetch);
-    expect(await run()).toEqual({ code: 0, out: 'ACME-1  the task title\n', err: '' });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}ACME-1  the task title\nteam next: claimed ACME-1\n`, err: '' });
     expect(lease('ACME-1')).toMatchObject({ id: 'ACME-1', seat: 'lead', pane: 'w1:p1' });
     expect(broker.reads()).toBe(1);
     broker.finish();
@@ -765,11 +879,11 @@ tasks:
     // The transform made the two source ids one final id: the second is refused, the first is
     // taken, and the renewal against the same answer reprints the record the claim printed.
     const refusal = 'team next: ACME-1 is not a task: its id repeats an earlier record\n';
-    expect(await run()).toEqual({ code: 0, out: 'ACME-1  first version\n', err: refusal });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}ACME-1  first version\nteam next: claimed ACME-1\n`, err: refusal });
     const first = lease('ACME-1');
     expect(first).toMatchObject({ id: 'ACME-1', seat: 'lead', pane: 'w1:p1' });
     now += 1000;
-    expect(await run()).toEqual({ code: 0, out: 'ACME-1  first version\n', err: refusal });
+    expect(await run()).toEqual({ code: 0, out: `${CTX}ACME-1  first version\nteam next: claimed ACME-1\n`, err: refusal });
     expect(leaseNames()).toEqual(['ACME-1.json']);
     const renewed = lease('ACME-1');
     expect(renewed.acquiredAt).toBe(first.acquiredAt);

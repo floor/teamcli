@@ -486,3 +486,87 @@ describe('a three-seat launch', () => {
     expect(logged.map((entry) => entry.who)).toEqual(['alpha', 'beta', 'gamma']);
   });
 });
+
+describe('a screen the profile cannot read', () => {
+  // Herdr's own status is the last word on a screen no profile reads, exactly as `reload` and
+  // `restart` already read it before a close that types nothing. The shell in front of the pane
+  // is not a prompt, whatever herdr says: that pane shows no CLI.
+  function steps(seconds: number): Step[] {
+    return [
+      { kind: 'run', argv: [], do: { do: 'create', seat: 'alpha', label: 'alpha', cwd: '.', repairLine: 'repair' } },
+      { kind: 'run', argv: [], do: { do: 'launch', seat: 'alpha', label: 'alpha', command: 'agy' } },
+      {
+        kind: 'wait',
+        text: 'until alpha shows its idle prompt',
+        do: { do: 'idle', seat: 'alpha', label: 'alpha', cli: 'antigravity', seconds, command: 'agy', pane: 'alpha-pane', repairLine: 'repair' },
+      },
+      // The rename is what tells a reached prompt from one still being waited out: an option
+      // seat gets its ready record there, as `up`'s plan always does.
+      {
+        kind: 'run',
+        argv: [],
+        do: { do: 'rename', seat: 'alpha', label: 'alpha', seconds: 5, rules: 'option', pane: 'alpha-pane' },
+      },
+    ];
+  }
+
+  function world(status: string | null, back: boolean | null): { host: Host; out: string[]; err: string[]; slept: number[] } {
+    const out: string[] = [];
+    const err: string[] = [];
+    const slept: number[] = [];
+    let t = 0;
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
+      paneRun: () => true,
+      typeLine: () => true,
+      renameAgent: () => true,
+      closeWorkspace: () => true,
+      stopSession: () => true,
+      kill: () => true,
+      agentPanes: () => ['alpha-pane'],
+      classify: () => 'unknown',
+      shellBack: () => back,
+      agentStatus: () => status,
+      sleep: async () => { slept.push(t); t += 1000; },
+      now: () => t,
+      allow: () => null,
+      record: () => {},
+      running: () => {},
+      drop: () => {},
+      say: (line) => { err.push(line); },
+      log: () => {},
+      final: (seat, record) => { out.push(`${recordText(seat, record)}\n`); },
+      detail: (line) => { err.push(line); },
+    };
+    return { host, out, err, slept };
+  }
+
+  test('herdr reports the seat idle: the launch is ready though no profile read the screen', async () => {
+    const { host, out, slept } = world('idle', null);
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: ready\n');
+    // The first poll is enough: the status, not a second screen, is the last word.
+    expect(slept).toEqual([]);
+  });
+
+  test('herdr reports the seat done: the launch is ready there too', async () => {
+    const { host, out } = world('done', null);
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: ready\n');
+  });
+
+  test('the shell is back in front of the pane: herdr idle does not make it ready', async () => {
+    const { host, out, err } = world('idle', true);
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: left out: timeout\n');
+    expect(err.join('')).toContain('timed out after 1 s waiting for its idle prompt; the screen last read unknown');
+  });
+
+  test('herdr reports the seat working: the launch waits it out', async () => {
+    const { host, out } = world('working', false);
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: left out: timeout\n');
+  });
+});

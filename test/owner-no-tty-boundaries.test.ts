@@ -3,10 +3,10 @@
 // hand, because the scenes that matter are the ones a detached process can build for itself:
 // it left its seat's pane (every herdr spelling cleared, re-parented past the CLI that started
 // it), or it kept its terminal's chain and only cut its stdin (a nohup-style run). Each
-// owner-gated command refuses that placement with the one sentence, before it reads a flagged
-// file, asks a session, matches the owner token, or stops anything; the owner at a terminal —
-// its output redirected or not — still passes; and the callers the walk places otherwise keep
-// the sentences they always had.
+// owner-gated command refuses that placement with its own route's sentence, before it reads a
+// flagged file, asks a session, matches the owner token, or stops anything; the owner at a
+// terminal — its output redirected or not — still passes; and the callers the walk places
+// otherwise keep the sentences they always had.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -49,6 +49,16 @@ let TEXT = '';
 const TERMINAL: Process[] = [{ pid: 50, name: 'zsh' }, { pid: 40, name: 'login' }, { pid: 30, name: 'Terminal' }];
 const ORPHANED: Process[] = [{ pid: 90, name: 'zsh' }, { pid: 1, name: 'launchd' }];
 const UNDER_A_CLI: Process[] = [{ pid: 90, name: 'zsh' }, { pid: 80, name: 'claude' }, { pid: 1, name: 'launchd' }];
+
+// The route each walk-gated command names now that the refusal says who else may run it: a
+// `leads` seat, an approved delegate, the orchestrator, an admitted sender or a placed seat.
+// The owner-only commands (broker, init, approve, status) keep the bare DETACHED_REFUSAL.
+const LEADS_ROUTE = 'only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane';
+const DELEGATE_ROUTE = 'only the owner or an approved delegate runs this, from a terminal outside herdr or its own pane';
+const ADMISSION_ROUTE = 'only the owner or a seat the send admission admits runs this, from a terminal outside herdr or its own pane';
+const PLACED_ROUTE = 'only the owner or a placed seat runs this, from a terminal outside herdr or its own pane';
+const OPERATOR_ROUTE = 'only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat';
+const ANSWER_ROUTE = 'only the owner or the orchestrator from its own seat runs this, from a terminal outside herdr or its own seat';
 
 let base: string;
 let root: string;
@@ -193,7 +203,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
     const io = leftItsPane();
     const code = await runUp([], io, upSources({ launch }));
     expect(code).toBe(1);
-    expect(io.err).toBe(`team up: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(`team up: ${LEADS_ROUTE}\n`);
     expect(created()).toBe(0);
   });
 
@@ -202,7 +212,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
     const io = nohupFromTerminal();
     const code = await runUp([], io, upSources({ launch }));
     expect(code).toBe(1);
-    expect(io.err).toBe(`team up: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(`team up: ${LEADS_ROUTE}\n`);
     expect(created()).toBe(0);
   });
 
@@ -210,7 +220,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
     const io = leftItsPane();
     const code = await runUp(['--dry-run'], io, upSources());
     expect(code).toBe(1);
-    expect(io.out).toContain(`! up would refuse: ${DETACHED_REFUSAL}\n`);
+    expect(io.out).toContain(`! up would refuse: ${LEADS_ROUTE}\n`);
   });
 
   test('up refuses the aimed flags before the flagged file or the named session is read', async () => {
@@ -220,7 +230,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
       const io = leftItsPane();
       const code = await runUp(argv, io, upSources({ launch }));
       expect(code).toBe(1);
-      expect(io.err).toBe(`team up: ${DETACHED_REFUSAL}\n`);
+      expect(io.err).toBe(`team up: ${LEADS_ROUTE}\n`);
       expect(existsSync(missing)).toBe(false);
     }
     expect(created()).toBe(0);
@@ -240,12 +250,12 @@ describe('every owner-gated command refuses the run with no terminal, through th
     dry.env = { TEAM_OWNER_APPROVAL: token };
     const dryCode = await runUp(['--dry-run'], dry, upSources({ launch, standing: () => standing }));
     expect(dryCode).toBe(1);
-    expect(dry.out).toContain(`! up would refuse: ${DETACHED_REFUSAL}\n`);
+    expect(dry.out).toContain(`! up would refuse: ${LEADS_ROUTE}\n`);
     const real = leftItsPane();
     real.env = { TEAM_OWNER_APPROVAL: token };
     const code = await runUp([], real, upSources({ launch, standing: () => standing }));
     expect(code).toBe(1);
-    expect(real.err).toBe(`team up: ${DETACHED_REFUSAL}\n`);
+    expect(real.err).toBe(`team up: ${LEADS_ROUTE}\n`);
     expect(created()).toBe(0);
   });
 
@@ -287,7 +297,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
       const io = leftItsPane();
       const code = await runDown(argv, io, sources);
       expect(code).toBe(1);
-      expect(io.err).toBe(`team down: ${DETACHED_REFUSAL}\n`);
+      expect(io.err).toBe(`team down: ${LEADS_ROUTE}\n`);
       expect(stopped()).toEqual([]);
     }
   });
@@ -297,7 +307,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
     const io = nohupFromTerminal();
     const code = await runDown(['--file', join(base, 'no-such.yaml')], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe(`team down: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(`team down: ${LEADS_ROUTE}\n`);
   });
 
   const throwingDoctor: DoctorSources = {
@@ -339,14 +349,13 @@ describe('every owner-gated command refuses the run with no terminal, through th
       const io = leftItsPane();
       const code = await runAdd(argv, io, throwingAdd);
       expect(code).toBe(1);
-      expect(io.err).toBe(`team add: ${DETACHED_REFUSAL}\n`);
+      expect(io.err).toBe(`team add: ${DELEGATE_ROUTE}\n`);
     }
   });
 
   const throwingRemove: RemoveSources = {
-    // The create-grant read is the one store lookup the refusal below is allowed, and a record it
-    // finds is what asks the clock: the empty home names no store, so the scene never reaches the
-    // machine's real grants and the order it pins is the order it always sees.
+    // No create-grant admits a run with no terminal, so the refusal is answered before any read:
+    // the record store is not even opened, and every machine read past the refusal throws.
     home: '',
     sessionRunning: boom('the session'),
     agents: boom('the agent list'),
@@ -362,7 +371,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
     const io = leftItsPane();
     const code = await runRemove(['worker'], io, throwingRemove);
     expect(code).toBe(1);
-    expect(io.err).toBe(`team remove: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(`team remove: ${LEADS_ROUTE}\n`);
   });
 
   const throwingWorktree: WorktreeSources = { home: '', now: boom('the clock') };
@@ -372,7 +381,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
       const io = leftItsPane();
       const code = await runWorktree(argv, io, throwingWorktree);
       expect(code).toBe(1);
-      expect(io.err).toBe(`team worktree: ${DETACHED_REFUSAL}\n`);
+      expect(io.err).toBe(`team worktree: ${OPERATOR_ROUTE}\n`);
     }
   });
 
@@ -398,7 +407,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
     const io = leftItsPane();
     const code = await runAnswer(['lead', 'trust'], io, throwingAnswer);
     expect(code).toBe(1);
-    expect(io.err).toBe(`team answer: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(`team answer: ${ANSWER_ROUTE}\n`);
   });
 
   const throwingSend: SendHost = {
@@ -422,7 +431,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
       const io = leftItsPane();
       const code = await runSend(argv, io, throwingSend);
       expect(code).toBe(1);
-      expect(io.err).toBe(`team send: ${DETACHED_REFUSAL}\n`);
+      expect(io.err).toBe(`team send: ${ADMISSION_ROUTE}\n`);
       expect(io.out).toBe('');
     }
   });
@@ -449,7 +458,7 @@ describe('every owner-gated command refuses the run with no terminal, through th
     const io = leftItsPane();
     const code = await runWatch([], io, throwingWatch);
     expect(code).toBe(1);
-    expect(io.err).toBe(`team watch: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(`team watch: ${PLACED_ROUTE}\n`);
   });
 
   test('broker refuses the run before the credential is read and the socket is bound', async () => {
@@ -594,7 +603,11 @@ describe('the owner at a terminal outside herdr still passes', () => {
     const io = atATerminal();
     const code = await runSend(['--list'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toContain('lead  claude-code  coordinator\n');
+    // Each row carries the project its team sits in: no registry names this team, so the project
+    // its own file writes.
+    expect(io.out).toContain('  SEAT  NICKNAME  ROLE         PROJECT  REACH\n');
+    expect(io.out).toContain('  lead  -         coordinator  acme     socket\n');
+    expect(io.out).toContain('1 seat\n');
   });
 });
 
@@ -604,8 +617,8 @@ describe('the one sentence is the no-terminal placement\'s alone', () => {
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
     expect(io.err).toBe('');
-    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
-    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
+    expect(io.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(io.out).toEndWith('dry run: nothing was run\n');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
   });
@@ -615,8 +628,8 @@ describe('the one sentence is the no-terminal placement\'s alone', () => {
     const code = await runUp(['--dry-run'], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW });
     expect(code).toBe(1);
     expect(io.err).toBe('');
-    expect(io.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is ');
-    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
+    expect(io.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(io.out).toEndWith('dry run: nothing was run\n');
     expect(io.out + io.err).not.toContain(DETACHED_REFUSAL);
   });

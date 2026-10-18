@@ -15,16 +15,19 @@ here: this command connects to no broker, holds no tracker credential, and has n
 The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and
 this command does not isolate anything.
 `title` and `description` are the owner's text. They are not scrubbed.
-The list is file order. A priority is shown and does not reorder.
+The list is file order. A priority is shown in `--json` and does not reorder.
 A listing is not a claim and not the intake rule. `team plan` prints the takeable queue and claims nothing.
-`repos` and `needs` are shown when the file has them. They are not a grant, and they are not checked.
+`repos` and `needs` mark a record `blocked` in the STATE column when the file has them. They are
+not a grant, and they are not checked.
 The watch's ring is unchanged: `Team: run team messages`.
 
 ## What it reads and writes
 
 Reads the git checkout (`findRoot`), the team file, and the YAML list at `tasks.path`. The path
-is relative to the checkout. A record's `id` and `title` are required. Every other field is
-printed only when the file has it. An empty `blocked-by`, `repos`, or `needs` prints no line.
+is relative to the checkout. A record's `id` and `title` are required. The plain listing prints
+the contract's four columns; every other field the file carries is in the `--json` record.
+`blocked-by`, `repos` and `needs` make the STATE cell `blocked`; none of them is judged or
+resolved here.
 
 On a broker source nothing is listed and no socket connection is attempted: the refusal below
 names where the read lives.
@@ -46,10 +49,9 @@ team issues: the task file is not there
 team issues: the task file is not a list
 team issues: m1 is not a task: title is required
 team issues: record 1 is not a task: id is required
-team issues: nothing is waiting
 ```
 
-`nothing is waiting` is not a refusal. It is what an empty list prints, and the exit is 0.
+An empty list is not a refusal: it prints the context line and `0 issues`, and the exit is 0.
 
 `tasks.source must be file` is the local-adapter miss: it stands for a source this build does not
 carry. The broker-source sentence is the other side of the same rule — a tracker's records are
@@ -96,6 +98,9 @@ seats:
 
 ```console
 $ team issues ; echo "exit $?"
-m1  the task title
+team beacon, session "beacon"
+  ID  STATE  ASSIGNEE  TITLE
+  m1  open   -         the task title
+1 issue
 exit 0
 ```

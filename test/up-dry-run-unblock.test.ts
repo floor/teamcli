@@ -1,9 +1,11 @@
 // A caller the run does not admit, at the terminal: the real run is answered with the bare word
 // on stderr and nothing else. The dry run is never denied — it names the refusal once, names the
 // owner's own run of this folder with the flags this caller used, and then the plan it would
-// make. Nothing the launch could do happens, and both runs exit 1. The harness is the granted
-// seat's own coverage (`up-deny-boundaries.test.ts`): a project under git, the approval the
-// owner's `team approve` leaves, and the real placement walk.
+// make. An aimed run — `--session`, or a `--file` other than this folder's own — stops at the
+// owner-only refusal, whatever the file's grant says: the flagged target is never read, so no
+// plan prints for it. Nothing the launch could do happens, and both runs exit 1. The harness is
+// the granted seat's own coverage (`up-deny-boundaries.test.ts`): a project under git, the
+// approval the owner's `team approve` leaves, and the real placement walk.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -243,7 +245,7 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
     expect(code).toBe(1);
     expect(io.err).toBe('');
     expect(io.out).toContain(
-      '! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is unplaced (it runs in a herdr pane without an agent)\n',
+      '! up would refuse: only the owner or `leads` starts the team; this call is pilot\n',
     );
     // The one spelling: the refusal is printed once, and the plan follows it.
     expect(io.out.split('! up would refuse:').length - 1, 'refusal printed once').toBe(1);
@@ -251,11 +253,11 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
     expect(io.out).toContain('dry run: nothing was run\n');
     expect(io.out).toContain('+ ');
     // No flag named, so the owner's command is the bare one.
-    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
-  test('the unblock line carries the caller\'s own flags, quoted, and the plan still prints', async () => {
+  test('the unblock line carries the caller\'s own flags, quoted, and the aimed file is never read', async () => {
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
@@ -265,16 +267,19 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
     expect(code).toBe(1);
     expect(io.err).toBe('');
     expect(io.out).toContain(
-      '! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n',
+      '! up would refuse: only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)\n',
     );
-    // The named file keeps its meaning for the owner's run and is never read here: the plan is
-    // this folder's own.
-    expect(io.out).toContain('dry run: nothing was run\n');
-    expect(io.out).toContain('+ ');
+    expect(io.out).toContain(
+      '! to unblock: a `leads` seat runs `team up --file other.yaml` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n',
+    );
+    // The named file keeps its meaning for the owner's run and is never read here — the file's
+    // grant does not make the aim ordinary — so there is no plan for this folder's own file.
+    expect(io.out).not.toContain('dry run: nothing was run');
+    expect(io.out).not.toContain('+ ');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
-  test('a named session rides the unblock line too', async () => {
+  test('a named session rides the unblock line too, and no plan follows it', async () => {
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' } });
     const { sources } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
@@ -284,8 +289,11 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
     expect(code).toBe(1);
     expect(io.err).toBe('');
     expect(io.out).toContain(
-      '! to unblock: the owner runs `team up --session beta` from this folder, at a terminal outside herdr\n',
+      '! up would refuse: only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)\n',
     );
-    expect(io.out).toContain('dry run: nothing was run\n');
+    expect(io.out).toContain(
+      '! to unblock: a `leads` seat runs `team up --session beta` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n',
+    );
+    expect(io.out).not.toContain('dry run: nothing was run');
   });
 });

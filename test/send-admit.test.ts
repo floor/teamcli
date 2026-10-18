@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { admitSend, sendGrantFor, senderHeader, type AdmitTeams, type DeclaredSender, type SendGrant, type SendGrantRecord } from '../src/send/admit.ts';
+import { admitSend, sendGrantFor, senderHeader, type AdmitContext, type AdmitTeams, type DeclaredSender, type SendGrant, type SendGrantRecord } from '../src/send/admit.ts';
 import type { Agent } from '../src/registry/agents.ts';
 
 // The reach every rule is decided over, and nothing else: a send is admitted only by a rule
@@ -48,17 +48,17 @@ const teams: AdmitTeams = {
     project: 'teamcli',
     entity: 'teamcli',
     roster: [
-      { agent: ORCH_CLI, seat: 'orchestrator', role: 'orchestrator' },
+      { agent: ORCH_CLI, seat: 'orchestrator', role: 'orchestrator', leads: true },
       { agent: BUILDER_1, seat: 'builder-1', role: 'builder' },
       { agent: TESTER_1, seat: 'tester-1', role: 'tester' },
-      { agent: ASSISTANT_CLI, seat: 'assistant', role: 'assistant' },
+      { agent: ASSISTANT_CLI, seat: 'assistant', role: 'assistant', assistant: true },
     ],
   },
   labs: {
     project: 'labs',
     entity: 'teamcli',
     roster: [
-      { agent: ORCH_LABS, seat: 'orchestrator', role: 'orchestrator' },
+      { agent: ORCH_LABS, seat: 'orchestrator', role: 'orchestrator', leads: true },
       { agent: BUILDER_LABS, seat: 'builder-1', role: 'builder' },
     ],
   },
@@ -66,11 +66,18 @@ const teams: AdmitTeams = {
     project: 'radio',
     entity: 'radio',
     roster: [
-      { agent: ORCH_RADIO, seat: 'orchestrator', role: 'orchestrator' },
+      { agent: ORCH_RADIO, seat: 'orchestrator', role: 'orchestrator', leads: true },
       { agent: BUILDER_RADIO, seat: 'builder-1', role: 'builder' },
     ],
   },
 };
+
+/** The fixture's own team as a file that marks no assistant: its lines without the capability,
+ *  so the entity's first assistant is whichever seat a scene marks below it. */
+function headless(source: AdmitTeams = teams): AdmitTeams {
+  const main = source.teamcli!;
+  return { ...source, teamcli: { ...main, roster: main.roster.map(({ assistant: _stale, ...line }) => line) } };
+}
 
 // The clock every grant test is judged at, and one record as the owner's folder returns them.
 const NOW = new Date('2026-10-16T12:00:00.000Z');
@@ -85,23 +92,62 @@ describe('send admission: the rules that admit', () => {
     }
   });
 
-  test('an orchestrator reaches an orchestrator of another team, and its own', () => {
-    expect(admitSend(orchCli, orchRadio, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
+  test('an orchestrator reaches an orchestrator of its entity, and its own', () => {
+    // Two teams of one entity write to each other's lead; another entity's lead is not reached.
     expect(admitSend(orchCli, orchLabs, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
+    expect(admitSend(orchLabs, orchCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
+    expect(admitSend(orchCli, orchRadio, teams).ok).toBe(false);
+    expect(admitSend(orchLabs, orchRadio, teams).ok).toBe(false);
     // A lead to itself is the orchestrator pair; there is no wider own-team reach.
     expect(admitSend(orchCli, orchCli, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
   test('an assistant reaches the coordinator of its entity, in the main team', () => {
-    // The assistant sits in a sub-team of the entity: the coordinator is the main team's lead.
+    // The fixture's own team marks nothing: the entity's first assistant by its place in the
+    // chain is the sub-team's seat, and the coordinator is the main team's lead.
     const assistantLabs = agent('agt_000000000009', 'assistant', 'labs');
     const withAssistant: AdmitTeams = {
-      ...teams,
-      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: assistantLabs.id, seat: 'assistant', role: 'assistant' }] },
+      ...headless(),
+      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: assistantLabs.id, seat: 'assistant', role: 'assistant', assistant: true }] },
     };
     expect(admitSend(assistantLabs, orchCli, withAssistant)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
-    // The same rule in the entity's own team: the coordinator is its own team's lead.
+    // The same capability in the entity's own team: the coordinator is its own team's lead.
     expect(admitSend(assistantCli, orchCli, teams)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
+  });
+
+  test('the chain decides which assistant is the entity\'s: the head of the chain wins', () => {
+    const assistantLabs = agent('agt_000000000009', 'assistant', 'labs');
+    const markedLabs = { ...teams.labs!, roster: [...teams.labs!.roster, { agent: assistantLabs.id, seat: 'assistant', role: 'assistant', assistant: true }] };
+    // The main team's own assistant holds the place, whatever a sub-team marks beside it.
+    const headAndSub: AdmitTeams = { ...teams, labs: markedLabs };
+    expect(admitSend(assistantCli, orchCli, headAndSub)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
+    expect(admitSend(assistantLabs, orchCli, headAndSub).ok).toBe(false);
+    // With the main team marking none, the first of the entity's teams by team id holds it.
+    const archivist = agent('agt_00000000000b', 'assistant', 'archive');
+    const subs: AdmitTeams = {
+      ...headless(),
+      archive: { project: 'archive', entity: 'teamcli', roster: [{ agent: archivist.id, seat: 'assistant', role: 'assistant', assistant: true }] },
+      labs: markedLabs,
+    };
+    expect(admitSend(archivist, orchCli, subs)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
+    expect(admitSend(assistantLabs, orchCli, subs).ok).toBe(false);
+  });
+
+  test('the role word "assistant" is not the capability: the file\'s mark decides', () => {
+    // A seat named and roled the word, with no mark on its line, is admitted by nothing.
+    const byWord = agent('agt_00000000000c', 'assistant', 'labs');
+    const withWord: AdmitTeams = {
+      ...headless(),
+      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: byWord.id, seat: 'assistant', role: 'assistant' }] },
+    };
+    expect(admitSend(byWord, orchCli, withWord).ok).toBe(false);
+    // And the mark on a seat called anything else is what admits it.
+    const marked = agent('agt_00000000000d', 'scribe', 'labs');
+    const withMark: AdmitTeams = {
+      ...headless(),
+      labs: { ...teams.labs!, roster: [...teams.labs!.roster, { agent: marked.id, seat: 'scribe', role: 'builder', assistant: true }] },
+    };
+    expect(admitSend(marked, orchCli, withMark)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
   });
 
   test('an orchestrator reaches every seat of its own team, and no seat of another', () => {
@@ -125,6 +171,31 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(orchLabs, orchLabs, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
+  test('the operator is the place the file declares, never the role word', () => {
+    // The file marks its operator by name: a seat written `role: implementer` there reaches
+    // every seat of its own team, and a seat merely holding the role word `operator` does not.
+    const ops = agent('agt_00000000000f', 'ops', 'teamcli');
+    const byWord = agent('agt_000000000010', 'wordsmith', 'teamcli');
+    const base = headless();
+    const declared: AdmitTeams = {
+      ...base,
+      teamcli: {
+        ...base.teamcli!,
+        operator: 'ops',
+        roster: [
+          ...base.teamcli!.roster,
+          { agent: ops.id, seat: 'ops', role: 'implementer' },
+          { agent: byWord.id, seat: 'wordsmith', role: 'operator' },
+        ],
+      },
+    };
+    expect(admitSend(ops, builder1, declared)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
+    expect(admitSend(byWord, builder1, declared).ok).toBe(false);
+    expect(admitSend(byWord, builder1, base).ok).toBe(false);
+    // The place is the team's own: it reaches that team's seats and no other team's.
+    expect(admitSend(ops, builderLabs, declared).ok).toBe(false);
+  });
+
   test('an owner-signed grant naming send admits the pair it was verified for', () => {
     expect(admitSend(builderRadio, builder1, teams, { name: 'send to the teamcli builders' })).toEqual({
       ok: true,
@@ -134,28 +205,30 @@ describe('send admission: the rules that admit', () => {
 });
 
 // The shapes `up` and `add` register: a team record whose lead seat carries the file's own role
-// word — `coordinator` — and no lead field of its own. The roster is what names the team's lead,
-// and the acceptance scenes send over exactly these records.
-describe('send admission: the lead seat a file names itself', () => {
+// word — `coordinator` — and the `leads` capability beside it, with no lead field of its own. The
+// capability is what names the team's lead, and the acceptance scenes send over exactly these
+// records.
+describe('send admission: the lead seat the roster capability names', () => {
   const fileTeams: AdmitTeams = {
     aaa111aaa111: {
       project: 'floor',
       entity: 'floor',
       roster: [
-        { agent: 'agt_00000000000a', seat: 'main-coordinator', role: 'coordinator' },
+        { agent: 'agt_00000000000a', seat: 'main-coordinator', role: 'coordinator', leads: true },
         { agent: 'agt_00000000000b', seat: 'agy-seat', role: 'implementer' },
         { agent: 'agt_00000000000e', seat: 'second-seat', role: 'implementer' },
       ],
     },
     bbb222bbb222: {
       project: 'alpha',
-      entity: 'alpha-ent',
-      roster: [{ agent: 'agt_00000000000c', seat: 'lead', role: 'coordinator' }],
+      // The main team's entity: its lead is reached as the entity's other team leads are.
+      entity: 'floor',
+      roster: [{ agent: 'agt_00000000000c', seat: 'lead', role: 'coordinator', leads: true }],
     },
     ccc333ccc333: {
       project: 'beta',
-      entity: 'beta-ent',
-      roster: [{ agent: 'agt_00000000000d', seat: 'lead', role: 'coordinator' }],
+      entity: 'floor',
+      roster: [{ agent: 'agt_00000000000d', seat: 'lead', role: 'coordinator', leads: true }],
     },
   };
   const agy = agent('agt_00000000000b', 'agy-seat', 'aaa111aaa111');
@@ -164,7 +237,7 @@ describe('send admission: the lead seat a file names itself', () => {
   const alphaLead = agent('agt_00000000000c', 'lead', 'bbb222bbb222');
   const betaLead = agent('agt_00000000000d', 'lead', 'ccc333ccc333');
 
-  test('a seat reaches the coordinator its roster names, with no lead field to read', () => {
+  test('a seat reaches the lead its roster marks, with no record field to read', () => {
     expect(admitSend(agy, coordinator, fileTeams)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
     // The coordinator briefs a seat of its own team, and reaches the other orchestrators.
     expect(admitSend(coordinator, second, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
@@ -175,30 +248,159 @@ describe('send admission: the lead seat a file names itself', () => {
     expect(admitSend(alphaLead, betaLead, fileTeams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
-  test('the file word names only the lead: seat to seat still has no rule', () => {
+  test('the capability names the lead: seat to seat still has no rule', () => {
     expect(admitSend(agy, second, fileTeams)).toEqual({
       ok: false,
       why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
 
-  test('a roster naming both lead words keeps the registry\'s own first', () => {
-    const both: AdmitTeams = {
-      ddd444ddd444: {
-        project: 'both',
-        entity: 'both',
+  test('the lead is the capability, in whatever language the file names the role', () => {
+    const koordinator = agent('agt_000000000014', 'koordinator', 'eee555eee555');
+    const bau = agent('agt_000000000015', 'bau-1', 'eee555eee555');
+    const marked: AdmitTeams = {
+      eee555eee555: {
+        project: 'sprache',
+        entity: 'sprache',
         roster: [
-          { agent: 'agt_000000000011', seat: 'coord', role: 'coordinator' },
-          { agent: 'agt_000000000012', seat: 'orch', role: 'orchestrator' },
-          { agent: 'agt_000000000013', seat: 'worker', role: 'builder' },
+          { agent: koordinator.id, seat: 'koordinator', role: 'koordinator', leads: true },
+          { agent: bau.id, seat: 'bau-1', role: 'implementer' },
         ],
       },
     };
-    const worker = agent('agt_000000000013', 'worker', 'ddd444ddd444');
-    const orch = agent('agt_000000000012', 'orch', 'ddd444ddd444');
-    const coord = agent('agt_000000000011', 'coord', 'ddd444ddd444');
-    expect(admitSend(worker, orch, both)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
-    expect(admitSend(worker, coord, both).ok).toBe(false);
+    // A role word the reach never learned costs the lead nothing: the mark is what is read.
+    expect(admitSend(bau, koordinator, marked)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
+    expect(admitSend(koordinator, bau, marked)).toEqual({ ok: true, rule: 'an orchestrator or operator to a seat of its own team' });
+    // The word alone is no lead, in German or in English: the same rosters with no mark on them.
+    const byGerman: AdmitTeams = {
+      eee555eee555: {
+        project: 'sprache',
+        entity: 'sprache',
+        roster: [
+          { agent: koordinator.id, seat: 'koordinator', role: 'koordinator' },
+          { agent: bau.id, seat: 'bau-1', role: 'implementer' },
+        ],
+      },
+    };
+    expect(admitSend(bau, koordinator, byGerman).ok).toBe(false);
+    const byEnglish: AdmitTeams = {
+      fff666fff666: {
+        project: 'sprache',
+        entity: 'sprache',
+        roster: [
+          { agent: 'agt_000000000014', seat: 'orchestrator', role: 'orchestrator' },
+          { agent: 'agt_000000000015', seat: 'builder-1', role: 'builder' },
+        ],
+      },
+    };
+    const englishOrch = agent('agt_000000000014', 'orchestrator', 'fff666fff666');
+    const englishBuilder = agent('agt_000000000015', 'builder-1', 'fff666fff666');
+    expect(admitSend(englishBuilder, englishOrch, byEnglish).ok).toBe(false);
+  });
+});
+
+// The live floor entity: floor's own lead is its coordinator, and teamcli and teamcli.io carry
+// `entity: floor` beside their own projects — the team file's `entity:` key, which the registry's
+// record writes as its `entity`. The entity's leads write to each other in every direction; an
+// entity's edge refuses every other lead, and a plain seat crosses no team at all.
+describe('send admission: the entity its team records name', () => {
+  const floorTeams: AdmitTeams = {
+    floor: {
+      project: 'floor',
+      entity: 'floor',
+      roster: [
+        { agent: 'agt_000000000020', seat: 'coordinator', role: 'coordinator', leads: true },
+        { agent: 'agt_000000000021', seat: 'builder-1', role: 'builder' },
+      ],
+    },
+    teamcli: {
+      project: 'teamcli',
+      entity: 'floor',
+      roster: [
+        { agent: 'agt_000000000022', seat: 'orchestrator', role: 'orchestrator', leads: true },
+        { agent: 'agt_000000000023', seat: 'builder-1', role: 'builder' },
+      ],
+    },
+    'teamcli.io': {
+      project: 'teamcli.io',
+      entity: 'floor',
+      roster: [
+        { agent: 'agt_000000000024', seat: 'orchestrator', role: 'orchestrator', leads: true },
+        { agent: 'agt_000000000025', seat: 'builder-1', role: 'builder' },
+      ],
+    },
+    'other-v4': {
+      project: 'other-v4',
+      entity: 'other-org',
+      roster: [
+        { agent: 'agt_000000000026', seat: 'orchestrator', role: 'orchestrator', leads: true },
+        { agent: 'agt_000000000027', seat: 'builder-1', role: 'builder' },
+      ],
+    },
+  };
+  const coordinator = agent('agt_000000000020', 'coordinator', 'floor');
+  const floorBuilder = agent('agt_000000000021', 'builder-1', 'floor');
+  const cliLead = agent('agt_000000000022', 'orchestrator', 'teamcli');
+  const cliBuilder = agent('agt_000000000023', 'builder-1', 'teamcli');
+  const ioLead = agent('agt_000000000024', 'orchestrator', 'teamcli.io');
+  const otherLead = agent('agt_000000000026', 'orchestrator', 'other-v4');
+  const reach = { ok: true, rule: 'an orchestrator to another orchestrator' } as const;
+
+  test('(1) two teams of one entity: their leads write to each other, both ways', () => {
+    expect(admitSend(cliLead, ioLead, floorTeams)).toEqual(reach);
+    expect(admitSend(ioLead, cliLead, floorTeams)).toEqual(reach);
+  });
+
+  test('(2) the entity\'s coordinator and every team lead, both ways', () => {
+    // floor leads the entity: its lead reaches teamcli's and teamcli.io's, and they reach it.
+    expect(admitSend(coordinator, cliLead, floorTeams)).toEqual(reach);
+    expect(admitSend(cliLead, coordinator, floorTeams)).toEqual(reach);
+    expect(admitSend(coordinator, ioLead, floorTeams)).toEqual(reach);
+    expect(admitSend(ioLead, coordinator, floorTeams)).toEqual(reach);
+  });
+
+  test('a plain seat crosses no team, whoever leads either side', () => {
+    expect(admitSend(cliBuilder, floorBuilder, floorTeams).ok).toBe(false);
+    expect(admitSend(floorBuilder, cliBuilder, floorTeams).ok).toBe(false);
+    // Not to another team's lead, nor to the entity's coordinator.
+    expect(admitSend(cliBuilder, coordinator, floorTeams).ok).toBe(false);
+    expect(admitSend(cliBuilder, ioLead, floorTeams).ok).toBe(false);
+  });
+
+  test('across entities no lead pair is admitted, in either direction', () => {
+    // other-org is another entity's: every lead's reach stops at its own entity's edge.
+    expect(admitSend(coordinator, otherLead, floorTeams).ok).toBe(false);
+    expect(admitSend(otherLead, coordinator, floorTeams).ok).toBe(false);
+    expect(admitSend(cliLead, otherLead, floorTeams).ok).toBe(false);
+    expect(admitSend(otherLead, cliLead, floorTeams).ok).toBe(false);
+  });
+
+  test('two teams that name no entity are not one entity\'s, and their leads are refused', () => {
+    const leadOne = agent('agt_000000000028', 'lead', 'one');
+    const leadTwo = agent('agt_000000000029', 'lead', 'two');
+    const noEntity: AdmitTeams = {
+      one: { project: 'one', entity: null, roster: [{ agent: leadOne.id, seat: 'lead', role: 'coordinator', leads: true }] },
+      two: { project: 'two', entity: null, roster: [{ agent: leadTwo.id, seat: 'lead', role: 'coordinator', leads: true }] },
+    };
+    expect(admitSend(leadOne, leadTwo, noEntity).ok).toBe(false);
+    expect(admitSend(leadTwo, leadOne, noEntity).ok).toBe(false);
+  });
+
+  test('the asker\'s own chain may close the reach; with no word it stands', () => {
+    const contextOf = (crossTeams?: Partial<Record<'entity' | 'project' | 'team' | 'seat', boolean>>): AdmitContext => ({ projects: {}, crossTeams });
+    // No word at all, or the project's own permissive word: the entity's reach stands.
+    expect(admitSend(cliLead, ioLead, floorTeams, undefined, contextOf()).ok).toBe(true);
+    expect(admitSend(cliLead, ioLead, floorTeams, undefined, contextOf({ project: true })).ok).toBe(true);
+    // Closed at any level of the asker's own chain, the lead pair is refused.
+    const closed: Partial<Record<'entity' | 'project' | 'team' | 'seat', boolean>>[] = [
+      { entity: false }, { project: false }, { team: false }, { seat: false },
+    ];
+    for (const crossTeams of closed) {
+      expect(admitSend(cliLead, ioLead, floorTeams, undefined, contextOf(crossTeams)).ok).toBe(false);
+    }
+    // Only the project level may open it again after an entity closed it.
+    expect(admitSend(cliLead, ioLead, floorTeams, undefined, contextOf({ entity: false, project: true })).ok).toBe(true);
+    expect(admitSend(cliLead, ioLead, floorTeams, undefined, contextOf({ entity: false, team: true })).ok).toBe(false);
   });
 });
 
@@ -218,13 +420,9 @@ describe('send admission: default deny', () => {
   const admitted = new Set([
     ...everyone.map((one) => `owner -> ${one.name}`),
     'orchestrator@teamcli -> orchestrator@labs',
-    'orchestrator@teamcli -> orchestrator@radio',
     'orchestrator@teamcli -> orchestrator@teamcli',
     'orchestrator@labs -> orchestrator@teamcli',
-    'orchestrator@labs -> orchestrator@radio',
     'orchestrator@labs -> orchestrator@labs',
-    'orchestrator@radio -> orchestrator@teamcli',
-    'orchestrator@radio -> orchestrator@labs',
     'orchestrator@radio -> orchestrator@radio',
     "assistant@teamcli -> orchestrator@teamcli",
     'builder-1@teamcli -> orchestrator@teamcli',
@@ -314,11 +512,12 @@ describe('send admission: default deny', () => {
     expect(admitSend(builder1, stray, teams).ok).toBe(false);
   });
 
-  test('a team record with no roster lead is read by its seat named for the lead', () => {
-      const sparse: AdmitTeams = { teamcli: { project: 'teamcli', entity: 'teamcli', roster: [{ agent: ORCH_CLI, seat: 'orchestrator', role: 'lead' }] } };
-    expect(admitSend(builder1, orchCli, sparse)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
-      const byField: AdmitTeams = { teamcli: { project: 'teamcli', entity: 'teamcli', orchestrator: 'orchestrator', roster: [{ agent: ORCH_CLI, seat: 'orchestrator', role: 'lead' }] } };
+  test('a record with no capability names its lead by its own field, and one that says neither has none', () => {
+    const byField: AdmitTeams = { teamcli: { project: 'teamcli', entity: 'teamcli', orchestrator: 'orchestrator', roster: [{ agent: ORCH_CLI, seat: 'orchestrator', role: 'lead' }] } };
     expect(admitSend(builder1, orchCli, byField)).toEqual({ ok: true, rule: "a seat to its own team's orchestrator" });
+    // Neither the field nor the mark: the seat named for a lead is no lead, whatever its role word.
+    const noLead: AdmitTeams = { teamcli: { project: 'teamcli', entity: 'teamcli', roster: [{ agent: ORCH_CLI, seat: 'orchestrator', role: 'lead' }] } };
+    expect(admitSend(builder1, orchCli, noLead).ok).toBe(false);
   });
 });
 

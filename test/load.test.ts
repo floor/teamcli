@@ -167,6 +167,17 @@ async function loaderOf(ref: string, where: string): Promise<Loader> {
   return (await import(pathToFileURL(join(where, 'src/file/load.ts')).href)) as Loader;
 }
 
+// One sentence changed on purpose, and this list is the whole of it: the loader no longer sends
+// anyone to the copy an owner last approved (that command is gone), and says "the copy this
+// machine stored" instead. Every other byte is still held against the fork point.
+const REWORDED: ReadonlyArray<readonly [string, string]> = [
+  ['the copy you last approved on this machine', 'the copy this machine stored'],
+];
+
+function canonical(shape: string): string {
+  return REWORDED.reduce((text, [from, to]) => text.split(from).join(to), shape);
+}
+
 // The fixture project, the sequence the tests above use, run through both loaders: one line
 // per case they disagree on. The guard asserts an empty list; the drift test asserts the
 // opposite, so the comparison cannot quietly stop comparing.
@@ -191,8 +202,8 @@ function disagreements(candidate: Loader, reference: Loader, fixture: string): s
     if (candidateRoot !== referenceRoot) found.push(`${label}: ${candidateRoot} vs ${referenceRoot}`);
   };
   const same = (label: string, cwd: string, options?: { file?: string }) => {
-    const candidateShape = JSON.stringify(shape(candidate.loadTeamFile(cwd, options)));
-    const referenceShape = JSON.stringify(shape(reference.loadTeamFile(cwd, options)));
+    const candidateShape = canonical(JSON.stringify(shape(candidate.loadTeamFile(cwd, options))));
+    const referenceShape = canonical(JSON.stringify(shape(reference.loadTeamFile(cwd, options))));
     if (candidateShape !== referenceShape) found.push(`${label}\n  candidate:  ${candidateShape}\n  reference:  ${referenceShape}`);
   };
 

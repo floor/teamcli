@@ -29,6 +29,18 @@ export type Screen =
                                      // screen names, or null when it names none
   | { kind: 'unknown' };
 
+/** What a screen says a seat is doing, in the state words the readers use: an idle table or a
+ *  composer holding text is `idle` (the two the CLI takes a line at), a running turn is
+ *  `working`, every other screen the profile reads is `blocked` (someone has to act on it), and
+ *  one no profile reads is `unknown`. The four words are the ones a herdr status can carry, so a
+ *  profile herdr cannot report can be read with them in place of its word. */
+export function screenWord(screen: Screen): 'idle' | 'working' | 'blocked' | 'unknown' {
+  if (screen.kind === 'idle' || screen.kind === 'unsent') return 'idle';
+  if (screen.kind === 'working') return 'working';
+  if (screen.kind === 'unknown') return 'unknown';
+  return 'blocked';
+}
+
 function load(name: string): ScreenData {
   return loadScreen(readFileSync(new URL(`../profiles/${name}.yaml`, import.meta.url), 'utf8'), undefined, `${name}.yaml`);
 }
@@ -42,6 +54,7 @@ const DATA: Record<string, ScreenData> = {
   grok: load('grok'),
   gemini: load('gemini'),
   muse: load('muse'),
+  jules: load('jules'),
 };
 
 /** The shipped screen for a CLI, or null when this version has none. */
@@ -55,29 +68,46 @@ export function vendorNoticeRange(cli: string): VersionRange | null {
   return DATA[cli]?.vendor_notice?.tested ?? null;
 }
 
-// The window every pattern sees: the pane's last 20 lines. Styled lines are trimmed only past
-// their last escape; the core trims each line's plain form for matching.
+// The window the data patterns see: the pane's last 20 lines. Styled lines are trimmed only
+// past their last escape; the core trims each line's plain form for matching.
 function windowOf(lines: string[]): string[] {
   return lines.map((line) => line.trimEnd()).slice(-20);
 }
 
+// The whole visible screen, for a CLI read by a screen module. Such a CLI draws where it likes,
+// and jules draws its session card at the very top of the pane, above eighteen blank rows: the
+// last-20 window never holds the card's status. The read ends its last row with a newline, and
+// that newline is not a row, so it is dropped. The module owns the reading and the core still
+// owns the stage order and the floor, which can only add caution.
+function wholeOf(lines: string[]): string[] {
+  const trimmed = lines.map((line) => line.trimEnd());
+  if (trimmed.length > 1 && trimmed[trimmed.length - 1] === '') trimmed.pop();
+  return trimmed;
+}
+
+// What a profile's reading may see: the whole screen for a CLI whose reading is a module, the
+// window for data.
+function linesFor(data: ScreenData, lines: string[]): string[] {
+  return data.whole_screen === true ? wholeOf(lines) : windowOf(lines);
+}
+
 /** The same classification `classify` runs, against a screen that may carry added patterns. */
 export function classifyData(data: ScreenData, lines: string[], options?: ScreenOptions | ReadClock): Screen {
-  return classifyLines(data, windowOf(lines), options);
+  return classifyLines(data, linesFor(data, lines), options);
 }
 
 /** Every stage, in the core's order. The first one that matches wins. */
 export function classify(cli: string | ScreenData, lines: string[], options?: ScreenOptions | ReadClock): Screen {
   const data = typeof cli === 'string' ? DATA[cli] : cli;
   if (!data) return { kind: 'unknown' };
-  return classifyLines(data, windowOf(lines), options);
+  return classifyLines(data, linesFor(data, lines), options);
 }
 
 /** The composer alone. A running turn would otherwise hide an empty input box. */
 export function classifyComposer(cli: string | ScreenData, lines: string[], options?: ScreenOptions | ReadClock): Screen {
   const data = typeof cli === 'string' ? DATA[cli] : cli;
   if (!data) return { kind: 'unknown' };
-  return composeLines(data, windowOf(lines), options);
+  return composeLines(data, linesFor(data, lines), options);
 }
 
 export function readScreen(cli: string | ScreenData, screen: string | undefined, options?: ScreenOptions | ReadClock): Screen {

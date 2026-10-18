@@ -8,7 +8,7 @@ process_names:
   - claude
 tested:
   from: '2.1.288'
-  to: '2.1.299'
+  to: '2.1.302'
 unattended:
   - --dangerously-skip-permissions
 rules:
@@ -71,6 +71,20 @@ quota:
     used: '{1}%'
     resets: '{2}'
     window: weekly
+  # The same labels with the pace margin the configurable status line prints before the reset:
+  # `W: 12% (+13.3%) (125h26m)` — the row a real screen in the suite carries (status.test.ts).
+  # The margin is the line's own `expected minus used` figure; the report reads it from the row
+  # itself, so these patterns carry the percentage and the reset and drop only the margin.
+  - account: anthropic
+    match: '\bL: ([0-9]+)% \((?:[+\-±][0-9.]+%)\) \(([0-9hm]+)\)'
+    used: '{1}%'
+    resets: '{2}'
+    window: session
+  - account: anthropic
+    match: '\bW: ([0-9]+)% \((?:[+\-±][0-9.]+%)\) \(([0-9hm]+)\)'
+    used: '{1}%'
+    resets: '{2}'
+    window: weekly
 status_model:
   - match: '(?:^|[\s·|])(Opus|Sonnet|Haiku|Fable)\s+([0-9]+(?:\.[0-9]+)*)(?:$|[\s·|])'
     model: 'Claude {1}'
@@ -79,7 +93,7 @@ status_model:
     yields: [Claude Opus, Claude Sonnet, Claude Haiku, Claude Fable]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
 screen:
-  # The shell after `/exit` on 2.1.299: `Resume this session with:` and `claude --resume`.
+  # The shell after `/exit` on 2.1.299 and 2.1.302: `Resume this session with:` and `claude --resume`.
   unknown:
     - any: ['Resume this session with:']
   trust:
@@ -90,7 +104,7 @@ screen:
     - all:
         - '^\s*[❯›>]?\s*Yes, I trust this folder\b'
       footer: 'Enter to confirm · Esc to cancel'
-    # 2.1.299 (`claude-code/2.1.299/trust.txt`): a "Quick safety check" whose marked
+    # 2.1.299 and 2.1.302 (`claude-code/2.1.302/trust.txt`): a "Quick safety check" whose marked
     # row is `No, exit` and whose second row is `Yes, I trust this folder`. Enter
     # confirms the marked row. The footer is the one the earlier dialog already uses.
     - all:
@@ -207,10 +221,13 @@ screen:
         patterns:
           - '^\s*[❯›>]\s*$'
   # The prompt is back and the error is still on the pane. Herdr calls the seat done. The
-  # sentence is the one a seat printed; no capture shows a retry key, so none is named.
+  # sentence is the one a seat printed; no capture shows a retry key, so none is named. `live`
+  # reads it on the live region alone: the newest turn above the box, never a turn the pane has
+  # scrolled past, so an old error over an idle prompt stays an idle prompt.
   provider_error:
     - any:
         - 'API Error: Connection lost mid-response\. The response above may be incomplete\.'
+      live: true
   # The rejected line, matched on the fragments that were quoted: the field report names
   # 429 and 403 as this CLI's usage-limit rejections. Whatever follows "Your limit will
   # reset at" is the reset time the watch reports.
@@ -237,7 +254,7 @@ screen:
     rule: '^[─━]{8,}$'
     # Explicit subscription labels from the configurable quota status line; context percentages
     # and transcript text are not quota. The constructed fixture documents this format.
-    status: '\b[LW]: [0-9]+% \([0-9hm]+\)'
+    status: '\b[LW]: [0-9]+% \((?:[0-9hm]+|[+\-±][0-9.]+%\))'
     footers:
       - '^\s{2,}.*·.*(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]+.*$'
       - '^\s{2,}(?:(?:⏵⏵\s+)?bypass permissions|⏸\s+manual mode)\b.*$'

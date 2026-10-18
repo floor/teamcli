@@ -1,20 +1,56 @@
 # Codex 0.161.0 terminal captures
 
-Captured from the installed macOS Codex CLI (`codex-cli 0.161.0`) on 2026-10-08 with
-herdr 0.7.1, `pane read --source visible --lines 200` (plain), in a scratch session of
-my own with one Codex pane, 54 by 23 — the size `up` creates. The CLI was launched the
-way a seat is launched, plus a pinned model so the status row is one the shipped profile
-reads:
+Captured from the installed macOS Codex CLI (`codex-cli 0.161.0`) on 2026-10-18 with
+herdr 0.7.1, `pane read --source visible --lines 60` (plain), in a scratch session of
+my own with one Codex pane per scene, 54 by 23 — the size `up` creates. The launch
+pinned a model so the status row is one the shipped profile reads; nothing typed was
+left from another scene.
 
-`codex -a never -s danger-full-access --no-daemon --no-alt-screen -m gpt-5.6-terra -c check_for_update_on_startup=false`
+The two launches are the person's own CLI's, not the seat's: no `-a never -s
+danger-full-access --no-daemon --no-alt-screen` flags. That is the launch that draws
+the chrome row under the status row — the shape that read `unknown` on a live seat —
+and the dialog shapes are the same either way.
 
-The pinned model was accepted. No trust dialog and no update screen appeared, and nothing
-was answered.
+- `codex -m gpt-6.1-sol` in a folder that is not a git repository: `idle-hint.txt`,
+  `unsent.txt`, `working.txt`, `exit-typed.txt`, `exit.txt`.
+- `codex -a on-request -s read-only -m gpt-6.1-sol` with one prompt asking for
+  `touch probe.txt`: `permission.txt`. The dialog was read and left unanswered; the
+  read-only sandbox is the capture's own setting.
+- `codex -m gpt-6.1-sol` in a subdirectory of a fresh git repository no trust decision
+  named: `trust.txt`. The dialog was read and left unanswered; the pane was closed
+  without answering it.
 
-`pane read --source visible` returns the pane's screen with leading and trailing blank
-rows trimmed. The reading below was taken from the returned text, as delivery reads it.
+The `.codex` config files the 0.157.0 permission capture needed were not needed here:
+`-a on-request -s read-only` makes a write ask on its own. No vendor configuration was
+edited, no dialog was answered, and the update check was not overridden.
 
-- `idle.txt`: the empty box at boot, read `idle`. The banner's workspace path is replaced by
-  `<workspace>`; the line is not part of any box, so the shorter stand-in moves nothing.
-  At this width the status row wraps: `weekly 9` stays on the status line and the next
+Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
+`<project-worktree>` and `<repository-root>`, and the resume id by `<session-id>`.
+
+- `idle.txt`: the empty box at boot, captured 2026-10-08, read `idle`. At 54 columns
+  this build wraps the status row: `weekly 9` stays on the status line and the next
   line is the ellipsis alone.
+- `idle-hint.txt`: the empty box on a plain launch, read `idle`. One chrome row sits
+  under the status row — `← for agents · ? for shortcuts`. The status row is cut
+  (`weekly 100…`). Read as `unknown` before the composer allowed that row.
+- `unsent.txt`: the empty box after a line was typed, read `unsent`. Typing hides the
+  chrome row; the status row is the pane's last line.
+- `working.txt`: the turn after Enter, read `working`. `• Working (0s • esc to
+  interrupt)` sits above the empty box, and the chrome row is back under the status
+  row.
+- `permission.txt`: the approval dialog for `touch probe.txt`, read `permission`. The
+  dialog draws three choices, one more than 0.157.0's: `Yes, proceed`, `Yes, and don't
+  ask again for commands that start …`, `No, and tell Codex what to do differently`.
+- `trust.txt`: the folder-trust dialog, read `trust`. 0.161.0's way out is `2. Back to
+  Agent Command Center` with `enter continue · esc back`, where 0.157.0 drew `2. Quit`
+  and `enter continue · esc quit`.
+- `exit-typed.txt`: `/exit` typed in the free box, read `unsent`; the menu row
+  `› /exit  exit Codex` sits above the input row.
+- `exit.txt`: the pane after Enter, read `unknown`. Codex asks no exit question; the
+  shell is back with the task's own advice above it.
+
+## Not produced
+
+`question`: Codex 0.161.0 asks none in its composer — the approval dialog above is the
+only question it draws — and the profile declares no question stage. `exit question`:
+0.161.0 ends on `/exit` with no question; the profile declares no exit confirm.

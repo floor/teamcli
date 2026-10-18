@@ -86,6 +86,7 @@ describe('team doctor on a file of every model shape', () => {
     expect(run.err).toBe('');
     expect(run.out).toBe(
       [
+        'team pilot, session "pilot"',
         // The fixture still spells the lead `coordinator:`, on line 4: doctor prints the file's
         // notice before the seats' own warnings, and counts it.
         'warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
@@ -94,7 +95,7 @@ describe('team doctor on a file of every model shape', () => {
         'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
         'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
         'ok    herdr 0.7.1',
-        '--    session pilot is not running',
+        'note  session pilot is not running',
         'ok    claude 2.1.288 (Claude Code)',
         'ok    claude-code: logged in',
         'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
@@ -105,17 +106,38 @@ describe('team doctor on a file of every model shape', () => {
         'ok    antigravity: logged in',
         'ok    cursor-agent 2026.10.01',
         'ok    cursor: logged in',
-        `ok    the lobby ${home}/.config/team/lobby: will be created at the first launch`,
-        `--    the file is legacy: migrate to ${home}/.config/team/lobby by writing:`,
+        'ok    the lobby ~/.config/team/lobby: will be created at the first launch',
+        'note  the file is legacy: migrate to ~/.config/team/lobby by writing:',
         'trust:',
         '  - ~/.config/team/lobby',
         `  - ${root}`,
         `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root`,
         'team doctor: nothing missing, 6 warnings',
+        'what 0.5.0 must not pretend:',
+        '  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.',
+        '  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.',
+        '  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.',
+        '  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.',
+        '  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.',
         '',
       ].join('\n'),
     );
     expect(run.code).toBe(0);
+  });
+
+  test('a launch naming the same model in another word order is no warning', async () => {
+    // agy's flag splits the vendor's display order: the launch starts Gemini Argon 4 and the file
+    // writes Gemini 4 Argon with the same version. One model, so the doctor says nothing of it.
+    edit((text) =>
+      text
+        .replace('launch: agy', 'launch: agy --model gemini-4-argon')
+        .replace('    model: Gemini Flash\n    version: "3.8"', '    model: Gemini 4 Argon\n    version: "4"'),
+    );
+    await approve();
+    const run = await doctor();
+    expect(run.out).not.toContain('plain-voyager: the launch starts');
+    // A seat launched on another model still warns, spelled as launcher and file spell it.
+    expect(run.out).toContain('warn  other-model: the launch starts Claude Fable 5.1, the file says Opus 5.5 (dev)\n');
   });
 
   test('a declared model_from makes the note say what really happens', async () => {
@@ -123,11 +145,11 @@ describe('team doctor on a file of every model shape', () => {
     await approve();
     const run = await doctor();
     // claude-code's screen names the seat's declared model, so the running seat is checked
-    expect(run.out).toContain('--    script-seat: the model is chosen by its launcher; checked on the running seat\n');
+    expect(run.out).toContain('note  script-seat: the model is chosen by its launcher; checked on the running seat\n');
     expect(run.out).not.toContain('script-seat: the launch');
     // the three message seats' rules files count with the one model warning, and the file's
     // notice counts too
-    expect(run.out).toEndWith('team doctor: nothing missing, 5 warnings\n');
+    expect(run.out).toContain('team doctor: nothing missing, 5 warnings\nwhat 0.5.0 must not pretend:\n');
   });
 
   test('model_from edited after the record is not a doctor miss', async () => {
@@ -152,11 +174,11 @@ describe('team doctor on a file of every model shape', () => {
       'warn  plain-codex: its rules file is missing; run team reload plain-codex',
       'warn  plain-voyager: its rules file is missing; run team reload plain-voyager',
       'warn  plain-reviewer: its rules file is missing; run team reload plain-reviewer',
-      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
+      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.302: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into',
       'warn  script-seat: the launch runs zsh, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
     ]);
     expect(run.out).toContain('ok    the watch is running\n');
-    expect(run.out).toEndWith('team doctor: nothing missing, 6 warnings\n');
+    expect(run.out).toContain('team doctor: nothing missing, 6 warnings\nwhat 0.5.0 must not pretend:\n');
     expect(run.code).toBe(0);
   });
 });
@@ -188,8 +210,8 @@ describe('the note for a seat launched before team recorded its process', () => 
     expect(run.code).toBe(0);
     const notes = run.out.split('\n').filter((line) => line.includes('launched before team recorded its process'));
     expect(notes).toEqual([
-      '--    plain-codex: launched before team recorded its process; run `team remove plain-codex --keep` then `team add plain-codex` (or `team down` then `team up` for the whole team) to launch it again',
-      '--    other-model: launched before team recorded its process; run `team remove other-model --keep` then `team add other-model` (or `team down` then `team up` for the whole team) to launch it again',
+      'note  plain-codex: launched before team recorded its process; run `team register plain-codex` to record its process',
+      'note  other-model: launched before team recorded its process; run `team register other-model` to record its process',
     ]);
   });
 });

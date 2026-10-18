@@ -244,7 +244,7 @@ describe('the prompt', () => {
 });
 
 describe('an unanswered prompt cannot hold the run', () => {
-  const left: PauseResult = { kind: 'left out', reason: 'timed out after 4 s waiting for its owner; left as it is', detail: '' };
+  const left: PauseResult = { kind: 'left out', reason: 'timed out after 4 s waiting for an answer; left as it is', detail: '' };
 
   test('a trust prompt with no key ends after the idle timeout, the seat left as it is', async () => {
     OWN_CLOCK.reset();

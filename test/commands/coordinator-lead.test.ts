@@ -159,15 +159,21 @@ const operator = { kind: 'seat' as const, name: 'operator', pane: 'operator-pane
 const worker = { kind: 'seat' as const, name: 'worker', pane: 'worker-pane', session: 'acme' };
 
 describe('a lead written role: coordinator', () => {
-  test('the coordinator seat may add another seat', async () => {
+  test('the coordinator seat may not add another seat: the map\'s row is the owner\'s alone', async () => {
     const { base, root, home } = place();
     approve(teamYaml(true), root, home);
     record(root, { coordinator: coordinator.pane, operator: operator.pane });
-    const io = testIo(root, coordinator);
-    const code = await runAdd(['worker', '--dry-run'], io, addSources(home));
-    expect(code, `${io.out}${io.err}`).toBe(0);
-    expect(io.out).toContain('worker');
-    expect(io.err).toBe('');
+    // `role: coordinator` is a role, not a standing grant: the map's `add` row refuses the
+    // coordinator's seat like every other, and a dry run says the refusal and the way out.
+    const dry = testIo(root, coordinator);
+    const code = await runAdd(['worker', '--dry-run'], dry, addSources(home));
+    expect(code, `${dry.out}${dry.err}`).toBe(1);
+    expect(dry.out).toContain('! add would refuse: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is coordinator');
+    expect(dry.out).toContain('! to unblock: an approved delegate runs `team add worker`');
+    expect(dry.err).toBe('');
+    const real = testIo(root, coordinator);
+    expect(await runAdd(['worker'], real, addSources(home))).toBe(1);
+    expect(real.err).toBe('team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is coordinator\n');
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -190,24 +196,30 @@ describe('a lead written role: coordinator', () => {
     approve(teamYaml(true), root, home);
     record(root, { coordinator: coordinator.pane, worker: worker.pane });
     const add = testIo(root, worker);
+    // A dry run explains the refusal on stdout instead of refusing bare; it still exits 1.
     expect(await runAdd(['worker', '--dry-run'], add, addSources(home))).toBe(1);
-    expect(add.err).toContain('only the owner, the orchestrator or the operator');
+    expect(add.out).toContain('! add would refuse:');
+    expect(add.out).toContain('only the owner or a standing grant (delegate)');
     const remove = testIo(root, worker);
     expect(await runRemove(['worker'], remove, removeSources(home, []))).toBe(1);
-    expect(remove.err).toContain('only the owner, the orchestrator or the operator');
+    expect(remove.err).toContain('only the owner or `leads` removes a seat');
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('the operator may remove another seat, and only the owner removes the operator', async () => {
+  test('the lead may remove another seat, and only the owner removes the orchestrator or the operator', async () => {
     const { base, root, home } = place();
     approve(teamYaml(false), root, home);
     record(root, { coordinator: coordinator.pane, operator: operator.pane, worker: worker.pane });
     const agents: HerdrAgent[] = [
       { name: 'worker', agent: 'claude', pane: worker.pane, workspace: 'worker-ws', status: 'idle', cwd: null },
     ];
+    const byCoordinator = testIo(root, coordinator);
+    expect(await runRemove(['worker'], byCoordinator, removeSources(home, agents)), `${byCoordinator.out}${byCoordinator.err}`).toBe(0);
+    expect(byCoordinator.out).toContain('removed worker');
+    // The operator is not a lead: the map's `remove` row refuses it, and the sentence says so.
     const byOperator = testIo(root, operator);
-    expect(await runRemove(['worker'], byOperator, removeSources(home, agents)), `${byOperator.out}${byOperator.err}`).toBe(0);
-    expect(byOperator.out).toContain('removed worker');
+    expect(await runRemove(['worker'], byOperator, removeSources(home, []))).toBe(1);
+    expect(byOperator.err).toBe('team remove: only the owner or `leads` removes a seat; this call is operator\n');
     const leadRemovesOperator = testIo(root, coordinator);
     expect(await runRemove(['operator'], leadRemovesOperator, removeSources(home, []))).toBe(1);
     expect(leadRemovesOperator.err).toBe(

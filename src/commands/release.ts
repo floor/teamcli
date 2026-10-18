@@ -1,10 +1,12 @@
 import { readArgs } from '../args.ts';
 import { loadTeamFile } from '../file/load.ts';
-import { SEMVER_PATTERN, packageProblem } from '../release/grammar.ts';
+import type { Command, Io } from '../io.ts';
+import { plainLine } from '../launch/plain.ts';
+import { formatTable, pluralCount, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { runChecks, type Outcome, type ReleaseResult } from '../release/checks.ts';
+import { SEMVER_PATTERN, packageProblem } from '../release/grammar.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
 import { keychainReader, realSecurityRun, type KeyReader } from '../release/keychain.ts';
-import type { Command, Io } from '../io.ts';
 
 export const USAGE = `Usage: team release check <package@version> [--json] [--file <path>]
 
@@ -21,8 +23,7 @@ Linear milestone and a qualifying status update (one read-only request, its key
 read from the Keychain and sent in one header, nowhere else); with the activity
 pair, the release marker in the public activity file.
 
-Exits 0 when every check passes, 1 when one is missing, 2 when one is unknown,
-64 on a bad invocation or an invalid team file.
+Exits 0 when every check passes, 1 when one is missing, 2 when one is unknown, 64 on a bad invocation or an invalid team file.
 `;
 
 // The rows, in the output's fixed order; a check is present exactly when the file configures it.
@@ -38,7 +39,7 @@ function jsonRequested(argv: string[]): boolean {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index] as string;
     if (argument === '--file') index += 1;
-    else if (argument === '--json') return true;
+    else if (argument === '--json' || argument.startsWith('--json=')) return true;
   }
   return false;
 }
@@ -52,7 +53,8 @@ export async function runRelease(argv: string[], io: Io, fetcher: Fetch, keyRead
   const args = readArgs(argv, ['file'], ['json']);
   const sub = args.rest[0];
   const fail = (code: 'usage' | 'configuration', message: string): number => {
-    if (json) io.stdout(`${JSON.stringify({ error: { code, message } })}\n`);
+    const id = code === 'usage' ? 'release.usage' : 'release.configuration';
+    if (json) writeJsonError(io, id, message, null);
     else io.stderr(`team release: ${message}\n`);
     // exit: release.configuration
     // exit: release.usage
@@ -94,12 +96,31 @@ export async function runRelease(argv: string[], io: Io, fetcher: Fetch, keyRead
   const result = await runChecks(decl, version, fetcher, {
     keyReader: keyReader ?? keychainReader(process.platform, io.stdinIsTTY, realSecurityRun),
   });
+  const keys = present(result);
+  const statuses = keys.map((check) => (result[check] as Outcome).status);
+  const missingCount = statuses.filter((status) => status === 'missing').length;
+  const unknownCount = statuses.filter((status) => status === 'unknown').length;
   if (json) {
-    io.stdout(jsonResult(name, version, result));
+    const checks: Record<string, Outcome> = {};
+    for (const check of keys) {
+      const { status, detail } = result[check] as Outcome;
+      checks[check] = { status, detail };
+    }
+    writeJson(io, 'team.release', {
+      format: 1,
+      package: name,
+      version,
+      checks,
+      ...(result.warning !== undefined ? { warning: result.warning } : {}),
+      summary: {
+        checks: statuses.length,
+        missing: missingCount,
+        unknown: unknownCount,
+      },
+    });
   } else {
-    io.stdout(table(result));
+    io.stdout(renderPlainRelease(name, version, result, io));
   }
-  const statuses = present(result).map((check) => (result[check] as Outcome).status);
   // exit: release.passed
   if (statuses.every((status) => status === 'pass')) return 0;
   // exit: release.missing
@@ -112,27 +133,27 @@ function present(result: ReleaseResult): (keyof ReleaseResult)[] {
   return ORDER.filter((check) => result[check] !== undefined);
 }
 
-// One JSON object and nothing else: the three keys in order, each check on one line, and the
-// one warning as a fourth key when the run has one.
-function jsonResult(name: string, version: string, result: ReleaseResult): string {
-  const lines = present(result).map((check) => {
-    const { status, detail } = result[check] as Outcome;
-    return `    ${JSON.stringify(check)}: { "status": ${JSON.stringify(status)}, "detail": ${JSON.stringify(detail)} }`;
+function renderPlainRelease(name: string, version: string, result: ReleaseResult, io: Io): string {
+  const keys = present(result);
+  const rows = keys.map((check) => {
+    const outcome = result[check] as Outcome;
+    return [check, outcome.status, outcome.detail];
   });
-  const warning = result.warning === undefined ? '' : `,\n  "warning": ${JSON.stringify(result.warning)}`;
-  return `{\n  "package": ${JSON.stringify(name)},\n  "version": ${JSON.stringify(version)},\n  "checks": {\n${lines.join(',\n')}\n  }${warning}\n}\n`;
-}
-
-function table(result: ReleaseResult): string {
-  const rows: string[][] = [
-    ['check', 'status', 'detail'],
-    ...present(result).map((check) => {
-      const outcome = result[check] as Outcome;
-      return [check, outcome.status, outcome.detail];
-    }),
-  ];
-  const first = Math.max(...rows.map((row) => (row[0] as string).length));
-  const second = Math.max(...rows.map((row) => (row[1] as string).length));
-  const warning = result.warning === undefined ? '' : `warn  ${result.warning}\n`;
-  return `${rows.map((row) => `${(row[0] as string).padEnd(first)}  ${(row[1] as string).padEnd(second)}  ${row[2]}`).join('\n')}\n${warning}`;
+  const missingCount = rows.filter((row) => row[1] === 'missing').length;
+  const style = ttyStyle(io);
+  const tableBlock = formatTable({
+    headers: ['CHECK', 'STATE', 'DETAIL'],
+    rows,
+    style,
+    styleCell(padded, rawCleaned, _rowIndex, colIndex, cellStyle) {
+      if (colIndex !== 1) return padded;
+      if (rawCleaned === 'pass') return cellStyle.green(padded);
+      if (rawCleaned === 'missing') return cellStyle.red(padded);
+      if (rawCleaned === 'unknown') return cellStyle.yellow(padded);
+      return padded;
+    },
+  });
+  const warning = result.warning === undefined ? '' : `warn  ${plainLine(result.warning)}\n`;
+  const summary = `${pluralCount(rows.length, 'check')}, ${missingCount} missing\n`;
+  return `package ${plainLine(name)}, version ${plainLine(version)}\n${tableBlock}${warning}${summary}`;
 }

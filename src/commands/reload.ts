@@ -1,40 +1,68 @@
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
-import { describeCaller, isOwner, walkCaller } from '../caller.ts';
+import {
+  anotherPaneRefusal,
+  callerOf,
+  describeCaller,
+  isOwner,
+  noPaneRefusal,
+  standingOf,
+  walkCaller,
+} from '../caller.ts';
 import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
-import { grantGate, logGranted } from '../grant.ts';
+import { grantGate, logGranted, type GrantVerdict } from '../grant.ts';
 import {
   agentList,
   agentRename,
+  agentStatus,
+  paneForeground,
   paneProcesses,
   paneRead,
   paneRun,
   paneShellBack,
+  pressEnter,
   reportDisplayAgent,
+  typeText,
   workspaceClose,
   workspaceCreate,
   workspacePanes,
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
+import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
+import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
+import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { gateVerdict } from '../permissions/who.ts';
+import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { approvalStanding, type Standing } from '../store/store.ts';
+import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
+import { realSources as doctorSources } from './doctor.ts';
+import { rulesFileProblem } from './status.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = 'Usage: team reload <seat> [--file <path>]\n';
+export const USAGE = `Usage: team reload <seat> [--file <path>] [--json]
+
+Exits 0 when the seat is reloaded or already matches the file, 1 when reload is refused or relaunch fails, 2 when the invocation or team file can't be read.
+`;
 
 export type ReloadSources = {
   launch: Launch;
@@ -42,10 +70,21 @@ export type ReloadSources = {
   now?: () => Date;
   grantGate?: typeof grantGate;
   logGranted?: typeof logGranted;
+  standing?: (root: string) => Standing;
+  /** What the installed `<binary>` reports as its version, read once before a close. The
+   *  profile's tested range is the record of which screens this build reads: a version outside
+   *  it refuses up front, and a version that cannot be read refuses nothing. Absent: the close
+   *  is made exactly as it was before this guard. */
+  version?: (binary: string) => string | null;
 };
 
 function aim(session: string): string | undefined {
   return session === 'default' ? undefined : session;
+}
+
+/** A profile's tested range as `doctor` prints it. */
+function testedRange(tested: { from: string; to: string }): string {
+  return tested.from === tested.to ? tested.from : `${tested.from} to ${tested.to}`;
 }
 
 const realLaunch: Launch = {
@@ -64,7 +103,10 @@ const realLaunch: Launch = {
   agents: (session) => agentList(aim(session)),
   workspacePanes: (session, workspace) => workspacePanes(workspace, aim(session)),
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
-  foreground: (session, pane) => null,
+  typeText: (session, pane, text) => typeText(pane, text, aim(session)),
+  pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  agentStatus: (session, pane) => agentStatus(pane, aim(session)),
+  foreground: (session, pane) => paneForeground(pane, aim(session)),
   processInfo: (session, pane) => paneProcesses(pane, aim(session)),
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
   sleep: (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)),
@@ -75,6 +117,7 @@ const realSources: ReloadSources = {
   launch: realLaunch,
   home: homedir(),
   now: () => new Date(),
+  version: (binary) => doctorSources.version(binary),
 };
 
 export const reload: Command = (argv, io) => runReload(argv, io, realSources);
@@ -82,44 +125,65 @@ export default reload;
 
 /**
  * `team reload <seat>`: when the file's model, version or effort differs from the launch
- * record, close that seat at an idle prompt and launch the file's line. A ready seat `up`
- * leaves alone stays up. Nothing is closed while the seat is working or the box holds
- * unsent text, and a seat launched before the record existed is refused.
+ * record — or a message seat's per-seat rules file no longer holds the live text — close that
+ * seat at an idle prompt and launch the file's line, delivering the rules again. A ready seat
+ * `up` leaves alone stays up. Nothing is closed while the seat is working or the box holds
+ * unsent text. A seat launched before the record kept a model is read from its screen, or
+ * from the file when the screen names none, and recorded in place when nothing drifts.
  */
 export async function runReload(argv: string[], io: Io, sources: ReloadSources = realSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['file'], []);
-  if (args.error) return invocation(out, args.error);
+  // A bad option stops the parser before `--json` is read when it comes first, and the
+  // structured refusal is still the one the caller asked for.
+  const json = hasJsonFlag(argv);
+  const args = readArgs(argv, ['file'], ['json']);
+  if (args.error) return invocation(io, json, args.error);
   const name = args.rest.length === 1 ? args.rest[0] : undefined;
   if (!name) {
     const extra = args.rest[1];
-    return invocation(out, extra === undefined ? 'a <seat> is required' : `unexpected "${plainLine(extra)}"`);
+    return invocation(io, json, extra === undefined ? 'a <seat> is required' : `unexpected "${plainLine(extra)}"`);
   }
 
   const caller = walkCaller(io);
   const owner = isOwner(caller);
   const flagged = args.values.file;
   const foreign = flagged !== undefined && resolve(io.cwd, flagged) !== resolve(io.cwd, TEAM_FILE);
+  // Dev mode, from this folder's own file: the caller's place, never a file the caller names.
+  // A `dev-mode` value anywhere in its chain governs, and `TEAMCLI_DEV_MODE` is then ignored;
+  // before any such value, the variable set to exactly `1` keeps its behaviour. The gate below
+  // is the caller gate dev mode folds: a grant the file omits and one naming another seat are
+  // that gate, while its placement (`no-pane`, `another-pane`), the approval, the scope, a file
+  // that will not load and the owner's `--file` stay refusals in every mode.
+  const policyLoad = loadTeamFile(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
+  const dev = resolveDevMode('reload', io, {
+    ...(sources.home ? { home: sources.home } : {}),
+    team: policyLoad.ok ? policyLoad.team : null,
+    root: policyLoad.ok ? policyLoad.root : null,
+    now: sources.now ? sources.now() : new Date(),
+  });
+  // The configuration lines the run owes once, written where the caller's place is known and
+  // before the grant gate — a gate that refuses must not swallow them: the variable ignored
+  // under a governing policy, an expiry, a source that could not be read. Nothing is written
+  // when the chain had nothing to say.
+  const placeDir = policyLoad.ok ? dirname(policyLoad.path) : dirname(join(io.cwd, TEAM_FILE));
+  logDevModeState(placeDir, 'reload', describeCaller(caller), dev, sources.now ? sources.now() : new Date());
+  let devWarning: string | null = null;
   let grantSeat: string | null = null;
+  let said: GrantVerdict | null = null;
   if (!owner) {
-    const said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
-    if (said.kind === 'refused') {
-      out.stderr(`team reload: ${said.text}\n`);
-      // exit: reload.grant-another-pane
-      // exit: reload.grant-approval
-      // exit: reload.grant-caller
+    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
+    // A grant that cannot be read is the refusal it was, before any other reading: the rest is
+    // judged with the team file in hand, where the map's `reload` row admits a lead.
+    if (said.kind === 'refused' && said.id === 'grant.file') {
+      refuse(io, json, 'reload', {
+        id: 'reload.grant-file',
+        message: said.text,
+        repair: null,
+      });
       // exit: reload.grant-file
-      // exit: reload.grant-no-pane
-      // exit: reload.grant-omitted
-      // exit: reload.grant-scope
       return 1;
     }
-    grantSeat = said.grant.seat;
-    if (foreign) {
-      out.stderr(`team reload: --file is the owner's; the granted seat cannot use it\n`);
-      // exit: reload.grant-flag
-      return 1;
-    }
+    if (said.kind === 'passed') grantSeat = said.grant.seat;
   }
 
   const loaded = loadTeamFile(io.cwd, {
@@ -127,75 +191,266 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     ...(sources.home ? { home: sources.home } : {}),
   });
   if (!loaded.ok) {
-    for (const problem of loaded.errors) {
-      out.stderr(`team reload: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
-    }
+    const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
+    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null });
+    else for (const line of said) out.stderr(`team reload: ${line}\n`);
     // exit: reload.file
     return 2;
   }
 
   const team = loaded.team;
+  const dir = dirname(loaded.path);
+  const root = loaded.root;
+  const home = sources.home;
+  const standing = (sources.standing ?? approvalStanding)(root, home);
+  const session = team.session;
+  // Two doors for a seat: the map's `reload` row (the owner and the team's `leads`, standing on
+  // their recorded pane) and the grant. A grant the file carries is a second gate, as it is for
+  // `down`: its refusal is a refusal even where the map would admit the caller. With no grant,
+  // a lead passes on the map's row alone.
+  const placed = callerOf(io, session);
+  if (!owner && grantSeat === null) {
+    const rule = gateVerdict(
+      placed, team, loaded.root, sources.home ?? homedir(), 'reload',
+      standingOf(dir, session, placed), sources.now ?? (() => new Date()),
+    );
+    let refusal: string | null = null;
+    // A grant the file carries is read before the placement: its sentence names what the file
+    // must fix (an approval, a scope, a seat), which is more than "you are not placed". The
+    // grant's own placement words are the same sentence the map's verdict gives, so they are
+    // taken from the verdict below.
+    const grantWords = said !== null && said.kind === 'refused' ? said : null;
+    const placementWords = grantWords?.id === 'grant.no-pane' || grantWords?.id === 'grant.another-pane';
+    if (grantWords !== null && !placementWords && (team.grant !== null || rule.kind !== 'ok')) refusal = grantWords.text;
+    else if (rule.kind === 'no-pane') refusal = noPaneRefusal(rule.name);
+    else if (rule.kind === 'another-pane') refusal = anotherPaneRefusal(rule.name, rule.recordedPane);
+    else if (!(rule.kind === 'ok' && team.grant === null)) refusal = said?.kind === 'refused' ? said.text : null;
+    if (refusal !== null) {
+      // Dev mode lifts the caller gate's own words — a grant the file omits, or one naming
+      // another seat — and nothing else: the placement's repair, the approval and the scope
+      // stay refusals.
+      const liftable = rule.kind === 'refused' && said !== null && said.kind === 'refused'
+        && (said.id === 'grant.omitted' || said.id === 'grant.caller');
+      const folded = liftable ? devModeCallerGate(dev, refusal) : null;
+      if (folded === null) {
+        // The document's row is the gate's own: the grant's id where the file's grant refused,
+        // the placement's for the two pane verdicts, the caller's row otherwise.
+        const id = grantWords !== null && grantWords.id.startsWith('grant.') && !placementWords
+          ? `reload.${grantWords.id.replace(/^grant\./, 'grant-')}`
+          : rule.kind === 'no-pane' || (placementWords && grantWords?.id === 'grant.no-pane') ? 'reload.grant-no-pane'
+            : rule.kind === 'another-pane' || grantWords?.id === 'grant.another-pane' ? 'reload.grant-another-pane'
+              : 'reload.grant-caller';
+        refuse(io, json, 'reload', {
+          id,
+          message: `${refusal}${liftable ? devModeExpiryNote(dev) : ''}`,
+          repair: null,
+        });
+        // exit: reload.grant-another-pane
+        // exit: reload.grant-approval
+        // exit: reload.grant-caller
+        // exit: reload.grant-no-pane
+        // exit: reload.grant-omitted
+        // exit: reload.grant-scope
+        return 1;
+      }
+      out.stderr(`team reload: ${folded}\n`);
+      devWarning = folded;
+    }
+  }
+  if (!owner && foreign) {
+    refuse(io, json, 'reload', {
+      id: 'reload.grant-flag',
+      message: "--file is the owner's; the granted seat cannot use it",
+      repair: null,
+    });
+    // exit: reload.grant-flag
+    return 1;
+  }
+  // The audit line the fold owes: written where the gate is used, before any later refusal
+  // ends the run. A run the owner's `--file` refusal ended above owes none — no close was
+  // permitted — so the line waits until that refusal has passed.
+  if (devWarning !== null) logDevMode(dir, 'reload', describeCaller(placed), devWarning, sources.now?.() ?? new Date());
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) {
-    out.stderr(`team reload: no seat of that name\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.absent',
+      message: 'no seat of that name',
+      repair: 'team seats lists the seats the file declares',
+    });
     // exit: reload.absent
     return 1;
   }
-  if (grantSeat !== null && seat.name === grantSeat) {
-    out.stderr(`team reload: a granted reload does not close the caller's seat\n`);
+  if (placed.kind === 'seat' && seat.name === placed.name) {
+    refuse(io, json, 'reload', {
+      id: 'reload.self',
+      message: "a reload does not close the caller's seat",
+      repair: null,
+    });
     // exit: reload.self
     return 1;
   }
 
-  const dir = dirname(loaded.path);
-  const session = team.session;
   const recorded = readState(dir).sessions[session]?.seats[seat.name];
   if (seat.stopped || !recorded || recorded.stage !== 'ready' || !recorded.pane || !recorded.workspace || !recorded.launched) {
-    out.stderr(`team reload: ${seat.name} has no ready pane to close\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.not-running',
+      message: `${seat.name} has no ready pane to close`,
+      repair: `team up launches ${seat.name}; team reload needs a seat already at its idle prompt`,
+    });
     // exit: reload.not-running
     return 1;
   }
+  // A seat started before the launch record kept a model still reloads: its screen's status row
+  // is the first answer, the team file's declared values the second, and whichever answered is
+  // said and then recorded. A seat already running what that answer declares is recorded in
+  // place, with no close.
+  let compared = recorded;
+  let source: 'screen' | 'file' | null = null;
+  let shown: Running | null = null;
   if (recorded.model === undefined || recorded.version === undefined) {
-    out.stderr(`team reload: ${seat.name}: its model and effort were not recorded at launch\n`);
-    // exit: reload.unrecorded
-    return 1;
+    shown = seatModel({ cli: seat.cli, model: seat.model }, sources.launch.paneText(session, recorded.pane) ?? undefined);
+    compared = {
+      ...recorded,
+      model: shown?.model ?? seat.model,
+      version: shown?.version ?? seat.version,
+      ...(recorded.effort === undefined && seat.effort !== undefined ? { effort: seat.effort } : {}),
+    };
+    source = shown === null ? 'file' : 'screen';
   }
-  const detail = driftOf(recorded, seat);
-  if (detail === null) {
-    out.stdout(`team reload: ${seat.name} is already running what the file declares\n`);
+  const detail = driftOf(compared, seat);
+  // The rules file is a launch input too: a seat whose per-seat file no longer holds the live
+  // text is not running what the file declares, however its model row reads. This is the same
+  // reading `team check` makes (`rulesFileProblem`), so the repair the check names can never
+  // leave the check red. A seat with no home to look under has no file to compare.
+  const rulesProblem = home === undefined ? null : rulesFileProblem(standing, team, seat, root, home);
+  const driftDetail = [detail, rulesProblem === null ? null : 'rules'].filter((part): part is string => part !== null).join('; ');
+  if (detail === null && rulesProblem === null && source === null) {
+    const summary = `team reload: ${seat.name} is already running what the file declares`;
+    if (json) {
+      writeJson(io, 'team.reload', {
+        format: 1 as const,
+        dry_run: false,
+        status: 'same',
+        action_summary: summary,
+        project: team.project,
+        session,
+        seat: seat.name,
+        pane: recorded.pane,
+      });
+    } else {
+      out.stdout(`${summary}\n`);
+    }
     // exit: reload.same
     return 0;
   }
 
-  const listed = sources.launch.agents(session)?.find((agent) => agent.name === seat.name);
-  if (listed && listed.pane === recorded.pane && listed.workspace === recorded.workspace) {
-    const text = sources.launch.paneText(session, recorded.pane);
-    const kind = readScreen(seat.cli, text ?? undefined).kind;
-    if (listed.status === 'working' || kind === 'working') {
-      out.stderr(`team reload: ${seat.name} is working; nothing closed\n`);
-      // exit: reload.working
-      return 1;
-    }
-    if (kind === 'unsent') {
-      out.stderr(`team reload: ${seat.name} holds unsent text; nothing closed\n`);
-      // exit: reload.unsent
-      return 1;
-    }
-    if (!((listed.status === 'idle' || listed.status === 'done') && kind === 'idle')) {
-      out.stderr(`team reload: ${seat.name} is not at an idle prompt; nothing closed\n`);
-      // exit: reload.not-idle
-      return 1;
-    }
-  }
-
+  // Both writes — the record kept in place and the close that follows a drift — happen under the
+  // session's mutator lock, and the idle-prompt reading is taken there too, so nothing between
+  // that reading and the close can move the seat.
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    out.stderr(`team reload: ${plainLine(runLockText(runLock.held, session, dir))}\n`);
+    refuse(io, json, 'reload', {
+      id: 'reload.run-lock',
+      message: runLockText(runLock.held, session, dir),
+      repair: null,
+    });
     // exit: reload.run-lock
     return 1;
   }
   try {
-    const root = loaded.root;
+    if (detail === null && rulesProblem === null) {
+      updateState(dir, (file) => {
+        const held = file.sessions[session]?.seats[seat.name];
+        if (!held) return;
+        held.model = compared.model;
+        held.version = compared.version;
+        if (compared.effort === undefined) delete held.effort;
+        else held.effort = compared.effort;
+      });
+      const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
+      if (json) {
+        writeJson(io, 'team.reload', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'same',
+          action_summary: summary,
+          project: team.project,
+          session,
+          seat: seat.name,
+          pane: recorded.pane,
+        });
+      } else {
+        out.stdout(`${summary}\n`);
+      }
+      // exit: reload.unrecorded
+      return 0;
+    }
+
+    // The close this run makes hands the seat's place to a relaunch, and the relaunch's ready
+    // screen is read through the CLI's profile: an installed version outside the profile's
+    // tested range may draw a prompt no recogniser knows, and the seat would be closed and left
+    // without one. The version is read once, before anything is closed. A version that cannot
+    // be read is not evidence against the CLI, and refuses nothing.
+    const profile = profileFor(seat.cli);
+    const printed = profile === null || sources.version === undefined ? null : sources.version(profile.binary);
+    if (profile !== null && printed !== null) {
+      const verdict = versionVerdict(printed, profile.tested);
+      if (verdict === 'older' || verdict === 'newer') {
+        refuse(io, json, 'reload', {
+          id: 'reload.untested',
+          message: `${seat.name}: ${plainLine(profile.binary)} ${plainLine(printed)} is ${verdict} than the tested ${plainLine(testedRange(profile.tested))}; its ready screen may not be recognised, so nothing closed`,
+          repair: null,
+        });
+        // exit: reload.untested
+        return 1;
+      }
+    }
+
+    const listed = sources.launch.agents(session)?.find((agent) => agent.name === seat.name);
+    if (listed && listed.pane === recorded.pane && listed.workspace === recorded.workspace) {
+      const text = sources.launch.paneText(session, recorded.pane);
+      const kind = readScreen(seat.cli, text ?? undefined).kind;
+      if (listed.status === 'working' || kind === 'working') {
+        refuse(io, json, 'reload', { id: 'reload.working', message: `${seat.name} is working; nothing closed`, repair: null });
+        // exit: reload.working
+        return 1;
+      }
+      if (kind === 'unsent') {
+        refuse(io, json, 'reload', { id: 'reload.unsent', message: `${seat.name} holds unsent text; nothing closed`, repair: null });
+        // exit: reload.unsent
+        return 1;
+      }
+      // herdr's own status is the last word on a screen the profile cannot read: one it reports
+      // idle or done is closed without typing into it, and the advice says so. A working seat
+      // was refused above; anything else unread stays the refusal it was.
+      if (!(unreadIdle(listed.status) && (kind === 'idle' || kind === 'unknown'))) {
+        refuse(io, json, 'reload', { id: 'reload.not-idle', message: `${seat.name} is not at an idle prompt; nothing closed`, repair: null });
+        // exit: reload.not-idle
+        return 1;
+      }
+      if (kind === 'unknown') {
+        // The advice is the terminal's: the document has no field for it, and stdout stays the
+        // one document under `--json`.
+        if (json) out.stderr(`team reload: ${unreadAdvice(seat.name, listed.status)}\n`);
+        else out.stdout(`team reload: ${unreadAdvice(seat.name, listed.status)}\n`);
+      }
+    }
+
+    // The readings are the terminal's; under `--json` stdout is the one document, so they ride
+    // on stderr, where a reader parsing the document never meets them.
+    const says = (text: string) => (json ? out.stderr(text) : out.stdout(text));
+    if (rulesProblem !== null) {
+      // Said before any model line: the file, not the status row, is what the repair is for.
+      // The line that follows (when the record held no model) already ends `; reloading`.
+      says(`team reload: ${seat.name}: ${rulesProblem}${source === null ? '; reloading' : ''}\n`);
+    }
+    if (source !== null) {
+      const effort = source === 'screen' ? effortFromFile(recorded, compared) : effortSaid(recorded, compared);
+      says(source === 'screen'
+        ? `team reload: ${seat.name}: its launch record held no model; its screen shows ${compared.model} ${compared.version}${effort}; reloading\n`
+        : `team reload: ${seat.name}: its launch record held no model; its screen names none, so the file's ${compared.model} ${compared.version}${effort} stand; reloading\n`);
+    }
+
     const planned = {
       name: seat.name,
       cli: seat.cli,
@@ -209,21 +464,38 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
       rules: rulesOf(team, seat, root),
+      // The same delivery a fresh `up` gives the seat: a message seat needs its per-seat file
+      // and the one line to read, written and typed by the host below; an option seat needs
+      // nothing here (its rules ride the launch line).
+      ...(home === undefined ? {} : seatDeliveryOf(standing, team, seat, root, home, standing.kind !== 'verified' || owner)),
       repair: {
         pane: recorded.pane,
         workspace: recorded.workspace,
         launched: recorded.launched,
         cli: seat.cli,
-        reload: { detail },
+        reload: { detail: driftDetail },
       },
     };
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and relaunches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, session, [planned]);
+    const installed = installCliHooks(dir, session, [planned]);
+    if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
+      logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
+        sources.now ? sources.now() : new Date());
+    }
     const steps = upPlan({
       session,
       root,
       seats: [planned],
       sessionRunning: true,
       startWatch: false,
+      cliHooks: installed,
+      watchLabel: watchLabel(team.project),
     });
+    // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
+    // run starts.
+    resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
     const now = sources.now ?? (() => new Date());
     let closed = false;
@@ -235,7 +507,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       classify(current, pane, cli) {
         return readScreen(cli, launch.paneText(current, pane) ?? undefined).kind;
       },
+      foreground: (current, pane) => launch.foreground(current, pane),
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,
+      agentStatus: (current, pane) => launch.agentStatus?.(current, pane) ?? null,
       agentPanes: (current) => launch.agentPanes(current),
       createWorkspace: (current, cwd, label) => launch.createWorkspace(current, cwd, label),
       paneRun: (current, pane, command) => launch.paneRun(current, pane, command),
@@ -249,6 +523,41 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       startServer: () => false,
       sessionUp: () => true,
       typeLine: () => false,
+      // The rules delivery a message seat needs after its relaunch: the file is written from
+      // the live text, then the one line is typed at an empty idle prompt and read back, with
+      // Enter only after the file still holds the hash the line names. The owner's live run and
+      // a run with no verified approval write under the live project name, as `restart` does.
+      ...(home === undefined ? {} : {
+        deliverRules: async (
+          current: string,
+          pane: string,
+          cli: string,
+          file: { text: string; path: string; line: string; seat: string },
+          seconds: number,
+        ) => {
+          const devProject = standing.kind !== 'verified' || owner ? team.project : undefined;
+          const written = writeRulesFile(standing, file.seat, root, home, file.text, rulesFileHash(file.text), undefined, devProject);
+          if (!written.ok) return fileRefusalOf(written);
+          if (!typeablePath(file.path)) {
+            return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
+          }
+          const stopped: { why: Refusal | null } = { why: null };
+          const delivered = await deliverRules(cli, file.line, seconds, {
+            screen: () => launch.paneText(current, pane) ?? undefined,
+            status: () => launch.agentStatus?.(current, pane) ?? null,
+            type: (value) => launch.typeText?.(current, pane, value) ?? false,
+            enter: () => launch.pressEnter?.(current, pane) ?? false,
+            file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
+            foreground: () => launch.foreground(current, pane),
+            report: (why) => {
+              stopped.why = why;
+            },
+            now: () => now().getTime(),
+            sleep: launch.sleep,
+          });
+          return delivered === false && stopped.why !== null ? stopped.why : delivered;
+        },
+      }),
       stopSession: () => false,
       kill: () => false,
       allow: () => null,
@@ -270,6 +579,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const prior = current.seats[next] ?? { stage: patch.stage };
           const { waiting: written, effort, createdWorkspace: _created, ...rest } = patch;
           const stored: SeatState = { ...prior, ...rest };
+          // The record keeps the file's own launch line, never the executed one: the state hooks'
+          // `--settings` rides on the command the pane runs, not on what the seat declared.
+          const launch_line = (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
+          if (launch_line) stored.launch_line = launch_line;
           if (written === null) delete stored.waiting;
           else if (written) stored.waiting = written;
           if (effort === null) delete stored.effort;
@@ -280,7 +593,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         // model and effort the file now declares.
         if (patch.pane && next === seat.name && sources.home) {
           const made = registerLaunch(
-            { home: sources.home, team, root, by: describeCaller(caller), session },
+            { home: sources.home, team, root, by: describeCaller(caller), session, owner },
             seat,
             patch.pane,
             readState(dir).sessions[session]?.seats[next]?.id,
@@ -298,26 +611,55 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       sleep: (ms) => launch.sleep(ms),
       now: () => launch.now().getTime(),
       log(_who, what) {
-        if (what !== detail) return;
-        if (grantSeat !== null) (sources.logGranted ?? logGranted)(dir, grantSeat, 'reload', now(), `${seat.name} ${detail}`);
-        else logLine(dir, 'reload', describeCaller(caller), `${seat.name}: ${detail}`, now());
+        if (what !== driftDetail) return;
+        if (grantSeat !== null) (sources.logGranted ?? logGranted)(dir, grantSeat, 'reload', now(), `${seat.name} ${driftDetail}`);
+        else logLine(dir, 'reload', describeCaller(caller), `${seat.name}: ${driftDetail}`, now());
       },
     };
     const report = await executePlan(steps, session, host);
     if (!report.dropped.includes(seat.name)) {
       const after = readState(dir).sessions[session]?.seats[seat.name];
       if (after?.stage === 'ready') {
-        out.stdout(`team reload: ${seat.name} reloaded\n`);
+        const summary = `team reload: ${seat.name} reloaded`;
+        if (json) {
+          writeJson(io, 'team.reload', {
+            format: 1 as const,
+            dry_run: false,
+            status: 'reloaded',
+            action_summary: summary,
+            project: team.project,
+            session,
+            seat: seat.name,
+            pane: after.pane ?? recorded.pane,
+          });
+        } else {
+          out.stdout(`${summary}\n`);
+        }
         // exit: reload.reloaded
         return 0;
       }
     }
     if (!closed) {
-      out.stderr(`team reload: the seat changed before it closed; nothing relaunched\n`);
+      refuse(io, json, 'reload', {
+        id: 'reload.changed',
+        message: 'the seat changed before it closed; nothing relaunched',
+        repair: null,
+      });
       // exit: reload.changed
       return 1;
     }
-    out.stderr(`team reload: the close happened and the new launch did not reach ready\n`);
+    // The relaunch did not reach ready: the close happened and nothing took its place, so the
+    // registry records the seat as down. `stopped` keeps the same agent for the next launch and
+    // clears its pane; a record left `running` would describe a seat no pane holds.
+    if (sources.home) {
+      const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, seat.name, 'stopped');
+      if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
+    }
+    refuse(io, json, 'reload', {
+      id: 'reload.launch',
+      message: 'the close happened and the new launch did not reach ready',
+      repair: null,
+    });
     // exit: reload.launch
     return 1;
   } finally {
@@ -327,14 +669,43 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
 
 /** `model`, `effort`, or `model; effort`. Null when the launch record already matches the file. */
 function driftOf(recorded: SeatState, seat: Seat): string | null {
-  const model = recorded.model !== seat.model || recorded.version !== seat.version;
+  // The shared comparison (`modelDiffers`): another word order, another casing, or the version
+  // written inside the recorded model name is the model the file declares.
+  const model =
+    recorded.model === undefined || recorded.version === undefined
+      ? true
+      : modelDiffers(
+          { model: recorded.model, version: recorded.version },
+          { model: seat.model, version: seat.version },
+        );
   const effort = (recorded.effort ?? null) !== (seat.effort ?? null);
   if (!model && !effort) return null;
   return [model ? 'model' : '', effort ? 'effort' : ''].filter(Boolean).join('; ');
 }
 
-function invocation(io: Io, message: string): number {
-  io.stderr(`team reload: ${message}\n${USAGE}`);
+/** The effort the launch record lacked, read from the team file: said wherever the fallback
+ *  values are named, so the reader knows which half came from where. */
+/** The effort the file supplied, said plainly; the caller has already said where it came from. */
+function effortSaid(recorded: SeatState, compared: SeatState): string {
+  return compared.effort !== undefined && recorded.effort === undefined
+    ? ` and effort ${compared.effort}`
+    : '';
+}
+
+function effortFromFile(recorded: SeatState, compared: SeatState): string {
+  const effort = effortSaid(recorded, compared);
+  return effort === '' ? '' : `${effort} from the file`;
+}
+
+/** What the fallback recorded, and from where: the screen's model, or the file's values when the
+ *  screen names none. */
+function mentioned(shown: Running | null, compared: SeatState, recorded: SeatState): string {
+  if (shown === null) return `the file's ${compared.model} ${compared.version}${effortSaid(recorded, compared)}, since its screen names none`;
+  return `${compared.model} ${compared.version} from its screen${effortFromFile(recorded, compared)}`;
+}
+
+function invocation(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'reload', { id: 'reload.invocation', message, repair: null, usage: USAGE });
   // exit: reload.invocation
   return 2;
 }

@@ -13,12 +13,17 @@ import type { CheckSources } from '../../src/check/team.ts';
 import { commits, USAGE as COMMITS_USAGE } from '../../src/commands/commits.ts';
 import { pr } from '../../src/commands/pr.ts';
 import type { Io } from '../../src/io.ts';
+import { NOT_PRETENDED } from '../../src/permissions/must-not-pretend.ts';
 import { config, PR_SIGNATURE, SIGNATURE } from '../check/fixtures.ts';
 import { createRepository, type Repository } from '../check/repository.ts';
 
 /** The notice the old spelling prints, and the twin the `--pr` form adds after it. */
 const NOTICE = 'team check: `team check` is now `team commits check`, and is still read through 0.3.3\n';
 const TWIN = 'team check: `team check --pr` is now `team pr check`, and is still read through 0.3.3\n';
+
+/** The record's honesty block the team check prints under both of its answers; the sentences
+ *  themselves are pinned in test/must-not-pretend.test.ts. */
+const NOT_PRETENDED_BLOCK = `${NOT_PRETENDED.join('\n')}\n`;
 
 /** A standing the verification refused: it still says what it is, and still carries the
  *  approval repair. A machine with no record at all carries neither. */
@@ -151,10 +156,12 @@ describe('the old spelling is the new run, one notice line first', () => {
       // A machine that never approved the file carries no row and marks no repair: the report is
       // the file's state alone.
       expect(ran.stdout).toBe(
-        'difference: lead is in the file and is not running\n' +
-          '  repair: the owner runs team up\n' +
-          'team check: 1 difference(s), 1 for the owner\n' +
-          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n',
+        'team acme-web, session "acme-web"\n' +
+          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
+          'difference: lead is in the file and is not running\n' +
+          '  repair: team up\n' +
+          '  who: the owner\n' +
+          '1 difference, 1 for the owner\n',
       );
       expect(ran.stderr).toBe('');
       // A standing that still says something keeps its row first, and the row marks the repairs
@@ -168,12 +175,15 @@ describe('the old spelling is the new run, one notice line first', () => {
       });
       expect(refused.code).toBe(1);
       expect(refused.stdout).toBe(
-        `difference: ${REFUSED_WHY}\n` +
+        'team acme-web, session "acme-web"\n' +
+          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
+          `difference: ${REFUSED_WHY}\n` +
           '  repair: the live file is what the commands read\n' +
+          '  who: the owner\n' +
           'difference: lead is in the file and is not running\n' +
-          '  repair: the owner runs team up (after: the live file is what the commands read)\n' +
-          'team check: 2 difference(s), 2 for the owner\n' +
-          'not known: work sent and unread, a lead waiting on a seat, a landing not recorded\n',
+          '  repair: team up (after: the live file is what the commands read)\n' +
+          '  who: the owner\n' +
+          '2 differences, 2 for the owner\n',
       );
       expect(refused.stderr).toBe('');
     } finally {
@@ -186,12 +196,23 @@ describe('the old spelling is the new run, one notice line first', () => {
     writeFileSync(join(repo.path, 'body.md'), `${PR_SIGNATURE}\n`);
     const old = await run(check, [hash.clean, '--pr', 'body.md']);
     expect(old.code).toBe(0);
-    expect(old.stdout).toBe('team commits check: 1 commit checked, 1 pull request body checked: ok\n');
+    expect(old.stdout).toBe(
+      'COMMIT      STATUS  DETAIL\n' +
+        `${hash.clean.slice(0, 10)}  ok      feat: a clean one\n` +
+        'team commits check: 1 commit checked, 1 pull request body checked: ok\n',
+    );
     expect(old.stderr).toBe(`${NOTICE}${TWIN}`);
 
     const committed = await run(commits, ['check', hash.clean]);
     const body = await run(pr, ['check', 'body.md']);
-    expect(committed).toEqual({ code: 0, stdout: 'team commits check: 1 commit checked: ok\n', stderr: '' });
+    expect(committed).toEqual({
+      code: 0,
+      stdout:
+        'COMMIT      STATUS  DETAIL\n' +
+        `${hash.clean.slice(0, 10)}  ok      feat: a clean one\n` +
+        'team commits check: 1 commit checked: ok\n',
+      stderr: '',
+    });
     expect(body).toEqual({ code: 0, stdout: 'team pr check: 1 pull request body checked: ok\n', stderr: '' });
   });
 
@@ -247,9 +268,7 @@ describe('team pr check needs no repository', () => {
       const code = await pr(['check', 'body.md'], io, (cwd, file) => loadConfig(cwd, file, home));
       expect(code).toBe(0);
       expect(stdout).toBe('team pr check: 1 pull request body checked: ok\n');
-      expect(stderr).toBe(
-        'team pr check: warning: line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n',
-      );
+      expect(stderr).toBe('');
     } finally {
       rmSync(folder, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

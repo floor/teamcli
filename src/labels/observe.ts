@@ -1,0 +1,93 @@
+// The observed half of a seat's label (Layer 3): what the running session itself shows, read
+// before anything the file approves is trusted. The sources, best first:
+//
+//   1. the CLI's own signal on the pane — the status line Claude Code renders, the row the
+//      profile pins (`status_below`) or the pane's last rows when it pins none — for the model,
+//      and the effort word the CLI prints about itself ("with high effort", Grok's
+//      parenthetical, Cursor's row word, …);
+//   2. the file's written display and effort, for a screen this version cannot read — never the
+//      CLI's name in place of a model.
+//
+// Observed ≠ file: the label follows the observed value. Nothing here writes the file; `team
+// check` and the watch's model-drift check report the difference. The effort word, once seen,
+// stays until a later screen shows a different one.
+import { stripSgr } from '../ansi.ts';
+import { displayEffort } from '../profiles/profile.ts';
+import { runningModel } from '../status/statusline.ts';
+import { statusRow } from '../watch/screen.ts';
+
+export type LabelSeat = {
+  cli: string;
+  model: string;
+  version: string;
+  display: string;
+  effort?: string;
+};
+
+/** The display_agent line for one seat this pass, and the effort word the screen showed, when
+ *  it showed one. Absence of that word is not a value: the caller keeps the last word it saw. */
+export function observeLabel(
+  seat: LabelSeat,
+  screen: string | undefined,
+  rememberedEffort?: string,
+): { line: string; effort?: string } {
+  const seen = observedEffort(seat.cli, screen);
+  const effort = displayEffort(seat.cli, seen ?? rememberedEffort ?? seat.effort);
+  const display = displayOf(seat, screen);
+  return { line: effort === null ? display : `${display} ${effort}`, ...(seen ? { effort: seen } : {}) };
+}
+
+/** The effort word this pane itself shows, when this version can read one — the same read the
+ *  label's line makes. `undefined` when the screen shows none, or cannot be read: absence is
+ *  not a value, and a caller comparing against the file decides what stands in its place. */
+export function observedEffort(cli: string, screen: string | undefined): string | undefined {
+  if (screen === undefined || screen === '') return undefined;
+  return effortOnScreen(cli, screen);
+}
+
+function displayOf(seat: LabelSeat, screen: string | undefined): string {
+  if (screen === undefined || screen === '') return seat.display;
+  const running = runningModel(seat.cli, screen);
+  if (!running) return seat.display;
+  if (running.model === seat.model && running.version === seat.version) return seat.display;
+  return `${running.model} ${running.version}`;
+}
+
+/** The effort word on this pane, or none. Codex and Cursor read only the status row the model
+ *  read already uses, so a dialog that hides the row does not invent a word. The others are
+ *  read from the whole pane. Claude's banner leaves the last rows. Antigravity's word and
+ *  Grok's paren sit on the same footer the model rule reads; the word is not part of the model. */
+function effortOnScreen(cli: string, screen: string): string | undefined {
+  const plain = stripSgr(screen);
+  if (cli === 'codex' || cli === 'cursor') {
+    const row = statusRow(cli, plain);
+    if (row === null) return undefined;
+    return cli === 'codex' ? codexEffort(row) : cursorEffort(row);
+  }
+  if (cli === 'claude-code') return last(plain, /\bwith (low|medium|high|xhigh|max) effort\b/gi);
+  if (cli === 'antigravity') {
+    return last(plain, /·\s*(low|medium|high|xhigh|max)\b/gi)
+      ?? last(plain, /\((low|medium|high|xhigh|max)\)/gi);
+  }
+  if (cli === 'grok') return last(plain, /Grok\s+\d+(?:\.\d+)*(?:\s+Fast)?\s+\(([A-Za-z]+)\)/g);
+  return undefined;
+}
+
+function codexEffort(row: string): string | undefined {
+  const hit = /GPT-[\d.]+-[A-Za-z]+\s+([A-Za-z]+)\s*·/.exec(row);
+  return hit?.[1]?.toLowerCase();
+}
+
+// `Extra High` is the label Cursor prints for the id suffix `xhigh`. `None` and `Minimal` are
+// not in the effort list the file checks; they are still the word the row showed.
+function cursorEffort(row: string): string | undefined {
+  const hit = /\b(Extra High|None|Minimal|Low|Medium|High|Max)\b/.exec(row);
+  if (!hit?.[1]) return undefined;
+  return hit[1] === 'Extra High' ? 'xhigh' : hit[1].toLowerCase();
+}
+
+function last(text: string, pattern: RegExp): string | undefined {
+  let found: string | undefined;
+  for (const hit of text.matchAll(pattern)) found = hit[1];
+  return found?.toLowerCase();
+}

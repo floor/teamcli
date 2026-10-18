@@ -2,8 +2,8 @@
 
 Starts one seat of a running team: a seat the file declares but nothing runs for — `team up` started
 the others — or a temporary seat beside the team, which the file does not declare at all. A declared
-seat the file marks `stopped: true`, or that `team remove` took out, is put back from the approved
-copy first. It never touches the seats that are already running.
+seat the file marks `stopped: true` starts again, its mark cleared first. It never touches the seats
+that are already running.
 
 The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
 the project folder, every other seat in the team's lobby outside repositories, verified by the
@@ -12,14 +12,14 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
 
 ## Synopsis
 
-    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>]
-             [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+             [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 ## What it reads and writes
 
-Reads the team file (or the one `--file` names), this machine's approval store (the record, and the
-approved copy the seat is put back from), the session's state (`.agents/team.state.json`, including
+Reads the team file (or the one `--file` names), this machine's record store (the record it holds,
+if any), the session's state (`.agents/team.state.json`, including
 the project's stored budget readings), herdr (the session's state, its agents and their workspaces),
 the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
 and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
@@ -34,37 +34,38 @@ through herdr: the workspace, the launch, and the name.
 
 ## Who may run it
 
-The owner, the orchestrator's seat and the operator's seat, and a caller outside herdr whose
-ancestry names a create-grant's `runner` — the record [`team init`](init.md) describes — on a file
-whose root and this call's folder both sit under the paths that record covers, before it expires. A
-run with no terminal is refused before the file is read, unless that record names the caller:
-`team add: only the owner runs this, from a terminal outside herdr`. A seat that leads is not
-granted: the second half of a swap, `add <lead>`, stays the owner's. The seat is that name's, in a session
-this project's state records — the file's session, or one the state records the caller's pane in —
-on the pane the state records for that name in that session: a seat of another session, or a pane
-merely renamed to the orchestrator's or the operator's name, is refused — and so is a seat the state
-records no pane for, or records on another pane than this call is on; those two refusals name the
-seat and the repair. What that proves is placement, and no more: the state file is in the project,
-and a process of the same user that writes its own pane there under the orchestrator's name, and
-renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the
-same user. `--file` and `--session` are the owner's alone, from a terminal outside herdr: a
-non-owner aiming either is refused before the flagged file or session is read at all. Everything `up`
-refuses on — a `MISS` finding from [team doctor](doctor.md), the machine past its limits, the
-ceilings — refuses here too, for the one seat being started. A file that differs from a stored
-copy is not a refusal: the live file is the record.
+The owner. A seat of the team is refused before anything else is read: adding a seat is the
+owner's in 0.5.0, where no `agree` or `grant` holders stand, so every seat meets the map's own
+line — `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is <caller>` —
+whatever pane it sits on and whatever the state records. The one standing that opens a seat's run
+is the file's own `delegates` section, below. A run with no terminal is refused before the file is
+read: `team add: only the owner or an approved delegate runs this, from a terminal outside herdr or
+its own pane` — a caller outside herdr has no registry record, so no record admits it. A seat an
+active create-grant names by its own registry id — the record [`team init`](init.md) describes — is
+admitted on a file whose root and this call's folder both sit under the paths that record covers,
+before it expires. A seat
+that leads is not granted: the second half of a swap, `add <lead>`, stays the owner's. `--file`
+and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming either is
+refused before the flagged file or session is read at all. Everything `up` refuses on — a `MISS`
+finding from [team doctor](doctor.md), the machine past its limits, the ceilings — refuses here
+too, for the one seat being started. A file that differs from a stored copy is not a refusal: the
+live file is the record.
 
 A file with a `delegates` section also admits one more caller: the approved delegate, a pane the
-owner named in that section as `<session>/<pane id>`, outside the team. When the ordinary rule
-above refuses and the file names a delegate, the delegate gate decides — it re-reads the live file
-and the approval in force, never a remembered copy — and a caller it passes runs this command as
-that delegate. The delegated `add` is the ordinary one for a declared seat: `--temporary`, `--like`,
-`--until`, `--worktree`, `--session` and `--file` stay the owner's, and so does any add that would
-edit the file or the approval — restoring a seat the file no longer holds, or clearing
-`stopped: true`, both of which write the file and re-sign the approval. A `--file` or `--session`
+owner named in that section as `<session>/<pane id>`, outside the team. When the map refuses — for
+every seat it does — and the file names a delegate, the delegate gate decides — it re-reads the
+live file and the record in force, never a remembered copy, and proves the caller stands on the
+delegate pane, and only that pane — and a caller it passes runs this command as that delegate. The
+delegated `add` is a same-copy seat and nothing else: the one seat it may start is a seat the record
+already holds, its stanza hash for hash as the live file writes it, so the add writes neither the
+file nor the record. `--temporary`, `--like`, `--until`, `--worktree`, `--session`
+and `--file` stay the owner's, and so does any add that would edit the file or the record —
+clearing `stopped: true`, or naming a stanza the record does not hold, which would extend or
+change the file. A `--file` or `--session`
 a non-owner aims is the gate's too, once the file names a delegate: the gate refuses it before the
 flagged file or the flag's session is read, on the eligibility of the default live file alone —
-the flagged file is never opened. With no `delegates` section nothing changes: the same refusals,
-the same words, the same exit codes, those two flags' included. A delegated run
+the flagged file is never opened. With no `delegates` section the run is refused by the rule
+alone: the same words, the same exit codes, those two flags' included. A delegated run
 that proceeds is attributed in the log before its effects, as
 `<time> delegate [delegate] <session>/<pane id> add`.
 
@@ -75,15 +76,20 @@ that proceeds is attributed in the log before its effects, as
 | `--model <model>` | override the seat's model for this launch (CLI model id or `<model> <version>`); on a declared seat the owner's alone |
 | `--effort <effort>` | override the seat's reasoning effort for this launch; on a declared seat the owner's alone |
 | `--temporary` | start a seat the file does not declare, beside the team |
-| `--like <seat>` | the approved seat a temporary seat is a copy of: its CLI, model and launch |
+| `--like <seat>` | the declared seat a temporary seat is a copy of: its CLI, model and launch |
 | `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
 | `--worktree <task>` | the worktree the temporary seat is started in, instead of the seat's own `cwd` |
 | `--session <name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--dry-run` | print whether this seat would launch or be refused. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | the usage, and exit 0 |
 
-The temporary seat's name is the `--like` seat's, with `-tmp-<n>`: the first `n` that is free.
+The temporary seat's name is the `--like` seat's, with `-tmp-` and the next free seat number. The
+number is written in the width and separator the advised `seat-numbering` setting resolves for the
+team — two digits and `-` by default (`worker-tmp-01`), or a width of 1 to 4 digits, or `auto` for
+the number's own digits, with the separator the setting names. Numbers are compared as numbers, so
+a name from an older width still holds its place: 9 is followed by 10, and 99 by 100.
 
 `--until` accepts one of two ends, and nothing else.
 
@@ -146,32 +152,39 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 - `add.locked`, the locked edit does not validate (`src/commands/add.ts:706`)
 - `add.not-ready`, the launch finished without a ready seat; `add.server`, the server did not start (`src/commands/add.ts:743-744`)
 
+`--json` prints one `team.add` document instead: `project`, `session`, the seat name as `seat`,
+the pane the launch made as `pane`, the working lines the run printed as `notes`, and the final
+record as `action_summary`; `dry_run` is `false` and `status` is `ready`. On `--dry-run` the
+document carries `dry_run: true`, `status: "dry-run"`, `action_summary: "dry run: nothing was
+run"`, and a `plan` of the steps the real run would take, each the line it would print with its
+`+`, `!` or `skip` prefix. A refusal under `--json` prints the `team.error` document on stdout —
+its `id` is the contract row for that refusal (`add.caller`, `add.seat-name`, `add.budget`, …) —
+and nothing on stderr: the run's own lines ride in the document's `notes`.
+
 ## Refusals
 
 | Message | Exit |
 | --- | --- |
 | `team add: unknown option --x` / `team add: a seat name is required` / `team add: --like needs a value` (each with the usage) | 2 |
 | `team add: --like, --until and --worktree are for --temporary` | 2 |
+| `team add: "lead" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name` — the file declares no seat of the name; a file written before 0.5.0 that already declares one still starts it | 2 |
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
-| `team add: only the owner, the orchestrator or the operator runs it; this call is <caller>` | 1 |
-| `team add: only the owner, the orchestrator, the operator or the approved delegate runs it; this call is <caller>` — the file names a delegate, and this call is not it | 1 |
+| `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is <caller>` | 1 |
 | ``team add: delegation needs a verified approval: <reason>`` — the delegate gate. A fingerprint difference is not a refusal; the live file names the delegate | 1 |
 | ``team add: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
 | `team add: --<flag> is the owner's; the approved delegate cannot use it` — `--temporary`, `--like`, `--until`, `--worktree`, `--session` or `--file` | 1 |
-| `team add: the approved delegate cannot change the file or the approval; the owner adds a missing or stopped seat` — an add that would restore a missing seat or clear `stopped`, also on `--dry-run` | 1 |
+| `team add: the approved delegate adds only a same-copy seat: the live file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — any add that would edit the file or the record, also on `--dry-run` | 1 |
 | `team add: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
-| ``team add: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
-| ``team add: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
 | ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
 | `team add: the file has no seat "<name>"` | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
-| `team add: the approval allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
+| `team add: the file allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
 | `team add: refused: <account> <window> left <n>%, inside its <reserve>% reserve, changed <age> ago; accounts with room: <accounts>` | 1 |
 | `team add: refused: <account> spend <amount> <CUR>, at or below its <floor> <CUR> floor, read <age> ago; accounts with room: <accounts>` | 1 |
 | `team add: session can't be "default", herdr's own session` | 1 |
@@ -183,9 +196,9 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | `team add: workspace.base is required to read a merged end` / `team add: "<branch>" is not a branch name` / `team add: branch <branch> doesn't exist` | 1 |
 | `team add: no worktree named "<task>" is recorded` | 1 |
 | `team add: worktree <task> has a failed setup; team worktree remove <task>` | 1 |
-| ``team add: the file is legacy: migrate trust to absolute paths including the lobby ~/.config/team/lobby: ...`` | 1 |
-| ``team add: trust: must list the lobby ~/.config/team/lobby`` | 1 |
-| ``team add: the lobby ~/.config/team/lobby: <check>`` | 1 |
+| ``team add: the file is legacy: migrate trust to absolute paths including the lobby <lobby>: ...`` | 1 |
+| ``team add: trust: must list the lobby <lobby>`` | 1 |
+| ``team add: the lobby <lobby>: <check>`` | 1 |
 | `team add: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` — the CLI's own record for the lobby can't be written, so the seat would open that folder untrusted; `grok` and `cursor` seats are told their own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`) | 1 |
 | ``team add: seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` | 1 |
 | `team add: the file changed while add was checking; nothing was written` | 1 |
@@ -194,7 +207,11 @@ run` — and makes nothing. A dry run that reaches a refusal the real run would 
 | ``team add: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; `--dry-run` takes no lock and never shows it | 1 |
 | ``team add: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |
 
-The ceilings are read from the approval's record, never from the file: a seat that would put the
+`<lobby>` in the rows above is the team's lobby: the file's `lobby:` when it sets one, else the
+lobby the registry recorded for the session, else `<home>/.config/team/lobbies/<entity>` when the
+file names `entity:`, else the default `~/.config/team/lobby`.
+
+The ceilings are read from the live file, never from the record: a seat that would put the
 session past `limits.seats`, past `limits.temporary` for a temporary seat, or past a
 `limits.vendors` entry for its vendor, is refused.
 
@@ -213,7 +230,7 @@ coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobby      # the team's lobby; the default when the file sets none
   - ~/Code/beacon
 
 workspace:
@@ -243,14 +260,13 @@ seats:
 agents: [claude-beacon]
 ```
 
-Only the implementer is up. A pane made by hand and renamed `claude-keeper` is not the orchestrator:
-the state records no pane for the seat, so nothing tells that shell apart from the seat, and every
-command that changes the team refuses it, naming the seat and the repair only the owner can make —
-the hand-started pane is closed, and `team up` starts the seat with a pane of its own:
+Only the implementer is up. Adding a seat is the owner's: the orchestrator's own seat is refused
+like every other, whatever pane it is placed on and whatever the state records, and the file's
+`delegates` section is the one standing that opens a seat's run:
 
 ```console caller=claude-keeper
 $ team add claude-beacon ; echo "exit $?"
-team add: no pane is recorded for seat claude-keeper in this session: the owner stops that seat and runs `team up`
+team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is claude-keeper
 exit 1
 ```
 
@@ -276,12 +292,11 @@ The owner is told `team remove <name> --abandon closes its workspace without typ
 is told `the owner runs team remove <name> --abandon, which closes its workspace without typing`.
 A screen the profile recognises keeps the sentence above.
 
-An implementer's seat is neither the orchestrator's nor the operator's, so it adds nothing — not even
-itself:
+An implementer's seat adds nothing either — not even itself:
 
 ```console caller=claude-beacon
 $ team add claude-keeper ; echo "exit $?"
-team add: only the owner, the orchestrator or the operator runs it; this call is claude-beacon
+team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is claude-beacon
 exit 1
 ```
 
@@ -298,12 +313,12 @@ claude-beacon: ready
 exit 0
 ```
 
-A temporary seat is not in the file at all. It is a copy of an approved seat — here the implementer's
+A temporary seat is not in the file at all. It is a copy of a declared seat — here the implementer's
 — and it works until a result exists or a branch is merged:
 
 ```console
 $ team add --temporary --like claude-beacon --until result:notes/result.md ; echo "exit $?"
-claude-beacon-tmp-1: ready
+claude-beacon-tmp-01: ready
 exit 0
 ```
 
@@ -328,8 +343,10 @@ team add: --like, --until and --worktree are for --temporary
 exit 2
 $ team add ; echo "exit $?"
 team add: a seat name is required
-Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
-       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>]
+Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+       team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+
+Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
 exit 2
 ```
 
@@ -353,6 +370,9 @@ $ team add claude-beacon ; echo "exit $?"
 team add: refused: the lobby is not trusted for claude: run claude in ~/.config/team/lobby and accept the folder
 exit 1
 ```
+
+The path above is the default lobby; a team that sets `lobby:`, or whose session already recorded
+another lobby, sees that lobby's path in the same place.
 
 The line names the repair the seat's own CLI needs: a `grok` or `cursor` seat is told `run grok
 --trust in <lobby>`, or `run cursor-agent --trust in <lobby>`. A `--dry-run` reports it as

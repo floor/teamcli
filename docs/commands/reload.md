@@ -1,43 +1,74 @@
 # team reload
 
 Closes one running seat and launches it again when the team file's model, version or effort
-differs from the model, version and effort recorded at its last launch. `team up` leaves a
-seat that is already ready as it is, so a later edit of the model or the effort never
-reaches that seat. This command names one seat and does only that swap.
+differs from the model, version and effort recorded at its last launch — or when a seat that
+takes its rules as a first message has a per-seat rules file that no longer holds the rules
+text the live team file gives it. `team up` leaves a seat that is already ready as it is, so a
+later edit of the model, the effort or the rules never reaches that seat. This command names
+one seat and does only that swap.
 
 The close happens at an idle prompt. A seat that is working, a seat whose input box holds
 unsent text, and a seat whose screen is not an idle prompt are left as they are: nothing is
-closed and nothing is launched. A seat whose launch was not recorded — one brought up before
-the record existed — is refused the same way. The next launch that reaches an idle prompt
-writes the record, and a later reload can read it.
+closed and nothing is launched. A screen the profile cannot read is not an idle prompt
+either, except that herdr's own status is the last word on it: a seat herdr reports idle or
+done is closed without typing into it, and the line says the screen was not recognised and
+what herdr reports; one herdr reports working keeps the refusal. A seat whose launch record
+kept no model — one brought up before the record held one — still reloads: the model its
+screen shows is read first, the team file's declared model and effort stand when the screen
+names none, and the reading is said and recorded. A seat already running what that reading
+declares, whose rules file (when it takes its rules in one) holds the live text, is recorded
+in place with no close. The next launch that reaches an idle prompt writes the record, and a
+later reload can read it.
 
 A matching seat exits without closing anything and without a log line. A close that passes
 is logged at that moment, before the workspace is closed. The owner's line names the seat
-and `model`, `effort`, or `model; effort`. A granted run names the granted seat, then the
-seat that was reloaded, then the same difference.
+and `model`, `effort`, `rules`, or the words joined with `; ` — `model; effort`, `model;
+rules`, `effort; rules`. A granted run names the granted seat, then the seat that was
+reloaded, then the same difference.
 
 ## Synopsis
 
-    team reload <seat> [--file <path>]
+    team reload <seat> [--file <path>] [--json]
 
 ## What it reads and writes
 
-Reads the team file and the session's seat record. Writes that record again when the new
-launch reaches its idle prompt: the model, the version, the effort word when the file sets
-one, and the launch line. A seat that already matches is not written. A refusal is not written.
+Reads the team file, the session's seat record and — for a seat that takes its rules as a
+first message — its per-seat rules file. Writes that record again when the new launch reaches
+its idle prompt: the model, the version, the effort word when the file sets one, and the
+launch line. A relaunched message seat also has its rules file written again and the one line
+pointing at it typed, as a fresh `up` does; an option seat's rules ride its launch line. A
+seat that already matches is not written. A refusal is not written.
 
 The log gains one line when the close happens, and no line when it does not.
 
 ## Who may run it
 
-The owner at a terminal may name any seat, including the operator. A granted orchestrator
-may name any other seat when the file's grant lists `reload`, and may not name its own
-seat: closing that pane would end the caller. The grant this run reads is the live file's,
-like `up` and `down`: a file edited since the last approval is not a refusal. `--file` is
-the owner's. A delegate is not offered this command.
+The owner at a terminal may name any seat, including the operator. A lead — a seat the map's
+`leads` row admits, as for `restart` — may name another seat, standing on its own recorded
+pane, with or without a grant in the file. A seat the file's grant names — the orchestrator —
+may also name any other seat when the grant lists `reload`, and may not name its own seat:
+closing that pane would end the caller. A grant the file carries is a second gate, as it is
+for `down`: where the file carries one, its words are read even for a lead. The grant this
+run reads is the live file's, like `up` and `down`: a file edited since the last record is
+not a refusal. `--file` is the owner's. A delegate is not offered this command.
 
 ## Flags
 
 | Flag | Meaning |
 | --- | --- |
 | `--file <path>` | The team file. The owner may name one. A granted seat may not. |
+| `--json` | the same outcome as one JSON document (`team.reload`) instead of the line |
+
+## Output and exit codes
+
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| the seat was closed and launched again | `team reload: <seat> reloaded` | 0 |
+| the seat already runs what the file declares | `team reload: <seat> is already running what the file declares` | 0 |
+| refused, or the relaunch did not reach ready | `team reload: <reason>` | 1 |
+| it can't run: a bad option, or the team file can't be read | `team reload: <problem>`, with the usage for a bad option | 2 |
+
+`--json` prints one `team.reload` document instead: `seat`, the new `pane`, the outcome as
+`status` (`reloaded` or `same`), and the same closing line as `action_summary`. A refusal under
+`--json` prints the `team.error` document on stdout — its `id` is the contract row for that
+refusal (`reload.absent`, `reload.working`, …) — and nothing on stderr.

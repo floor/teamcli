@@ -27,7 +27,10 @@ seats:
 
 // The notice a file spelled with the legacy `coordinator:` key carries, at line 3 of `minimal`.
 // Files keep the old spelling on purpose — it is still read — so they warn.
-const notice = { line: 3, message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read' };
+const notice = {
+  line: 3,
+  message: '`coordinator:` is now `leads: true` on the lead\'s seat, and is still read',
+};
 
 // Replaces one piece of a valid file, and fails loudly if the piece isn't there.
 function change(text: string, from: string, to: string): string {
@@ -87,7 +90,7 @@ describe('the complete example of the RFC', () => {
   });
 
   test('values with units are read into seconds, percent and bytes', () => {
-    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 600, idleRepeat: 1200, unsentAfter: 60, quotaMarks: [50, 75, 90] });
+    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 300, idleOwner: 900, blindAfter: 300, idleRepeat: 1200, unsentAfter: 60, quotaMarks: [50, 75, 90] });
     expect(team.machine).toEqual({
       loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
       swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
@@ -150,7 +153,7 @@ describe('the lead is a field, or the legacy key', () => {
     // `marked` carries the lead's mark on line 14 and the worker seat on 15..21, so the second
     // mark lands on line 22.
     const twice = change(marked, '    launch: codex\n', '    launch: codex\n    leads: true\n');
-    expect(errors(twice)).toEqual(['22: `leads` is on more than one seat: a team has one orchestrator']);
+    expect(errors(twice)).toEqual(['22: `leads` is on 2 seats: "lead", "worker"; a team has one lead']);
   });
 
   test('the key alone still reads, with its own refusals', () => {
@@ -205,6 +208,82 @@ describe('the lead is a field, or the legacy key', () => {
     ]);
     const off = change(marked, '    leads: true\n', '    leads: false\n');
     expect(errors(off)).toEqual(['1: the file has no seat that leads: put `leads: true` on one seat']);
+  });
+});
+
+// The entity's assistant: `assistant: true` on at most one seat, never on one the file expands
+// from a count. Unlike the lead there is no key to spell it with, so the mark rides the built
+// seat — the capability admits a send, and the seat's digest is what the owner approves.
+describe('the assistant is one seat the file marks', () => {
+  const mark = (text: string, at = '    launch: claude --model claude-opus-5-5\n'): string =>
+    change(text, at, `${at}    assistant: true\n`);
+
+  test('the mark rides the seat, and no other spelling is needed', () => {
+    const { team, warnings } = valid(mark(marked));
+    expect(team.seats.filter((seat) => seat.assistant === true).map((seat) => seat.name)).toEqual(['lead']);
+    expect(warnings).toEqual([]);
+  });
+
+  test('a file that marks none carries no field at all', () => {
+    const { team } = valid(marked);
+    expect(team.seats.map((seat) => seat.assistant)).toEqual([undefined, undefined]);
+  });
+
+  test('two marks are refused at the second one', () => {
+    // The lead's mark lands on line 14 in `marked`, which shifts the worker's seat down one; the
+    // worker's mark lands on 23.
+    expect(errors(mark(mark(marked), '    launch: codex\n'))).toEqual([
+      '23: `assistant` is on more than one seat: a team has one assistant',
+    ]);
+  });
+
+  test('a mark on a seat with a count is refused at the field', () => {
+    // The worker is the operator in this fixture, so the operator moves to the lead's seat: the
+    // count's own refusal would otherwise stand beside the assistant's.
+    const moved = change(marked, 'operator: worker\n', 'operator: lead\n');
+    const counted = change(moved, '    launch: codex\n', '    launch: codex\n    count: 2\n    assistant: true\n');
+    expect(errors(counted)).toEqual(['23: `assistant` on "worker" can\'t be a seat with count']);
+  });
+});
+
+// The nickname: a human name for one seat, unique in its team and never
+// another seat's name. It confers nothing — the role keeps the grants — and it rides the built
+// seat, so the seat's digest changes when the file writes one.
+describe('a nickname is one seat\'s human name', () => {
+  const named = (text: string, nickname: string, at = '    launch: claude --model claude-opus-5-5\n'): string =>
+    change(text, at, `${at}    nickname: ${nickname}\n`);
+
+  test('rides the seat, and a file that writes none carries no field', () => {
+    const { team } = valid(named(marked, 'zeus'));
+    expect(team.seats.map((seat) => [seat.name, seat.nickname])).toEqual([['lead', 'zeus'], ['worker', undefined]]);
+  });
+
+  test('two seats may not share it', () => {
+    // `marked`: the lead's item is line 7, the worker's line 15. The first nickname is line 14,
+    // the second line 22; both items stay where they were.
+    const twice = named(named(marked, 'zeus'), 'zeus', '    launch: codex\n');
+    expect(errors(twice)).toEqual(['16: seat "worker": two seats have the nickname "zeus" (the other is "lead" on line 7)']);
+  });
+
+  test('it may not be another seat\'s name', () => {
+    const shadow = named(marked, 'worker');
+    expect(errors(shadow)).toEqual(['7: seat "lead": the nickname "worker" is the name of another seat (line 16)']);
+  });
+
+  test('a seat may carry its own name as its nickname', () => {
+    const own = named(marked, 'worker', '    launch: codex\n');
+    expect(valid(own).team.seats[1]?.nickname).toBe('worker');
+  });
+
+  test('a seat with a count carries none', () => {
+    // The operator moves to the lead's seat so the count's own refusal is the only one.
+    const moved = change(marked, 'operator: worker', 'operator: lead');
+    const counted = change(moved, '    launch: codex\n', '    launch: codex\n    count: 2\n    nickname: zeus\n');
+    expect(errors(counted)).toEqual(['23: `nickname` on "worker" can\'t be a seat with count']);
+  });
+
+  test('the name rule is the name\'s own', () => {
+    expect(errors(named(marked, 'zeus@acme'))).toEqual(['14: seat "lead": the nickname takes letters, digits, ".", "_" and "-"']);
   });
 });
 
@@ -363,6 +442,48 @@ describe('names and labels after count is expanded', () => {
   });
   test('distinct seats pass, and every instance counts for the default ceiling', () => {
     expect(valid(minimal + counted + second).team.limits.seats).toBe(6);
+  });
+});
+
+describe('seat numbers', () => {
+  const numbered = (name: string, role = 'builder'): string => `  - role: ${role}
+    name: ${name}
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    launch: team-deepseek
+`;
+
+  test('builder-1 and builder-01 in one team are one number: refused at the second name', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-01')).join('\n'))
+      .toMatch(/two seats have the same role and number: "builder-1" on line \d+ and "builder-01" here \(the number is written with and without leading zeros\)/);
+  });
+
+  test('another width is the same number too: 1, 01 and 001 clash among themselves', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-001')).join('\n'))
+      .toContain('two seats have the same role and number: "builder-1"');
+    expect(errors(minimal + numbered('builder-01') + numbered('builder-001')).join('\n'))
+      .toContain('two seats have the same role and number: "builder-01"');
+  });
+
+  test('the same number under another role is another seat: it is not a clash', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-01', 'tester'))).toEqual([]);
+  });
+
+  test('different numbers never clash, and a mix of widths still loads', () => {
+    expect(errors(minimal + numbered('builder-1') + numbered('builder-02'))).toEqual([]);
+    expect(valid(minimal + numbered('builder-2') + numbered('builder-9') + numbered('builder-10') + numbered('builder-100')).team.seats.map((seat) => seat.name))
+      .toEqual(['lead', 'builder-2', 'builder-9', 'builder-10', 'builder-100']);
+  });
+
+  test('a name with no number stays distinct from the seat of number 1', () => {
+    expect(errors(minimal + numbered('builder') + numbered('builder-1'))).toEqual([]);
+  });
+
+  test('a temporary name clashes with its own zero-padded spelling', () => {
+    expect(errors(minimal + numbered('worker-tmp-1') + numbered('worker-tmp-01')).join('\n'))
+      .toContain('two seats have the same role and number: "worker-tmp-1"');
   });
 });
 

@@ -21,7 +21,7 @@ team restart --changed [--abandon] [--dry-run] [--session <name>] [--file <path>
 
 ## Who May Run It
 
-| Form | Owner (terminal outside herdr) | Orchestrator or operator seat (from its recorded pane) | Any other seat, unplaced pane, or detached run |
+| Form | Owner (terminal outside herdr) | A lead seat — the orchestrator's, or a seat the record marks a lead (from its recorded pane) | Any other seat, unplaced pane, or detached run |
 | --- | --- | --- | --- |
 | `team restart <seat>` | Yes (`--abandon`, `--session`, `--file` allowed) | Yes, for another seat (`--abandon` allowed on non-lead seats that are not `working`; never `--session` or `--file`) | Refused (`restart.caller` or `restart.detached`, exit 1) |
 | `team restart` | Yes | Refused (`restart.caller`, exit 1) | Refused (`restart.caller` or `restart.detached`, exit 1) |
@@ -30,9 +30,9 @@ team restart --changed [--abandon] [--dry-run] [--session <name>] [--file <path>
 ### Caller invariants for `team restart <seat>`
 
 1. **Detached calls**: a run with no terminal (`caller.kind === 'owner-no-tty'`) is refused before reading any file (`restart.detached`, exit 1).
-2. **Owner-only flags**: `--session` and `--file` are the owner's alone (`restart.session-owner`, `restart.file-owner`, exit 1). When the orchestrator or operator runs `team restart <seat>` from its lobby without `--file`, `launchedTeamFile` resolves the project's `.agents/team.yaml`.
-3. **Recorded pane verification**: an orchestrator or operator caller must run from the pane recorded for its seat in `.agents/state.json` (`standingOf(dir, session, caller)`). Missing or mismatched pane records are refused (`restart.caller`, exit 1).
-4. **No self-restart from a seat**: a seat caller cannot restart its own recorded pane because closing the workspace kills the calling shell mid-command before the relaunch runs (`restart.self`, exit 1: `team restart: the <seat> cannot restart its own recorded pane; the owner must do it`).
+2. **Owner-only flags**: `--session` and `--file` are the owner's alone (`restart.session-owner`, `restart.file-owner`, exit 1). When a lead runs `team restart <seat>` from its lobby without `--file`, `launchedTeamFile` resolves the project's `.agents/team.yaml`.
+3. **Recorded pane verification**: a lead caller must run from the pane recorded for its seat in `.agents/state.json` (`standingOf(dir, session, caller)`). Missing or mismatched pane records are refused (`restart.caller`, exit 1).
+4. **No self-restart from a seat**: a seat caller cannot restart its own recorded pane because closing the workspace kills the calling shell mid-command before the relaunch runs (`restart.self`, exit 1: ``team restart: the <seat> cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it``).
 5. **No seat-initiated `--abandon` on lead seats**: a seat caller may not pass `--abandon` when targeting the orchestrator's or the operator's seat (`restart.lead`, exit 1: `team restart: a seat caller does not abandon the orchestrator's or the operator's seat; this call is <caller>`).
 
 ---
@@ -51,7 +51,7 @@ Given `<seat>`:
    ```
 3. **Parked or stopped seat (`restart.signed-off`, exit 1)**: if the declared seat has `parked: true` or `stopped: true`, `team restart` refuses:
    ```
-   team restart: <seat> is signed off; the owner approves the seat back and runs team up
+   team restart: <seat> is signed off; the owner takes the sign-off off in the file and runs team up
    ```
 
 ---
@@ -74,7 +74,10 @@ Before typing an exit sequence or closing a live pane, `team restart` checks `se
 - `free` — idle at its prompt with an empty input box and verified process identity.
 - `exited` — the CLI has already exited and the pane is back at a bare shell.
 - `gone` — no live pane in the session carries the seat.
-- Busy states: `working`, `unsent`, `permission`, `question`, `exit-question`, `trust`, `error`, `unknown`.
+- Busy states: `working`, `unsent`, `permission`, `question`, `exit-question`, `trust`, `error`, and `unknown` — except that an unread screen on a seat herdr itself reports `idle` or `done` is not busy: it is advice, and the workspace is closed without typing into it:
+  ```
+  <seat>: screen: not recognised; herdr reports it <status>; the workspace is closed without typing into it
+  ```
 
 Without `--abandon`:
 - Only `free`, `exited`, and `gone` are stopped.
@@ -85,9 +88,9 @@ Without `--abandon`:
 
 With `--abandon`:
 - **Owner**: any busy state (including `working`) is closed by closing the workspace directly without typing into the pane.
-- **Orchestrator or operator**: a stuck non-working state (`unsent`, `permission`, `question`, `exit-question`, `trust`, `error`, `unknown`) is closed by closing the workspace without typing. If the seat is `working`, `--abandon` from a seat caller is refused (`restart.abandon-working`, exit 1):
+- **A lead**: a stuck non-working state (`unsent`, `permission`, `question`, `exit-question`, `trust`, `error`, `unknown`) is closed by closing the workspace without typing. If the seat is `working`, `--abandon` from a seat caller is refused (`restart.abandon-working`, exit 1):
   ```
-  team restart: <seat> is working; a granted abandon leaves it (the owner's --abandon closes it)
+  team restart: <seat> is working; a seat's --abandon leaves it (the owner's --abandon closes it)
   ```
 
 ### Three-fact block printed before closing a live pane
@@ -95,7 +98,7 @@ With `--abandon`:
 Whenever `team restart` closes a running or exited pane, it first prints three lines on stdout stating what is in the pane and what closing it entails:
 
 ```
-<seat>: input box: empty | holds unsent text
+<seat>: input box: empty | holds unsent text | not read (the screen is not recognised)
 <seat>: turn: not working (<state>) | mid-turn (working)
 <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
 ```

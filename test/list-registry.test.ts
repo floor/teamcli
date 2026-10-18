@@ -142,7 +142,7 @@ test('a session the registry does not name is a discovered row, and one it names
     team: (session) => (session === 'stray' ? { project: 'stray', root: '/work/stray', seats: 1, unreadable: false } : { project: 'acme', root: '/work/acme', seats: 2, unreadable: false }),
   }));
   expect(run.code).toBe(0);
-  const rows = JSON.parse(run.out) as RegistryRow[];
+  const rows = (JSON.parse(run.out) as { rows: RegistryRow[] }).rows;
   expect(rows.map((row) => [row.team, row.source, row.defined])).toEqual([
     ['acme', 'registry', true],
     ['stray', 'discovered', false],
@@ -157,7 +157,7 @@ test('rows are grouped by entity: sorted by entity, then by team', async () => {
   const beta: RegistryTeam = { ...BEACON, id: 'beac0beac0be', entity: 'beta', session: 'beta-one', project: 'beta', root: '/work/beta' };
   const run = await listed(['--json'], sources([BEACON, beta, ACME], { sessions: () => [] }));
   expect(run.code).toBe(0);
-  expect((JSON.parse(run.out) as RegistryRow[]).map((row) => [row.entity, row.team])).toEqual([
+  expect(((JSON.parse(run.out) as { rows: RegistryRow[] }).rows).map((row) => [row.entity, row.team])).toEqual([
     ['acme', 'acme'],
     ['beacon', 'beacon'],
     ['beta', 'beta-one'],
@@ -166,13 +166,16 @@ test('rows are grouped by entity: sorted by entity, then by team', async () => {
 
 test('the one word filters by entity; a word no entity has is an empty list', async () => {
   const run = await listed(['--json', 'acme'], sources([ACME, BEACON]));
-  expect(run).toEqual({ code: 0, out: `${JSON.stringify([...JSON.parse(run.out) as RegistryRow[]], null, 2)}\n`, err: '' });
-  expect((JSON.parse(run.out) as RegistryRow[]).map((row) => row.team)).toEqual(['acme']);
+  expect(run.code).toBe(0);
+  expect(run.err).toBe('');
+  expect(((JSON.parse(run.out) as { rows: RegistryRow[] }).rows).map((row) => row.team)).toEqual(['acme']);
 
   const none = await listed(['acme2'], sources([ACME, BEACON]));
-  expect(none).toEqual({ code: 0, out: 'no teams\n', err: '' });
+  expect(none).toEqual({ code: 0, out: 'no teams\n0 teams\n', err: '' });
   const json = await listed(['--json', 'acme2'], sources([ACME, BEACON]));
-  expect(json).toEqual({ code: 0, out: '[]\n', err: '' });
+  expect(json.code).toBe(0);
+  expect(json.err).toBe('');
+  expect((JSON.parse(json.out) as { rows: RegistryRow[] }).rows).toEqual([]);
 });
 
 test('the table carries the contract columns, one state each', async () => {
@@ -188,6 +191,7 @@ test('the table carries the contract columns, one state each', async () => {
   expect(lines[2]?.split(/\s{2,}/)).toEqual([
     'beacon', 'beacon', 'beacon', '/home/.config/team/lobbies/beacon', '?', 'yes', 'no', 'no', 'registry',
   ]);
+  expect(lines[3]).toBe('2 sessions');
 });
 
 test('--seats adds the registry roster to the row, table and json alike', async () => {
@@ -197,7 +201,7 @@ test('--seats adds the registry roster to the row, table and json alike', async 
     ['worker', 'agt_0fedcba98765', 'implementer'],
   ]);
   const json = await listed(['--json', '--seats'], sources([ACME], { sessions: () => [{ name: 'acme', running: true }] }));
-  const rows = JSON.parse(json.out) as RegistryRow[];
+  const rows = (JSON.parse(json.out) as { rows: RegistryRow[] }).rows;
   expect(Object.keys(rows[0] ?? {})).toEqual(['entity', 'team', 'project', 'lobby', 'seats', 'defined', 'approved', 'running', 'source', 'roster']);
   expect(rows[0]?.roster.map((seat) => seat.seat)).toEqual(['lead', 'worker']);
 });
@@ -209,7 +213,7 @@ test('herdr cannot be asked: a registered team still lists, its RUNNING unknown'
     'acme', 'acme', 'acme', '/home/.config/team/lobbies/acme', '2', 'yes', 'yes', '?', 'registry',
   ]);
   const json = await listed(['--json'], sources([ACME], { sessions: () => null }));
-  expect((JSON.parse(json.out) as RegistryRow[])[0]?.running).toBeNull();
+  expect(((JSON.parse(json.out) as { rows: RegistryRow[] }).rows)[0]?.running).toBeNull();
 });
 
 test('a registry that reads but names no team still shows what discovery found, source-tagged', async () => {
@@ -217,7 +221,7 @@ test('a registry that reads but names no team still shows what discovery found, 
     sessions: () => [{ name: 'stray', running: true }],
     team: () => ({ project: 'stray', root: '/work/stray', seats: 1, unreadable: false }),
   }));
-  expect((JSON.parse(run.out) as Array<Omit<RegistryRow, 'roster'>>)).toEqual([
+  expect(((JSON.parse(run.out) as { rows: Array<Omit<RegistryRow, 'roster'>> }).rows)).toEqual([
     {
       entity: 'stray',
       team: 'stray',
@@ -230,7 +234,7 @@ test('a registry that reads but names no team still shows what discovery found, 
       source: 'discovered',
     },
   ]);
-  expect(await listed([], sources([], { sessions: () => null }))).toEqual({ code: 0, out: 'no teams\n', err: '' });
+  expect(await listed([], sources([], { sessions: () => null }))).toEqual({ code: 0, out: 'no teams\n0 teams\n', err: '' });
 });
 
 test('no registry to read: discovery alone, and a positional is still not this command\'s', async () => {
@@ -241,12 +245,12 @@ test('no registry to read: discovery alone, and a positional is still not this c
   };
   const run = await listed([], withoutRegistry);
   expect(run.code).toBe(0);
-  expect(run.out).toBe('TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE\nbeacon  beacon   running  2      -\n');
+  expect(run.out).toBe('TEAM    PROJECT  STATUS   SEATS  ACTIVITY  NOTE\nbeacon  beacon   running  2      -\n1 session\n');
 
   const nulled = await listed([], { ...withoutRegistry, registry: () => null });
   expect(nulled.out).toBe(run.out);
 
-  const extra = await listed(['--json', 'extra'], { ...withoutRegistry, registry: () => null });
+  const extra = await listed(['extra'], { ...withoutRegistry, registry: () => null });
   expect(extra.code).toBe(2);
   expect(extra.out).toBe('');
   expect(extra.err).toContain('team list: unexpected "extra"');
@@ -302,7 +306,7 @@ test('home with a registry file: the record and its team file are read from disk
       team: () => null,
     });
     expect(run.code).toBe(0);
-    const rows = JSON.parse(run.out) as Array<Omit<RegistryRow, 'roster'>>;
+    const rows = (JSON.parse(run.out) as { rows: Array<Omit<RegistryRow, 'roster'>> }).rows;
     // SEATS is the file's count — one seat declared — not the record's longer roster.
     expect(rows).toEqual([{
       entity: 'acme',
@@ -319,7 +323,7 @@ test('home with a registry file: the record and its team file are read from disk
     const bare = join(base, 'bare');
     mkdirSync(bare, { recursive: true });
     const none = await listed([], { ...realListSources(bare), sessions: () => [] });
-    expect(none.out).toBe('no running sessions\n');
+    expect(none.out).toBe('no running sessions\n0 sessions\n');
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -339,7 +343,7 @@ test('a record the writer wrote lists with its roster and its file state', async
       session: 'acme',
       root,
       lobby: '/home/.config/team/lobbies/acme',
-      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator' }],
+      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator', leads: true }],
       lifecycle: 'running',
       by: 'up',
     });
@@ -349,7 +353,7 @@ test('a record the writer wrote lists with its roster and its file state', async
       team: () => null,
     });
     expect(run.code).toBe(0);
-    expect(JSON.parse(run.out)).toEqual([{
+    expect((JSON.parse(run.out) as { rows: RegistryRow[] }).rows).toEqual([{
       entity: 'acme',
       team: 'acme',
       project: 'acme',

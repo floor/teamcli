@@ -4,15 +4,25 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
+import { standingOf } from '../src/caller.ts';
+import { runTeamCheck } from '../src/check/team.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
-import { runRestart, type RestartSources } from '../src/commands/restart.ts';
+import { runRestart, USAGE, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { loadTeamFile } from '../src/file/load.ts';
+import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { readAgents } from '../src/registry/agents.ts';
+import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { registerLaunch } from '../src/registry/sync.ts';
+import { approvalStanding } from '../src/store/store.ts';
+import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -269,7 +279,63 @@ describe('team restart <seat>', () => {
     expect(log).toContain('restart [owner] restarted worker; pane pane-old -> pane-new\n');
   });
 
-  test('orchestrator and operator can restart another seat from their recorded pane, including from the lobby', async () => {
+  test('a dev-mode restart records the mark and the caller it admitted', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources } = makeHarness(fixture);
+    const recorded = () => readAgents(fixture.home).find((agent) => agent.reach.seat === 'worker');
+
+    // A seat the gate refuses, folded into a warning: the restart proceeds, and its registry
+    // write says which mode it ran in and who it admitted — not `dev_mode: false`.
+    const folded = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    folded.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker'], folded, sources)).toBe(0);
+    expect(folded.err).toBe('team restart: warning: only the owner or `leads` restarts a seat; this call is helper; dev mode continues\n');
+    expect(recorded()?.provenance.dev_mode).toBe(true);
+    expect(recorded()?.provenance.dev_mode_by).toBe('helper');
+  });
+
+  test('a lead\'s restart in force leaves an existing mark, and the owner\'s restart takes it off', async () => {
+    /** The worker ready on `pane-old`, its record marked as a folded run wrote it. The lead is
+     *  on the roster, as a launched team lists it: the gate reads the record, not the file. */
+    function marked(): { fixture: Fixture; sources: RestartSources; recorded(): ReturnType<typeof readAgents>[number] | undefined } {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+        session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      });
+      const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+      if (!loaded.ok) throw new Error('fixture team does not validate');
+      const seat = (name: string) => loaded.team.seats.find((item) => item.name === name)!;
+      registerLaunch({ home: fixture.home, team: loaded.team, root: fixture.root, by: 'owner' }, seat('lead'), 'pane-lead');
+      registerLaunch({ home: fixture.home, team: loaded.team, root: fixture.root, by: 'helper', devMode: true }, seat('worker'), 'pane-old');
+      return {
+        fixture,
+        sources: makeHarness(fixture).sources,
+        recorded: () => readAgents(fixture.home).find((agent) => agent.reach.seat === 'worker'),
+      };
+    }
+
+    // A lead's restart in force is routine: it re-points the record and leaves the mark for the
+    // owner. The owner's own restart is the write that answers the finding.
+    const byLead = marked();
+    const lead = testIo(byLead.fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    expect(await runRestart(['worker'], lead, byLead.sources)).toBe(0);
+    expect(byLead.recorded()?.provenance.dev_mode).toBe(true);
+    expect(byLead.recorded()?.provenance.dev_mode_by).toBe('helper');
+
+    const byOwner = marked();
+    const owner = testIo(byOwner.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], owner, byOwner.sources)).toBe(0);
+    expect(byOwner.recorded()?.provenance.dev_mode).toBeUndefined();
+    expect(byOwner.recorded()?.provenance.dev_mode_by).toBeUndefined();
+  });
+
+  test('the lead can restart another seat from its recorded pane, including from the lobby', async () => {
     const fixture = makeFixture();
     const lobby = join(fixture.home, '.config', 'team', 'lobby');
     mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
@@ -292,6 +358,93 @@ describe('team restart <seat>', () => {
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
   });
 
+  test('the lead can start a seat the file lists and no pane holds', async () => {
+    // The check names `team restart <seat>` for a seat that is in the file and not running, so a
+    // lead must be able to run it with no record and no agent to stop: the map admits the team's
+    // leads, and the seat starts where nothing was closed.
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(fixture.root, leadCaller);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(0);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(1);
+  });
+
+  test('check names the lead for the restart it prints, and the restart gate admits that lead', async () => {
+    // The missing-seat line prints `team restart <seat>` with `who: the team's lead`. That is the
+    // map's own row (`restart: owner-or-leads`) answered by the function `restart.ts` calls, so a
+    // lead must be able to run the line as printed. `team add` is the owner's alone — the owner
+    // writes a seat into the file — and the check names it nowhere: the two acts are different
+    // rows, and a lead reading the line is handed the one it can run. The team is registered with
+    // its roster, the shape a launched team has on this machine, not the file-declaration fallback
+    // the test above reads.
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    const id = teamIdOf(fixture.root);
+    upsertTeam(fixture.home, id, { project: 'acme', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    setRoster(fixture.home, id, [
+      { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+    ]);
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const opsCaller: Caller = { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' };
+
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const checkIo = testIo(fixture.root, leadCaller);
+    const code = runTeamCheck({}, checkIo, {
+      live: () => ({
+        running: true,
+        agents: [
+          { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: fixture.root },
+          { name: 'ops', agent: 'claude-code', pane: 'pane-ops', workspace: 'ws-ops', status: 'idle', cwd: fixture.root },
+        ],
+        workspaces: [
+          { id: 'ws-lead', label: 'lead' },
+          { id: 'ws-ops', label: 'ops' },
+        ],
+        screens: { 'pane-lead': CLAUDE_IDLE, 'pane-ops': CLAUDE_IDLE },
+      }),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, fixture.home),
+      now: () => NOW,
+      home: fixture.home,
+    });
+    expect(code).toBe(1);
+    expect(checkIo.out).toContain(
+      'difference: worker is in the file and is not running\n  repair: team restart worker\n  who: the team\'s lead\n',
+    );
+    expect(checkIo.out).not.toContain('team add');
+
+    // The gate behind the printed command, in the registry-listed shape: the roster's `leads`
+    // mark admits the lead, the map refuses a plain seat, and `team add` stays the owner's.
+    const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+    if (!loaded.ok) throw new Error('fixture team does not validate');
+    const standingOfLead = standingOf(fixture.dir, 'acme', leadCaller);
+    const standingOfOps = standingOf(fixture.dir, 'acme', opsCaller);
+    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfLead, () => NOW)).toEqual({ kind: 'ok' });
+    expect(gateVerdict(opsCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfOps, () => NOW)).toEqual({ kind: 'refused' });
+    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'add', standingOfLead, () => NOW)).toEqual({ kind: 'refused' });
+    expect(gateVerdict({ kind: 'owner' }, loaded.team, fixture.root, fixture.home, 'add', { session: 'acme' }, () => NOW)).toEqual({ kind: 'ok' });
+
+    // And the lead runs the line as printed: the seat starts where nothing was closed.
+    const io = testIo(fixture.root, leadCaller);
+    expect(await runRestart(['worker'], io, sources)).toBe(0);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(1);
+  });
+
   test('refuses self-restart from a seat caller', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
@@ -303,12 +456,12 @@ describe('team restart <seat>', () => {
 
     const code = await runRestart(['lead'], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe('team restart: the lead cannot restart its own recorded pane; the owner must do it\n');
+    expect(io.err).toBe('team restart: the lead cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
   });
 
-  test('seat caller --abandon closes a blocked or unsent non-lead seat, but refuses a working seat or a lead seat', async () => {
+  test('a lead --abandon closes a blocked non-lead seat, but refuses a working seat or a lead seat; a plain seat is refused by the map', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -316,28 +469,37 @@ describe('team restart <seat>', () => {
       session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
     });
-    const opsCaller: Caller = { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' };
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
 
-    // 1. Refuses --abandon on the orchestrator seat
+    // 1. Refuses --abandon on the operator's seat: the map admits the lead, and the abandon rule
+    //    keeps a seat caller off the orchestrator's and the operator's seat.
     const leadRun = makeHarness(fixture, { workerScreen: 'permission' });
-    const ioLead = testIo(fixture.root, opsCaller);
-    expect(await runRestart(['lead', '--abandon'], ioLead, leadRun.sources)).toBe(1);
+    const ioLead = testIo(fixture.root, leadCaller);
+    expect(await runRestart(['ops', '--abandon'], ioLead, leadRun.sources)).toBe(1);
     expect(ioLead.err).toContain("does not abandon the orchestrator's or the operator's seat");
 
-    // 2. Refuses --abandon on a working seat from a seat caller
+    // 2. Refuses --abandon on a working seat from a lead caller
     const workingRun = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });
-    const ioWorking = testIo(fixture.root, opsCaller);
+    const ioWorking = testIo(fixture.root, leadCaller);
     expect(await runRestart(['worker', '--abandon'], ioWorking, workingRun.sources)).toBe(1);
-    expect(ioWorking.err).toBe("team restart: worker is working; a granted abandon leaves it (the owner's --abandon closes it)\n");
+    expect(ioWorking.err).toBe("team restart: worker is working; a seat's --abandon leaves it (the owner's --abandon closes it)\n");
     expect(workingRun.did.closed).toEqual([]);
 
-    // 3. Succeeds with --abandon on a blocked seat from a seat caller without typing
+    // 3. Succeeds with --abandon on a blocked seat from a lead caller without typing
     const blockedRun = makeHarness(fixture, { workerScreen: 'permission', workerStatus: 'blocked' });
-    const ioBlocked = testIo(fixture.root, opsCaller);
+    const ioBlocked = testIo(fixture.root, leadCaller);
     expect(await runRestart(['worker', '--abandon'], ioBlocked, blockedRun.sources)).toBe(0);
     expect(blockedRun.did.typed).toEqual([]);
     expect(blockedRun.did.closed).toEqual(['ws-old']);
     expect(ioBlocked.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+
+    // 4. A plain seat of the team is refused by the map's `restart` row before any of that: it
+    //    admits the owner and the team's `leads`, and `ops` holds no `leads`.
+    const opsRun = makeHarness(fixture);
+    const ioOps = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' });
+    expect(await runRestart(['worker'], ioOps, opsRun.sources)).toBe(1);
+    expect(ioOps.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is ops\n');
+    expect(opsRun.did.closed).toEqual([]);
   });
 
   test('refuses a busy seat without --abandon, and refuses when preflight fails before stopping the seat', async () => {
@@ -399,7 +561,7 @@ describe('team restart <seat>', () => {
 
     const ioStopped = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['parked-seat'], ioStopped, sources)).toBe(1);
-    expect(ioStopped.err).toBe('team restart: parked-seat is signed off; the owner approves the seat back and runs team up\n');
+    expect(ioStopped.err).toBe('team restart: parked-seat is signed off; the owner takes the sign-off off in the file and runs team up\n');
 
     // Dry run
     const ioDry = testIo(fixture.root, { kind: 'owner' });
@@ -415,5 +577,201 @@ describe('team restart <seat>', () => {
     const ioLocked = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], ioLocked, sources)).toBe(1);
     expect(ioLocked.err).toContain('another session-mutating run is holding');
+  });
+
+  test('an unread screen on a seat herdr calls idle does not block a lead: closed without typing, then restarted', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture, { workerScreen: 'unknown' });
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    const code = await runRestart(['worker'], io, sources);
+    expect(code, io.err).toBe(0);
+    // The workspace is closed without a typed exit: the screen is not recognised.
+    expect(did.typed).toEqual([]);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(io.out).toContain('worker: input box: not read (the screen is not recognised)\n');
+    expect(io.out).toContain('worker: screen: not recognised; herdr reports it idle; the workspace is closed without typing into it\n');
+    expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-new');
+  });
+
+  test('a dry run on an unread screen says how the workspace is closed', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture, { workerScreen: 'unknown' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--dry-run'], io, sources)).toBe(0);
+    expect(io.out).toContain('stop worker in pane-old (unknown)\n');
+    expect(io.out).toContain('worker: screen: not recognised; herdr reports it idle; the workspace is closed without typing into it\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  test('--json: a restarted seat is the team.restart document, its working lines collapsed to notes', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--json'], io, sources)).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{
+      schema: { name: string; version: number };
+      format: number;
+      dry_run: boolean;
+      status: string;
+      action_summary: string;
+      project: string;
+      session: string;
+      seat: string;
+      pane: string | null;
+      notes: string[];
+    }>(io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.restart', version: 1 });
+    expect(doc).toMatchObject({
+      format: 1,
+      dry_run: false,
+      status: 'ready',
+      action_summary: 'team restart: restarted worker; pane pane-old -> pane-new',
+      project: 'acme',
+      seat: 'worker',
+      pane: 'pane-new',
+    });
+    expect(doc.notes).toContain('worker: input box: empty');
+    expect(doc.notes).toContain('worker: turn: not working (free)');
+    expect(io.out).not.toContain('worker: input box: empty\n');
+  });
+
+  test('--json --dry-run: the plan carries the stop then the launch, and nothing is run', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--dry-run', '--json'], io, sources)).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{
+      dry_run: boolean;
+      status: string;
+      action_summary: string;
+      seat: string;
+      plan: { step: string; detail: string; seat?: string; prefix?: string }[];
+    }>(io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      dry_run: true,
+      status: 'dry-run',
+      action_summary: 'dry run: nothing was run',
+      seat: 'worker',
+    });
+    expect(doc.plan[0]).toEqual({
+      step: 'stop',
+      seat: 'worker',
+      detail: 'stop worker in pane-old (free)',
+      prefix: '+',
+    });
+    expect(doc.plan.some((step) => step.step === 'launch' && step.seat === 'worker')).toBe(true);
+    expect(did.typed).toEqual([]);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  test('the same unread screen with herdr reporting a turn stays a refusal', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture, { workerScreen: 'unknown', workerStatus: 'working' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: worker shows a screen the profile does not recognise; left as it is (team restart worker --abandon closes its workspace without typing)\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  test('--json: a dev-mode warning is a note, on the plan and on the real run, and stdout is the document alone', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources } = makeHarness(fixture);
+    const warning = 'warning: only the owner or `leads` restarts a seat; this call is helper; dev mode continues';
+
+    // The dry answer is the document: the warning rides in its notes, never in front of it.
+    const dry = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    dry.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker', '--dry-run', '--json'], dry, sources)).toBe(0);
+    expect(dry.err).toBe('');
+    const dryDoc = JSON.parse(dry.out) as { status: string; notes: string[] };
+    expect(dryDoc.status).toBe('dry-run');
+    expect(dryDoc.notes).toContain(warning);
+    expect(dry.out.startsWith('{')).toBe(true);
+
+    // The real run's terminal line carried the command's name; the document's note does not.
+    const real = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    real.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['worker', '--json'], real, sources)).toBe(0);
+    expect(real.err).toBe('');
+    const realDoc = JSON.parse(real.out) as { status: string; notes: string[] };
+    expect(realDoc.status).toBe('ready');
+    expect(realDoc.notes).toContain(warning);
+    expect(realDoc.notes.some((note) => note.startsWith('team restart:'))).toBe(false);
+  });
+
+  test('--json: the owner-or-leads repair names the owner\'s command without this run\'s --json', async () => {
+    const fixture = makeFixture();
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+
+    expect(await runRestart(['worker', '--json'], io, sources)).toBe(1);
+    expect(io.err).toBe('');
+    const doc = assertJsonErrorShape(io.out, { id: 'restart.caller', messageContains: 'only the owner or `leads` restarts a seat' });
+    expect(doc.error.repair).toContain('`team restart worker`');
+    expect(doc.error.repair).not.toContain('--json');
+
+    // The dry answer's line is the same command, without the dry run's own flag.
+    const dry = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
+    expect(await runRestart(['worker', '--dry-run'], dry, sources)).toBe(1);
+    expect(dry.out).toContain('! to unblock: a `leads` seat runs `team restart worker`');
+    expect(dry.out).not.toContain('--dry-run`');
+  });
+
+  test('--json: a refusal is the team.error document and leaves stderr empty', async () => {
+    const fixture = makeFixture();
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['no-such-seat', '--json'], io, sources)).toBe(1);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, {
+      id: 'restart.unknown',
+      messageContains: 'no-such-seat is not a signed declared seat',
+      repair: 'team seats lists the seats the file declares',
+    });
+  });
+
+  test('--json: a bad invocation is the usage row, without the usage text in the document', async () => {
+    const fixture = makeFixture();
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['--json'], io, sources)).toBe(2);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, { id: 'restart.usage', messageContains: 'a seat name is required' });
+    expect(io.out).not.toContain('Usage:');
+    expect(USAGE).toContain('Exits 0 when the seat is restarted');
   });
 });

@@ -15,11 +15,37 @@ function io(): Io & { out: string; err: string } {
   return state;
 }
 
-test('--version prints the package version', async () => {
+test('--version prints the package version and --about prints version, licence, docs link, and NOT_PRETENDED', async () => {
   const run = io();
   expect(await main(['--version'], run)).toBe(0);
   expect(run.out.trim()).toBe(version());
   expect(version()).toMatch(/^\d+\.\d+\.\d+/);
+
+  const about = io();
+  expect(await main(['--about'], about)).toBe(0);
+  expect(about.err).toBe('');
+  expect(about.out).toContain(`team ${version()}`);
+  expect(about.out).toContain('licence: MIT');
+  expect(about.out).toContain('what 0.5.0 must not pretend:');
+  expect(about.out).toContain('The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.');
+
+  const aboutJson = io();
+  expect(await main(['--about', '--json'], aboutJson)).toBe(0);
+  expect(aboutJson.err).toBe('');
+  const parsed = JSON.parse(aboutJson.out) as {
+    schema: { name: string; version: number };
+    version: string;
+    licence: string;
+    must_not_pretend: Array<{ text: string; ref: string }>;
+  };
+  expect(parsed.schema).toEqual({ name: 'team.about', version: 1 });
+  expect(parsed.version).toBe(version());
+  expect(parsed.licence).toBe('MIT');
+  expect(parsed.must_not_pretend).toHaveLength(5);
+  expect(parsed.must_not_pretend[0]).toEqual({
+    text: 'The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.',
+    ref: 'Kernel §11, §12, §14',
+  });
 });
 
 test('--help prints the usage and exits 0; no command exits 2', async () => {
@@ -58,3 +84,4 @@ test('every command of the table takes --help and -h, and prints its usage', asy
     }
   }
 });
+

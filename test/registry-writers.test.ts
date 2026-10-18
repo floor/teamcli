@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -10,8 +10,10 @@ import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { findAgent, getAgent, readAgents } from '../src/registry/agents.ts';
-import { getTeam, teamIdOf } from '../src/registry/teams.ts';
+import { findAgent, getAgent, readAgents, registerAgent } from '../src/registry/agents.ts';
+import { getTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { get as getProject, projectIdOf, projectsFile, readProjects, upsertProject } from '../src/registry/projects.ts';
+import { admitSend, PROJECT_RULES } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -126,6 +128,56 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     expect(getTeam(fixture.home, teamId)?.roster).toHaveLength(1);
   });
 
+  test("a launch writes the file's lead mark on the roster, and a moved mark does not linger", () => {
+    const fixture = makeFixture();
+    const input = registryOf(fixture);
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const leadId = (registerLaunch(input, lead, 'pane-lead') as { id: string }).id;
+    const workerId = (registerLaunch(input, worker, 'pane-worker') as { id: string }).id;
+    // The file leads with `lead` (`coordinator: lead`), so only that line says so.
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.roster).toEqual([
+      { agent: leadId, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: workerId, seat: 'worker', role: 'implementer' },
+    ]);
+    // The file moves its lead mark to the worker: the next write re-resolves every line.
+    const moved = { ...input, team: { ...input.team, orchestrator: 'worker' } };
+    registerLaunch(moved, worker, 'pane-worker-2');
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.roster).toEqual([
+      { agent: leadId, seat: 'lead', role: 'coordinator' },
+      { agent: workerId, seat: 'worker', role: 'implementer', leads: true },
+    ]);
+  });
+
+  test("a launch writes the file's assistant mark on the roster, and a moved mark does not linger", () => {
+    const fixture = makeFixture();
+    const input = registryOf(fixture);
+    const teamId = teamIdOf(fixture.root);
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    // The file's own seats are what the mark is read from — its digest field, beside `parked` —
+    // so a scene marks one without rewriting the fixture's YAML, as the lead's own scene moves
+    // `orchestrator`.
+    const marks = (seatName: string) => ({
+      ...input.team,
+      seats: input.team.seats.map((seat) => (seat.name === seatName ? { ...seat, assistant: true as const } : seat)),
+    });
+    const leadId = (registerLaunch({ ...input, team: marks('lead') }, lead, 'pane-lead') as { id: string }).id;
+    const workerId = (registerLaunch({ ...input, team: marks('lead') }, worker, 'pane-worker') as { id: string }).id;
+    // The file marks `lead`, so that line says so — beside its own `leads`, which the fixture's
+    // `coordinator:` key resolves.
+    expect(getTeam(fixture.home, teamId)?.roster).toEqual([
+      { agent: leadId, seat: 'lead', role: 'coordinator', leads: true, assistant: true },
+      { agent: workerId, seat: 'worker', role: 'implementer' },
+    ]);
+    // The file moves its assistant mark to the worker: the next write re-resolves every line.
+    registerLaunch({ ...input, team: marks('worker') }, worker, 'pane-worker-2');
+    expect(getTeam(fixture.home, teamId)?.roster).toEqual([
+      { agent: leadId, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: workerId, seat: 'worker', role: 'implementer', assistant: true },
+    ]);
+  });
+
   test('a stop keeps the id and clears the pane; the next launch is the same agent', () => {
     const fixture = makeFixture();
     const input = registryOf(fixture);
@@ -174,6 +226,39 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     expect(getAgent(fixture.home, other)?.seat_handle).toBeUndefined();
   });
 
+  test('a dev-mode write marks the record, a write in force by anyone but the owner leaves the mark, and the owner takes it off', () => {
+    const fixture = makeFixture();
+    const input = registryOf(fixture);
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+
+    // The owner registers first, in force: the record's registrant from here on.
+    const first = registerLaunch({ ...input, owner: true }, worker, 'pane-0');
+    const id = (first as { id: string }).id;
+    expect(getAgent(fixture.home, id)?.provenance.dev_mode).toBeUndefined();
+
+    // A folded run writes the record again: the mark, and the caller that run admitted.
+    registerLaunch({ ...input, by: 'helper', devMode: true }, worker, 'pane-1');
+    const marked = getAgent(fixture.home, id)!;
+    expect(marked.provenance.registered_by).toBe('owner');
+    expect(marked.provenance.dev_mode).toBe(true);
+    expect(marked.provenance.dev_mode_by).toBe('helper');
+
+    // A lead's relaunch in force re-points the record and leaves the mark where it is: the
+    // routine write does not answer the finding the mark raises.
+    registerLaunch({ ...input, by: 'lead' }, worker, 'pane-2');
+    const kept = getAgent(fixture.home, id)!;
+    expect(kept.reach.pane).toBe('pane-2');
+    expect(kept.provenance.dev_mode).toBe(true);
+    expect(kept.provenance.dev_mode_by).toBe('helper');
+
+    // The owner's own write in force takes the mark off, and the caller it named with it.
+    registerLaunch({ ...input, owner: true }, worker, 'pane-3');
+    const cleared = getAgent(fixture.home, id)!;
+    expect(cleared.provenance.dev_mode).toBeUndefined();
+    expect(cleared.provenance.dev_mode_by).toBeUndefined();
+    expect(cleared.provenance.dev_mode_at).toBeUndefined();
+  });
+
   test('a seat the registry never knew is not written by a stop', () => {
     const fixture = makeFixture();
     expect(registerEnd(registryOf(fixture), 'worker', 'stopped')).toBeNull();
@@ -213,6 +298,170 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     const made = registerLaunch(input, worker, 'pane-1');
     expect('note' in made && made.note.length > 0).toBe(true);
     expect(registerEnd(input, 'worker', 'stopped')).toBeNull();
+  });
+});
+
+describe('the project a team leads, read through the launch', () => {
+  /** The fixture's file, also naming the project it sits in and claiming its lead. */
+  function leadFixture(): { fixture: Fixture; input: RegistryTeam } {
+    const fixture = makeFixture();
+    const yaml = TEAM_YAML
+      .replace('workspace:\n', `trust:\n  - ~/.config/team/lobby\n  - ${fixture.root}\nworkspace:\n`)
+      .replace('workspace:\n', 'in_project: TeamCLI\nproject_lead: true\nworkspace:\n');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('lead fixture does not validate');
+    return { fixture, input: { home: fixture.home, team: parsed.team, root: fixture.root, by: 'owner' } };
+  }
+
+  /** A second team in the fixture's project, with one lead seat: the other lead the admission
+   *  scene names, and the lead a leave must not clear. */
+  function addOtherLeadTeam(fixture: Fixture): { teamId: string; leadId: string } {
+    const root = join(fixture.root, 'other');
+    mkdirSync(root, { recursive: true });
+    const teamId = teamIdOf(root);
+    const leadId = registerAgent(fixture.home, {
+      name: 'lead',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: { team: teamId, seat: 'lead', session: 'other', pane: 'w2:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'owner',
+    }).id;
+    upsertTeam(fixture.home, teamId, {
+      project: 'other',
+      session: 'other',
+      root,
+      roster: [{ agent: leadId, seat: 'lead', role: 'coordinator', leads: true }],
+      lifecycle: 'running',
+      by: 'owner',
+    });
+    const projectId = projectIdOf('TeamCLI');
+    const held = getProject(fixture.home, projectId);
+    if (held === null) throw new Error('the second team joins a project the scene must already have written');
+    upsertProject(fixture.home, projectId, { teams: [...held.teams, teamId] });
+    return { teamId, leadId };
+  }
+
+  test("a launch writes the project's lead as the lead seat's agent", () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const id = (registerLaunch(input, lead, 'pane-1') as { id: string }).id;
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))).toMatchObject({
+      name: 'TeamCLI',
+      lead: id,
+      teams: [teamIdOf(fixture.root)],
+    });
+  });
+
+  test('a launch before the lead seat has launched leaves no lead, and the lead launch points it', () => {
+    const { fixture, input } = leadFixture();
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    registerLaunch(input, worker, 'pane-w');
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBeNull();
+    const id = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBe(id);
+  });
+
+  test('the mark moving in the file re-points the lead on the next launch', () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    const workerId = (registerLaunch(input, worker, 'pane-w') as { id: string }).id;
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBe(leadId);
+    const moved = { ...input, team: { ...input.team, orchestrator: 'worker' } };
+    registerLaunch(moved, worker, 'pane-w2');
+    expect(getProject(fixture.home, projectIdOf('TeamCLI'))?.lead).toBe(workerId);
+  });
+
+  test('a file that drops project_lead clears the lead it set, and admission refuses the old lead afterwards', () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const ops = input.team.seats.find((seat) => seat.name === 'ops')!;
+    const projectId = projectIdOf('TeamCLI');
+    const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    expect(getProject(fixture.home, projectId)?.lead).toBe(leadId);
+    const other = addOtherLeadTeam(fixture);
+
+    // The file stops leading the project and hands the coordinator mark to `ops`, one edit.
+    const yaml = readFileSync(fixture.file, 'utf8')
+      .replace('project_lead: true\n', '')
+      .replace('coordinator: lead\n', 'coordinator: ops\n');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('the edited fixture does not validate');
+    registerLaunch({ ...input, team: parsed.team }, ops, 'pane-ops');
+
+    // The record no longer names the old agent as the project's lead...
+    expect(getProject(fixture.home, projectId)?.lead).toBeNull();
+    // ...and admission reads the record: the pair a stale lead admits is refused now. The stale
+    // record is hand-built so the scene shows it was the record, not another rule, doing the work.
+    const teams = readTeams(fixture.home);
+    const stored = readProjects(fixture.home);
+    const oldLead = getAgent(fixture.home, leadId)!;
+    const otherLead = getAgent(fixture.home, other.leadId)!;
+    const stale = { [projectId]: { ...stored[projectId]!, lead: leadId } };
+    expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stale })).toEqual({ ok: true, rule: PROJECT_RULES[0] });
+    expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stored }).ok).toBe(false);
+  });
+
+  test('a team that leaves the project takes its lead out of the record, and the other teams stay', () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const projectId = projectIdOf('TeamCLI');
+    const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
+    const other = addOtherLeadTeam(fixture);
+    expect(getProject(fixture.home, projectId)?.lead).toBe(leadId);
+
+    // The file stops naming the project; `project_lead` cannot stay without it.
+    const yaml = readFileSync(fixture.file, 'utf8')
+      .replace('in_project: TeamCLI\n', '')
+      .replace('project_lead: true\n', '');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('the edited fixture does not validate');
+    registerLaunch({ ...input, team: parsed.team }, worker, 'pane-w');
+
+    const project = getProject(fixture.home, projectId);
+    expect(project?.lead).toBeNull();
+    expect(project?.teams).toEqual([other.teamId]);
+  });
+
+  test("a leave clears only the leaving team's lead: another team's lead stays on record", () => {
+    const { fixture, input } = leadFixture();
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
+    const projectId = projectIdOf('TeamCLI');
+    registerLaunch(input, lead, 'pane-l');
+    const other = addOtherLeadTeam(fixture);
+    // The project leads with the other team's agent when this team's file stops naming it.
+    upsertProject(fixture.home, projectId, { lead: other.leadId });
+
+    const yaml = readFileSync(fixture.file, 'utf8')
+      .replace('in_project: TeamCLI\n', '')
+      .replace('project_lead: true\n', '');
+    writeFileSync(fixture.file, yaml);
+    const parsed = validateTeamFile(yaml, { home: fixture.home, root: fixture.root });
+    if (!parsed.ok) throw new Error('the edited fixture does not validate');
+    registerLaunch({ ...input, team: parsed.team }, worker, 'pane-w');
+
+    expect(getProject(fixture.home, projectId)?.lead).toBe(other.leadId);
+  });
+
+  test('a file that leads no project writes no lead', () => {
+    const fixture = makeFixture();
+    const input = registryOf(fixture);
+    const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
+    registerLaunch(input, lead, 'pane-1');
+    expect(existsSync(projectsFile(fixture.home))).toBe(false);
   });
 });
 

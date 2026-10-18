@@ -9,13 +9,17 @@ import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runAuthorityEdit, type AuthorityEdit } from '../src/authority-edit.ts';
 import type { Caller, Process } from '../src/caller.ts';
+import { runDelegate } from '../src/commands/delegate.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { delegateGate, delegateReadGate } from '../src/delegate.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { grantGate } from '../src/grant.ts';
+import { DELEGATE_OUTPUT_SCHEMA, GRANT_OUTPUT_SCHEMA, REVOKE_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { Standing } from '../src/store/store.ts';
 import { testIo, type TestIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const HEAD = `# Preserve the file's spelling and comments.
 format: 1
@@ -534,6 +538,32 @@ describe('grant and revoke parse the invocation before attempting an edit', () =
     }
   });
 
+  test('a repository with no team file gets the loader refusal, never a raw lstat', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'team-authority-edit-no-file-')));
+    made.push(root);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, stdio: 'ignore' });
+    const home = join(root, 'home');
+    fs.mkdirSync(home);
+    const place: Place = { root, home, file: join(root, '.agents', 'team.yaml') };
+
+    for (const run of [
+      (io: TestIo) => runGrant(['lead', '--scope', 'up'], io, { home }),
+      (io: TestIo) => runDelegate(['outside/first', '--commands', 'up'], io, { home }),
+      (io: TestIo) => runRevoke(['grant'], io, { home }),
+    ]) {
+      const io = owner(place);
+      expect(await run(io)).toBe(2);
+      expect(io.err).toContain('no team file here');
+      expect(io.err).not.toContain('ENOENT');
+      expect(io.err).not.toContain('lstat');
+    }
+
+    const json = owner(place);
+    expect(await runGrant(['lead', '--scope', 'up', '--json'], json, { home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, { id: 'grant.invalid', messageContains: 'no team file here', repair: null });
+  });
+
   test('revoke requires an exact kind and target without a wildcard or all form', async () => {
     const place = folder(BASE + GRANT + DELEGATES);
     for (const argv of [[], ['all'], ['grant', 'lead'], ['delegate'], ['delegate', 'outside/first', 'extra'], ['grant', '--all']]) {
@@ -550,6 +580,92 @@ describe('grant and revoke parse the invocation before attempting an edit', () =
     expect(await runGrant(['lead', '--scope', '\u001b[31munknown\u001b[0m'], io, { home: place.home })).toBe(2);
     expect(io.err).toContain('unknown');
     expect(io.err).not.toContain('\u001b');
+  });
+
+  test('--json emits schema-valid envelopes and error envelopes on grant, delegate, and revoke', async () => {
+    const place = folder();
+
+    const grantDry = owner(place);
+    expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run', '--json'], grantDry, { home: place.home })).toBe(0);
+    expect(grantDry.err).toBe('');
+    const grantDryDoc = assertMatchesOutputSchema(grantDry.out, GRANT_OUTPUT_SCHEMA);
+    expect(grantDryDoc).toMatchObject({
+      dry_run: true,
+      status: 'dry-run',
+      action_summary: 'grant: would change',
+      project: 'beacon',
+      session: 'arena',
+      target: 'lead',
+      scope: ['up', 'down'],
+    });
+
+    const grantWrite = owner(place);
+    expect(await runGrant(['lead', '--scope', 'up,down', '--json'], grantWrite, { home: place.home })).toBe(0);
+    const grantWriteDoc = assertMatchesOutputSchema(grantWrite.out, GRANT_OUTPUT_SCHEMA);
+    expect(grantWriteDoc).toMatchObject({
+      dry_run: false,
+      status: 'updated',
+      action_summary: 'grant: updated',
+      target: 'lead',
+      scope: ['up', 'down'],
+    });
+
+    upsertTeam(place.home, teamIdOf(place.root), { project: 'beacon', session: 'arena', root: place.root });
+    const teamTrustDry = owner(place);
+    expect(await runGrant(['@team', '--capabilities', 'dialogs.trust', '--dry-run', '--json'], teamTrustDry, { home: place.home })).toBe(0);
+    const teamTrustDoc = assertMatchesOutputSchema(teamTrustDry.out, GRANT_OUTPUT_SCHEMA);
+    expect(teamTrustDoc).toMatchObject({
+      dry_run: true,
+      status: 'dry-run',
+      target: '@team',
+      capabilities: ['dialogs.trust'],
+    });
+
+    const delegateWrite = owner(place);
+    expect(await runDelegate(['outside/first', '--commands', 'up,down', '--json'], delegateWrite, { home: place.home })).toBe(0);
+    const delegateDoc = assertMatchesOutputSchema(delegateWrite.out, DELEGATE_OUTPUT_SCHEMA);
+    expect(delegateDoc).toMatchObject({
+      dry_run: false,
+      status: 'updated',
+      action_summary: 'delegate: updated',
+      target: 'outside/first',
+      commands: ['up', 'down'],
+    });
+
+    const revokeWrite = owner(place);
+    expect(await runRevoke(['grant', '--json'], revokeWrite, { home: place.home })).toBe(0);
+    const revokeDoc = assertMatchesOutputSchema(revokeWrite.out, REVOKE_OUTPUT_SCHEMA);
+    expect(revokeDoc).toMatchObject({
+      dry_run: false,
+      status: 'updated',
+      action_summary: 'revoke: updated',
+      target: 'grant',
+    });
+
+    for (const [cmd, fn] of [
+      ['grant', (io: TestIo, argv: string[]) => runGrant(argv, io, { home: place.home })],
+      ['delegate', (io: TestIo, argv: string[]) => runDelegate(argv, io, { home: place.home })],
+      ['revoke', (io: TestIo, argv: string[]) => runRevoke(argv, io, { home: place.home })],
+    ] as const) {
+      const bad = owner(place);
+      expect(await fn(bad, ['--nope', '--json'])).toBe(2);
+      expect(bad.err).toBe('');
+      assertJsonErrorShape(bad.out, { id: `${cmd}.invocation`, messageContains: 'unknown option --nope', repair: null });
+
+      const nonOwner = testIo(place.root, { kind: 'owner-no-tty' });
+      const validArgs = cmd === 'grant'
+        ? ['lead', '--scope', 'up', '--json']
+        : cmd === 'delegate'
+          ? ['outside/first', '--commands', 'up', '--json']
+          : ['grant', '--json'];
+      expect(await fn(nonOwner, validArgs)).toBe(1);
+      expect(nonOwner.err).toBe('');
+      const parsedErr = assertJsonErrorShape(nonOwner.out, {
+        id: `${cmd}.refused`,
+        messageContains: 'only the owner runs this, from a terminal outside herdr',
+      });
+      expect((parsedErr.error as { rule?: string }).rule).toBe('owner-only');
+    }
   });
 });
 

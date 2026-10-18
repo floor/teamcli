@@ -23,6 +23,7 @@
     "rules": {
       "oneOf": [
         { "const": "first-message" },
+        { "const": "prepend" },
         {
           "type": "object",
           "additionalProperties": false,
@@ -30,6 +31,16 @@
           "properties": { "option": { "type": "string", "minLength": 1 } }
         }
       ]
+    },
+    "standing_rules": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "optional: rules the profile carries for every seat of this CLI, over the team file's; they ride with the file's rules in every delivery"
+    },
+    "herdr_status": {
+      "enum": ["reliable", "unreliable"],
+      "description": "optional: whether herdr reports this CLI's agent status faithfully; with unreliable, a screen the profile reads idle counts as free whatever herdr says"
     },
     "login": {
       "type": "object",
@@ -40,7 +51,14 @@
         "hint": { "type": "string", "minLength": 1 }
       }
     },
-    "exit": { "type": "string", "minLength": 1 },
+    "exit": { "type": "string", "minLength": 1, "description": "what is typed into an idle prompt to make the CLI exit; a profile carries this or exit_keys, never both" },
+    "exit_keys": {
+      "type": "array",
+      "items": { "enum": ["ctrl+c"] },
+      "minItems": 1,
+      "description": "the keys that exit the CLI from its idle screen, in order, for a CLI that takes no exit text; a profile carries this or exit, never both"
+    },
+    "compose_module": { "$ref": "#/$defs/screenModule" },
     "exit_clear": {
       "type": "string",
       "enum": ["ctrl+c", "ctrl+u", "escape", "backspace"],
@@ -91,6 +109,9 @@
         }
       }
     }
+  ],
+  "allOf": [
+    { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] }
   ],
   "$defs": {
     "trustAnswer": {
@@ -221,6 +242,25 @@
         "additionalProperties": false,
         "properties": { "block": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/blockStep" } } }
       },
+      "allOf": [
+        {
+          "if": { "required": ["live"] },
+          "then": {
+            "anyOf": [{ "required": ["any"] }, { "required": ["all"] }],
+            "not": {
+              "anyOf": [
+                { "required": ["footer"] },
+                { "required": ["on_footer"] },
+                { "required": ["below_last_rule"] },
+                { "required": ["without_rule"] },
+                { "required": ["none_after"] },
+                { "required": ["only_after"] },
+                { "required": ["block"] }
+              ]
+            }
+          }
+        }
+      ],
       "properties": {
         "any": { "$ref": "#/$defs/patterns" },
         "all": { "$ref": "#/$defs/patterns" },
@@ -228,6 +268,7 @@
         "on_footer": { "type": "boolean" },
         "below_last_rule": { "type": "string", "maxLength": 200 },
         "without_rule": { "type": "boolean" },
+        "live": { "type": "boolean", "description": "an any/all rule read on the live region alone: the composer's own rows and the newest turn above them, never a turn the window has scrolled past" },
         "none_after": {
           "type": "object",
           "additionalProperties": false,
@@ -411,6 +452,13 @@
           "minItems": 1,
           "description": "Rows the pane draws of its own between the input row and the status row, declared only where a capture shows them. A matching row is not text in the box. Only status-then-one reads the key."
         },
+        "chrome": {
+          "description": "The pane's own chrome row under the status line: one string, or a list read as the union, each matching the whole line. Only status-then-one reads the key. Declared, a line under the status row is chrome only when it matches — any other line there leaves the row unread, so text the seat prints can never stand in for the pane's row and feed a quota figure. A composer that declares none keeps the trailing rule it had.",
+          "oneOf": [
+            { "$ref": "#/$defs/patternString" },
+            { "type": "array", "items": { "$ref": "#/$defs/patternString" }, "minItems": 1 }
+          ]
+        },
         "frame_rows": {
           "type": "integer",
           "minimum": 0,
@@ -448,7 +496,8 @@
         { "if": { "required": ["status_below"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
         { "if": { "required": ["status"] }, "then": { "properties": { "mode": { "const": "box-to-rule" } } } },
         { "if": { "required": ["border"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
-        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
+        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } },
+        { "if": { "required": ["chrome"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
       ]
     }
   }

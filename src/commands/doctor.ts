@@ -8,16 +8,18 @@ import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
+import { shownTeamFile } from '../check/team.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { isParseError, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
-import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
+import type { BudgetAccount, Deprecation, Seat, TeamFile } from '../file/types.ts';
 import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { resolveLobby, verifyLobby } from '../lobby/gate.ts';
+import { verifyLobby } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
@@ -27,7 +29,7 @@ import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { holdText, liveHold, readState, type SeatState } from '../state.ts';
-import { canShowModel, seatModel } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -146,7 +148,8 @@ export const realSources: DoctorSources = {
   },
 };
 
-export const USAGE = 'Usage: team doctor [--session <name>] [--file <path>] [--login]\n';
+export const USAGE =
+  "Usage: team doctor [--session <name>] [--file <path>] [--login] [--json]\nExits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can't be read.\n";
 
 export type Level = 'ok' | 'warn' | 'miss' | 'note';
 export type Finding = { level: Level; text: string };
@@ -302,7 +305,9 @@ function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Findin
     if (named === null) {
       const finding = modelFlagFinding(seat, profile);
       if (finding) findings.push(finding);
-    } else if (named.model !== seat.model || named.version !== seat.version) {
+    } else if (modelDiffers(named, { model: seat.model, version: seat.version })) {
+      // The same comparison `team check` and `status` use: a name in another word order, or a
+      // version spelled inside the launch's model name, is the model the file declares.
       findings.push({
         level: 'warn',
         text: `${seat.name}: the launch starts ${named.model} ${named.version}, the file says ${declaredModel(seat)}`,
@@ -399,7 +404,7 @@ function watchFindings(
   if (recorded.pane && sources.watchPane && sources.watchAlive) {
     const there = sources.watchPane(session, recorded.pane, recorded.workspace);
     if (there === false) {
-      if (sources.watchAlive(recorded.pid)) {
+      if (recorded.pid !== undefined && sources.watchAlive(recorded.pid)) {
         const name = sources.processComm?.(recorded.pid) ?? 'process';
         return [{
           level: 'miss',
@@ -445,7 +450,7 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
     const waiting = recorded.waiting;
     if (!waiting) continue;
     if (waiting.state === 'trust-sent-recovery') {
-      findings.push({ level: 'warn', text: `${name}: trust sent; recovery required; the owner runs team up` });
+      findings.push({ level: 'warn', text: `${name}: trust sent; recovery required; a lead runs team up` });
       continue;
     }
     if (waiting.state !== 'waiting-owner' || waiting.classification !== 'trust') continue;
@@ -476,7 +481,7 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
     if (inRange) {
       const shown = extractFolder(inRange.extract, screen);
       const landed = shown ? showLanding(shown) : null;
-      const lobby = showLanding(resolveLobby(sources.home, team));
+      const lobby = showLanding(lobbyOf(sources.home, root, { ...team, session }));
       const project = showLanding(root);
       // A lead may be showing the lobby or the project: both are folders `up` leaves a running
       // lead in. The shown spelling must be that folder itself, not something that only
@@ -497,24 +502,30 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
 // in the file, and it is the owner's or an authorised swapper's; the line still offers the
 // whole-team sequence, which every caller of these lines may follow. For every other seat — stop it, keep it in the
 // file, add it again: the add launches it fresh, which is what records the process, writes the
-// rules file and starts the seat in the machine lobby — or the whole team at once.
+// rules file and starts the seat in the team's lobby — or the whole team at once.
 export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name: string): string =>
   relaunchRepair(team, name, 'markdown');
 
 // A seat the state records from a launch that predates the process identity: neither the watch
 // nor `status` can tell whether its pane still holds what team launched, and nothing would
-// notice a restore. One note per such seat; only a launch records the identity, so the note
-// says what relaunches it. A seat the state doesn't record was not left running by this
-// session, and a stopped seat is never started by `up`: neither is told.
+// notice a restore. One note per such seat, naming `team register <seat>`: it completes the
+// record where the seat stands — the id and the process identity a launch would have written,
+// without relaunching anything. A lead's own seat draws no note: it is the seat reading this
+// line, and the whole-team restart these lines used to name is never the repair. A seat the
+// state doesn't record was not left running by this session, and a stopped seat is never
+// started by `up`: neither is told.
 function identityFindings(team: TeamFile, dir: string, session: string): Finding[] {
   const recorded = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
   for (const seat of team.seats) {
     const held = recorded[seat.name];
     if (seat.stopped || !held || held.launched) continue;
+    // An orchestrator or an operator is the seat this line is read from: telling it to register
+    // its own pane is a whole-team act dressed as a repair, and is never shown.
+    if (isLeadSeat(team, seat.name)) continue;
     findings.push({
       level: 'note',
-      text: `${seat.name}: launched before team recorded its process; run ${relaunch(team, seat.name)} to launch it again`,
+      text: `${seat.name}: launched before team recorded its process; run \`team register ${seat.name}\` to record its process`,
     });
   }
   return findings;
@@ -577,6 +588,19 @@ function cliOf(team: TeamFile, name: string, recorded: SeatState): string | null
     ?? null;
 }
 
+/** The file's deprecated keys as doctor's `the file, line N:` warnings: the message and the
+ *  repair `team check` prints. 0.3.5's approve line sent users to `team doctor` for the rest,
+ *  so a key that still loads but grants nothing is reported here too. */
+function deprecatedFileWarnings(
+  deprecations: readonly Deprecation[],
+  file: string,
+): { line: number; message: string }[] {
+  return deprecations.map((deprecation) => ({
+    line: deprecation.line,
+    message: `${deprecation.message}; repair: ${deprecation.repair.replace('{file}', file)}`,
+  }));
+}
+
 export function doctorFindings(
   team: TeamFile,
   root: string,
@@ -615,7 +639,7 @@ export function doctorFindings(
   // runs only once a record exists, so a folder no launch has delivered to grows no warning.
   if (standing.kind === 'verified') {
     for (const seat of approved.seats) {
-      if (seat.stopped || profileFor(seat.cli)?.rulesOption != null) continue;
+      if (seat.stopped || (profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') continue;
       const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
       const check = checkRulesFile(path, rulesOf(approved, seat, root));
@@ -652,7 +676,7 @@ export function doctorFindings(
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
   findings.push(...trustFindings(team, root, dir, session, sources));
 
-  const lobby = resolveLobby(sources.home, team);
+  const lobby = lobbyOf(sources.home, root, { ...team, session });
   // The same walk `up` and `add` use before a launch into the lobby: a path a shipped CLI
   // reads at start is a miss. A file a CLI only writes is named afterwards, so an owner
   // still sees whose lock is sitting in the folder.
@@ -721,7 +745,7 @@ export function doctorFindings(
           const unknown: string[] = [];
           for (const [name, s] of activeSeats) {
             if (s.start_cwd) {
-              // The machine lobby and the project root are not this old folder. A lead recorded
+              // The team's lobby and the project root are not this old folder. A lead recorded
               // in either is not told to move.
               if (s.start_cwd === oldLanding) inOld.push(name);
               continue;
@@ -762,7 +786,7 @@ export function doctorFindings(
     const fromText = oldLobby ? `from ${plainLine(oldLobby)} to ${plainLine(lobby)}` : `to ${plainLine(lobby)}`;
     findings.push({
       level: 'note',
-      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText(team, root, sources.home)}`),
+      text: plainText(`the file is legacy: migrate ${fromText} by writing:\n${migrationText({ ...team, session }, root, sources.home)}`),
     });
   }
   return findings;
@@ -792,11 +816,20 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
   return findings;
 }
 
+import { contextLine, hasJsonFlag, pluralCount, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../permissions/must-not-pretend.ts';
+
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file'], ['login']);
+  const args = readArgs(argv, ['session', 'file'], ['login', 'json']);
+  const json = hasJsonFlag(argv);
   if (args.error || args.rest.length) {
-    out.stderr(`team doctor: ${plainText(args.error ?? `unexpected "${args.rest[0]}"`)}\n${USAGE}`);
+    const why = plainText(args.error ?? `unexpected "${args.rest[0]}"`);
+    if (json) {
+      writeJsonError(io, 'doctor.invocation', why, null);
+    } else {
+      out.stderr(`team doctor: ${why}\n${USAGE}`);
+    }
     // exit: doctor.invocation
     return 2;
   }
@@ -806,10 +839,25 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   } catch {
     // Tests may supply a proxy that throws on any read to prove no source was touched before validation.
   }
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ? { file: args.values.file } : {}), ...(home ? { home } : {}) });
+  const loaded = loadTeamFile(io.cwd, {
+    ...(args.values.file ? { file: args.values.file } : {}),
+    ...(home ? { home } : {}),
+    // The session this run addresses: the placement check reads that session's recorded lobby.
+    ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+  });
   if (!loaded.ok) {
-    for (const problem of loaded.errors) {
-      out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+    if (json) {
+      const id = loaded.errors[0]?.message.includes('not inside a git repository')
+        ? 'doctor.not-a-repo'
+        : loaded.errors.some(isParseError)
+          ? 'doctor.file-invalid'
+          : 'doctor.file';
+      const msg = loaded.errors.map((p) => `${p.line ? `line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');
+      writeJsonError(io, id, msg, null);
+    } else {
+      for (const problem of loaded.errors) {
+        out.stderr(`team doctor: ${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+      }
     }
     // exit: doctor.not-a-repo
     // exit: doctor.file
@@ -820,7 +868,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const session = args.values.session ?? team.session;
   // The one read of the approval store: every finding below derives from it.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
-  const findings = args.flags.has('login')
+  const loginOnly = args.flags.has('login');
+  const findings = loginOnly
     ? doctorLoginFindings(team, sources)
     : [
         ...doctorFindings(
@@ -829,7 +878,10 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           dirname(loaded.path),
           session,
           sources,
-          loaded.warnings,
+          [
+            ...loaded.warnings,
+            ...deprecatedFileWarnings(loaded.deprecations ?? [], shownTeamFile(loaded.path, root)),
+          ],
           standing,
           undefined,
           budgetCheckFindings(team, standing, root, sources, callerOf(io)),
@@ -841,18 +893,57 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         ...holdFindings(dirname(loaded.path), sources),
       ];
 
-  const label: Record<Level, string> = { ok: 'ok  ', warn: 'warn', miss: 'MISS', note: '--  ' };
-  out.stdout(findings.map((finding) => `${label[finding.level]}  ${finding.text}\n`).join(''));
   const missing = findings.filter((finding) => finding.level === 'miss').length;
   const warnings = findings.filter((finding) => finding.level === 'warn').length;
   // The same rule `up` and `add` refuse on. A missing watch is `miss` but blocks nothing, so the
   // refusal line is printed only when at least one finding blocks, and counts those.
   const blockers = findings.filter(blocksLaunch).length;
-  const plural = warnings === 1 ? '' : 's';
-  let summary = `team doctor: ${missing} missing, ${warnings} warning${plural}`;
-  if (!missing) summary = `team doctor: nothing missing, ${warnings} warning${plural}`;
-  else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
-  out.stdout(`${summary}\n`);
+
+  if (json) {
+    writeJson(io, 'team.doctor', {
+      format: 1,
+      project: plainLine(team.project),
+      session: plainLine(session),
+      login_only: loginOnly,
+      findings: findings.map((finding) => ({
+        level: finding.level,
+        text: finding.text,
+        blocks_launch: blocksLaunch(finding),
+      })),
+      summary: {
+        missing,
+        warnings,
+        blockers,
+      },
+      ...(loginOnly
+        ? {}
+        : {
+            must_not_pretend: NOT_PRETENDED_ENTRIES.map((entry) => ({
+              text: entry.text,
+              ref: entry.ref,
+            })),
+          }),
+    });
+  } else {
+    const style = ttyStyle(io);
+    const warnText = pluralCount(warnings, 'warning');
+    let summary = `team doctor: ${missing} missing, ${warnText}`;
+    if (!missing) summary = `team doctor: nothing missing, ${warnText}`;
+    else if (blockers) summary += `: ${blockers} of them block \`up\` and \`add\``;
+
+    const lines: string[] = [];
+    if (!loginOnly) lines.push(contextLine(team.project, session));
+    for (const finding of findings) lines.push(renderFinding(finding, style, sources.home));
+    lines.push(summary);
+    if (!loginOnly) lines.push(...NOT_PRETENDED);
+
+    const rendered = `${lines.join('\n')}\n`;
+    if (style.enabled) {
+      io.stdout(rendered);
+    } else {
+      out.stdout(rendered);
+    }
+  }
   // exit: doctor.clear
   // exit: doctor.missing
   return missing ? 1 : 0;

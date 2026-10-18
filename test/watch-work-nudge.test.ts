@@ -1,6 +1,6 @@
 // `watch.nudge` is sent to each idle worker on the idle cadence, through the drop file `team send`
-// uses. The report line is that body when the file omits the key. A missing approval does not
-// stop it. A lead, a dialog and unsent text are not targets.
+// uses. The fixed watch line is that body when the file omits the key. A missing approval does
+// not stop it. A lead, a dialog and unsent text are not targets.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -84,7 +84,7 @@ describe('watch.nudge', () => {
     expect(again.work.map((item) => item.seat).sort()).toEqual(['deepseek-acme', 'deepseek-acme-2']);
   });
 
-  test('an omitted nudge sends the report line, once per idle stretch when idle_repeat is off', () => {
+  test('an omitted nudge sends the fixed watch line, once per idle stretch when idle_repeat is off', () => {
     const text = raw.replace(/  idle_repeat: 20m[^\n]*\n/, '');
     const memory = newMemory();
     const live = scene({ 'deepseek-acme': { status: 'idle', screen: idle } });
@@ -127,6 +127,7 @@ describe('watch.nudge', () => {
     expect(at(raw, memory, 10 * MIN, asked).work).toEqual([]);
     expect(at(raw, memory, 12 * MIN, free).work.map((item) => item.seat)).toEqual(['deepseek-acme']);
   });
+
 });
 
 describe('team watch writes the drop', () => {

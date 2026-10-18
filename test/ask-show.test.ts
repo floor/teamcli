@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
 import { CLOCK_SKEW_MS, markerMac, questionDigest, runAskShow, USAGE, type MarkerBody } from '../src/commands/ask-show.ts';
+import { ASK_SHOW_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { testIo } from './helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 /** Fixed vector. The key is 32 bytes of 0x42. The guard copies this mac. */
 const VECTOR = {
@@ -21,6 +23,9 @@ const VECTOR = {
 const IN_TIME = new Date(VECTOR.expiresAt);
 const ASK = `TeamCLI signed ask v1\n${JSON.stringify({ question: VECTOR.question, request_id: VECTOR.requestId })}\n`;
 const MARKER = `{"v":1,"request_id":"${VECTOR.requestId}","question_sha256":"${VECTOR.digest}","expires_at":"${VECTOR.expiresAt}","mac":"${VECTOR.mac}"}`;
+/** The verification summary the reading closes on, for the fixture's own request. */
+const SUMMARY = `request ${VECTOR.requestId} verified, expires ${VECTOR.expiresAt}`;
+const ARGS = [VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'];
 
 let base = '';
 
@@ -53,17 +58,13 @@ test('the fixed vector matches the mac the command recomputes', () => {
   expect(markerMac(key, body)).toBe(VECTOR.mac);
 });
 
-test('a matching marker prints the question and nothing of the key', async () => {
+test('a matching marker prints the question, its verification summary and nothing of the key', async () => {
   const dir = root();
   place(dir);
   const io = testIo(dir);
-  const code = await runAskShow(
-    [VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'],
-    io,
-    IN_TIME,
-  );
+  const code = await runAskShow(ARGS, io, IN_TIME);
   expect(code).toBe(0);
-  expect(io.out).toBe('Status?\n');
+  expect(io.out).toBe(`Status?\n${SUMMARY}\n`);
   expect(io.err).toBe('');
   expect(`${io.out}${io.err}`).not.toContain(VECTOR.key);
   expect(`${io.out}${io.err}`).not.toContain(VECTOR.mac);
@@ -103,7 +104,7 @@ test('a key generated in the test verifies, and its bytes stay off the streams',
   writeFileSync(join(dir, 'key.txt'), encoded);
   const io = testIo(dir);
   expect(await runAskShow([requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], io, IN_TIME)).toBe(0);
-  expect(io.out).toBe('Generated?\n');
+  expect(io.out).toBe(`Generated?\nrequest ${requestId} verified, expires ${VECTOR.expiresAt}\n`);
   expect(`${io.out}${io.err}`).not.toContain(encoded);
 });
 
@@ -115,7 +116,7 @@ test('an ask may carry extra fields', async () => {
   expect(
     await runAskShow([VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'], io, IN_TIME),
   ).toBe(0);
-  expect(io.out).toBe('Status?\n');
+  expect(io.out).toBe(`Status?\n${SUMMARY}\n`);
 });
 
 test('five seconds past expires_at still prints, and one millisecond later does not', async () => {
@@ -126,7 +127,7 @@ test('five seconds past expires_at still prints, and one millisecond later does 
   const args = [VECTOR.requestId, '--ask', 'ask.txt', '--marker', 'marker.json', '--key', 'key.txt'];
   const within = testIo(dir);
   expect(await runAskShow(args, within, new Date(expires + CLOCK_SKEW_MS))).toBe(0);
-  expect(within.out).toBe('Status?\n');
+  expect(within.out).toBe(`Status?\n${SUMMARY}\n`);
   const past = testIo(dir);
   expect(await runAskShow(args, past, new Date(expires + CLOCK_SKEW_MS + 1))).toBe(1);
   expect(past.out).toBe('');
@@ -197,4 +198,62 @@ test('a bad invocation exits 2 and prints the usage', async () => {
   expect(await runAskShow([], io)).toBe(2);
   expect(io.out).toBe('');
   expect(io.err).toBe(`team ask-show: a request id, --ask, --marker and --key are required\n${USAGE}`);
+});
+
+test('--json prints the verified ask as the team.ask-show envelope, with stderr empty', async () => {
+  const dir = root();
+  place(dir);
+  const io = testIo(dir);
+  expect(await runAskShow([...ARGS, '--json'], io, IN_TIME)).toBe(0);
+  expect(io.err).toBe('');
+  const doc = assertMatchesOutputSchema<{
+    schema: { name: string; version: number };
+    format: number;
+    request_id: string;
+    question: string;
+    expires_at: string;
+    verified: boolean;
+  }>(io.out, ASK_SHOW_OUTPUT_SCHEMA);
+  expect(doc.schema).toEqual({ name: 'team.ask-show', version: 1 });
+  expect(doc).toMatchObject({
+    format: 1,
+    request_id: VECTOR.requestId,
+    question: VECTOR.question,
+    expires_at: VECTOR.expiresAt,
+    verified: true,
+  });
+  expect(io.out).not.toContain(VECTOR.key);
+  expect(io.out).not.toContain(VECTOR.mac);
+});
+
+test('--json refusals are the structured error envelope, with stderr empty', async () => {
+  const dir = root();
+  place(dir);
+  const past = new Date(Date.parse(VECTOR.expiresAt) + CLOCK_SKEW_MS + 1);
+  const expiredIo = testIo(dir);
+  expect(await runAskShow([...ARGS, '--json'], expiredIo, past)).toBe(1);
+  expect(expiredIo.err).toBe('');
+  assertJsonErrorShape(expiredIo.out, { id: 'ask-show.expired', messageContains: 'the ask has expired' });
+
+  place(dir, ASK, `${MARKER.replace(/e"}$/, 'f"}')}\n`);
+  const refusedIo = testIo(dir);
+  expect(await runAskShow([...ARGS, '--json'], refusedIo, IN_TIME)).toBe(1);
+  expect(refusedIo.err).toBe('');
+  assertJsonErrorShape(refusedIo.out, { id: 'ask-show.refused', messageContains: 'the marker does not verify' });
+
+  const invocationIo = testIo(dir);
+  expect(await runAskShow(['--json'], invocationIo)).toBe(2);
+  expect(invocationIo.err).toBe('');
+  assertJsonErrorShape(invocationIo.out, { id: 'ask-show.invocation', messageContains: 'a request id' });
+
+  // --json read from raw argv: the parser's own error must not lose the structured face.
+  for (const [argv, messageContains] of [
+    [['--nope', '--json', VECTOR.requestId], 'unknown option --nope'],
+    [['--json=1', VECTOR.requestId], 'unknown option --json'],
+  ] as const) {
+    const badIo = testIo(dir);
+    expect(await runAskShow([...argv], badIo, IN_TIME)).toBe(2);
+    expect(badIo.err).toBe('');
+    assertJsonErrorShape(badIo.out, { id: 'ask-show.invocation', messageContains });
+  }
 });

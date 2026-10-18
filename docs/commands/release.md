@@ -34,22 +34,22 @@ wherever they appear, so `--file --help` prints the usage and exits 0.
 
 | Caller | May |
 | --- | --- |
-| anyone, from any folder | run it: it needs no herdr session, no terminal, no approval and no login |
+| anyone, from any folder | run it: it needs no herdr session, no terminal and no login |
 | the Linear check alone | read its key from the macOS Keychain, so that one check needs macOS, an interactive run and the one-time setup; anywhere else it is `unknown` and the others are unaffected |
 
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| every check passed | the table, one row per check in its fixed order, each `pass`, `missing` or `unknown` — or the one JSON object with `--json` | 0 |
-| no check is unknown, but one or more are missing | the same table, the failing rows' detail under `missing` | 1 |
-| at least one check is unknown | the same table, the failed reads' detail under `unknown` | 2 |
-| a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`; with `--json`, one error object instead (`usage` for the arguments and an undeclared package, `configuration` for the file) | 64 |
+| every check passed | `package <name>, version <ver>`, the `CHECK  STATE  DETAIL` table, and the `<n> check` / `<n> checks, <m> missing` summary — or the `team.release` v1 JSON document (`schema/release.schema.json`) with `--json` | 0 |
+| no check is unknown, but one or more are missing | the same table, the failing rows' detail under `missing`, and the summary line | 1 |
+| at least one check is unknown | the same table, the failed reads' detail under `unknown`, and the summary line | 2 |
+| a bad invocation, an invalid team file, or a package the file does not declare | `team release: <reason>`; with `--json`, a `team.error` v1 JSON document instead (`release.usage` for the arguments and an undeclared package, `release.configuration` for the file) | 64 |
 
 A timeout, a transport failure, or a 408, 429 or 5xx response is retried exactly once; other failures are not retried.
 
-A run whose npm `dist-tags` document shows `next` behind `latest` appends one `warn  <reason>` line
-after the table, or a `"warning"` member after `checks` with `--json`. The warning is a hint, not a
+A run whose npm `dist-tags` document shows `next` behind `latest` prints one `warn  <reason>` line
+between the table and the summary line, or a `"warning"` member after `checks` with `--json`. The warning is a hint, not a
 check: it changes no row, no status and no exit code, and a document that is absent or unreadable,
 or whose tags are not versions, prints nothing.
 
@@ -98,12 +98,14 @@ right, but the tag's commit has not reached the default branch and npm's `next` 
 
 ```console
 $ team release check material@3.0.2 ; echo "exit $?"
-check      status   detail
-npm        pass     exact version, checksums, and provenance found
-tag        missing  tag commit is not an ancestor of the default branch
-github     pass     published release matches SemVer channel
-changelog  pass     changelog entry has a valid release date
+package material, version 3.0.2
+  CHECK      STATE    DETAIL
+  npm        pass     exact version, checksums, and provenance found
+  tag        missing  tag commit is not an ancestor of the default branch
+  github     pass     published release matches SemVer channel
+  changelog  pass     changelog entry has a valid release date
 warn  npm's next dist-tag points at 3.0.1, older than latest 3.0.2: run npm dist-tag add material@3.0.2 next
+4 checks, 1 missing
 exit 1
 ```
 

@@ -27,11 +27,11 @@ const SRC = '../../src/commands/restart.ts';
 // The page's caller table, its busy enumeration, and the two flags it reserves to the owner.
 const OWNER_ROW = 'run it, from a terminal outside herdr; `--session` and `--file` are the owner\'s own';
 const NO_TERMINAL_ROW =
-  'nothing: `team restart: only the owner runs this, from a terminal outside herdr`';
+  'nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane``';
 const LEAD_ROW =
   'never its own recorded pane, never `--abandon` on the orchestrator\'s or the operator\'s seat, and never `--abandon` on a `working` seat';
 const BUSY_ENUMERATION =
-  'working, blocked at a prompt, at its own exit question, on a screen the profile does not recognise, or holding unsent text';
+  'working, blocked at a prompt, at its own exit question, or holding unsent text';
 const FILE_FLAG = 'the team file, instead of `.agents/team.yaml`; the owner\'s alone';
 const SESSION_FLAG = 'the herdr session, instead of `team.session`; the owner\'s alone';
 const RESTARTED_ROW = 'team restart: restarted <seat>; pane <old-pane> -> <new-pane>';
@@ -49,8 +49,9 @@ const SRC_LEFT_UNKNOWN = "unknown: 'shows a screen the profile does not recognis
 const SRC_LEFT_UNSENT = "unsent: 'holds unsent text in its input box; left as it is',";
 const SRC_EXIT_QUESTION = 'sits at its own exit question; left as it is (team restart ${name} --abandon closes it)';
 const SRC_OWNER_WAY = '(team restart ${name} --abandon closes its workspace without typing)';
-const SRC_CALLER = 'only the owner, the orchestrator or the operator restarts a seat; this call is ';
-const SRC_DETACHED_WIRING = 'const detached = detachedRefusal(walked);';
+// The source text escapes the backticks inside its template literal, so the pin does too.
+const SRC_CALLER = 'only the owner or \\`leads\\` restarts a seat; this call is ';
+const SRC_DETACHED_WIRING = "const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat'";
 const SRC_FLAG_WIRING = 'const flagRefusal = fileOwnerRefusal(io, args.values.file)';
 const SRC_SELF_PANE = 'caller.name === name || (recordedSeat?.pane !== undefined && caller.pane === recordedSeat.pane)';
 
@@ -268,16 +269,17 @@ describe('the restart page, held to its command', () => {
     const bare = makeWorld();
     const ioDetached = testIo(bare.root, { kind: 'owner-no-tty' });
     expect(await runRestart(['worker'], ioDetached, bare.sources)).toBe(1);
-    expect(ioDetached.err).toBe('team restart: only the owner runs this, from a terminal outside herdr\n');
+    expect(ioDetached.err).toBe('team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane\n');
     expect(ioDetached.out).toBe('');
 
-    // An ordinary seat of the team may not restart another seat.
+    // An ordinary seat of the team may not restart another seat: the map's `restart` row admits
+    // the owner and the team's `leads`, and the seat holds no `leads`.
     const world = makeWorld();
     record(world.dir, { worker: 'pane-old' });
     const workerCaller = { kind: 'seat', name: 'worker', pane: 'pane-old', session: 'acme' } as const;
     const ioWorker = testIo(world.root, workerCaller);
     expect(await runRestart(['lead'], ioWorker, world.sources)).toBe(1);
-    expect(ioWorker.err).toBe('team restart: only the owner, the orchestrator or the operator restarts a seat; this call is worker\n');
+    expect(ioWorker.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is worker\n');
     expect(ioWorker.out).toBe('');
 
     // A lead on its recorded pane may not aim --file or --session: refused before the path is
@@ -294,13 +296,13 @@ describe('the restart page, held to its command', () => {
     expect(await runRestart(['worker', '--session', 'acme'], ioSession, world.sources)).toBe(1);
     expect(ioSession.err).toBe(`team restart: --session is the owner's, from a terminal outside herdr; this call is lead\n`);
 
-    // The self check reads the recorded pane, not the caller's name: the operator, standing on
-    // the target seat's recorded pane, is refused as a self restart.
-    record(world.dir, { ops: 'pane-old', worker: 'pane-old' });
-    const opsOnWorkerPane = { kind: 'seat', name: 'ops', pane: 'pane-old', session: 'acme' } as const;
-    const ioSelfPane = testIo(world.root, opsOnWorkerPane);
+    // The self check reads the recorded pane, not the caller's name: the lead, standing on the
+    // target seat's recorded pane, is refused as a self restart.
+    record(world.dir, { lead: 'pane-old', worker: 'pane-old' });
+    const leadOnWorkerPane = { kind: 'seat', name: 'lead', pane: 'pane-old', session: 'acme' } as const;
+    const ioSelfPane = testIo(world.root, leadOnWorkerPane);
     expect(await runRestart(['worker'], ioSelfPane, world.sources)).toBe(1);
-    expect(ioSelfPane.err).toBe('team restart: the ops cannot restart its own recorded pane; the owner must do it\n');
+    expect(ioSelfPane.err).toBe('team restart: the lead cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
     expect(world.did.closed).toEqual([]);
   });
 
@@ -321,13 +323,27 @@ describe('the restart page, held to its command', () => {
     expect(ioBlocked.err).toBe('team restart: worker is blocked at a prompt, which team never answers; left as it is\n');
     expect(blocked.did.closed).toEqual([]);
 
-    // A screen the profile does not recognise: the owner's refusal names the way out.
+    // A screen the profile does not recognise is advice when herdr itself reports the seat
+    // idle: the workspace is closed without typing and the seat restarts. Only herdr's own
+    // busy word keeps the refusal.
     const unknown = makeWorld('unknown');
     record(unknown.dir, { worker: 'pane-old' });
     const ioUnknown = testIo(unknown.root, { kind: 'owner' });
-    expect(await runRestart(['worker'], ioUnknown, unknown.sources)).toBe(1);
-    expect(ioUnknown.err).toBe('team restart: worker shows a screen the profile does not recognise; left as it is (team restart worker --abandon closes its workspace without typing)\n');
-    expect(unknown.did.closed).toEqual([]);
+    expect(await runRestart(['worker'], ioUnknown, unknown.sources)).toBe(0);
+    expect(unknown.did.typed).toEqual([]);
+    expect(unknown.did.closed).toEqual(['ws-old']);
+    expect(ioUnknown.out).toContain('worker: input box: not read (the screen is not recognised)\n');
+    expect(ioUnknown.out).toContain('worker: screen: not recognised; herdr reports it idle; the workspace is closed without typing into it\n');
+    expect(ioUnknown.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+
+    // The same unread screen with herdr reporting a turn: the refusal stands, and the owner's
+    // way out is named.
+    const unknownWorking = makeWorld('unknown', 'working');
+    record(unknownWorking.dir, { worker: 'pane-old' });
+    const ioUnknownWorking = testIo(unknownWorking.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], ioUnknownWorking, unknownWorking.sources)).toBe(1);
+    expect(ioUnknownWorking.err).toBe('team restart: worker shows a screen the profile does not recognise; left as it is (team restart worker --abandon closes its workspace without typing)\n');
+    expect(unknownWorking.did.closed).toEqual([]);
 
     // The owner's --abandon on a working seat closes it without typing and restarts it. The
     // launch command itself is not "typing into the pane": only closeUnasked skips the pane.

@@ -1,13 +1,17 @@
-// The modular watch core must report, nudge and remember exactly what the pass it replaced did.
+// The modular watch core must report and remember exactly what the pass it replaced did.
 // `oldPass` below is src/watch/pass.ts as it stood before the checks were split into modules
 // (the merge of #45), copied in unchanged — except the one field read the lead's rename moved,
 // `team.coordinator` to `team.orchestrator`, the same value under the section's canonical name,
 // the unrecognised-screen fail-safe's quiet-unknown line, added to both sides below,
 // the model-drift line's restart, which the check now names,
-// and the nudge, which now types into the idle seat rather than the operator —
+// the nudge into a free seat and its fallback line, removed here: a report for the operator is
+// never typed into a seat, so the old pass still computes both and the comparison below demands
+// equal reports alone,
+// and the idle check's owner stage, which reports at `idle_owner` as well as the lead at
+// `idle_first` — added to both sides below —
 // and used by this file alone. Every scenario runs both
-// implementations over the same fixtures, step for step, and demands equal PassResults and equal
-// pending state — for a team file without `watch.checks`, which is every fixture here.
+// implementations over the same fixtures, step for step, and demands equal reports and equal
+// readings — for a team file without `watch.checks`, which is every fixture here.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import type { Seen } from '../src/budgets/readings.ts';
@@ -16,11 +20,11 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession } from '../src/state.ts';
 import type { SessionState } from '../src/state.ts';
-import { WATCH_LABEL } from '../src/status/compare.ts';
 import type { Live } from '../src/status/compare.ts';
 import { seatModel } from '../src/status/statusline.ts';
 import { gb, recordSwap } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { withWas } from './helpers.ts';
@@ -30,7 +34,7 @@ import { withWas } from './helpers.ts';
 type OldMemory = {
   idleSince: Record<string, number>;
   lastWorking: Record<string, number>;
-  idleTold: Record<string, number>;
+  idleTold: Record<string, { lead?: number; owner?: number }>;
   unsentSince: Record<string, number>;
   active: Set<string>;
   teamIdleSince: number | null;
@@ -148,22 +152,24 @@ function oldPass(
     const worked = memory.lastWorking[name];
     if (worked === undefined) memory.idleSince[name] ??= now;
     const since = now - (worked ?? (memory.idleSince[name] as number));
-    const told = memory.idleTold[name];
+    const told = (memory.idleTold[name] ??= {});
     const repeat = team.watch.idleRepeat;
-    if (since >= team.watch.idleFirst * 1000 && (told === undefined || (repeat !== undefined && now - told >= repeat * 1000))) {
-      memory.idleTold[name] = now;
-      reports.push({
-        key: `idle:${name}`,
-        text: worked === undefined
-          ? `${name} has been idle since the watch started`
-          : `${name} has been idle for ${oldMinutes(since)} minutes`,
-        to: 'operator',
-      });
+    const line = worked === undefined
+      ? `${name} has been idle since the watch started`
+      : `${name} has been idle for ${oldMinutes(since)} minutes`;
+    if (since >= team.watch.idleFirst * 1000 && (told.lead === undefined || (repeat !== undefined && now - told.lead >= repeat * 1000))) {
+      told.lead = now;
+      reports.push({ key: `idle:${name}`, text: line, to: 'operator' });
+    }
+    // The owner stage: told once per idle period, at idle_owner.
+    if (since >= team.watch.idleOwner * 1000 && told.owner === undefined) {
+      told.owner = now;
+      reports.push({ key: `idle-owner:${name}`, text: `${line} — reported to the owner`, to: 'owner' });
     }
   }
 
   for (const agent of live.agents) {
-    if (known.has(agent.pane) || labels.get(agent.workspace) === WATCH_LABEL) continue;
+    if (known.has(agent.pane) || labels.get(agent.workspace) === watchLabel(team.project)) continue;
     once(`extra:${agent.pane}`, `${agent.name ?? `an unnamed ${agent.agent ?? 'agent'}`} (${agent.pane}) is running and is not in the file`);
   }
 
@@ -235,7 +241,7 @@ function oldPass(
     if (chosen) {
       nudge = { pane: chosen.pane, text: OLD_NUDGE_TEXT, pending: memory.pending.slice(), seat: chosen.seat, cli: chosen.cli };
     } else if (now - memory.pendingSince >= team.watch.nudgeWait * 1000) {
-      fallback = `no idle seat could be nudged for ${oldMinutes(now - memory.pendingSince)} minutes; ${memory.pending.length} report(s) wait: ${memory.pending.join('; ')}`;
+      fallback = `no idle seat could be nudged for ${oldMinutes(now - memory.pendingSince)} minutes; ${memory.pending.length} ${memory.pending.length === 1 ? 'report' : 'reports'} wait: ${memory.pending.join('; ')}`;
     }
     if (nudge || fallback) {
       memory.pending = [];
@@ -270,11 +276,9 @@ function both(name: string, team: TeamFile, steps: Step[]): void {
     // `readings` is the one field the old pass had no idea of (#46, #50); every fixture here
     // names no budget account, so it stays empty and the rest must be equal as before. A step
     // that hands the pass a cache gets it back as it handed it over.
-    expect({ name, at: step.at, reports: now.reports, nudge: now.nudge, fallback: now.fallback })
-      .toEqual({ name, at: step.at, reports: was.reports, nudge: was.nudge, fallback: was.fallback });
+    expect({ name, at: step.at, reports: now.reports })
+      .toEqual({ name, at: step.at, reports: was.reports });
     expect(now.readings).toEqual(step.readings ?? []);
-    expect({ name, at: step.at, pending: after.pending, since: after.pendingSince })
-      .toEqual({ name, at: step.at, pending: before.pending, since: before.pendingSince });
   }
 }
 
@@ -457,18 +461,21 @@ describe('the modular core against the pass it replaced', () => {
     // The fail-safe's case: herdr says done, and the profile reads no composer — a stalled seat
     // must be reported, not taken for a free one.
     const stalled = live({ 'codex-acme': { status: 'done', screen: 'Some unknown output without composer\n' } });
+    // A condition clears on two passes in a row before it returns: one clear pass is the flicker
+    // the new pass forgives, and the old pass would report the return there.
     both('attention', team(), [
       { live: stuck, at: 0 },
       { live: stuck, at: MIN },
       { live: live(), at: 2 * MIN },
-      { live: stuck, at: 3 * MIN },
-      { live: asked, at: 4 * MIN },
-      { live: live({ 'codex-acme': { status: 'blocked', screen: '' } }), at: 5 * MIN },
-      { live: odd, at: 6 * MIN },
-      { live: live(), at: 7 * MIN },
-      { live: stalled, at: 8 * MIN },
+      { live: live(), at: 3 * MIN },
+      { live: stuck, at: 4 * MIN },
+      { live: asked, at: 5 * MIN },
+      { live: live({ 'codex-acme': { status: 'blocked', screen: '' } }), at: 6 * MIN },
+      { live: odd, at: 7 * MIN },
+      { live: live(), at: 8 * MIN },
       { live: stalled, at: 9 * MIN },
-      { live: live(), at: 10 * MIN },
+      { live: stalled, at: 10 * MIN },
+      { live: live(), at: 11 * MIN },
     ]);
   });
 
@@ -476,7 +483,7 @@ describe('the modular core against the pass it replaced', () => {
     const now = live({ 'claude-coordinator-acme': { screen: busy.replace('Opus 5.5', 'Fable 5.1') } });
     now.agents = now.agents.filter((one) => one.name !== 'deepseek-acme-2');
     now.agents.push(agent('stranger', 'w8', 'working'), agent(null, 'w9', 'working'));
-    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: 'watchdog' });
+    now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: watchLabel('acme-web') });
     both('missing and extra', team(), [
       { live: now, at: 0 },
       { live: now, at: MIN },
@@ -529,11 +536,14 @@ describe('the modular core against the pass it replaced', () => {
   });
 
   test('the machine tight, blind, and tight again', () => {
+    // Blind on two passes in a row, as above: one blind pass is forgiven, so identical reports
+    // need the second.
     both('machine', team(), [
       { live: live(), at: 0, machine: tight },
       { live: live(), at: MIN, machine: tight },
       { live: live(), at: 2 * MIN, machine: blind },
-      { live: live(), at: 3 * MIN, machine: tight },
+      { live: live(), at: 3 * MIN, machine: blind },
+      { live: live(), at: 4 * MIN, machine: tight },
       { live: live(), at: 70 * MIN, machine: blind },
     ]);
   });
@@ -549,21 +559,24 @@ describe('the modular core against the pass it replaced', () => {
     ]);
   });
 
-  test('the nudge: delivered, kept while the operator is busy, and the fallback', () => {
+  test('reports waiting while builders are free: the passes report the same, and nothing is typed', () => {
+    // The old pass nudged a free seat for these reports and fell back when none was free. That
+    // path is gone; what still has to match, step for step, is every report each pass raised.
     const asked = live({ 'deepseek-acme-2': { status: 'blocked', screen: question } });
     const askedBusy = live({
       'deepseek-acme-2': { status: 'blocked', screen: question },
       'claude-operator-acme': { status: 'working', screen: busy },
     });
-    both('the nudge', team(), [
+    both('reports waiting', team(), [
       { live: askedBusy, at: 0 },
       { live: askedBusy, at: 5 * MIN },
       { live: asked, at: 6 * MIN },
       { live: asked, at: 7 * MIN },
       { live: live(), at: 8 * MIN },
-      { live: asked, at: 9 * MIN },
+      { live: live(), at: 9 * MIN },
+      { live: asked, at: 10 * MIN },
     ]);
-    both('the nudge fallback', team(), [
+    both('reports waiting past the old fallback', team(), [
       { live: askedBusy, at: 0 },
       { live: askedBusy, at: 9 * MIN },
       { live: askedBusy, at: 10 * MIN },
@@ -573,7 +586,7 @@ describe('the modular core against the pass it replaced', () => {
   });
 
   test('the watch section changes mid-sequence', () => {
-    const brisk = valid(example.replace('  idle_first: 10m', '  idle_first: 1m').replace('  idle_repeat: 20m', '  idle_repeat: 2m'));
+    const brisk = valid(example.replace('  idle_first: 5m', '  idle_first: 1m').replace('  idle_repeat: 20m', '  idle_repeat: 2m'));
     const quiet = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
     both('a changed watch section', team(), [
       { live: quiet, at: 0 },
@@ -612,7 +625,7 @@ describe('the modular core against the pass it replaced', () => {
   test('a cached reading carrying a point rides both implementations the same way', () => {
     // § 5: this file's whole job is implementation-for-implementation equality, figure for
     // figure. The same step runs twice — with a cache as `observe` leaves it, and with one
-    // carrying § 5's valid point — and both implementations report, nudge and remember the same
+    // carrying § 5's valid point — and both implementations report and carry the reading the same
     // either way, carrying the reading forward exactly as it was handed over.
     const cached: Seen = {
       account: 'openai', window: 'weekly', left: 80, used: 20,
@@ -622,7 +635,7 @@ describe('the modular core against the pass it replaced', () => {
     const steps = (readings: Seen[]): Step[] => [{ live: live(), at: 0, readings }];
     both('a cache of one plain reading', team(), steps([cached]));
     both('a cache of one reading with a point', team(), steps([withWas(cached)]));
-    // Side by side over the pass's own result: the same reports, nudge and fallback, and the
+    // Side by side over the pass's own result: the same reports, and the
     // same reading record for record — the point is the one field that differs, and it is there.
     const run = (readings: Seen[]) => pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine,
@@ -631,8 +644,6 @@ describe('the modular core against the pass it replaced', () => {
     const plain = run([cached]);
     const pointed = run([withWas(cached)]);
     expect(pointed.reports).toEqual(plain.reports);
-    expect(pointed.nudge).toEqual(plain.nudge);
-    expect(pointed.fallback).toEqual(plain.fallback);
     const bare = (one: Seen) => Object.fromEntries(Object.entries(one).filter(([field]) => field !== 'was'));
     expect(pointed.readings.map(bare)).toEqual(plain.readings.map(bare));
     // Non-vacuity: the reading really was handed to the pass and came back, the pointed one's

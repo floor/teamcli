@@ -21,8 +21,8 @@ import { claudeBox, testIo } from '../helpers.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8');
-/** The notice the example fixture carries: it still spells the lead `coordinator:`, on line 5. */
-const WARNING = 'team approve: warning, line 5: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n';
+/** `team approve` no longer prints deprecation warnings on stderr (0.5.0 output contract §2.4). */
+const WARNING = '';
 /** The same notice as doctor prints it, among the file's own lines. */
 const FILE_WARNING = 'warn  the file, line 5: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read';
 const FILE = ['--file', '.agents/team.yaml'];
@@ -410,17 +410,18 @@ describe('team doctor', () => {
     expect(run.err).toBe('');
     expect(run.out).toBe(
       [
+        'team acme-web, session "acme-web"',
         FILE_WARNING,
         'ok    herdr 0.7.1',
-        '--    session acme-web is not running',
+        'note  session acme-web is not running',
         'ok    claude 2.1.288 (Claude Code)',
         'ok    claude-code: logged in',
         'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
         'warn  deepseek-acme-2: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher',
         'ok    codex codex-cli 0.157.0',
         'ok    codex: logged in',
-        `ok    the lobby ${home}/.config/team/lobby: will be created at the first launch`,
-        `--    the file is legacy: migrate from ../worktrees/acme-web/.lobby to ${home}/.config/team/lobby by writing:`,
+        'ok    the lobby ~/.config/team/lobby: will be created at the first launch',
+        'note  the file is legacy: migrate from ../worktrees/acme-web/.lobby to ~/.config/team/lobby by writing:',
         'trust:',
         '  - ~/.config/team/lobby',
         `  - ${root}`,
@@ -428,6 +429,12 @@ describe('team doctor', () => {
         `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
           + `${join(base, 'worktrees', 'acme-web')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme-web/*"`,
         'team doctor: nothing missing, 3 warnings',
+        'what 0.5.0 must not pretend:',
+        '  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.',
+        '  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.',
+        '  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.',
+        '  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.',
+        '  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.',
         '',
       ].join('\n'),
     );
@@ -492,10 +499,10 @@ describe('team doctor', () => {
       loggedIn: () => null,
     });
     expect(run.out).toContain(
-      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.299: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
+      'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.302: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
     );
     expect(run.out).toContain('warn  herdr 0.6.9 is older than the tested 0.7.1\n');
-    expect(run.out).toContain('--    claude-code: the login is not checked in this version\n');
+    expect(run.out).toContain('note  claude-code: the login is not checked in this version\n');
     expect(run.code).toBe(0);
   });
 
@@ -557,7 +564,7 @@ describe('team doctor', () => {
       'warn  deepseek-acme: the launch runs team-deepseek, not claude, and names no model: if the launcher chooses the model, say so with model_from: launcher\n',
     );
     expect(run.out).not.toContain('cursor-other: the launch names no model this version knows');
-    expect(run.out).toEndWith('team doctor: nothing missing, 4 warnings\n');
+    expect(run.out).toContain('team doctor: nothing missing, 4 warnings\nwhat 0.5.0 must not pretend:\n');
   });
 
   test("a launch whose model is not the file's warns", async () => {
@@ -629,7 +636,7 @@ describe('team doctor', () => {
 
   test('--session names another session', async () => {
     await approve([], OWNER);
-    expect((await doctor({}, ['--session', 'team-test'])).out).toContain('--    session team-test is not running\n');
+    expect((await doctor({}, ['--session', 'team-test'])).out).toContain('note  session team-test is not running\n');
   });
 });
 
@@ -688,8 +695,11 @@ describe('team up', () => {
     expect(run.out).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -c model_reasoning_effort=high -a never -s danger-full-access');
     expect(run.out).toContain('pane send-text <pane of codex-acme>');
     expect(run.out).toContain('  skip grok-acme: stopped in the file; start it with `team add grok-acme`\n');
-    expect(run.out).toContain('detached; the state records its pid');
+    // The plan's last steps: the watch's own workspace, then its command in that pane.
+    expect(run.out).toContain(`+ herdr --session acme-web workspace create --cwd ${root} --label 'Watch · acme-web' --no-focus\n`);
+    expect(run.out).toContain("+ herdr --session acme-web pane run <pane of Watch · acme-web> '");
     expect(run.out).toContain('watch --session acme-web');
+    expect(run.out).toContain('    (a desktop notification follows when the watch exits)\n');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
@@ -700,8 +710,8 @@ describe('team up', () => {
     });
     expect(run.code).toBe(1);
     expect(run.err).toBe('');
-    expect(run.out).toContain('! up would refuse: only the owner runs `up`, from a terminal outside herdr; this call is deepseek-acme\n');
-    expect(run.out).toContain('! to unblock: the owner runs `team up --file .agents/team.yaml` from this folder, at a terminal outside herdr\n');
+    expect(run.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is deepseek-acme\n');
+    expect(run.out).toContain('! to unblock: a `leads` seat runs `team up --file .agents/team.yaml` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 
@@ -754,7 +764,7 @@ describe('team down', () => {
   test('a seat other than the coordinator or the operator stops nothing', async () => {
     const run = await down([], WORKER);
     expect(run.code).toBe(1);
-    expect(run.err).toContain('team down: only the owner, the orchestrator or the operator stops the team; this call is deepseek-acme\n');
+    expect(run.err).toContain('team down: only the owner or `leads` stops the team; this call is deepseek-acme\n');
     expect(run.out).toBe('');
   });
 
@@ -796,7 +806,7 @@ describe('team down', () => {
 
     const worker = await down(['--dry-run'], WORKER);
     expect(worker.out).toStartWith(
-      '! down would refuse: only the owner, the orchestrator or the operator stops the team; this call is deepseek-acme\n',
+      '! down would refuse: only the owner or `leads` stops the team; this call is deepseek-acme\n',
     );
   });
 

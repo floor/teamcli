@@ -8,7 +8,7 @@ request's body alone and needs no git.
 
 ## Synopsis
 
-    team commits check <ref> [--since <ref>] [--file <path>]
+    team commits check <ref> [--since <ref>] [--file <path>] [--json]
 
 ## Flags
 
@@ -17,13 +17,14 @@ request's body alone and needs no git.
 | `<ref>` | one commit, or a range when it holds `..` | the commits to check, passed to git as given (`origin/main..HEAD`) |
 | `--since <ref>` | a commit | skip this commit and everything reachable from it, for this run; overrides `identity.since` |
 | `--file <path>` | a team file | the team file to read, instead of `.agents/team.yaml` |
+| `--json` | — | the report as the `team.commits` document (`schema/commits.schema.json`); a refusal as the `team.error` document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
 
 | Caller | May |
 | --- | --- |
-| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session, no terminal and no approval of its own |
+| anyone — a seat, an agent-run CLI, or the owner, from any folder | run it: it needs no herdr session and no terminal |
 | a seat, on its own branch, before it reports | run it |
 | CI, on a push | run it |
 
@@ -31,9 +32,13 @@ request's body alone and needs no git.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| every commit checked passes | `team commits check: <n> commits checked, <n> by a human or a merge: ok` — with `<n> skipped (since <ref>)` when `--since` left commits out | 0 |
-| at least one commit was refused | one block per offending commit — its hash and subject, then one line per finding under it — then the same count, ending `<n> commits refused` | 1 |
+| every commit checked passes | a `COMMIT  STATUS  DETAIL` table, one row per commit (`ok`, `refused` or `exempt`), then `team commits check: <n> commits checked, <n> by a human or a merge: ok` — with `<n> skipped (since <ref>)` when `--since` left commits out | 0 |
+| at least one commit was refused | the same table, then one `difference:` block per finding — what was found, `repair:`, `who:` — then the same counts, ending `<n> commits refused` | 1 |
 | the check can't run: a bad invocation, a team file that can't be read, or a ref that names nothing | `team commits check: <reason>`, with the usage for a bad invocation | 2 |
+
+Under `--json` the report is the `team.commits` document (`schema/commits.schema.json`), and a
+refusal writes the `team.error` document on stdout with its `contract/exit-codes.json` id; stderr
+stays empty.
 
 ## Example
 
@@ -108,9 +113,75 @@ The commit a person wrote needs no signature:
 
 ```console
 $ team commits check HEAD~2 ; echo "exit $?"
-team commits check: warning: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
+COMMIT      STATUS  DETAIL
+<sha>  exempt  Review the copy
 team commits check: 1 commit checked, 1 by a human or a merge: ok
 exit 0
+```
+
+The newest commit signs, but leaks a line the file forbids:
+
+```console
+$ team commits check HEAD ; echo "exit $?"
+COMMIT      STATUS   DETAIL
+<sha>  refused  Tidy the logs
+difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
+  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)
+  who: any seat
+team commits check: 1 commit checked: 1 commit refused
+exit 1
+```
+
+The same run under `--json`:
+
+```console
+$ team commits check HEAD --json ; echo "exit $?"
+{
+  "schema": {
+    "name": "team.commits",
+    "version": 1
+  },
+  "format": 1,
+  "ref": "HEAD",
+  "since": null,
+  "commits": [
+    {
+      "hash": "<sha>",
+      "subject": "Tidy the logs",
+      "status": "refused",
+      "exempt": null,
+      "findings": [
+        {
+          "kind": "forbidden",
+          "message": "forbidden pattern ^Claude-Session:",
+          "line": 5,
+          "text": "Claude-Session: 8f21c4a9"
+        }
+      ]
+    }
+  ],
+  "skipped": 0,
+  "pull_request": null,
+  "differences": [
+    {
+      "what": "commit <sha> \"Tidy the logs\", line 5: forbidden pattern ^Claude-Session: — \"Claude-Session: 8f21c4a9\"",
+      "repair": "rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)",
+      "who": "any seat"
+    }
+  ],
+  "notes": [
+    "line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read"
+  ],
+  "summary": {
+    "commits": 1,
+    "refused": 1,
+    "exempt": 0,
+    "skipped": 0,
+    "ok": false
+  },
+  "notice": null
+}
+exit 1
 ```
 
 Rationale, behaviour, refusals and known limits: [docs/internal/commits.md](../internal/commits.md).

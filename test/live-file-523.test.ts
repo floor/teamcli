@@ -13,6 +13,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { approvalStanding, storePath } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { readScreen, type Screen } from '../src/watch/screen.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -115,7 +116,6 @@ function world(existing: HerdrAgent[] = []) {
     typeText(_session, _pane, text) { effects.push(`type ${text}`); return true; },
     pressEnter() { effects.push('enter'); return true; },
     sendKey(_session, _pane, key) { effects.push(`key ${key}`); return true; },
-    spawnWatch: () => 4242,
     sleep: async (ms) => { clock += ms; },
     now: () => new Date(clock),
   };
@@ -158,8 +158,16 @@ describe('up takes launch ceilings from the live file without an approved copy',
     const made = world(existing ? [agent('lead')] : []);
     const io = testIo(root, OWNER);
     expect(await runUp([], io, made.up), io.err + io.out).toBe(reason ? 1 : 0);
-    expect(made.created).toHaveLength(launches);
-    expect(made.commands).toHaveLength(launches);
+    // The plan's last steps make the watch's own workspace and run the watch in its pane, so a
+    // run that creates seats creates one workspace and one command more. A session whose record
+    // already holds a live watch (the `existing` rows) starts none: `up` skips those steps.
+    const watchSteps = existing ? 0 : 1;
+    expect(made.created, io.err + io.out).toHaveLength(launches + watchSteps);
+    expect(made.commands, io.err + io.out).toHaveLength(launches + watchSteps);
+    if (watchSteps) {
+      expect(made.created[launches], io.err + io.out).toBe(watchLabel('acme'));
+      expect(made.commands[launches]).toContain('watch --session acme');
+    }
     expect(made.effects).toEqual([]);
     if (reason) expect(io.out).toContain(reason);
     const ready = Object.entries(readState(dir).sessions.acme?.seats ?? {})

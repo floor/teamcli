@@ -12,7 +12,7 @@ prunes, and does not delete the branch.
 
 Creates and removes a task worktree: a second checkout of the project on a branch of its own, where
 one seat does one task. `new` cuts the branch from `workspace.base`, records the worktree in the
-session's state and prints its folder; `remove` deletes a worktree that holds nothing that would be
+session's state and prints its action summary; `remove` deletes a worktree that holds nothing that would be
 lost, and keeps its branch. The branch `remove` checks and names is the worktree's own, read from
 `git worktree list --porcelain` — a branch renamed in place is still the one that must hold nothing
 unpublished, and the record's branch is only a hint. A detached HEAD, or a folder the list does not
@@ -91,6 +91,25 @@ same user.
 either is refused before the flagged file or session is read at all. `list`, `new` and `remove` refuse
 the same way.
 
+## What it prints
+
+`list` prints the team's context line, its `TASK  BRANCH  PATH` table — a folder that is gone reads
+`<path> (gone)` — the note line `note: limit <n> (workspace.limit)` and the count
+`1 worktree` / `<n> worktrees`; it writes nothing. `new` prints the context line and
+`worktree <task>: created at <path>`, and `remove` the context line and
+`removed <task>; the branch <branch> is kept` — or, for a record whose folder was already gone,
+`removed the record of <task>; its folder was already gone. No branch was deleted.`
+
+Under `--json` each is one `team.worktree` v1 document on stdout, its `schema` tag first. `list`'s
+carries `format`, `project`, `session`, `notice` (null), `worktrees` — one
+`{ task, branch, path, session, seat, exists }` per record, `seat` null when none is recorded —
+`notes` (the `limit` line) and `summary` (`{ worktrees }`). `new` and `remove` carry `format`,
+`dry_run` (always false — neither has one), `status` (`created`, `removed`, or `record-gone` for a
+folder that was already gone), `action_summary` (the line above), `project`, `session`, `action`
+(`new` or `remove`), `task`, `branch` and `path`. A refusal under `--json` writes a `team.error`
+v1 document on stdout instead — the refusal's own `id`, its `message` and `repair`, and no usage
+text — and stderr stays empty. The exit code is the same as without `--json`.
+
 ## Refusals
 
 | Message | Exit |
@@ -102,10 +121,9 @@ the same way.
 | `team worktree: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team worktree: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team worktree: only the owner, the orchestrator or the operator runs it; this call is <caller>` | 1 |
-| ``team worktree: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
-| ``team worktree: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
+| ``team worktree: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up` `` | 1 |
+| ``team worktree: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team worktree: session can't be "default", herdr's own session` | 1 |
-| ``team worktree: the file was never approved on this machine `` | 1 |
 | ``team worktree: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
 | ``team worktree: the approval record cannot be read (<store>/approval.json: "file" is not a string)`` — the record's `file` is not a string; the store refuses it before this command reads a copy | 1 |
 | ``team worktree: the stored copy can't be read `` — a verified record whose stored copy this version can't read, whether or not the fingerprints match | 1 |
@@ -135,8 +153,8 @@ the same way.
 | `team worktree: commits on no remote branch:` … the first twenty, one per line | 1 |
 | `team worktree: the worktree was not removed: <first line of git's error>` | 1 |
 
-When `setup` fails, the folder is still printed on stdout before the refusal: the worktree is kept,
-recorded as `setup: failed`, and the exit code is 1.
+When `setup` fails, the created line is still printed on stdout before the refusal: the worktree is
+kept, recorded as `setup: failed`, and the exit code is 1.
 
 ## Examples, moved here whole
 

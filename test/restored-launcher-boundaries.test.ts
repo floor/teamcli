@@ -3,10 +3,13 @@
 // plain launch line is never called a launcher, and the restart a lead is told apart from an
 // ordinary seat's. The scenes drive the real pass, never a hand-built observation.
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
+import type { CheckSources } from '../src/check/team.ts';
+import { check, loadConfig } from '../src/commands/check.ts';
+import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -15,6 +18,7 @@ import { usesLauncher } from '../src/launch/line.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
 import { testIo } from './helpers.ts';
 
@@ -127,7 +131,9 @@ function texts(
 const GENERIC = 'is no longer the process team launched (its session was restored, or its CLI was restarted)';
 const launcherLine = (seat: string, repair: string) =>
   `${seat}: its launch line starts a launcher, and the process in its pane is not the one team launched — ${repair}`;
-const RESTART_SEAT = 'team remove deepseek-acme --keep, then team add deepseek-acme';
+const leadNote = (seat: string) =>
+  `${seat}: started by a launcher; team cannot tell its process from the one it launched`;
+const RESTART_SEAT = 'team restart deepseek-acme';
 const RESTART_TEAM = 'team down, then team up (to restart the whole team)';
 
 describe('a restored seat running outside its launcher', () => {
@@ -140,19 +146,18 @@ describe('a restored seat running outside its launcher', () => {
       processes: { 'w3:p1': { shell: 500, foreground: [501] } },
     });
     // The stored session is on the pane, so the generic line stays quiet: the flag is the
-    // launcher's alone, and it names the restart — the pass reports, it launches nothing,
-    // and the waiting report rides the nudge carrying that same repair line.
+    // launcher's alone, and it names the restart — the pass reports, it launches nothing and
+    // types nothing.
     expect(result.reports.map((report) => report.text)).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
-    expect(result.nudge?.pending).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
-    expect(result.fallback).toBeNull();
+    expect(result.work).toEqual([]);
     expect(result.ring).toBeNull();
   });
 
-  test('a lead\'s flag restarts the whole team, not the seat', () => {
+  test('a lead\'s flag is a note, and no command stops the team', () => {
     const state = recorded('claude-coordinator-acme', 'w1', 600, 601, 'kept');
     const scene = live({ 'claude-coordinator-acme': { session: 'kept' } });
     expect(texts(teamOf(withLauncherLead), state, scene, newMemory(), { 'w1:p1': { shell: 600, foreground: [602] } }))
-      .toEqual([launcherLine('claude-coordinator-acme', RESTART_TEAM)]);
+      .toEqual([leadNote('claude-coordinator-acme')]);
   });
 
   test('a line the file says picks the model in its launcher is flagged the same', () => {
@@ -169,7 +174,7 @@ describe('a restored seat running outside its launcher', () => {
     expect(texts(teamOf(withLauncherLead), state, scene, newMemory(), { 'w1:p1': { shell: 600, foreground: [602] } }))
       .toEqual([
         `claude-coordinator-acme ${GENERIC}`,
-        launcherLine('claude-coordinator-acme', RESTART_TEAM),
+        leadNote('claude-coordinator-acme'),
         'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — '
           + RESTART_TEAM,
       ]);
@@ -188,7 +193,9 @@ describe('a restored seat running outside its launcher', () => {
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([]);
     // The recorded process in front again: the condition cleared…
     expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
-    // …so a process team did not launch, anew, is a new change and reported anew.
+    // …for a second pass in a row, so the one-pass flicker grace is over and the mark is gone.
+    expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
+    // A process team did not launch, anew, is a new change and reported anew.
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
   });
 });
@@ -215,68 +222,166 @@ describe('what the flag never touches', () => {
   });
 });
 
-// `status` names the same restart, and starts nothing: the lead's row stays the running seat.
-describe('status names the whole-team restart for a lead outside its launcher', () => {
+// The same fact through all three readings: a lead's own seat draws a note in `status`, no
+// difference in `status` or `check`, and only the launcher warning in `doctor`; an ordinary seat
+// draws the per-seat restart everywhere, never the whole-team one.
+describe('a restored seat outside its launcher, in status, check and doctor', () => {
   const NOW = new Date('2026-10-03T14:10:00Z');
   const claudeScreen = (model: string) =>
     `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
 
-  test('the lead is flagged, its row unchanged, and no repair starts the seat', async () => {
-    const base = mkdtempSync(join(tmpdir(), 'team-restored-launcher-'));
+  function doctorSources(home: string): DoctorSources {
+    return {
+      version: () => '2.1.288 (Claude Code)',
+      onPath: () => true,
+      loggedIn: () => true,
+      herdrVersion: () => '0.7.1',
+      sessionRunning: () => true,
+      now: () => NOW,
+      home,
+    };
+  }
+
+  /** The example's team with `seat` recorded as launched and the pane holding a process team did
+   *  not launch under the session its launch stored: the restored seat, through the real passes. */
+  function scene(text: string, seat: string, workspace: string) {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-restored-launcher-')));
+    const dir = join(base, 'acme');
+    const home = join(base, 'home');
+    mkdirSync(join(dir, '.agents'), { recursive: true });
+    mkdirSync(home);
+    const file = join(dir, '.agents', 'team.yaml');
+    writeFileSync(file, text);
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.watch = { pid: 1, heartbeat: '2026-10-03T14:09:00Z' };
+      session.seats[seat] = {
+        stage: 'ready',
+        pane: `${workspace}:p1`,
+        workspace,
+        launched: { shell: 400, cli: [401] },
+        agent_session: 'kept',
+      };
+    });
+    const agentAt = (name: string, pane: string, status: string, kind = 'claude'): HerdrAgent => ({
+      name,
+      agent: kind,
+      pane,
+      workspace: pane.split(':')[0]!,
+      status,
+      cwd: null,
+      ...(name === seat ? { session: 'kept' } : {}),
+    });
+    const live: Live = {
+      running: true,
+      agents: [
+        agentAt('claude-coordinator-acme', 'w1:p1', 'working'),
+        agentAt('codex-acme', 'w2:p1', 'idle', 'codex'),
+        agentAt('deepseek-acme', 'w3:p1', 'working'),
+        agentAt('deepseek-acme-2', 'w4:p1', 'done'),
+      ],
+      // The labels the file's own seats give, so `check` has nothing to register.
+      workspaces: [
+        { id: 'w1', label: 'claude-coordinator-acme · project coordinator' },
+        { id: 'w2', label: 'codex-acme · implementer' },
+        { id: 'w3', label: 'deepseek-acme · implementer' },
+        { id: 'w4', label: 'deepseek-acme-2 · implementer' },
+        { id: 'w9', label: watchLabel('acme-web') },
+      ],
+      screens: { 'w1:p1': claudeScreen('Opus 5.5') },
+      processes: { [`${workspace}:p1`]: { shell: 500, foreground: [501] } },
+    };
+    const checked = validateTeamFile(text);
+    if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
+    return { base, dir, home, file, text, live, team: checked.team };
+  }
+
+  function statusSources(s: ReturnType<typeof scene>): StatusSources {
+    return {
+      live: () => s.live,
+      branch: () => 'main',
+      standing: () => verifiedOf(s.team, s.text, s.dir, NOW),
+      now: () => NOW,
+    };
+  }
+
+  function checkSources(s: ReturnType<typeof scene>): CheckSources {
+    return {
+      live: () => s.live,
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+      home: s.home,
+    };
+  }
+
+  test('a lead\'s own seat: a note in status, no difference in status or check, and no restart in doctor', async () => {
+    // The coordinator — both `coordinator` and `operator` name it — started through a launcher.
+    const s = scene(example.replace('    launch: claude --model claude-opus-5-5', '    launch: team-claude'), 'claude-coordinator-acme', 'w1');
     try {
-      const dir = join(base, 'acme');
-      mkdirSync(join(dir, '.agents'), { recursive: true });
-      // The coordinator — operator and coordinator both — started through a launcher.
-      const text = example.replace('    launch: claude --model claude-opus-5-5', '    launch: team-claude');
-      const file = join(dir, '.agents', 'team.yaml');
-      writeFileSync(file, text);
-      const checked = validateTeamFile(text);
-      if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
-      updateState(join(dir, '.agents'), (state) => {
-        const session = (state.sessions['acme-web'] ??= emptySession());
-        session.watch = { pid: 1, heartbeat: '2026-10-03T14:09:00Z' };
-        session.seats['claude-coordinator-acme'] = {
-          stage: 'ready',
-          pane: 'w1:p1',
-          workspace: 'w1',
-          launched: { shell: 400, cli: [401] },
-          agent_session: 'kept',
-        };
-      });
-      const lead: Live = {
-        running: true,
-        agents: [
-          { ...agent('claude-coordinator-acme', 'w1', 'working'), session: 'kept' },
-          agent('codex-acme', 'w2', 'idle', 'codex'),
-          agent('deepseek-acme', 'w3', 'done'),
-          agent('deepseek-acme-2', 'w4'),
-        ],
-        workspaces: [
-          { id: 'w1', label: 'claude opus 5.5' }, { id: 'w2', label: 'gpt sol 6' },
-          { id: 'w3', label: 'deepseek flash v4.1' }, { id: 'w4', label: 'deepseek flash v4.1-2' }, { id: 'w9', label: 'watchdog' },
-        ],
-        screens: { 'w1:p1': claudeScreen('Opus 5.5') },
-        processes: { 'w1:p1': { shell: 500, foreground: [501] } },
-      };
-      const sources: StatusSources = {
-        live: () => lead,
-        branch: () => 'main',
-        standing: () => verifiedOf(checked.team, text, dir, NOW),
-        now: () => NOW,
-      };
-      const io = testIo(dir, { kind: 'owner' });
-      const code = await runStatus(['--file', file], io, sources);
-      // The seat is still the running one — the report says what is, and starts nothing.
-      expect(code).toBe(1);
-      expect(io.out).toMatch(/claude-coordinator-acme\s+working\s+Claude Opus 5\.5\s+w1:p1/);
-      expect(io.out).not.toMatch(/claude-coordinator-acme\s+restored, not launched by team/);
-      expect(io.out).toContain(
-        'difference: claude-coordinator-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n'
-          + '  repair: team down, then team up (to restart the whole team)\n',
-      );
-      expect(io.out).not.toContain('repair: the owner runs team up\n');
+      const statusIo = testIo(s.dir, { kind: 'owner' });
+      const statusCode = await runStatus(['--file', s.file], statusIo, statusSources(s));
+      // The seat is still the running one — the reading is a note, not a difference, and starts
+      // nothing. No command in it stops the team.
+      expect(statusCode).toBe(0);
+      expect(statusIo.out).toMatch(/claude-coordinator-acme\s+working\s+Claude Opus 5\.5\s+w1:p1/);
+      expect(statusIo.out).toContain(`note: ${leadNote('claude-coordinator-acme')}\n`);
+      expect(statusIo.out).toEndWith('no differences\n');
+      expect(statusIo.out).not.toContain('difference:');
+      expect(statusIo.out).not.toContain('team restart');
+      expect(statusIo.out).not.toContain('team down, then team up');
+
+      const checkIo = testIo(s.dir, { kind: 'owner' });
+      const checkCode = await check(['--file', s.file], checkIo, loadConfig, checkSources(s));
+      expect(checkCode).toBe(0);
+      expect(checkIo.out).toEndWith('no differences\n');
+      expect(checkIo.out).not.toContain('difference:');
+      expect(checkIo.out).not.toContain('team restart');
+      expect(checkIo.out).not.toContain('team down, then team up');
+
+      // Doctor sees the same launcher and answers with its model_from warning alone: no reading
+      // sends a lead to a restart of anything.
+      const doctorIo = testIo(s.dir, { kind: 'owner' });
+      await runDoctor(['--file', '.agents/team.yaml'], doctorIo, doctorSources(s.home));
+      expect(doctorIo.out).toContain('claude-coordinator-acme: the launch runs team-claude, not claude, and names no model');
+      expect(doctorIo.out).not.toContain('team restart');
+      expect(doctorIo.out).not.toContain('team down, then team up');
+      expect(doctorIo.out).not.toContain('to restart the whole team');
     } finally {
-      rmSync(base, { recursive: true, force: true });
+      rmSync(s.base, { recursive: true, force: true });
+    }
+  });
+
+  test('an ordinary seat: the per-seat restart in status and check, and no restart in doctor', async () => {
+    const s = scene(example, 'deepseek-acme', 'w3');
+    try {
+      const block = 'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n'
+        + '  repair: team restart deepseek-acme\n'
+        + '  who: the team\'s lead\n';
+      const statusIo = testIo(s.dir, { kind: 'owner' });
+      const statusCode = await runStatus(['--file', s.file], statusIo, statusSources(s));
+      expect(statusCode).toBe(1);
+      expect(statusIo.out).toContain(block);
+      expect(statusIo.out).toContain('1 difference\n');
+      expect(statusIo.out).not.toContain('team down, then team up');
+
+      const checkIo = testIo(s.dir, { kind: 'owner' });
+      const checkCode = await check(['--file', s.file], checkIo, loadConfig, checkSources(s));
+      expect(checkCode).toBe(1);
+      expect(checkIo.out).toContain(block);
+      expect(checkIo.out).toContain('1 difference\n');
+      expect(checkIo.out).not.toContain('team down, then team up');
+
+      // Doctor names the launcher and stops at the model warning: the repair is the reading's,
+      // never a restart doctor would add.
+      const doctorIo = testIo(s.dir, { kind: 'owner' });
+      await runDoctor(['--file', '.agents/team.yaml'], doctorIo, doctorSources(s.home));
+      expect(doctorIo.out).toContain('deepseek-acme: the launch runs team-deepseek, not claude, and names no model');
+      expect(doctorIo.out).not.toContain('team restart');
+      expect(doctorIo.out).not.toContain('team down, then team up');
+      expect(doctorIo.out).not.toContain('to restart the whole team');
+    } finally {
+      rmSync(s.base, { recursive: true, force: true });
     }
   });
 });

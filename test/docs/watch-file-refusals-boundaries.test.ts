@@ -94,8 +94,13 @@ describe("the watch page's schema-refusal demo after team approve left the build
       watch.includes('check.fail(item.line, `watch.checks can\'t turn off ${item.key}: ${ALWAYS_ON.join(\', \')} always run`);'),
       'the always-on refusal changed its bytes',
     ).toBe(true);
+    const up = raw(UP_SRC);
     expect(
-      raw(UP_SRC).includes('out.stderr(`team up: ${problem.line ? `line ${problem.line}: ` : \'\'}${plainText(problem.message)}\\n`);'),
+      up.includes("(problem) => `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`,"),
+      "the up printer's own line folding changed its bytes",
+    ).toBe(true);
+    expect(
+      up.includes('out.stderr(`team up: ${problem}\\n`);'),
       'the printer that puts the up name on a file problem changed its bytes',
     ).toBe(true);
     const contract = JSON.parse(readFileSync(new URL(CONTRACT, import.meta.url), 'utf8'));
