@@ -113,6 +113,35 @@ afterEach(() => {
 });
 
 describe('team remove --json', () => {
+  test("a human's pane is left running and is never typed into or closed", async () => {
+    // The worker's seat is a person's: the removal takes it out of the file, and the pane it
+    // stands on keeps running. Nothing is typed, no key is pressed and no workspace is closed.
+    const text = FILE.replace(
+      '    launch: claude --model claude-opus-5-5\n  - role: coordinator',
+      '    launch: claude --model claude-opus-5-5\n    human: true\n  - role: coordinator',
+    );
+    writeFileSync(file, text);
+    const loaded = loadTeamFile(dir);
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    writeApproval(
+      storePath(loaded.team.project, loaded.root, home),
+      { approval: approvalOf(loaded.team, loaded.root), file: text },
+      loaded.team.seats,
+      home,
+    );
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
+    const io = testIo(dir, owner);
+    expect(await runRemove(['worker', '--json'], io, made.sources)).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{ status: string; action_summary: string }>(io.out, REMOVE_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('removed');
+    expect(doc.action_summary).toContain("removed worker (the pane is a human's; nothing is typed into it; left running;");
+    expect(made.typed).toEqual([]);
+    expect(made.closed).toEqual([]);
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+  });
+
   test('a removed seat is one team.remove document closing on its summary', async () => {
     const made = world();
     made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
