@@ -48,6 +48,7 @@ import {
   appendEvent,
   parseEventPayload,
   parseSignedEventLine,
+  pruneEventLog,
   readEventsFromCursor,
   type EventAppendInput,
   type SignedEventRecord,
@@ -104,6 +105,8 @@ export type StartBusInput = {
   bufferLimit?: number;
   maxLogBytes?: number;
   keptLogFiles?: number;
+  maxTotalLogBytes?: number;
+  retentionSeconds?: number;
   extraPrivilegedKinds?: readonly EventKind[];
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>;
   now?: () => Date;
@@ -521,6 +524,12 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
   const resolveSeat = readSeatResolver(home, teamIdOf(input.root));
   const bufferLimit = input.bufferLimit ?? DEFAULT_SUBSCRIBER_BUFFER_LIMIT;
   const reconcileIntervalMs = input.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_SECONDS * 1000;
+  // Retention before the first event: a team back after an idle month drops its old segments now.
+  pruneEventLog(input.team.project, input.root, home, {
+    kept: input.keptLogFiles,
+    maxTotalBytes: input.maxTotalLogBytes,
+    retentionSeconds: input.retentionSeconds,
+  });
 
   let confirmed: { dev: number; ino: number } | undefined;
   for (let walk = 0; walk < START_WALKS; walk++) {
@@ -719,6 +728,8 @@ function dispatchBusRequest(
     const appended = appendEvent(input.team.project, input.root, home, request.event, {
       maxBytes: input.maxLogBytes,
       kept: input.keptLogFiles,
+      maxTotalBytes: input.maxTotalLogBytes,
+      retentionSeconds: input.retentionSeconds,
       deduplicate: true,
     });
     if (!appended.ok) {

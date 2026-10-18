@@ -4,9 +4,12 @@
 // Every event is signed under `EVENT_DOMAIN` with the checkout's message key (`messageKeyOf`).
 // The log mints monotonically increasing sequence numbers (`seq: 1, 2, ...`), writes atomically
 // at mode 0600 without following symbolic links, and rotates at `MAX_EVENT_LOG_BYTES` keeping
-// `EVENT_LOG_KEPT` files. When a subscriber's cursor is older than the oldest sequence retained
-// in the rotated log (`cursor > 0 && cursor < oldestSeq`), `readEventsFromCursor` answers `gap`
-// with `oldest_seq` so the subscriber resyncs from the underlying records before following on.
+// `EVENT_LOG_KEPT` files. A segment is retained for the event thresholds' window (30 days) and
+// the team's log never holds more than `EVENT_LOG_TOTAL_BYTES` (100 MB); past either, the oldest
+// sealed segment is dropped, whole and unrewritten, and one operational record names the drop.
+// When a subscriber's cursor is older than the oldest sequence retained in the rotated log
+// (`cursor > 0 && cursor < oldestSeq`), `readEventsFromCursor` answers `gap` with `oldest_seq` so
+// the subscriber resyncs from the underlying records before following on.
 import {
   chmodSync,
   closeSync,
@@ -25,6 +28,7 @@ import {
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
+import { logLine } from '../log.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
 import {
   messageKeyOf,
@@ -34,14 +38,18 @@ import {
   type Json,
 } from '../store/keys.ts';
 import { storePath, storesFolder } from '../store/store.ts';
-import { isEventKind, type EventKind } from './kinds.ts';
+import { DEFAULT_EVENT_RETENTION_SECONDS, isEventKind, type EventKind } from './kinds.ts';
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 export const EVENT_DOMAIN = 'team.event.v1\n';
 export const EVENT_LOG_FILE = 'events.jsonl';
-export const MAX_EVENT_LOG_BYTES = 1_000_000;
-export const EVENT_LOG_KEPT = 3;
+/** One segment reaches this size before it rotates. */
+export const MAX_EVENT_LOG_BYTES = 100_000_000;
+/** The live file and one sealed segment. */
+export const EVENT_LOG_KEPT = 2;
+/** The most the team's retained event log may hold, across its files. */
+export const EVENT_LOG_TOTAL_BYTES = 100_000_000;
 
 export type EventPayload = {
   v: 1;
@@ -148,6 +156,110 @@ function rotateEventLog(path: string, kept: number = EVENT_LOG_KEPT): string | n
     chmodSync(`${path}.1`, 0o600);
   }
   return null;
+}
+
+/** The retention window a pass applies: the age a segment is kept after its last write, and the
+ *  most the retained files together may hold. Both default to the shipping values. */
+export type EventLogRetention = {
+  maxTotalBytes?: number;
+  retentionSeconds?: number;
+};
+
+function sizeOfFile(path: string): number {
+  if (heldAt(path).kind !== 'file') return 0;
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** When the file was last written, or null when it is not a regular file this user owns. */
+function writtenAtFile(path: string): number | null {
+  if (heldAt(path).kind !== 'file') return null;
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/** Seals the live file when its last write is older than the window: every record it holds was
+ *  written before the window too, so the prune that follows may drop it as one segment. */
+function sealIdleLiveFile(path: string, kept: number, cutoffMs: number): void {
+  const writtenAt = writtenAtFile(path);
+  if (writtenAt === null || writtenAt >= cutoffMs || sizeOfFile(path) === 0) return;
+  rotateEventLog(path, kept);
+}
+
+/** Drops the oldest sealed segment while the retained bytes are over the cap or the segment was
+ *  last written before the window, oldest first. The live file is kept: it holds the newest
+ *  records and the next append. A dropped file is unlinked whole and a surviving one is never
+ *  rewritten, so every record still read is byte for byte the one that was verified. One
+ *  operational record names each pass that dropped something. */
+function pruneSealed(path: string, root: string, kept: number, options: EventLogRetention): void {
+  const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+  const maxTotal = options.maxTotalBytes ?? EVENT_LOG_TOTAL_BYTES;
+  const cutoff = Date.now() - retentionSeconds * 1_000;
+  const sealed: { name: string; path: string; size: number; writtenAt: number }[] = [];
+  let total = sizeOfFile(path);
+  for (let n = kept - 1; n >= 1; n--) {
+    const candidate = `${path}.${String(n)}`;
+    const writtenAt = writtenAtFile(candidate);
+    if (writtenAt === null) continue;
+    const size = sizeOfFile(candidate);
+    sealed.push({ name: `${EVENT_LOG_FILE}.${String(n)}`, path: candidate, size, writtenAt });
+    total += size;
+  }
+  const dropped: typeof sealed = [];
+  let bySize = false;
+  let byAge = false;
+  for (const segment of sealed) {
+    const overCap = total > maxTotal;
+    const tooOld = segment.writtenAt < cutoff;
+    if (!overCap && !tooOld) break;
+    try {
+      unlinkSync(segment.path);
+    } catch {
+      break;
+    }
+    total -= segment.size;
+    dropped.push(segment);
+    bySize ||= overCap;
+    byAge ||= tooOld;
+  }
+  if (dropped.length === 0) return;
+  const bytes = dropped.reduce((sum, segment) => sum + segment.size, 0);
+  const why = [bySize ? `${String(maxTotal)} bytes` : null, byAge ? `${String(retentionSeconds)}s old` : null]
+    .filter((part) => part !== null)
+    .join(' or ');
+  logLine(
+    join(root, '.agents'),
+    'bus',
+    'event-log',
+    `retention dropped ${dropped.map((segment) => segment.name).join(', ')} (${String(bytes)} bytes; past ${why})`,
+  );
+}
+
+/** Applies the retention window without appending: an idle live file is sealed, then the oldest
+ *  sealed segments are dropped while the log is over the cap or a segment is past the age window.
+ *  The bus calls this at start, so a team that comes back after an idle month drops its old
+ *  segments before its first event. Best effort: retention never fails the caller. */
+export function pruneEventLog(
+  project: string,
+  root: string,
+  home: string,
+  options: EventLogRetention & { kept?: number } = {},
+): void {
+  try {
+    const kept = options.kept ?? EVENT_LOG_KEPT;
+    const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+    const path = eventLogPath(project, root, home);
+    sealIdleLiveFile(path, kept, Date.now() - retentionSeconds * 1_000);
+    pruneSealed(path, root, kept, options);
+  } catch {
+    // Dropped on purpose: reads and writes are unaffected by retention failing.
+  }
 }
 
 const OPTIONAL_STRING_FIELDS = [
@@ -492,7 +604,14 @@ export function appendEvent(
   root: string,
   home: string,
   input: EventAppendInput,
-  options: { maxBytes?: number; kept?: number; deduplicate?: boolean; seqOverride?: number } = {},
+  options: {
+    maxBytes?: number;
+    kept?: number;
+    deduplicate?: boolean;
+    seqOverride?: number;
+    maxTotalBytes?: number;
+    retentionSeconds?: number;
+  } = {},
 ): EventAppendResult {
   const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
   const kept = options.kept ?? EVENT_LOG_KEPT;
@@ -551,6 +670,14 @@ export function appendEvent(
   const bytes = Buffer.from(line, 'utf8');
 
   try {
+    // An idle live file is sealed first, so the append starts a new segment and the records the
+    // old one holds are dropped by the prune below as one past-the-window segment.
+    try {
+      const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+      sealIdleLiveFile(path, kept, Date.now() - retentionSeconds * 1_000);
+    } catch {
+      // Retention never fails an append: the write below carries on.
+    }
     const current = heldAt(path);
     if (current.kind === 'file') {
       const size = statSync(path).size;
@@ -572,6 +699,11 @@ export function appendEvent(
       }
     } finally {
       closeSync(fd);
+    }
+    try {
+      pruneSealed(path, root, kept, options);
+    } catch {
+      // Retention never fails an append: the record is written either way.
     }
     return { ok: true, record, duplicate: false, path };
   } catch {
