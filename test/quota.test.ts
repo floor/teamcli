@@ -156,6 +156,38 @@ describe('quota reads only the composer\'s own status row', () => {
     expect(figuresOf(patterns, statusRow('codex', spoofed))).toEqual([]);
   });
 
+  test('the captured chrome row under the status line keeps the figure readable', () => {
+    // 0.161.0's plain launch draws `← for agents · ? for shortcuts` under the status row
+    // (idle-hint.txt, working.txt); the row above it is still the composer's.
+    const screen = `• Working (2m 10s • esc to interrupt)\n\n${statusLine}\n  ← for agents · ? for shortcuts\n`;
+    expect(statusRow('codex', screen)).toBe(statusLine);
+    expect(figuresOf(patterns, statusRow('codex', screen))).toEqual([
+      { account: 'openai', window: 'weekly', left: 39, used: 61, resets: null },
+    ]);
+  });
+
+  test('the warning form of the chrome row keeps the figure readable', () => {
+    // The same hint carries the account's warning: `? for shortcuts … ⚠ N warning · f2 to view`,
+    // the `⚠ N warning · f2 to view` tail the 0.157.0 captures draw on the status row. Any
+    // count reads, one warning or several.
+    for (const count of [1, 3]) {
+      const screen = `• Working (2m 10s • esc to interrupt)\n\n${statusLine}\n  ? for shortcuts … ⚠ ${count} warnings · f2 to view\n`;
+      expect(statusRow('codex', screen)).toBe(statusLine);
+      expect(figuresOf(patterns, statusRow('codex', screen))).toEqual([
+        { account: 'openai', window: 'weekly', left: 39, used: 61, resets: null },
+      ]);
+    }
+  });
+
+  test('a line the seat prints under the status row is not chrome, so nothing reads', () => {
+    // The one trailing row must be the captured chrome: status-then-one may not accept arbitrary
+    // text under a status-shaped line, or a seat could print a status row and a line below it and
+    // feed the watch its own figure.
+    const screen = `• Working (2m 10s • esc to interrupt)\n\n${statusLine}\n  (the seat keeps printing)\n`;
+    expect(statusRow('codex', screen)).toBeNull();
+    expect(figuresOf(patterns, statusRow('codex', screen))).toEqual([]);
+  });
+
   test('a grok quota line typed into the box, or printed above the rule, is not the row', () => {
     const patterns = quotaFor('grok');
     const idle = readFileSync(new URL('./fixtures/grok/1.0.50/idle.txt', import.meta.url), 'utf8');

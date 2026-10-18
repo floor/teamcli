@@ -117,6 +117,10 @@ type StatusThenOne = {
   /** Rows the pane draws of its own between the input row and the status row, declared
    *  only where a capture shows them. They are not the person's text. */
   ownRows?: RegExp[];
+  /** The pane's own chrome row under the status line, declared only where a capture shows it.
+   *  When set, a line under the status row is chrome only when it matches; any other line
+   *  leaves the status row unread, so text the seat prints can never stand in for the row. */
+  chrome?: RegExp[];
 };
 type TwoRules = {
   mode: 'two-rules-footer-below';
