@@ -61,6 +61,7 @@ import { launchLimit, readMachine, readingsText, type Machine, type SwapSample }
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
+import { registerInbox } from '../mcp/register.ts';
 
 export type AddSources = {
   home: string;
@@ -1252,6 +1253,7 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: input.confirmLobby,
     paneRun: launch.paneRun,
+    registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
       : {}),

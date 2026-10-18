@@ -18,6 +18,7 @@ import { plainPaneText } from './plain.ts';
 import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
+import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
 
@@ -49,6 +50,13 @@ export type Host = {
   confirmLobby?(): LobbyRefusal | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /**
+   * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
+   * launch command. Null when the profile carries no file route, and absent on a host whose
+   * commands never launch. A refusal is said in one line under the seat's record, and the seat
+   * still launches: the inbox is one delivery leg, not the launch.
+   */
+  registerInbox?(cli: string, seat: string, cwd: string): InboxRegistration | null;
   /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title. False is reported in one line and does not leave the seat out. */
@@ -832,6 +840,15 @@ export async function executePlan(
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: why });
           break;
+        }
+        // The seat's inbox is registered before its command runs, in the folder the command
+        // starts in. A refusal costs the seat its inbox leg and nothing else.
+        if (op.cli !== undefined && op.cwd !== undefined) {
+          const inbox = host.registerInbox?.(op.cli, op.seat, op.cwd);
+          if (inbox && !inbox.ok) {
+            hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
+            host.log(op.seat, `the team inbox was not registered: ${inbox.reason}`);
+          }
         }
         const here = place(op.seat, op.pane);
         if (!here || !host.paneRun(session, here.pane, op.command)) {

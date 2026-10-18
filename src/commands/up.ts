@@ -88,6 +88,7 @@ import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { watchLabel, watchRunning } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
+import { registerInbox } from '../mcp/register.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
@@ -1527,6 +1528,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
       ...(launch.reportDisplayAgent
         ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
         : {}),

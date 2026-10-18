@@ -34,6 +34,33 @@ timeouts:
 startup_reads:
   - GEMINI.md
   - .gemini/settings.json
+# The team inbox registers through Gemini's own project-scope add. Measured in a scratch
+# folder on 0.64.0: `gemini mcp add -s project team-inbox <command> -- <entry> mcp serve
+# --seat helper --session acme` exited 0, printed
+# `MCP server "team-inbox" added to project settings. (stdio)`, and wrote
+# `.gemini/settings.json` with `mcpServers.team-inbox.command` naming that command and
+# `args` naming the entry and the serve words, exactly as given. `gemini mcp list` in the
+# same folder printed the server with that command and args and marked it Disabled while
+# the folder is untrusted; a seat's launch answers its folder's trust dialog. The command
+# is this install's runner, so the server starts whether or not `team` is on the PATH, and
+# the launch refuses to write the file where the project does not ignore it.
+mcp_inbox:
+  add:
+    - mcp
+    - add
+    - -s
+    - project
+    - team-inbox
+    - '{command}'
+    - '--'
+    - '{entry}'
+    - mcp
+    - serve
+    - --seat
+    - '{seat}'
+    - --session
+    - '{session}'
+  target: .gemini/settings.json
 models:
   option:
     - -m
