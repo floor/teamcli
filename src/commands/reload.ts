@@ -26,6 +26,7 @@ import {
   paneShellBack,
   pressEnter,
   reportDisplayAgent,
+  sendKey,
   typeText,
   workspaceClose,
   workspaceCreate,
@@ -40,6 +41,7 @@ import { executePlan } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
+import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -107,6 +109,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   processInfo: (session, pane) => paneProcesses(pane, aim(session)),
@@ -566,6 +569,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             status: () => launch.agentStatus?.(current, pane) ?? null,
             type: (value) => launch.typeText?.(current, pane, value) ?? false,
             enter: () => launch.pressEnter?.(current, pane) ?? false,
+            // The profile's one clearing key, the same key `up` sends: a line this run typed
+            // whose read-back fails is cleared instead of left sitting in the box unsent.
+            ...(launch.sendKey
+              ? { key: (name: string) => launch.sendKey!(current, pane, name) }
+              : {}),
             file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
             foreground: () => launch.foreground(current, pane),
             report: (why) => {
@@ -626,7 +634,16 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         }
       },
       say: () => {},
-      final: () => {},
+      // A seat this run leaves out is said and logged the way `up` says its records: the refusal
+      // is the run's account of the seat, and throwing it away leaves the owner holding a line
+      // `team` typed and never sent, with nothing telling them so. A ready record says nothing
+      // here: a reload that worked keeps the one success line below, as it always did.
+      final(seat, record) {
+        if (record.kind !== 'left out') return;
+        const line = recordText(seat, record);
+        says(`${line}\n`);
+        logLine(dir, 'reload', describeCaller(caller), line, now());
+      },
       sleep: (ms) => launch.sleep(ms),
       now: () => launch.now().getTime(),
       log(_who, what) {
