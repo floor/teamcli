@@ -36,6 +36,7 @@ import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
 import { runTempo } from '../src/commands/tempo.ts';
 import { runHold } from '../src/commands/hold.ts';
+import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
@@ -2970,6 +2971,60 @@ scene('hold.invocation', async (place) => {
   write(place, TEAM);
   return show(await held(place, []), 'a <reason> is required');
 });
+
+{
+  async function raised(place: Place, argv: readonly string[], caller: Caller = leadSeat): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    const code = await runRaise([...argv], io, { home: place.home, now: () => NOW, notify: () => {} });
+    return { code, out: io.out, err: io.err };
+  }
+  scene('raise.raised', async (place) => {
+    write(place, TEAM);
+    recordLead(place);
+    return show(await raised(place, ['release.ready', 'the release is ready']), 'delivered to the owner at once');
+  });
+  scene('raise.merged', async (place) => {
+    write(place, TEAM);
+    recordLead(place);
+    await raised(place, ['release.ready', 'the release is ready']);
+    return show(await raised(place, ['release.ready', 'the release is ready']), "merged into the owner's record (×2)");
+  });
+  scene('raise.dry-run', async (place) => {
+    write(place, TEAM);
+    recordLead(place);
+    return show(await raised(place, ['decision.needed', 'pick a launch name', '--dry-run']), 'would deliver decision.needed');
+  });
+  scene('raise.capped', async (place) => {
+    write(place, TEAM);
+    recordLead(place);
+    for (let n = 1; n <= 10; n += 1) await raised(place, ['release.ready', `release line ${String(n)}`]);
+    return show(await raised(place, ['release.ready', 'one more line']), 'ten raises have reached the owner today');
+  });
+  scene('raise.io', async (place) => {
+    write(place, TEAM);
+    recordLead(place);
+    // The log path is a directory, which the log reader refuses by name.
+    mkdirSync(join(storePath('acme', place.root, place.home), 'events.jsonl'), { recursive: true });
+    return show(await raised(place, ['release.ready', 'the release is ready']), "the event log can't be read");
+  });
+  scene('raise.refused', async (place) => {
+    write(place, TEAM);
+    recordLead(place);
+    return show(
+      await raised(place, ['release.ready', 'the release is ready'], other),
+      "only the orchestrator's seat or a lead's raises to the owner; this call is other",
+    );
+  });
+  scene('raise.file', async (place) => {
+    const inRepo = show(await raised(place, ['release.ready', 'the release is ready']), 'no team file');
+    // Outside any checkout the same failure names only the project: raise takes no `--file`.
+    const outside = await raised({ ...place, root: place.base }, ['release.ready', 'the release is ready']);
+    show(outside, 'not inside a git repository: run team from a project\n');
+    expect(`${outside.out}${outside.err}`).not.toContain('--file');
+    return inRepo;
+  });
+  scene('raise.usage', async (place) => show(await raised(place, []), 'a <kind> is required'));
+}
 
 async function nexted(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
   const io = testIo(place.root, caller);

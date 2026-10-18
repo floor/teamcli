@@ -891,6 +891,30 @@ Usage:
 
 None.
 
+## `raise`
+
+Hidden: no
+
+Usage:
+
+    team raise <kind> <text> [--dry-run] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `kind` | no | no |
+| `text` | no | no |
+
 ## `register`
 
 Hidden: no

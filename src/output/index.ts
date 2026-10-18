@@ -87,6 +87,7 @@ export {
   POLICY_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,
   publishCommandOutputSchema,
+  RAISE_OUTPUT_SCHEMA,
   RELEASE_OUTPUT_SCHEMA,
   renderCommandOutputSchema,
   REVOKE_OUTPUT_SCHEMA,

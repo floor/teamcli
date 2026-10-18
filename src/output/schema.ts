@@ -676,6 +676,25 @@ export const HOLD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** Published `--json` output schema for `team raise` (`schema/raise.schema.json`). `record` is the
+ *  owner mailbox record's id, null on a dry run; `count` is the record's reading after this call,
+ *  so a merge shows the running total. */
+export const RAISE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.raise',
+  fileName: 'raise.schema.json',
+  title: 'team raise --json output',
+  statuses: ['raised', 'merged', 'dry-run'],
+  required: ['project', 'session', 'kind', 'text', 'route', 'at', 'record', 'count'],
+  properties: {
+    kind: { type: 'string', enum: ['release.ready', 'decision.needed'] },
+    text: { type: 'string', minLength: 1 },
+    route: { type: 'string', const: 'owner' },
+    record: { type: ['string', 'null'] },
+    count: { type: 'integer', minimum: 1 },
+    at: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Published `--json` output schema for `team lock` (`schema/lock.schema.json`). */
 export const LOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.lock',
@@ -1750,6 +1769,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DELEGATE_OUTPUT_SCHEMA,
   REVOKE_OUTPUT_SCHEMA,
   HOLD_OUTPUT_SCHEMA,
+  RAISE_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   RELEASE_OUTPUT_SCHEMA,

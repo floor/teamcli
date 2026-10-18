@@ -46,6 +46,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   tempo: () => import('./commands/tempo.ts'),
   unlock: () => import('./commands/unlock.ts'),
   hold: () => import('./commands/hold.ts'),
+  raise: () => import('./commands/raise.ts'),
   broker: () => import('./commands/broker.ts'),
   bus: () => import('./commands/bus.ts'),
   mcp: () => import('./commands/mcp.ts'),
