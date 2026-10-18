@@ -364,6 +364,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   untracked socket and lock in the checkout. The bus's event log and its sealed segments live in
   the project store, not in the checkout, so nothing else under `.agents` is missing.
 
+- **A running seat's draft is never typed over by a direct send.** The direct typed leg read a
+  running turn as an empty box — the caution stages run before the composer stage — so a send
+  typed its trigger into a draft a person had written during the turn, and the first Enter
+  submitted both. The composer below a working screen is now read too: when it holds unsent
+  text, nothing is typed and the send is `held` with the box's text, the record and the pending
+  marker are kept, and a running watch retries it when the seat is idle; a clear composer on a
+  working screen still takes the line. The same read backs the one guard the daemon, the retry
+  and the nudge share, so every typed path judges a working screen by its composer.
+
 ### Known limits
 
 - The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
