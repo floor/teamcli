@@ -941,7 +941,7 @@ function callerRefused(
 function selfRefused(out: Io, json: boolean, callerName: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.self',
-    message: `the ${callerName} cannot restart its own recorded pane; the owner must do it`,
+    message: `the ${callerName} cannot restart its own recorded pane; another \`leads\` seat (or the owner) restarts it`,
     repair: null,
   });
   // exit: restart.self

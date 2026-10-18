@@ -302,7 +302,7 @@ describe('the restart page, held to its command', () => {
     const leadOnWorkerPane = { kind: 'seat', name: 'lead', pane: 'pane-old', session: 'acme' } as const;
     const ioSelfPane = testIo(world.root, leadOnWorkerPane);
     expect(await runRestart(['worker'], ioSelfPane, world.sources)).toBe(1);
-    expect(ioSelfPane.err).toBe('team restart: the lead cannot restart its own recorded pane; the owner must do it\n');
+    expect(ioSelfPane.err).toBe('team restart: the lead cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
     expect(world.did.closed).toEqual([]);
   });
 

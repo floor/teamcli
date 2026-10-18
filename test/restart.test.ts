@@ -383,7 +383,7 @@ describe('team restart <seat>', () => {
 
     const code = await runRestart(['lead'], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe('team restart: the lead cannot restart its own recorded pane; the owner must do it\n');
+    expect(io.err).toBe('team restart: the lead cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
   });
