@@ -793,9 +793,9 @@ describe('a human seat is never typed into', () => {
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
     // The word adds `native`, which is never part of the order in force, so the whole word is set
-    // aside: the default order stands, the human walk records keeping its typed leg out, and the
-    // inbox leg is skipped for want of a listener before the drop file takes the send.
-    expect(lastEntry(w.root, w.home).failed).toEqual([TYPED_SKIP, MCP_SKIP]);
+    // aside: the default order stands, and the human walk records keeping its inbox and typed legs
+    // out before the drop file takes the send.
+    expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
   });
 
   test('a human seat that declares no order walks the drop file alone, with no failure', async () => {
@@ -816,22 +816,6 @@ describe('a human seat is never typed into', () => {
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect('failed' in entry).toBe(false);
-  });
-
-  test('the default order walks the drop file alone and records every leg kept out', async () => {
-    const w = world({ lead: HUMAN });
-    const host = walker(w);
-    const io = owner(w.root);
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    expect(host.frames).toEqual([]);
-    expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
-    expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, INBOX_SKIP_HUMAN, TYPED_SKIP]);
   });
 
   test('an order led by the inbox leg still walks only the drop file', async () => {
@@ -863,7 +847,9 @@ describe('a human seat is never typed into', () => {
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
     expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
-    expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, TYPED_SKIP]);
+    // The word names `native`, which no order in force holds, so the whole word is set aside and
+    // the inbox leg of the default order is recorded kept out in its place.
+    expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
   });
 
   test('the dry run names only the drop leg, whatever the order holds', async () => {
