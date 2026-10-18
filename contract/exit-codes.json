@@ -158,6 +158,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.human",
+      "meaning": "the named seat is a human's pane",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.lobby",
       "meaning": "the lobby could not be created for the launch",
       "trigger": "team add worker"

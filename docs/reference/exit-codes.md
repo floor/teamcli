@@ -28,6 +28,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.doctor` | `add` | 1 | doctor refuses the launch | `team add worker` |
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
 | `add.herdr` | `add` | 1 | herdr doesn't answer | `team add worker` |
+| `add.human` | `add` | 1 | the named seat is a human's pane | `team add worker` |
 | `add.lobby` | `add` | 1 | the lobby could not be created for the launch | `team add worker` |
 | `add.machine` | `add` | 1 | the machine is over a launch limit | `team add worker` |
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |

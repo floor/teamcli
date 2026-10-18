@@ -170,6 +170,9 @@ export interface UpSeat {
    *  would refuse. */
   repairLine: string;
   stopped: boolean;
+  /** The pane is a human's: the file marks it `human: true`. Nothing is launched into it and
+   *  no key or line is typed into it; the plan leaves the seat as it is and says why. */
+  human?: true;
   /** The seat's rules, as one text: what a launch option embeds and what its file holds. */
   rules: string;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
@@ -341,6 +344,15 @@ export function upPlan(input: UpInput): Step[] {
   for (const seat of input.seats) {
     if (seat.grantKeep) {
       steps.push({ kind: 'skip', text: `${seat.name}: ${seat.grantKeep}` });
+      continue;
+    }
+    // A pane that is a human's is never launched into or typed into: no workspace is made,
+    // no command runs, and the seat is left exactly as it was.
+    if (seat.human) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: the pane is a human's; nothing is launched into it or typed into it; left as it is`,
+      });
       continue;
     }
     if (seat.stopped) {
@@ -708,6 +720,9 @@ export interface DownSeat {
    *  `exited` comes from the process reading alone — the pane's own shell is back in front and
    *  no CLI process is in its foreground list — never from an unrecognised screen. */
   state: 'free' | 'working' | 'blocked' | 'unknown' | 'unsent' | 'exited';
+  /** The pane is a human's: the file marks it `human: true`. No exit line or key is typed into
+   *  it, and the seat is left running; the plan says why. */
+  human?: true;
   /** The seat's box holds exactly the profile's exit text — left by an earlier run that never
    *  confirmed it — and the profile carries the key that empties the box. */
   exitInBox?: boolean;
@@ -763,6 +778,16 @@ export function downPlan(input: DownInput): Step[] {
       steps.push({
         kind: 'skip',
         text: `${seat.name}: left running; only the owner stops the orchestrator's or the operator's seat`,
+      });
+      left++;
+      continue;
+    }
+    // A pane that is a human's is never typed into: no exit line, no key, and no close of the
+    // workspace it is in. The seat is left running and said so.
+    if (seat.human) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: the pane is a human's; nothing is typed into it; left running`,
       });
       left++;
       continue;

@@ -411,6 +411,8 @@ function seatPlan(
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: seat.stopped,
+    // A human's pane: no launch, no key, no line. The plan skips it before any of that.
+    ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live
     // file. A stored copy is not the text a seat is told to obey.
     rules: rulesOf(team, seat, root),
@@ -1160,9 +1162,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       });
       continue;
     }
-    // A stopped seat, one without a profile, and one already ready are left out of the budget.
-    // A seat resumed into a live workspace starts nowhere new, but its reading is still said.
-    if (planned.unidentifiedHold || planned.sessionDoubt || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
+    // A stopped seat, a human's pane, one without a profile, and one already ready are left out
+    // of the budget. A seat resumed into a live workspace starts nowhere new, but its reading is
+    // still said.
+    if (planned.human || planned.unidentifiedHold || planned.sessionDoubt || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
       seats.push(planned);
       continue;
     }
@@ -1866,7 +1869,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
     }
     const pending = team.seats.filter((seat) => {
-      if (seat.stopped || !profileFor(seat.cli)) return false;
+      // A human's pane is left as it is: nothing this run could have made ready, nothing pending.
+      if (seat.stopped || seat.human || !profileFor(seat.cli)) return false;
       return afterwards[seat.name]?.stage !== 'ready';
     });
     // A seat the plan left behind (a repair it would not close, a dialog it timed out at) is a

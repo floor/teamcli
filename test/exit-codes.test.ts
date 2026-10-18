@@ -635,6 +635,10 @@ scene('add.no-seat', async (place) => {
   approve(place, TWO);
   return show(await added(place, ['missing', '--file', place.file], owner, addSources(place)), 'no seat "missing"');
 });
+scene('add.human', async (place) => {
+  approve(place, TWO.replace('    stopped: true\n', '    stopped: true\n    human: true\n'));
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), "worker is a human's pane");
+});
 scene('add.no-like', async (place) => {
   approve(place, TWO);
   return show(await added(place, ['--temporary', '--like', 'missing', '--until', 'result:out.md', '--file', place.file], owner, addSources(place)), 'no seat "missing"');
@@ -3518,12 +3522,6 @@ async function dropped(place: Place, argv: string[], caller: Caller = leadSeat):
   const io = testIo(place.root, caller);
   const code = await runDrops(argv, io, { home: place.home });
   return { code, out: io.out, err: io.err };
-}
-
-function placeLead(place: Place, pane = 'w1:p1'): void {
-  updateState(join(place.root, '.agents'), (state) => {
-    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane };
-  });
 }
 
 scene('drops.ok', async (place) => {
