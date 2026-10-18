@@ -604,12 +604,18 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           told.add(key);
           say(refusal.text, false);
         }
+        // The watch's own reports ring as they always have: an owner-addressed one is a decision
+        // moment (a prompt, a floor, a screen nobody knows), and `--no-notify` silences operator
+        // notices, never an owner push. The owner's immediacy list batches what arrives on the
+        // bus (`OwnerDelivery`), not these; a report that is also published as an event is
+        // recorded once there and not rung a second time.
+        const reportTs = sources.now().toISOString();
         for (const report of result.reports) {
           if (report.to === 'owner') ownerTold.add(report.text);
           tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
         }
         if (busConnected && sources.busPublish !== undefined) {
-          await publishWatchReportsToBus(root, session, result.reports, sources.now().toISOString(), sources.busPublish);
+          await publishWatchReportsToBus(root, session, result.reports, reportTs, sources.busPublish);
         }
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
@@ -684,6 +690,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
+      }
+      const flushed = owner?.flush();
+      if (flushed?.error !== undefined) {
+        tellOnce(told, 'owner-record', `the owner's inbox was not written: ${flushed.error}`, tell);
       }
       const place = placedWatch(dir, session, sources.pid, sources.ownPane ? () => own ?? null : undefined);
       if (place === 'end' && paneGoneOnce) {
@@ -1071,6 +1081,96 @@ export async function syncWatchBus(
   }
 }
 
+/** The event one check report raises: the single place the report keys map to §4.3 kinds. Null
+ *  for a key this build does not map. The event carries no addressing; the caller sets it. */
+export function watchReportEvent(
+  report: { key: string; text: string },
+  session: string,
+  ts: string,
+): EventAppendInput | null {
+  const colon = report.key.indexOf(':');
+  if (colon < 0) return null;
+  const prefix = report.key.slice(0, colon);
+  const rawSeat = report.key.slice(colon + 1);
+  const seat = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
+  if (seat === '') return null;
+
+  if (prefix === 'missing' || prefix === 'never-started' || prefix === 'gone') {
+    return {
+      ts,
+      kind: 'seat.unreachable',
+      session,
+      record_id: `watch:${prefix}:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
+  if (prefix === 'permission' || (prefix === 'blocked' && report.text.includes('permission prompt'))) {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:permission:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: 'permission',
+      reason: report.text,
+    };
+  }
+  if (prefix === 'blocked' || prefix === 'question') {
+    return {
+      ts,
+      kind: 'seat.blocked',
+      session,
+      record_id: `watch:${prefix}:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
+  if (prefix === 'vendor notice' || prefix === 'vendor') {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:vendor-notice:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: 'vendor notice',
+      reason: report.text,
+    };
+  }
+  if (prefix === 'provider-error') {
+    if (report.text.includes('rate limit')) {
+      return {
+        ts,
+        kind: 'seat.at-prompt',
+        session,
+        record_id: `watch:provider-error:${seat}:${ts}`,
+        seat,
+        subject: seat,
+        prompt: 'rate limit',
+        reason: report.text,
+      };
+    }
+    return {
+      ts,
+      kind: 'seat.blocked',
+      session,
+      record_id: `watch:provider-error:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
+  return null;
+}
+
+/** Publishes one event per observation, even when a check emits an operator line and an owner
+ *  line for it: both lines share a record id, and an owner-addressed copy marks the event
+ *  addressed to `owner` (§4.5), so the watch's owner reports reach the owner's list as events,
+ *  one list with the rest. */
 export async function publishWatchReportsToBus(
   root: string,
   session: string,
@@ -1078,94 +1178,16 @@ export async function publishWatchReportsToBus(
   ts: string,
   publish: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>,
 ): Promise<void> {
-  // One event per observation, even when a check emits an operator line and an owner line for it:
-  // both lines share a record id, and an owner-addressed copy marks the event addressed to `owner`
-  // (§4.5), so the watch's owner reports reach the owner's list as events, one list with the rest.
   const events = new Map<string, EventAppendInput>();
   for (const report of reports) {
-    const colon = report.key.indexOf(':');
-    if (colon < 0) continue;
-    const prefix = report.key.slice(0, colon);
-    const rawSeat = report.key.slice(colon + 1);
-    const seat = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
-    if (seat === '') continue;
-    const addressed = report.to === 'owner';
-
-    let event: EventAppendInput | null = null;
-    if (prefix === 'missing' || prefix === 'never-started' || prefix === 'gone') {
-      event = {
-        ts,
-        kind: 'seat.unreachable',
-        session,
-        record_id: `watch:${prefix}:${seat}:${ts}`,
-        seat,
-        subject: seat,
-        reason: report.text,
-      };
-    } else if (prefix === 'permission' || (prefix === 'blocked' && report.text.includes('permission prompt'))) {
-      event = {
-        ts,
-        kind: 'seat.at-prompt',
-        session,
-        record_id: `watch:permission:${seat}:${ts}`,
-        seat,
-        subject: seat,
-        prompt: 'permission',
-        reason: report.text,
-      };
-    } else if (prefix === 'blocked' || prefix === 'question') {
-      event = {
-        ts,
-        kind: 'seat.blocked',
-        session,
-        record_id: `watch:${prefix}:${seat}:${ts}`,
-        seat,
-        subject: seat,
-        reason: report.text,
-      };
-    } else if (prefix === 'vendor notice' || prefix === 'vendor') {
-      event = {
-        ts,
-        kind: 'seat.at-prompt',
-        session,
-        record_id: `watch:vendor-notice:${seat}:${ts}`,
-        seat,
-        subject: seat,
-        prompt: 'vendor notice',
-        reason: report.text,
-      };
-    } else if (prefix === 'provider-error') {
-      if (report.text.includes('rate limit')) {
-        event = {
-          ts,
-          kind: 'seat.at-prompt',
-          session,
-          record_id: `watch:provider-error:${seat}:${ts}`,
-          seat,
-          subject: seat,
-          prompt: 'rate limit',
-          reason: report.text,
-        };
-      } else {
-        event = {
-          ts,
-          kind: 'seat.blocked',
-          session,
-          record_id: `watch:provider-error:${seat}:${ts}`,
-          seat,
-          subject: seat,
-          reason: report.text,
-        };
-      }
-    }
-
+    const event = watchReportEvent(report, session, ts);
     if (event === null) continue;
     const existing = events.get(event.record_id);
     if (existing !== undefined) {
-      if (addressed) existing.to = 'owner';
+      if (report.to === 'owner') existing.to = 'owner';
       continue;
     }
-    if (addressed) event.to = 'owner';
+    if (report.to === 'owner') event.to = 'owner';
     events.set(event.record_id, event);
   }
   for (const event of events.values()) await publish(root, event).catch(() => {});

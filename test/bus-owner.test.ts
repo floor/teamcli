@@ -67,6 +67,11 @@ function event(overrides: Partial<EventPayload> & Pick<EventPayload, 'seq' | 'ki
   };
 }
 
+/** The body of one stored record, uncounted (listUnacked carries ids only). */
+function storedBody(root: string, id: string): string {
+  return JSON.parse(readFileSync(messageFile(root, OWNER_MAILBOX, id), 'utf8')).payload.body;
+}
+
 afterEach(() => {
   while (dirs.length > 0) {
     const dir = dirs.pop()!;
@@ -182,7 +187,9 @@ describe("owner delivery: the notification the watch raises and the owner's own 
     expect(notes).toEqual([]);
 
     // The watch's owner-addressed report: `blocked` alone would not route to the owner, and the
-    // raising side's own `to` is what puts it in the owner's list.
+    // raising side's own `to` is what puts it in the owner's list. `seat.blocked` is not on the
+    // owner's immediacy list, so it is routine: it waits in the pass and lands as one digest at
+    // flush, without ringing (§10).
     const reportText = 'worker-2 is blocked, and its screen is not one the watch recognises';
     const report = event({
       seq: 9,
@@ -193,8 +200,150 @@ describe("owner delivery: the notification the watch raises and the owner's own 
       to: 'owner',
       reason: reportText,
     });
-    expect(delivery.onEvent(report)).toEqual({ addressed: true, notified: true, recorded: true });
-    expect(notes).toEqual([reportText]);
+    expect(delivery.onEvent(report)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(notes).toEqual([]);
+    expect(delivery.flush()).toEqual({ addressed: true, notified: false, recorded: true });
+    expect(notes).toEqual([]);
+    const records = listUnacked(root, 'acme', home);
+    expect(records.length).toBe(1);
+    expect(records[0]!.id.startsWith('digest-')).toBe(true);
+    expect(storedBody(root, records[0]!.id)).toBe(`1 event: ${reportText}`);
+  });
+
+  test('routine owner events batch into one digest for the pass, and a replayed pass finds it and writes nothing', () => {
+    const { root, home } = makeScratch();
+    const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const routine = [
+      event({
+        seq: 12,
+        kind: 'seat.working',
+        record_id: 'watch:working:worker-1',
+        seat: 'worker-1',
+        to: 'owner',
+        reason: 'worker-1 started work',
+      }),
+      event({
+        seq: 13,
+        kind: 'seat.idle',
+        record_id: 'watch:idle:worker-3',
+        seat: 'worker-3',
+        to: 'owner',
+        reason: 'worker-3 went idle',
+      }),
+    ];
+
+    const notes: string[] = [];
+    const delivery = new OwnerDelivery({
+      root,
+      session: 'acme',
+      team: parsed.team,
+      home,
+      notify: (text) => notes.push(text),
+    });
+    expect(delivery.onEvent(routine[0]!)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(delivery.onEvent(routine[1]!)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(notes).toEqual([]);
+    expect(delivery.flush()).toEqual({ addressed: true, notified: false, recorded: true });
+    expect(notes).toEqual([]);
+    // One record for the batch, not one per event.
+    const records = listUnacked(root, 'acme', home);
+    expect(records.length).toBe(1);
+    expect(storedBody(root, records[0]!.id)).toBe('2 events: worker-1 started work; worker-3 went idle');
+    // A second flush with nothing in the pass is silent.
+    expect(delivery.flush()).toBeUndefined();
+
+    // The same pass replayed after a restart: the digest id is its content, so the record is
+    // already there and nothing is written or rung again.
+    const replay = new OwnerDelivery({
+      root,
+      session: 'acme',
+      team: parsed.team,
+      home,
+      notify: (text) => notes.push(text),
+    });
+    for (const entry of routine) expect(replay.onEvent(entry).notified).toBe(false);
+    expect(replay.flush()).toEqual({ addressed: true, notified: false, recorded: true });
+    expect(notes).toEqual([]);
+    expect(listUnacked(root, 'acme', home).length).toBe(1);
+  });
+
+  test("the owner's immediacy list rings at once; the rest of the policy's owner traffic waits for the pass's digest", () => {
+    const { root, home } = makeScratch();
+    const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const notes: string[] = [];
+    const delivery = new OwnerDelivery({
+      root,
+      session: 'acme',
+      team: parsed.team,
+      home,
+      notify: (text) => notes.push(text),
+    });
+
+    // A lead's `seat.done` is on the list; a worker's is routine.
+    const leadDone = event({
+      seq: 20,
+      kind: 'seat.done',
+      record_id: 'watch:done:clerk',
+      seat: 'clerk',
+      to: 'owner',
+      reason: 'clerk finished its work',
+    });
+    const workerDone = event({
+      seq: 21,
+      kind: 'seat.done',
+      record_id: 'watch:done:worker-1',
+      seat: 'worker-1',
+      to: 'owner',
+      reason: 'worker-1 finished its work',
+    });
+    expect(delivery.onEvent(leadDone)).toEqual({ addressed: true, notified: true, recorded: true });
+    expect(delivery.onEvent(workerDone)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(notes).toEqual(['clerk finished its work']);
+
+    // A prompt kind the owner cares about rings; a prompt that is not one waits.
+    const permission = event({
+      seq: 22,
+      kind: 'seat.at-prompt',
+      record_id: 'watch:permission:worker-2',
+      seat: 'worker-2',
+      to: 'owner',
+      prompt: 'permission',
+      reason: 'worker-2 waits at a permission prompt',
+    });
+    const question = event({
+      seq: 23,
+      kind: 'seat.at-prompt',
+      record_id: 'watch:question:worker-3',
+      seat: 'worker-3',
+      to: 'owner',
+      prompt: 'question',
+      reason: 'worker-3 asks a question',
+    });
+    expect(delivery.onEvent(permission)).toEqual({ addressed: true, notified: true, recorded: true });
+    expect(delivery.onEvent(question)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(notes).toEqual(['clerk finished its work', 'worker-2 waits at a permission prompt']);
+    expect(delivery.flush()).toEqual({ addressed: true, notified: false, recorded: true });
+
+    // The list is a setting: a policy layer that supplies another list is obeyed, and the
+    // release default is not applied on top of it.
+    const custom: string[] = [];
+    const onlyDone = new OwnerDelivery({
+      root,
+      session: 'acme',
+      team: parsed.team,
+      home,
+      notify: (text) => custom.push(text),
+      atOnceKinds: ['team.policy-refused'],
+    });
+    expect(onlyDone.onEvent(permission)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(onlyDone.onEvent(leadDone)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(custom).toEqual([]);
   });
 
   test('the words the watch already told the owner are not a second notice, and the record still lands', () => {

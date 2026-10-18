@@ -21,7 +21,10 @@ import { messageFile, type MessagePayload } from '../commands/messages.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { type Json, messageKeyOf, MESSAGE_DOMAIN, signDomain } from '../store/keys.ts';
 import {
+  isOwnerAtOnce,
+  leadSeatsOf,
   recipientsForEvent,
+  type EventKind,
   type SeatRecipientResolver,
   type TeamRoutingRoles,
 } from './kinds.ts';
@@ -51,6 +54,9 @@ export type OwnerDeliveryInput = {
   alreadyTold?: (text: string) => boolean;
   /** The routing chain in force. The release defaults are the fold's base, always. */
   chain?: RoutingChain;
+  /** The owner's immediacy list in force; the setting's release default when the policy layer
+   *  supplies none (see `OWNER_AT_ONCE_SETTING` in `./kinds.ts`). */
+  atOnceKinds?: readonly EventKind[];
 };
 
 export type OwnerDeliveryOutcome = {
@@ -65,6 +71,8 @@ export class OwnerDelivery {
   private readonly input: OwnerDeliveryInput;
   private readonly now: () => Date;
   private readonly resolveSeat: SeatRecipientResolver | undefined;
+  /** Routine owner events of this pass: batched into one summary record at `flush`. */
+  private routine: { event: EventPayload; text: string }[] = [];
 
   constructor(input: OwnerDeliveryInput) {
     this.input = input;
@@ -72,13 +80,20 @@ export class OwnerDelivery {
     this.resolveSeat = input.home === undefined ? undefined : readSeatResolver(input.home, teamIdOf(input.root));
   }
 
-  /** Delivers one verified event. Returns whether it was addressed to the owner, so the caller
-   *  can tell a delivery from an event the owner is not in. */
+  /** Delivers one verified event. An event on the owner's immediacy list rings and lands as its
+   *  own record; everything else waits in the pass's batch for `flush` (§10). Returns whether the
+   *  event was addressed to the owner, so the caller can tell a delivery from an event the owner
+   *  is not in. */
   onEvent(event: EventPayload): OwnerDeliveryOutcome {
     if (!isOwnerAddressed(event, this.input.team, this.input.chain, this.resolveSeat)) {
       return { addressed: false, notified: false, recorded: false };
     }
     const text = ownerDeliveryText(event);
+    if (!this.atOnce(event)) {
+      this.routine.push({ event, text });
+      return { addressed: true, notified: false, recorded: false };
+    }
+
     const id = ownerRecordId(event);
     const path = this.input.home === undefined ? undefined : messageFile(this.input.root, OWNER_MAILBOX, id);
     const recordedBefore = path !== undefined && existsSync(path);
@@ -93,14 +108,42 @@ export class OwnerDelivery {
 
     if (path === undefined) return { addressed: true, notified, recorded: false };
     if (recordedBefore) return { addressed: true, notified, recorded: true };
-    const written = this.record(event, id, text);
+    const written = this.record(id, text, event.session);
     return { addressed: true, notified, recorded: written.ok, ...(written.ok ? {} : { error: written.error }) };
   }
 
+  /** Writes the pass's routine owner events as one summary record, so the owner's list holds one
+   *  batch rather than a notice per event. Called at the end of every pass. */
+  flush(): OwnerDeliveryOutcome | undefined {
+    if (this.routine.length === 0) return undefined;
+    const batch = this.routine;
+    this.routine = [];
+    const id = ownerDigestId(batch.map((entry) => entry.event));
+    if (this.input.home === undefined) return { addressed: true, notified: false, recorded: false };
+    if (existsSync(messageFile(this.input.root, OWNER_MAILBOX, id))) {
+      return { addressed: true, notified: false, recorded: true };
+    }
+    const body = `${String(batch.length)} event${batch.length === 1 ? '' : 's'}: ${batch.map((entry) => entry.text).join('; ')}`;
+    const written = this.record(id, body, this.input.session);
+    return { addressed: true, notified: false, recorded: written.ok, ...(written.ok ? {} : { error: written.error }) };
+  }
+
+  private atOnce(event: EventPayload): boolean {
+    return isOwnerAtOnce(
+      event.kind,
+      {
+        ...(event.seat === undefined ? {} : { seat: event.seat }),
+        ...(event.prompt === undefined ? {} : { prompt: event.prompt }),
+        leadSeats: leadSeatsOf(this.input.team),
+      },
+      this.input.atOnceKinds,
+    );
+  }
+
   private record(
-    event: EventPayload,
     id: string,
     text: string,
+    session: string,
   ): { ok: true } | { ok: false; error: string } {
     const home = this.input.home;
     if (home === undefined) return { ok: false, error: 'no home to sign the record with' };
@@ -109,7 +152,7 @@ export class OwnerDelivery {
       id,
       to: OWNER_MAILBOX,
       root: this.input.root,
-      session: event.session,
+      session,
       at: this.now().toISOString(),
       body: text,
       from: OWNER_RECORD_FROM,
@@ -163,6 +206,16 @@ export function ownerRecordId(event: EventPayload): string {
     .digest('hex')
     .slice(0, 12);
   return `evt-${String(event.seq)}-${digest}`;
+}
+
+/** The summary record's id: its batch's own content, so a restart that re-reads and re-batches
+ *  the same events finds the record already written and writes nothing. */
+export function ownerDigestId(events: readonly EventPayload[]): string {
+  const digest = createHash('sha256')
+    .update(events.map((event) => ownerRecordId(event)).join('\u0000'))
+    .digest('hex')
+    .slice(0, 16);
+  return `digest-${digest}`;
 }
 
 function clip(text: string): string {

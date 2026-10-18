@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  DEFAULT_OWNER_AT_ONCE_KINDS,
+  isOwnerAtOnce,
+  OWNER_AT_ONCE_SETTING,
+} from '../src/bus/kinds.ts';
+import {
   checkPrivilegedKindsWrite,
   checkRoutingWrite,
   policyRefusedEvent,
@@ -125,6 +130,51 @@ describe('the event thresholds', () => {
       'unreachable_threshold_seconds',
       'idle_threshold_seconds',
     ]);
+  });
+});
+
+describe("the owner's immediacy list (OD-20261018-05, Amendment 01 §10)", () => {
+  test('is a setting: named, at every level, owner-sovereign, with the reviewed release default', () => {
+    expect(OWNER_AT_ONCE_SETTING.name).toBe('owner-at-once');
+    expect(OWNER_AT_ONCE_SETTING.levels).toEqual(['entity', 'project', 'team', 'seat']);
+    expect(OWNER_AT_ONCE_SETTING.ownerSovereign).toBe(true);
+    expect(OWNER_AT_ONCE_SETTING.defaults).toBe(DEFAULT_OWNER_AT_ONCE_KINDS);
+  });
+
+  test('holds the kinds the amendment fixes, and its prompt and lead conditions narrow them', () => {
+    expect([...DEFAULT_OWNER_AT_ONCE_KINDS]).toEqual([
+      'seat.at-prompt',
+      'seat.unreachable',
+      'seat.done',
+      'team.seat-added',
+      'team.seat-removed',
+      'team.seat-reloaded',
+      'team.grant-issued',
+      'team.grant-revoked',
+      'team.grant-expired',
+      'team.policy-changed',
+      'team.policy-refused',
+    ]);
+
+    // The owner's prompt kinds ring; a prompt that is not one waits for the digest.
+    expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'permission' })).toBe(true);
+    expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'rate limit' })).toBe(true);
+    expect(isOwnerAtOnce('seat.at-prompt', { prompt: 'question' })).toBe(false);
+
+    // Only a lead's seat becoming unreachable or done rings.
+    const leads = new Set(['clerk']);
+    expect(isOwnerAtOnce('seat.done', { seat: 'clerk', leadSeats: leads })).toBe(true);
+    expect(isOwnerAtOnce('seat.done', { seat: 'worker-1', leadSeats: leads })).toBe(false);
+    expect(isOwnerAtOnce('seat.unreachable', { seat: 'clerk', leadSeats: leads })).toBe(true);
+    expect(isOwnerAtOnce('seat.unreachable', { seat: 'worker-1', leadSeats: leads })).toBe(false);
+
+    // Everything else in the policy's owner traffic is routine.
+    expect(isOwnerAtOnce('seat.blocked')).toBe(false);
+    expect(isOwnerAtOnce('seat.working')).toBe(false);
+
+    // A supplied list replaces the default rather than extending it.
+    expect(isOwnerAtOnce('seat.blocked', {}, ['seat.blocked'])).toBe(true);
+    expect(isOwnerAtOnce('team.policy-refused', {}, ['seat.blocked'])).toBe(false);
   });
 });
 
