@@ -583,6 +583,42 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(host.enters).toEqual([]);
   });
 
+  test('holds a running turn whose composer holds a draft, typing nothing and keeping the draft', async () => {
+    // The release's own capture of text typed while a turn runs: the classifier reads the
+    // screen `working` (its caution stage runs before the composer stage), and only the
+    // composer read sees the draft. The typed leg must hold, never type into it.
+    const workingUnsent = readFileSync(new URL('./fixtures/claude-code/2.1.289/unsent-typing-while-running-ansi.txt', import.meta.url), 'utf8');
+    const w = setupWorld();
+    const host = makeHost(w);
+    host.native.paneText = () => workingUnsent;
+
+    const io = ownerIo(w.root);
+    expect(await runSend(['lead', 'do not clobber the running draft'], io, host)).toBe(1);
+    expect(io.err).toContain('held: the composer already holds unsent text');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    // The draft is still where the owner left it.
+    expect(host.native.paneText('acme', 'pane-lead')).toBe(workingUnsent);
+  });
+
+  test('delivers into a running turn whose composer is empty', async () => {
+    const w = setupWorld();
+    const host = makeHost(w);
+    const busy = (box: string) => `✻ Thinking… (12s · esc to interrupt)\n${RULE}\n❯ ${box}\n${RULE}`;
+    host.native.paneText = (_session, pane) => {
+      const last = [...host.typed].reverse().find((t) => t.pane === pane);
+      return busy(last && !host.enters.includes(pane) ? last.text : '');
+    };
+
+    const io = ownerIo(w.root);
+    const code = await runSend(['lead', 'send into an empty working box'], io, host);
+    if (code !== 0) console.log('DEBUG', JSON.stringify(io.err), JSON.stringify(host.typed.length), JSON.stringify(host.enters.length));
+    expect(code).toBe(0);
+    expect(io.out).toContain('lead: delivered');
+    expect(host.typed.length).toBe(1);
+    expect(host.enters).toEqual(['pane-lead']);
+  });
+
   test('holds without typing when screen shows a dialog before typing', async () => {
     const w = setupWorld();
     const questionScreen = [

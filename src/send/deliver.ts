@@ -11,7 +11,7 @@
 // Enter. Only text the CLI drew unstyled is in the box.
 import { stripSgr } from '../ansi.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
-import { classify, readBox, readScreen } from '../watch/screen.ts';
+import { classify, classifyComposer, readBox, readScreen } from '../watch/screen.ts';
 import { POLL_MS, SETTLE_MS, sawSubmission, type NativePane } from './native.ts';
 
 /** The most Enters one delivery presses. */
@@ -126,7 +126,13 @@ function look(host: DeliverHost, pane: string, line: string, profile: string): L
   }
   const dialog = dialogKind(profile, screen);
   if (dialog !== null) return { state: 'dialog', kind: dialog };
-  if (read.kind !== 'unsent') return { state: 'empty', screen };
+  // A running turn reads `working` whatever the composer below it holds (the caution stages run
+  // before the composer stage), so a working screen is read at its composer too: a draft typed
+  // during the turn is unsent text, held like one, never typed over. The composer alone decides,
+  // and only when it reads `unsent` does the box count as held; an empty or unreadable box on a
+  // working screen is still the box this line goes into.
+  const unsent = read.kind === 'unsent' || (read.kind === 'working' && classifyComposer(profile, screen.split('\n')).kind === 'unsent');
+  if (!unsent) return { state: 'empty', screen };
   if (boxHoldsText(profile, line, screen)) return { state: 'trigger' };
   return { state: 'other', text: boxText(profile, screen) };
 }
