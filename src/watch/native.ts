@@ -225,6 +225,19 @@ async function expireOne(
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
         }
+        // The marker names the drop leg, as the send's own drop leg writes it: the seat's
+        // watcher promotes it on its receipt, and no retry pass ever types it. A human's drop
+        // is read by a person, who writes no receipt, so no marker waits for one there.
+        if (!human) {
+          markPending(dropDir, {
+            id: record.id,
+            from: record.from,
+            to: record.to,
+            body: record.body,
+            ts: scene.now.toISOString(),
+            leg: 'drop',
+          });
+        }
         appendHistory(record.project, record.root, home, {
           ts: scene.now.toISOString(),
           from: record.from,
@@ -233,14 +246,14 @@ async function expireOne(
           body: record.body,
           id: record.id,
           thread: record.thread ?? record.id,
-          outcome: 'delivered',
+          outcome: 'sent (unconfirmed)',
           ms: elapsedMs,
           via: 'drop',
           failed: [...failures],
         });
         dropTaken(taken.taken);
         scene.say(
-          `${record.to}: a native handoff from ${record.from} was unconfirmed after 10m; delivered (dropped ${String(record.body.length)} characters)`,
+          `${record.to}: a native handoff from ${record.from} was unconfirmed after 10m; sent (unconfirmed) (dropped ${String(record.body.length)} characters)`,
           false,
         );
         return;

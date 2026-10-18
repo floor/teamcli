@@ -689,7 +689,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // receiver watches its own drop folder, and for a pane that must never be typed into: a
     // file can wait where a keystroke cannot be taken back.
     if (leg === 'drop') {
-      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs);
+      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human);
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. A compose seat's typed leg is
@@ -1415,9 +1415,11 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
 /**
  * The drop leg: the body is written to the seat's 0600 drop file under the seat lock, and the
  * pane is not touched — no trigger line, no socket frame, no daemon round trip, so no agent has
- * to be live and no screen is read. Delivered means the file is in place, which is the one thing
- * this leg does; the history line says `via: drop`, and the receiver finds the file by watching
- * its own drop folder.
+ * to be live and no screen is read. The receiver finds the file by watching its own drop folder
+ * and leaves a receipt beside it when it reads it, so the one thing this leg can say at once is
+ * that the file is in place: `sent (unconfirmed)`, exit 0, with `via: drop` on the history line.
+ * The marker is what the watch watches for the receipt; a human's drop is read by a person, who
+ * writes none, so no marker is left there.
  */
 function deliverDropped(
   io: Io,
@@ -1437,6 +1439,9 @@ function deliverDropped(
   failures: readonly string[] = [],
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: SentAs | null = null,
+  /** The receiving pane is a human's: a person reads the drop and writes no receipt, so no
+   *  marker is left for a receipt that is never owed. */
+  human = false,
 ): number {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -1455,7 +1460,21 @@ function deliverDropped(
     if (!written.ok) {
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
     }
-    logLine(dir, 'send', who, `${seatName}: delivered (dropped ${String(body.length)} characters)`, host.now());
+    if (!human) {
+      // Written before the send returns: a watcher that reads the drop a moment later still finds
+      // the marker the receipt promotes, and a process that dies here leaves the watch its record.
+      markPending(dropDir, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        ...(sentAs === null ? {} : sentAs),
+        body,
+        id: msgId,
+        leg: 'drop',
+      });
+    }
+    const ms = host.now().getTime() - startedAt;
+    logLine(dir, 'send', who, `${seatName}: sent to its drop folder (drop ${String(body.length)} characters); no read receipt yet`, host.now());
     appendHistory(project, root, host.home, {
       ts: host.now().toISOString(),
       from,
@@ -1464,13 +1483,13 @@ function deliverDropped(
       body,
       id: msgId,
       thread: payload.thread,
-      outcome: 'delivered',
-      ms: host.now().getTime() - startedAt,
+      outcome: 'sent (unconfirmed)',
+      ms,
       via: 'drop',
       ...failed,
     });
     report.sent = msgId;
-    return delivered(io, seatName, report, 'dropped');
+    return sentUnconfirmed(io, seatName, report, ms, 'drop');
   } finally {
     lock.release();
   }
@@ -1646,7 +1665,7 @@ async function deliverInbox(
     const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
     appendHistory(project, root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
-    return sentUnconfirmed(io, seatName, report, ms);
+    return sentUnconfirmed(io, seatName, report, ms, 'mcp-inbox');
   } finally {
     lock.release();
   }
@@ -2291,9 +2310,9 @@ function seatList(team: TeamFile): string {
 
 /** Herdr reported the seat took the trigger — or, on the drop leg, the file is in place — and the
  *  pane was not a known dialog, or the seat's inbox server returned the message. Exit 0, always.
- *  The note names the path the send went by — `socket`, `dropped`, or `typed, socket <reason>`
- *  after the frame was not taken — and `read` for the mcp-inbox leg's receipt, whose own words
- *  are `delivered (read)`: the seat read the message, which is not a claim that it acted on it. */
+ *  The note names the path the send went by — `socket`, or `typed, socket <reason>` after the
+ *  frame was not taken — and `read` for the mcp-inbox leg's receipt, whose own words are
+ *  `delivered (read)`: the seat read the message, which is not a claim that it acted on it. */
 function delivered(io: Io, seat: string, report: Report, note?: string): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   const read = note === 'read';
@@ -2301,7 +2320,7 @@ function delivered(io: Io, seat: string, report: Report, note?: string): number 
     writeAction(io, report, {
       status: read ? 'delivered (read)' : 'delivered',
       summary,
-      channel: read ? 'mcp-inbox' : note === 'socket' ? 'socket' : note === 'dropped' ? 'drop' : 'typed',
+      channel: read ? 'mcp-inbox' : note === 'socket' ? 'socket' : 'typed',
     });
   } else {
     openText(io, report);
@@ -2310,13 +2329,13 @@ function delivered(io: Io, seat: string, report: Report, note?: string): number 
   return 0; // exit: send.delivered
 }
 
-/** The mcp-inbox leg's own success: the message is the 0600 drop file in the seat's inbox, and
- *  no receipt came back inside its grace. Nothing was typed, and the file is safe on disk.
- *  Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = `${seat}: sent (unconfirmed) (mcp-inbox, ${String(ms)} ms)`;
+/** A leg's own success with no receipt: the message is the 0600 drop file in the seat's folder —
+ *  its own inbox on the mcp-inbox leg, its drop folder on the drop leg — and no read receipt
+ *  came back. Nothing was typed, and the file is safe on disk. Exit 0, always. */
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop'): number {
+  const summary = `${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms)`;
   if (report.json) {
-    writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: 'mcp-inbox' });
+    writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
   } else {
     openText(io, report);
     io.stdout(`${summary}\n`);

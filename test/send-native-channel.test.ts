@@ -588,10 +588,20 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
   expect(watchPane.enters).toBe(0);
 
   const drops = dropDir(made.dir, 'lead');
-  const files = readdirSync(drops);
-  expect(files).toEqual([ID]);
+  const files = readdirSync(drops).sort();
+  expect(files).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
+  // The marker names the drop leg, so the seat's own receipt promotes it and no retry types it.
+  expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toEqual({
+    id: ID,
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    ts: expiredAt.toISOString(),
+    tries: 0,
+    leg: 'drop',
+  });
 
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
@@ -602,7 +612,7 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
       body: HANDOFF_BODY,
       id: ID,
       thread: ID,
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
       via: 'drop',
       failed: ['native: unconfirmed after 10m'],
@@ -706,7 +716,8 @@ test('confirm after expiry is refused and never causes a second delivery', async
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries.length).toBe(1);
   expect(history.ok && history.entries[0]?.via).toBe('drop');
-  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
+  // The drop file and its marker, nothing else: a late confirm never delivers twice.
+  expect(readdirSync(dropDir(made.dir, 'lead')).sort()).toEqual([ID, `${ID}.pending`]);
 });
 
 test('confirm inside the 10m window leaves no fallback triggered', async () => {
@@ -944,7 +955,7 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   // Without a socket, handOff returns fallback and the walk continues straight to drop with zero pane writes.
   const sendIo = helperCaller(made.root);
   expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(0);
-  expect(sendIo.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+  expect(sendIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
 
@@ -965,7 +976,7 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(watchPane.typed).toEqual([]);
   expect(watchPane.enters).toBe(0);
   expect(said).toEqual([
-    `lead: a native handoff from helper was unconfirmed after 10m; delivered (dropped ${String(HANDOFF_BODY.length)} characters)`,
+    `lead: a native handoff from helper was unconfirmed after 10m; sent (unconfirmed) (dropped ${String(HANDOFF_BODY.length)} characters)`,
   ]);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries[1]?.via).toBe('drop');
@@ -1016,7 +1027,7 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
   expect(recordBody(join(dir, ID))).toBe(HANDOFF_BODY);
   expect(existsSync(join(dir, `${ID}.pending`))).toBe(false);
   expect(said).toEqual([
-    `lead: a native handoff from helper was unconfirmed after 10m; delivered (dropped ${String(HANDOFF_BODY.length)} characters)`,
+    `lead: a native handoff from helper was unconfirmed after 10m; sent (unconfirmed) (dropped ${String(HANDOFF_BODY.length)} characters)`,
   ]);
 
   const history = readHistory('acme', made.root, made.home);
@@ -1028,7 +1039,7 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       body: HANDOFF_BODY,
       id: ID,
       thread: ID,
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
       via: 'drop',
       failed: [

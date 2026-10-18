@@ -36,6 +36,7 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { deliveryChainOf } from '../src/send/delivery.ts';
 import { readHistory } from '../src/send/history.ts';
+import { readPending } from '../src/send/pending.ts';
 import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
@@ -295,7 +296,7 @@ describe('the walk records the channel and the legs it skipped', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     // The drop leg types nothing: no trigger line, no Enter, no frame, no dial.
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
@@ -308,11 +309,13 @@ describe('the walk records the channel and the legs it skipped', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'drop',
       failed: [MCP_SKIP],
     });
+    // The marker is what the watch keeps beside the drop for the read receipt.
+    expect(readPending(dropDir(w.root, 'lead'))).toMatchObject([{ leg: 'drop', from: 'owner', to: 'lead' }]);
   });
 
   test('a level that leaves the drop leg out walks the typed leg behind it', async () => {
@@ -379,7 +382,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect(entry.failed).toEqual([MCP_SKIP]);
@@ -491,7 +494,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(lastEntry(w.root, w.home).failed).toEqual([MCP_SKIP]);
     expect(lastEntry(w.root, w.home).via).toBe('drop');
     expect(host.typed).toEqual([]);
@@ -719,7 +722,7 @@ describe('the drop leg', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(io.err).toBe('');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
@@ -732,7 +735,7 @@ describe('the drop leg', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'drop',
     });
@@ -745,7 +748,7 @@ describe('the drop leg', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
@@ -765,9 +768,9 @@ describe('the drop leg', () => {
       action_summary: string;
       ids: { sent: string };
     }>(io.out, SEND_OUTPUT_SCHEMA);
-    expect(doc.status).toBe('delivered');
+    expect(doc.status).toBe('sent (unconfirmed)');
     expect(doc.channel).toBe('drop');
-    expect(doc.action_summary).toBe('lead: delivered (dropped)');
+    expect(doc.action_summary).toBe('lead: sent (unconfirmed) (drop, 0 ms)');
     expect(readFileSync(join(dropDir(w.root, 'lead'), doc.ids.sent), 'utf8')).toBe(`${HEADER}hello`);
   });
 
@@ -800,7 +803,7 @@ describe('a human seat is never typed into', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -812,11 +815,13 @@ describe('a human seat is never typed into', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'drop',
       failed: [TYPED_SKIP],
     });
+    // A person reading the drop writes no receipt, so no marker waits for one.
+    expect(readPending(dropDir(w.root, 'lead'))).toEqual([]);
   });
 
   test('a human’s word naming native and typed records both legs kept out, and drop takes it', async () => {
@@ -826,7 +831,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -844,7 +849,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -864,7 +869,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -880,7 +885,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
