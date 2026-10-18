@@ -192,13 +192,20 @@ export function compare(
         continue;
       }
       // The conversation came back without the program the launch line names. Said here; the
-      // seat is still the running one, and nothing in this report starts it.
+      // seat is still the running one, and nothing in this report starts it. For a lead's own
+      // seat no per-seat restart is offered (a lead is never removed or restarted alone), and
+      // the whole-team restart it would take is never the repair: the note says what the
+      // process is, and the lead reads it.
       if (continuity === 'restored' && usesLauncher(seat)) {
-        differences.push({
-          what: `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched`,
-          repair: seatRestartRepair(team, seat.name),
-          needs: 'approve',
-        });
+        if (isLeadSeat(team, seat.name)) {
+          notes.push(`${seat.name}: started by a launcher; team cannot tell its process from the one it launched`);
+        } else {
+          differences.push({
+            what: `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched`,
+            repair: `team restart ${seat.name}`,
+            needs: 'approve',
+          });
+        }
       }
       // A ready seat with no identity is not relaunched by `up` when its model differs. A seat
       // still at launch is: `up` finishes it, so that repair stays `team up`. A bare shell is

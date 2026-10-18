@@ -26,9 +26,12 @@ restore left the shell in front) and a pane fronted by any other program reads `
 launched by team`; both carry a difference, and the second's model is `-`, never the file's.
 
 That pane is not silent, though: when the seat's launch line starts a launcher — a program other
-than the CLI's own binary, or a file that says the launcher chooses the model — the run adds a
-difference of its own, `<seat>: its launch line starts a launcher, and the process in its pane is
-not the one team launched`; the row stays the one the live session gives it. And a pane this
+than the CLI's own binary, or a file that says the launcher chooses the model — a seat that is
+not a lead adds a difference of its own, `<seat>: its launch line starts a launcher, and the
+process in its pane is not the one team launched`, repaired with `team restart <seat>`; the row
+stays the one the live session gives it. A lead's own seat is never restarted alone, so its
+line is a note and not a difference: `<seat>: started by a launcher; team cannot tell its
+process from the one it launched`, with no command that stops the team. And a pane this
 record cannot tie is repaired by that restart — `team remove <seat> --keep, then team add <seat>`,
 or `team down, then team up` for a lead — when its screen names a model the file does not carry,
 or its launch line starts a launcher; a pane it can say nothing about is repaired by looking at

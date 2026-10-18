@@ -603,7 +603,7 @@ describe('a pass of the watch', () => {
     const at = (processes: Record<string, { shell: number; foreground: number[] }>) =>
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
-    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart deepseek-acme';
     // Another CLI under the recorded shell: replaced. The launch line names a launcher, so both lines.
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     // The same reading again: the condition still holds, and it stands reported once.
@@ -626,7 +626,7 @@ describe('a pass of the watch', () => {
     const at = (processes: Record<string, { shell: number; foreground: number[] }>) =>
       pass({ team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
-    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart deepseek-acme';
     // The stored session is on the pane: the generic line stays quiet, and the launcher is still said.
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([launcher]);
     // A pane back at its shell is the generic line only.
@@ -640,7 +640,7 @@ describe('a pass of the watch', () => {
     const at = (processes: Record<string, { shell: number; foreground: number[] } | null>) =>
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
-    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart deepseek-acme';
     // same, replaced, replaced, same, gone, unknown, gone: reported at the 2nd and 5th readings
     // only. `unknown` is herdr failing to read, not the condition clearing: were it to clear the
     // mark, the `gone` after it would report a second time what the `gone` before it reported.

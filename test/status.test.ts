@@ -1077,10 +1077,13 @@ describe('a pane that no longer holds the process team launched', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).not.toMatch(/deepseek-acme\s+restored, not launched by team/);
+    // An ordinary seat is repaired seat by seat, never by stopping the whole team.
     expect(out).toContain(
       'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
-        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme (the owner runs the add, or an approved delegate when the file names one)\n',
+        '  repair: team restart deepseek-acme\n' +
+        "  who: the team's lead\n",
     );
+    expect(out).not.toContain('team down, then team up');
     expect(out).not.toContain('repair: team up\n');
   });
 

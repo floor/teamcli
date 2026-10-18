@@ -29,13 +29,12 @@ export const restored: SeatCheck = {
       ));
     }
     if (seat.identity === 'replaced' && seat.launcher) {
-      const repair = seat.lead
-        ? 'team down, then team up (to restart the whole team)'
-        : `team remove ${seat.name} --keep, then team add ${seat.name}`;
-      reports.push(ctx.once(
-        launchKey,
-        `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched — ${repair}`,
-      ));
+      // A lead's own seat is never restarted alone, and the whole-team restart is not the
+      // repair: the note says what the process is, with no command that stops the team.
+      const line = seat.lead
+        ? `${seat.name}: started by a launcher; team cannot tell its process from the one it launched`
+        : `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart ${seat.name}`;
+      reports.push(ctx.once(launchKey, line));
     }
     return reports.flatMap(reported);
   },
