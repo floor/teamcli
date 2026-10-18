@@ -390,10 +390,10 @@ because they load the file first.
 `delivery_order` is optional on a seat: its own word on the order a send to it walks, described
 [below](#delivery_order).
 
-`human` is optional on a seat: `human: true` marks its pane as a person's. A send to it walks no
-typing leg — the typed trigger and the native frame are skipped, each one's reason recorded on the
-history line the send writes — and falls to the `drop` leg, which is added to the walk when the
-order in force leaves it out. The watch types no
+`human` is optional on a seat: `human: true` marks its pane as a person's. A send to it walks the
+`drop` leg alone, whatever its delivery order or the default says — every other leg is skipped,
+each one's reason recorded on the history line the send writes — so the message arrives in the
+drop file and the pane is never touched. The watch types no
 retry there and no nudge: a held send's marker is given up on with the reason, and its message
 waits in the drop file. `team send --wait` is refused for such a seat, since the wait rides the
 native leg. The key is part of the seat's digest, and a file that marks no seat keeps every digest
@@ -433,7 +433,7 @@ delivery_order: [typed]
   is the same 0600 drop file and nothing typed into the pane at all — no trigger line and no
   socket frame. `delivery_order: [drop]` is the opt-in for a receiver that watches its own drop
   folder, and for a pane that must never receive typing; a seat the file marks `human` walks
-  `drop` even when its order leaves it out.
+  `drop` alone, whatever its order holds.
 - The receiving seat's chain is read outermost first: the entity, the project's registry record,
   this file's key, then the seat's own key. No entity record carries an order in this build, so
   that level is always silent; the project's word is `delivery_order` beside `teams` in

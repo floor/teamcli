@@ -87,7 +87,7 @@ export const seats: Section = {
         stopped: { type: 'boolean' },
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
-        human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks no typing leg to it — the walk falls to the drop leg — and the watch types no retry or nudge there' },
+        human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
         count: { type: 'integer', minimum: 1 },
         reach: {
           type: 'object',

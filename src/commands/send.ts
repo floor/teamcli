@@ -76,10 +76,11 @@ either takes the send, which ends the walk, or definitely cannot take it, which
 hands the send to the next leg and is recorded as a failure; the typed leg is
 terminal, taking the send or ending the walk unreachable. The drop
 leg writes the same 0600 drop file and types nothing at all. A seat the file marks
-human: true walks no typing leg: the typed trigger and the native frame are kept
-out — each one's reason is recorded — and the walk falls to the drop leg, added
-when the order in force leaves it out; a waited send is refused. The history line
-names the channel the send went by and the legs that failed before it.
+human: true walks the drop leg alone, whatever its delivery order or the default
+says: every other leg is kept out — each one's reason is recorded — and the walk
+writes the drop file, with nothing typed and no frame sent; a waited send is
+refused. The history line names the channel the send went by and the legs that
+failed before it.
 
 The mcp-inbox leg writes the same 0600 drop file and types nothing: it takes the
 send only when the seat's own inbox server is running (\`.inbox-listener\` beside
@@ -572,14 +573,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
-  // A human's pane never takes typing, whatever its order says: the typing legs are kept out of
-  // the walk — each one's reason is recorded on the history line — and the walk falls to the drop
-  // leg, added when the order in force leaves it out, since a file can wait where a keystroke
-  // cannot be taken back.
+  // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
+  // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
+  // order names is kept out, and each one's human reason is recorded on the history line, so a
+  // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
+  // back.
   const human = declared?.human === true;
-  const walk: readonly DeliveryLeg[] = human
-    ? [...order.filter((leg) => leg !== 'typed' && leg !== 'native'), ...(order.includes('drop') ? [] : (['drop'] as const))]
-    : order;
+  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
   // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
   // seat is refused before a write, a dry run included: the refusal is unconditional and stands
   // whether or not anything would be written, so the dry run reports the real run's refusal and
@@ -627,14 +627,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // takes the send only while the seat's own inbox server is listening, and is otherwise
   // recorded and passed. The native leg is skipped while SOCKET_SEND is off — the frame path is
   // a socket write this build does not make — and a walk that reaches it records the skip; a
-  // sender whose own file declares Claude Code gets the handoff instead. A human's walk keeps no
-  // typing leg at all; the legs this rule kept out are recorded first, so the history line the
+  // sender whose own file declares Claude Code gets the handoff instead. A human's walk is the
+  // drop leg alone; the legs this rule kept out are recorded first, so the history line the
   // drop leg writes (or the refusal) names what the pane was spared.
   const failures: string[] = [];
   if (human) {
     for (const leg of order) {
       if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
+      else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
     }
   }
   let socketNote: string | null = null;
