@@ -81,6 +81,11 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   // The one answer that moves a table default: a refusal names a rule, so the owner is the
   // audience; the operational log holds the same record for every reader.
   'team.policy-refused': ['owner'],
+  // The lead's own words to the owner, raised through `team raise`: a release is ready, or a
+  // decision is needed. Each is a decision moment the owner answers, so the audience is the
+  // owner alone and the watch delivers it at once (`DEFAULT_OWNER_AT_ONCE_KINDS`).
+  'release.ready': ['owner'],
+  'decision.needed': ['owner'],
   // Retention is operational, not governance: a dropped range is declared to the lead and the
   // operator, and the record itself is in the log every reader already verifies.
   'team.event-log-dropped': ['lead', 'operator'],

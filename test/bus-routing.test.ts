@@ -51,6 +51,11 @@ describe('the default routing table', () => {
     expect(EVENT_ROUTING_DEFAULTS['team.policy-changed']).toEqual(['lead', 'subject', 'owner']);
   });
 
+  test("the lead's raise reaches the owner and nobody else", () => {
+    expect(EVENT_ROUTING_DEFAULTS['release.ready']).toEqual(['owner']);
+    expect(EVENT_ROUTING_DEFAULTS['decision.needed']).toEqual(['owner']);
+  });
+
   test('a delivery question reaches the sender, a blocked seat its lead and operator', () => {
     expect(EVENT_ROUTING_DEFAULTS['message.delivered']).toEqual(['sender']);
     expect(EVENT_ROUTING_DEFAULTS['message.held']).toEqual(['sender', 'lead']);
@@ -154,6 +159,8 @@ describe("the owner's immediacy list (Amendment 01 §10)", () => {
       'team.grant-expired',
       'team.policy-changed',
       'team.policy-refused',
+      'release.ready',
+      'decision.needed',
     ]);
 
     // The owner's prompt kinds ring; a prompt that is not one waits for the digest.
@@ -167,6 +174,10 @@ describe("the owner's immediacy list (Amendment 01 §10)", () => {
     expect(isOwnerAtOnce('seat.done', { seat: 'worker-1', leadSeats: leads })).toBe(false);
     expect(isOwnerAtOnce('seat.unreachable', { seat: 'clerk', leadSeats: leads })).toBe(true);
     expect(isOwnerAtOnce('seat.unreachable', { seat: 'worker-1', leadSeats: leads })).toBe(false);
+
+    // The lead's raise is a decision moment: it rings, not batches.
+    expect(isOwnerAtOnce('release.ready')).toBe(true);
+    expect(isOwnerAtOnce('decision.needed')).toBe(true);
 
     // Everything else in the policy's owner traffic is routine.
     expect(isOwnerAtOnce('seat.blocked')).toBe(false);

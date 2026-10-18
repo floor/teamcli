@@ -82,6 +82,10 @@ export const EVENT_KINDS = [
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
+  // The lead's own words to the owner (`team raise`): a release is ready, or a decision is
+  // needed. Owner-routed by default and delivered at once; no seat is in the audience.
+  'release.ready',
+  'decision.needed',
   // Operational: retention declares the sequence range it dropped, so a reader, a reconcile
   // pass and a gap-resync see a declared drop rather than an unexplained hole.
   'team.event-log-dropped',
@@ -127,7 +131,8 @@ export function isPrivilegedKind(kind: EventKind, extraPrivileged?: readonly str
 
 /** Events delivered to the owner at once rather than batched into a summary (Amendment 01 §10):
  *  `seat.at-prompt` of the owner's kinds, `seat.unreachable` and `seat.done` of the lead's seat,
- *  and every roster, grant and policy event. */
+ *  every roster, grant and policy event, and the lead's own `team raise` line — a release ready
+ *  or a decision needed, which the owner answers rather than reads later in a digest. */
 export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
   'seat.unreachable',
@@ -140,6 +145,8 @@ export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
+  'release.ready',
+  'decision.needed',
 ];
 
 const OWNER_AT_ONCE_SET: ReadonlySet<EventKind> = new Set<EventKind>(DEFAULT_OWNER_AT_ONCE_KINDS);
