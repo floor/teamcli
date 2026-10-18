@@ -111,7 +111,7 @@ export function skeleton(project: string, head: string | null, teamVersion = ver
   const launch = profileFor(cli)?.binary ?? 'claude';
   return `# yaml-language-server: $schema=https://raw.githubusercontent.com/floor/teamcli/v${teamVersion}/schema/team.schema.json
 # The team of ${project}. Private to this clone: see .git/info/exclude.
-# The live file is what the commands read. Edit it, then run the seats.
+# The live file is what the commands read. Edit it, then run team up.
 format: 1
 project: ${project}
 # visibility: public          # public | private: whether forbidden_public applies
@@ -370,7 +370,7 @@ export async function runInit(
   // the document has no field for.
   const action_summary = restored
     ? `Restored ${TEAM_FILE} from the copy this machine stored.`
-    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run the seats.`;
+    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run team up.`;
   if (json) {
     writeJson(io, 'team.init', {
       format: 1 as const,

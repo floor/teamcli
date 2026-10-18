@@ -402,7 +402,7 @@ function notYours(io: Io, json?: boolean): number {
 
 /** The team file as a repair names it: `.agents/team.yaml` under the root the load found, or
  *  the path itself when `--file` aimed the run at another folder. */
-function shownTeamFile(path: string | undefined, root: string): string {
+export function shownTeamFile(path: string | undefined, root: string): string {
   if (path === undefined) return TEAM_FILE;
   const rel = relative(root, path);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path;

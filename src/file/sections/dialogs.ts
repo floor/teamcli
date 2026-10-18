@@ -3,8 +3,8 @@ import type { Section } from './section.ts';
 /**
  * `dialogs:` is the 0.4 line's trust-dialog setting. It is read and ignored: answering a trust
  * dialog is the owner's live team grant now, so the key grants nothing. It stays a known field
- * so a file written for the 0.4 line still loads, and `team check` names it with its repair;
- * every other command stays quiet about it, and no command acts on its value.
+ * so a file written for the 0.4 line still loads, and `team check` and `team doctor` name it
+ * with its repair; every other command stays quiet about it, and no command acts on its value.
  */
 export const dialogs: Section = {
   name: 'dialogs',
@@ -13,7 +13,7 @@ export const dialogs: Section = {
   validate(entry, ctx) {
     // Any shape loads: the key is ignored, so refusing one would refuse a file the 0.4 line
     // wrote for a reason this build no longer reads. The one thing the section does is report
-    // the deprecation, and only `team check` prints that report.
+    // the deprecation, and `team check` and `team doctor` print that report.
     if (entry) {
       ctx.check.deprecations.push({
         line: entry.line,

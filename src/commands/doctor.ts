@@ -8,13 +8,14 @@ import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
+import { shownTeamFile } from '../check/team.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
 import { isParseError, loadTeamFile } from '../file/load.ts';
 import { migrationText } from '../file/migrate.ts';
 import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
-import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
+import type { BudgetAccount, Deprecation, Seat, TeamFile } from '../file/types.ts';
 import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { verifyLobby } from '../lobby/gate.ts';
@@ -587,6 +588,19 @@ function cliOf(team: TeamFile, name: string, recorded: SeatState): string | null
     ?? null;
 }
 
+/** The file's deprecated keys as doctor's `the file, line N:` warnings: the message and the
+ *  repair `team check` prints. 0.3.5's approve line sent users to `team doctor` for the rest,
+ *  so a key that still loads but grants nothing is reported here too. */
+function deprecatedFileWarnings(
+  deprecations: readonly Deprecation[],
+  file: string,
+): { line: number; message: string }[] {
+  return deprecations.map((deprecation) => ({
+    line: deprecation.line,
+    message: `${deprecation.message}; repair: ${deprecation.repair.replace('{file}', file)}`,
+  }));
+}
+
 export function doctorFindings(
   team: TeamFile,
   root: string,
@@ -864,7 +878,10 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           dirname(loaded.path),
           session,
           sources,
-          loaded.warnings,
+          [
+            ...loaded.warnings,
+            ...deprecatedFileWarnings(loaded.deprecations ?? [], shownTeamFile(loaded.path, root)),
+          ],
           standing,
           undefined,
           budgetCheckFindings(team, standing, root, sources, callerOf(io)),

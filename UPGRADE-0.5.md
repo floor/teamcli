@@ -31,8 +31,8 @@ the record, `team check` reads it against what is running, and `team up` admits 
    model, cwd and session — with no approval step and no legacy refusal. One change from 0.3.5
    shows here: the seat's workspace is created in the project, and its pane label reads
    `orchestrator · orchestrator` (0.3.5 used the lobby and `claude opus 0`). The plan's standing
-   rules no longer name commands this build does not have.
-   <!-- recheck at rc.6: the launch rules drop `team approve` -->
+   rules no longer name commands this build does not have: they forbid `team grant`, `team
+   delegate` and `team revoke`, and editing `trust:`; `team approve` is not named.
 4. **`team up`**. The file in your clone is the record, so nothing is approved by hand any more.
    Running seats keep working as they are; relaunch one with `team restart <seat>`, or the team —
    `team down`, then `team up`, typed as two commands, the second only after the first has
@@ -43,12 +43,11 @@ the record, `team check` reads it against what is running, and `team up` admits 
 
 ## `team approve` is gone
 
-The command is not in the CLI. A typed `team approve` gets a line of its own saying the command
-is gone, not the generic unknown-command answer, and exits 2.
-<!-- recheck at rc.6: confirm the typed-approve wording -->
-`team --help` carries no `approve` line. A fresh `team init` ends by naming `team up` as the next
-command.
-<!-- recheck at rc.6: confirm the init line -->
+The command is not in the CLI. A typed `team approve` gets a line of its own: `team approve was
+removed in 0.5.0: the live team file is the record, and nothing needs approving; see
+UPGRADE-0.5.md`. It exits 2 — the generic unknown-command answer's code — but not its text.
+`team --help` carries no `approve` line. A fresh `team init` ends `Edit it, then run team up.`,
+naming the command that follows the edit.
 
 `team up` admits from the live file now: edit the file in your clone, then run `up` — or `add`,
 `remove`, `down`, `restart`; each reads the file itself. A script that guarded on `team approve`
@@ -87,7 +86,7 @@ its way out. These are the messages an upgrade produces most often; each has its
 as well.
 
 - **`` `dialogs:` is deprecated and grants nothing ``** (`team check` warns, once; `team doctor`
-  notes it too). <!-- recheck at rc.6: doctor's dialogs note lands with the fix --> Remove
+  notes it too, with the same message and repair). Remove
   `dialogs:` from the file. Trust answering is the owner's grant now: `team grant @team
   --capabilities dialogs.trust` turns it on and `team revoke` ends it.
 - **`` `coordinator:` is now `leads: true` on the lead's seat, and is still read ``**

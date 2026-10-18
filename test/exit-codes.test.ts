@@ -2362,6 +2362,7 @@ scene('team.help', async (place) => show(await entry(['--help'], testIo(place.ro
 scene('team.no-command', async (place) => show(await entry([], testIo(place.root, owner)), 'Usage:'));
 scene('team.version', async (place) => show(await entry(['--version'], testIo(place.root, owner)), version()));
 scene('team.unknown', async (place) => show(await entry(['nosuch'], testIo(place.root, owner)), 'unknown command'));
+scene('team.approve-removed', async (place) => show(await entry(['approve'], testIo(place.root, owner)), 'team approve was removed in 0.5.0'));
 scene('team.command-help', async (place) => show(await entry(['status', '--help'], testIo(place.root, owner)), 'Usage: team status'));
 scene('team.command-threw', async (place) => {
   // An invalid skeleton is `init`'s own refusal now; a plain file where its folder goes still

@@ -91,7 +91,7 @@ describe('the rules of a seat', () => {
     expect(seatRules(rulesInput)).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
-      'Never run `team trust` or `team approve`, and never edit `trust:` in the team file.',
+      'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
       'In a protected checkout, never switch the branch, reset or commit.',
       'Run the tests your change touches, not the whole suite.',
       'Your signature in a commit message, as a trailer, in a last paragraph of its own that holds trailers only: Agent: Claude Opus 5.5 · implementer',
