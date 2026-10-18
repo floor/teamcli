@@ -22,7 +22,8 @@ the delivery legs a send walked past, each as `<leg>: <reason>`: the legs of the
 order that definitely could not take the send — the ones a walk passed before the leg that took
 it, or every leg that failed on a walk that ran out of legs — `native` (recorded `unavailable`
 while no socket write is made) or `mcp-inbox` (recorded `no live inbox listener` when no server
-is serving that seat's inbox) in this
+is serving that seat's inbox, and `no receipt within 10m` on the watch's later typed line for a
+message the seat's client left unread past the fallback window) in this
 build. It is absent when no leg failed, and a line that has none of the six, from a build older
 than these fields, carries the six required fields alone. `note` is the short qualifier the
 outcome word cannot carry alone: a delivered send whose box cleared before herdr's status or the

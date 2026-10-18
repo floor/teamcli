@@ -41,7 +41,12 @@ call leaves at `<id>.read`. The receipt is `delivered (read)`: the seat read the
 the words claim nothing about what it did with it. A wait that ends without the receipt is
 `sent (unconfirmed)`, exit 0 — the file is the message, safely on disk, and the walk ends rather
 than typing into a pane the inbox was chosen over. A record beside the drop says which leg left
-it, so no retry pass types it. This build makes no socket write — a frame can land at a
+it. A receipt that lands after the sender has gone is promoted by the watch — one
+`delivered (read)` history line, nothing typed — and a message still unread ten minutes after
+the send is the fallback the wait promised: the watch types its trigger line, and that history
+line's `delivered` carries `failed: mcp-inbox: no receipt within 10m`. Ten minutes is the window
+the native leg allows for a confirmation, so a live inbox never delays a message longer than the
+frame path does. This build makes no socket write — a frame can land at a
 busy session's held-message dialog, where the box is blocked — so a walk that reaches `native`
 records it `unavailable`. The native leg is a call the sender's own process makes, so a walk
 from the owner, or from a sender whose own file does not declare `cli: claude-code`, records it
@@ -375,7 +380,11 @@ A running watch retries a `held`, `not-submitted` or dialog-stopped send once th
 up to three tries in thirty minutes; the line the send printed tells the sender so, and a retry
 that stops says where the message is. A retry never types into a pane back at its shell — the
 seat's CLI has exited, so it is given up with `the seat is back at its shell; nothing was typed`
-and the drop file stays. A `delivered (taken, not yet confirmed)` send is never
+and the drop file stays. A message the `mcp-inbox` leg left is not retried on that
+schedule: a receipt promotes it once the seat's client reads it — one `delivered (read)` history
+line, nothing typed — and a message still unread when the ten-minute fallback window ends is
+handed to the same retry, which types its trigger and says on the history line which leg's wait
+ended (`failed: mcp-inbox: no receipt within 10m`). A `delivered (taken, not yet confirmed)` send is never
 retried: the seat took the line, and a running watch reads the transcript and the status on its
 later passes for the sign that it acted on it. A sign confirms the delivery silently; a seat that
 sits free for a minute past the send, or a record thirty minutes old, with no sign at all, is said

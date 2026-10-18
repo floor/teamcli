@@ -414,7 +414,8 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       via: 'mcp-inbox',
       failed: [NATIVE_SKIP],
     });
-    // The record left beside the drop says which leg left it, so no retry pass types it.
+    // The record left beside the drop says which leg left it: the send types nothing, and the
+    // watch promotes a later receipt, or types the drop once the ten-minute fallback ends.
     expect(JSON.parse(readFileSync(join(dir, `${id}.pending`), 'utf8'))).toEqual({
       ts: NOW.toISOString(),
       from: 'owner',
