@@ -185,6 +185,56 @@ describe('a reply is a record on the thread it answers', () => {
     });
   });
 
+  test('a seat replies from its own pane and session: the admission judges the placement, not a sessionless reading', async () => {
+    // The placement `team reply` makes in a real terminal: the walk finds herdr above it, the
+    // pane root among its ancestors, and the session lists the pane under the seat's name, so
+    // `placeCaller` records the session the seat stood in. A caller handed in with `session`
+    // already pinned would hide the reading this scene is about — the admission must carry the
+    // session its own placement found, not the sessionless walk the pre-file gate keeps.
+    place('helper', 'w2:p1');
+    sentTo('helper', SENT, { from: 'worker' });
+    const io = testIo(root);
+    const paneRoot = 4242;
+    io.callerSources = () => ({
+      ancestors: () => [{ pid: paneRoot, name: 'zsh' }, { pid: 1, name: 'herdr' }],
+      agents: () => [{ pane: 'w2:p1', name: 'helper', agent: null, workspace: '', status: '', cwd: root }],
+      paneRootPid: (pane: string) => (pane === 'w2:p1' ? paneRoot : null),
+      env: io.env,
+      stdinIsTTY: io.stdinIsTTY,
+    });
+    const code = await runReply([SENT, 'answered'], io, host({ newId: () => REPLY }));
+
+    expect([code, io.out, io.err]).toEqual([0, 'team acme, session "acme"\nworker: replied\n', '']);
+    const record = recordAt(join(recordDir(root, 'acme', 'worker'), REPLY));
+    expect(record.payload).toMatchObject({
+      from: 'helper',
+      to: 'worker',
+      rule: REPLY_RULE,
+      thread: SENT,
+      in_reply_to: SENT,
+    });
+  });
+
+  test('--close from the seat that was addressed judges the same placement: it closes and exits 0', async () => {
+    place('helper', 'w2:p1');
+    sentTo('helper', SENT, { from: 'worker' });
+    const io = testIo(root);
+    const paneRoot = 4242;
+    io.callerSources = () => ({
+      ancestors: () => [{ pid: paneRoot, name: 'zsh' }, { pid: 1, name: 'herdr' }],
+      agents: () => [{ pane: 'w2:p1', name: 'helper', agent: null, workspace: '', status: '', cwd: root }],
+      paneRootPid: (pane: string) => (pane === 'w2:p1' ? paneRoot : null),
+      env: io.env,
+      stdinIsTTY: io.stdinIsTTY,
+    });
+    const code = await runReply([SENT, '--close'], io, host());
+
+    expect([code, io.out, io.err]).toEqual([0, `team acme, session "acme"\n${SENT}: closed\n`, '']);
+    expect(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'helper'), `${SENT}.closed.json`), 'utf8'))).toMatchObject({
+      payload: { kind: 'thread-close', id: SENT, thread: SENT, by: 'helper', root, session: 'acme', at: NOW_ISO },
+    });
+  });
+
   test('--json writes one team.reply document, and nothing else', async () => {
     sentTo('owner', SENT_B, { from: 'worker' });
     const result = await run([SENT_B, 'ok', '--json'], { kind: 'owner' }, { newId: () => REPLY_B });
