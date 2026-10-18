@@ -9,7 +9,7 @@
 // session is touched and no real pane is read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
@@ -17,7 +17,7 @@ import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readHistory } from '../../src/send/history.ts';
 import type { NativePane } from '../../src/send/native.ts';
 import type { SendOutcome } from '../../src/send/uds.ts';
-import { testIo } from '../helpers.ts';
+import { recordBody, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
 
@@ -190,7 +190,7 @@ describe('team send: the plain send is the typed trigger again', () => {
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
     expect(host.pane.enters).toBe(1);
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
     const read = readHistory('acme', root, host.home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
