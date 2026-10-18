@@ -4,7 +4,10 @@
 // `<root>/.agents/send-drops/<session>/<seat>/<uuid>`. The MCP inbox adds nothing to the message:
 // a listener marker says a server is there, and one receipt `<id>.read` says a message was read
 // by an `inbox_read` call. The drop file is still the message; both sidecars are conveniences
-// written with the same atomic 0600 rename the drop gets.
+// written with the same atomic 0600 rename the drop gets. A read parses the record and verifies
+// its signature with the checkout's message key before it writes the receipt or shows a body: a
+// tampered or unsigned file is refused, so the receipt never proves a read of something the
+// server could not authenticate.
 //
 // Path rules, which the server never relaxes: the seat and session are the launch's, never a tool
 // argument's; the folder is checked step by step so a link at `.agents`, `send-drops`, the
@@ -15,6 +18,8 @@ import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
+import { readRecord, verifyRecord } from '../send/record.ts';
+import { messageKeyState } from '../store/keys.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -271,28 +276,53 @@ export type InboxRead =
   | { ok: true; body: string }
   | { ok: false; reason: string };
 
+/** The inbox a read serves: the launch's own folder, root, seat and session. */
+export type InboxTarget = { dropDir: string; root: string; seat: string; session: string };
+
 /**
- * Reads one message and writes its receipt **before** returning the body: a read that cannot
- * leave proof is refused, so `delivered (read)` can never rest on a body the client saw without
- * the receipt on disk. The id is a lowercase UUID; no other string reaches the filesystem.
+ * Reads one message, verifies it, and only then writes its receipt **before** returning the body:
+ * a read that cannot leave proof is refused, so `delivered (read)` can never rest on a body the
+ * client saw without the receipt on disk. The record is parsed as the signed envelope `team send`
+ * writes, its signature is checked with the checkout's message key, and it must name this inbox —
+ * its seat, session and root — before any body is shown. A file that is not a record, a tampered
+ * signature, an absent key and a record bound elsewhere are all refused with no body and no
+ * receipt written. The id is a lowercase UUID; no other string reaches the filesystem.
  */
-export function readMessage(dropDir: string, id: string, seat: string, session: string, pid: number): InboxRead {
+export function readMessage(target: InboxTarget, id: string, pid: number, home: string): InboxRead {
   if (!MESSAGE_ID.test(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const at = join(dropDir, id);
+  const at = join(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const receipt = heldAt(receiptPath(dropDir, id));
+  const receipt = heldAt(receiptPath(target.dropDir, id));
   if (receipt.kind !== 'missing' && receipt.kind !== 'file') {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
-  const body = readNoFollow(at);
-  if (body === null) return { ok: false, reason: `message ${JSON.stringify(id)} could not be read` };
-  const record: InboxReceipt = { v: 1, id, seat, session, tool: 'inbox_read', ts: new Date().toISOString(), pid };
+  const looked = readRecord(at, id);
+  if (!looked.ok) return { ok: false, reason: `message ${JSON.stringify(id)} is not a signed record: ${looked.reason}` };
+  if (looked.record === null) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  const payload = looked.record.payload;
+  if (payload.to !== target.seat || payload.session !== target.session) {
+    return { ok: false, reason: `message ${JSON.stringify(id)} is not addressed to this inbox` };
+  }
+  if (!sameRoot(payload.root, target.root)) {
+    return { ok: false, reason: `message ${JSON.stringify(id)} is bound to another checkout` };
+  }
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') {
+    return {
+      ok: false,
+      reason: key.kind === 'unreadable' ? `the message key is unreadable: ${key.why}` : 'no message key; nothing was shown',
+    };
+  }
+  if (!verifyRecord(looked.record, key.key)) {
+    return { ok: false, reason: `message ${JSON.stringify(id)} does not verify against this message key` };
+  }
+  const record: InboxReceipt = { v: 1, id, seat: target.seat, session: target.session, tool: 'inbox_read', ts: new Date().toISOString(), pid };
   try {
-    dropMessage(dropDir, `${id}${RECEIPT_SUFFIX}`, `${JSON.stringify(record)}\n`);
+    dropMessage(target.dropDir, `${id}${RECEIPT_SUFFIX}`, `${JSON.stringify(record)}\n`);
   } catch {
     return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
   }
-  return { ok: true, body };
+  return { ok: true, body: payload.body };
 }
 
 /**
