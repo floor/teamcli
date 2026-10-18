@@ -13,7 +13,7 @@ import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
-import { PENDING_ID, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative } from '../send/pending.ts';
+import { PENDING_ID, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
@@ -32,7 +32,7 @@ import { markTaken } from '../send/taken.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { type DeliveryLeg, type SettingLevel } from '../settings/inherit.ts';
+import { SETTING_LEVELS, type DeliveryLeg, type SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -192,7 +192,7 @@ export type SendHost = {
    *  out (the real host does), the chain is read from the files: the receiving team file's own
    *  key and the seat's, and the registry project's (`src/send/delivery.ts`). A test hands in a
    *  chain to decide the order without a file to write. */
-  delivery?: Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
+  delivery?: Partial<Record<SettingLevel, readonly (DeliveryLeg | PendingNativeFallbackLeg)[] | undefined>>;
 };
 
 export const realHost: SendHost = {
@@ -544,7 +544,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // walks; nothing declared leaves native, mcp-inbox, typed. The words are the receiving team
   // file's (its own key and the seat's) and the registry project's, read here; a host that hands
   // in a chain decides instead, which is how a test picks an order without a file to write.
-  const order = deliveryOrder(host.delivery ?? deliveryChainOf({
+  const rawChain = host.delivery ?? deliveryChainOf({
     root: to.root,
     seat: to.seat,
     home: host.home,
@@ -552,7 +552,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // from its root, and one that cannot be read declares nothing.
     ...(to.cross ? {} : { file: team }),
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
-  }));
+  });
+  const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
   // A human's pane never takes typing, whatever its order says: the typing legs are kept out of
   // the walk — each one's reason is recorded on the history line — and the walk falls to the drop
   // leg, added when the order in force leaves it out, since a file can wait where a keystroke
@@ -633,7 +634,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         // SendMessage carries the message. Any other sender gets the skip, as before. A handoff
         // that cannot name a live address hands the send to the leg after this one.
         if (callerNative) {
-          const off = handOff(team.project, root, from, to, body, admission, host);
+          const fallback = fallbackAfterNative(order, rawChain, at);
+          const off = handOff(team.project, root, from, to, body, admission, fallback, host);
           if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
           if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
           failures.push(`native: ${off.reason}`);
@@ -768,6 +770,26 @@ function stampHandoffNonce(body: string, nonce: string): string {
   return `${body.slice(0, newline)} [${nonce}]${body.slice(newline)}`;
 }
 
+/** The legs of the recipient's `delivery_order` that stand after `native`: when a handoff is
+ *  not confirmed within the 10m window, `team watch` walks these legs in order. */
+function fallbackAfterNative(
+  order: readonly DeliveryLeg[],
+  rawChain: Partial<Record<SettingLevel, readonly (DeliveryLeg | PendingNativeFallbackLeg)[] | undefined>>,
+  at: number,
+): readonly PendingNativeFallbackLeg[] {
+  for (let i = SETTING_LEVELS.length - 1; i >= 0; i -= 1) {
+    const level = SETTING_LEVELS[i];
+    const declared = level !== undefined ? rawChain[level] : undefined;
+    if (declared !== undefined && declared.includes('drop')) {
+      const idx = declared.indexOf('native');
+      if (idx >= 0) {
+        return declared.slice(idx + 1).filter((leg): leg is PendingNativeFallbackLeg => leg !== 'native');
+      }
+    }
+  }
+  return order.slice(at + 1).filter((leg): leg is PendingNativeFallbackLeg => leg !== 'native');
+}
+
 function handOff(
   storeProject: string,
   storeRoot: string,
@@ -775,6 +797,7 @@ function handOff(
   to: Aim,
   body: string,
   admission: Admission,
+  fallback: readonly PendingNativeFallbackLeg[],
   host: SendHost,
 ): HandOff {
   if (!admission.ok) return { kind: 'refused', why: 'the send was not admitted' };
@@ -807,6 +830,7 @@ function handOff(
     project: to.project,
     root: to.root,
     ...(to.sentAs !== null ? { spec: to.sentAs.spec, resolved: to.sentAs.resolved } : {}),
+    fallback: [...fallback],
     body: stampHandoffNonce(body, nonce),
   };
   const written = writePending(storeProject, storeRoot, host.home, record);
