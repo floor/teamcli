@@ -4,6 +4,8 @@ Writes one message to one seat. A plain send writes the message whole as one sig
 0600, by renaming a temporary file into place, and — on the typed leg — types one short trigger
 line that names that record. The record is the message: it carries the body, the sender, the
 rule that admitted the send, and the thread it belongs to, and its name is the send's id.
+A record waiting in a seat's folder is answered with [team reply](reply.md), which writes the
+answer as a record on the same thread and cites the record it answers.
 The body is never split across several writes. A seat whose CLI builds its own work item from
 its screens — a profile with a compose module — still gets the record, but the body is typed
 through those screens and never becomes a trigger line; `delivered` there means the CLI printed

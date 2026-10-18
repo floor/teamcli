@@ -398,6 +398,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `rename.refused` | `rename` | 1 | the caller is not the owner or leads, the target seat exists, or the target clashes with a nickname | `team rename worker lead` |
 | `rename.invalid` | `rename` | 2 | the team file or new seat name is invalid | `team rename worker Bad_Name` |
 | `rename.invocation` | `rename` | 2 | the invocation can't be read | `team rename` |
+| `reply.replied` | `reply` | 0 | the reply record was written on its thread, or its thread was closed | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.refused` | `reply` | 1 | the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.configuration` | `reply` | 2 | the team file can't be read | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.usage` | `reply` | 2 | the invocation can't be read | `team reply` |
 | `restart.dry-run` | `restart` | 0 | the stop and launch plan was printed and nothing was touched | `team restart worker --dry-run` |
 | `restart.ready` | `restart` | 0 | the seat was restarted in a new pane | `team restart worker` |
 | `restart.abandon-working` | `restart` | 1 | a seat caller passed --abandon on a working seat | `team restart worker --abandon` |

@@ -1867,6 +1867,53 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--close",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "reply",
+      "positionals": [
+        {
+          "name": "id",
+          "optional": false,
+          "repeatable": false
+        },
+        {
+          "name": "text",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team reply <id> [<text>] [--close] [--json]",
+        "team reply <id> --close"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--abandon",
           "repeatable": false,
           "takesValue": false

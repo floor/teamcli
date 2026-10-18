@@ -810,7 +810,7 @@ function fallbackAfterNative(
 
 /** The registry id the sender's record carries, when it has one: the owner is named by `owner`
  *  alone, and a declared sender the store holds no record for carries none. */
-function senderIdOf(admission: Admission): string | null {
+export function senderIdOf(admission: Admission): string | null {
   if (!admission.ok || admission.sender === 'owner') return null;
   return 'id' in admission.sender ? admission.sender.id : null;
 }
@@ -1750,7 +1750,7 @@ function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: 
 /** `send-drops`, the session directory, and the seat directory are each mode 0700.
  *  The leaf alone would leave the parents at the umask, so other users could list
  *  session ids and seat names. `.agents` itself is not changed. */
-function sealDropTree(dir: string, session: string, seat: string): void {
+export function sealDropTree(dir: string, session: string, seat: string): void {
   const root = join(dir, 'send-drops');
   const sessionDir = join(root, session);
   const leaf = join(sessionDir, seat);
@@ -2086,6 +2086,10 @@ export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender
  * and `init` ask the grants in. A record the folder returns still has to name this caller's own
  * record and this receiver (`sendGrantFor`); a grant for another pair is not a grant here, so
  * nothing looser than the pair reaches `admitSend`.
+ *
+ * `reply` is handed in by `team reply` alone, and only after it verified the record it answers
+ * and found the thread open: the context then carries `open-thread`, and the reply rule — the
+ * last one `admitSend` asks — can admit a pair no rule above admits.
  */
 export function admissionOf(
   caller: Caller,
@@ -2096,6 +2100,7 @@ export function admissionOf(
   fileTeamId: string,
   now: () => Date,
   at: SeatStanding,
+  reply?: 'open-thread',
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   const record = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
@@ -2134,7 +2139,7 @@ export function admissionOf(
   // team → seat, which `admitSend` resolves itself (`seatsCrossTeams`). No level's record
   // carries a declaration of that setting yet, so the chain is empty here and the setting
   // stands at its own default, off.
-  const context: AdmitContext = { projects: projectRegistry.readProjects(home), crossTeams: {} };
+  const context: AdmitContext = { projects: projectRegistry.readProjects(home), crossTeams: {}, ...(reply !== undefined ? { reply } : {}) };
   const verdict = admitSend(sender, judged, records, undefined, context);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
   // The grant folder is asked for a recorded sender alone: a grant names an identity, and the

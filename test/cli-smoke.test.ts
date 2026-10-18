@@ -58,6 +58,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   reload: 'sends reload instructions to a live seat pane',
   remove: 'closes a live seat pane and removes its state entry',
   rename: 'mutates .agents/team.yaml, .agents/team.state.json, and registry records to rename a seat',
+  reply: "writes one signed reply record into the answered record's sender's folder",
   restart: 'restarts a live seat CLI process in its herdr pane',
   tempo: 'mutates .agents/state.json to change the watch tempo',
   unlock: 'mutates project lock state to release a named lock',
