@@ -97,7 +97,7 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 - **At once, or in the pass's digest**: the `owner-at-once` setting (`OWNER_AT_ONCE_SETTING`, the
   owner's alone) names the kinds notified on the pass that reads them, each with its own record:
   `DEFAULT_OWNER_AT_ONCE_KINDS` holds `seat.at-prompt` of a permission, trust, login, vendor or
-  rate-limit prompt, `seat.unreachable` and a lead's `seat.done`, and every `team.seat-*`,
+  rate-limit prompt, a lead's `seat.unreachable` or `seat.done`, and every `team.seat-*`,
   `team.grant-*` and `team.policy-*` kind. Every
   other owner-routed event waits in the pass and lands at its end as one digest record whose body
   is the count (`1 event:` or `<n> events:`), then the pass's lines joined by `; `, each folded to

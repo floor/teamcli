@@ -236,7 +236,7 @@ in the agentless pane `up` starts it in, or when it is the watch this session re
 does it subscribe to `.agents/bus.sock` as the owner. A watch a seat starts in its own pane runs
 its passes, polls and publishes what it sees, but never subscribes with the owner's identity. On
 the owner's path, an event the policy routes to the owner and on the owner's immediacy list — a
-seat at a permission, trust, login, vendor or rate-limit prompt, an unreachable seat or a lead's
+seat at a permission, trust, login, vendor or rate-limit prompt, a lead's `seat.unreachable` or
 `seat.done`, and every roster, grant and policy event — rings on the pass that reads it and lands
 as its own signed record in the owner's mailbox, `.agents/messages/owner/`; every other
 owner-routed event waits in the pass and lands at its end as one digest record, its body the pass's
