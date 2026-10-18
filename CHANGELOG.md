@@ -247,6 +247,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile's clearing key, the key `up` sends, and its record says the line was cleared and names
   `run up again`. A ready seat still prints only the run's one success line.
 
+- `team drops`, `team messages`, `team next`, `team plan`, `team issues`, `team bus` and
+  `team broker` work at a team root that is not a git repository. Each resolved its root through
+  git before reading the team file, so a folder holding `.agents/team.yaml` outside any checkout
+  was refused with the no-repository sentence; each now takes the shared resolution — the
+  enclosing checkout, or the plain root in this folder. A folder that is neither a checkout nor a
+  team root keeps the no-repository refusal and exit 2, and an unreadable or invalid team file
+  keeps its own exit.
+
 ### Known limits
 
 - The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
