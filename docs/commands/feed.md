@@ -88,6 +88,13 @@ An empty history prints the context line and `0 events` — no table. `--follow`
 header, table and count each time a pass brings new entries, so a reader can tell one arrival
 from the next.
 
+One message is one row. A send filed as `sent (unconfirmed)` and a later line for the same id —
+a `delivered (read)` receipt, a typed fallback, or a taken delivery's later report — are one
+message's outcome moving: a reading shows the latest line once, and the address the send
+recorded (`spec`, `resolved`) stays on that row. The send's measured milliseconds are not
+carried over, since they timed the send and not the outcome that followed it. A `--follow` pass
+prints the update when it arrives, because it is new information.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the feed was printed | the context line, the `TIME  KIND  SEAT  DETAIL` table, and `<n> event` or `<n> events` | 0 |

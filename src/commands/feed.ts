@@ -520,7 +520,7 @@ function collectEntries(
   if (seatFilter !== undefined) {
     all = all.filter((entry) => entry.from === seatFilter || entry.to === seatFilter);
   }
-  return { ok: true, entries: all };
+  return { ok: true, entries: oneOutcomePerId(all) };
 }
 
 function timeOf(ts: string): string {
@@ -528,6 +528,31 @@ function timeOf(ts: string): string {
     return ts.slice(11, 19);
   }
   return ts;
+}
+
+/**
+ * One message, one row. A send whose seat had not read it when the command printed is filed as
+ * `sent (unconfirmed)`; a later line for the same id — the watch's receipt promotion
+ * (`delivered (read)`), its typed fallback, or a taken delivery's later report — is the same
+ * message's outcome moving. The feed shows the latest line once, in its chronological place,
+ * and keeps the address the send recorded (`spec`, `resolved`) when the later line has none.
+ * The measured time is not carried over: it timed the send, not the outcome that followed it.
+ */
+function oneOutcomePerId(entries: readonly HistoryEntry[]): HistoryEntry[] {
+  const latest = new Map<string, HistoryEntry>();
+  const order: string[] = [];
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!;
+    const kept = latest.get(entry.id);
+    if (kept === undefined) {
+      latest.set(entry.id, { ...entry });
+      order.push(entry.id);
+      continue;
+    }
+    if (kept.spec === undefined && entry.spec !== undefined) kept.spec = entry.spec;
+    if (kept.resolved === undefined && entry.resolved !== undefined) kept.resolved = entry.resolved;
+  }
+  return order.reverse().map((id) => latest.get(id)!);
 }
 
 /** The KIND cell: the entry's outcome, with the path and the milliseconds when the send
