@@ -200,6 +200,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   send daemon refuses a human seat at its own queue — the CLI's walk takes the drop leg alone
   earlier — so no trigger is typed, no frame is sent and no worker is started.
 
+- **`team raise`, and two owner events.** `team raise <kind> <text>` carries one line from the
+  team's lead to the owner at once: a signed record in the owner's mailbox, the matching
+  `release.ready` or `decision.needed` event, and the machine notification. Both kinds are routed
+  to `owner` alone and stand in the owner-at-once list, so the watch rings them instead of
+  batching them into the pass's digest, and the record is written under the id the event's own
+  delivery would use, so the watch finds it already there and does not deliver it twice. The
+  orchestrator's seat, or a seat the file marks `leads`, may raise; the owner and every other seat
+  are refused by name, and a lead's seat must be on the pane the state records for it. The same
+  kind and line from the same seat within the hour is one record, rewritten as `<line> (×N)` and
+  adds no event, and ten raises reach the owner per team per UTC day, an eleventh refused with the
+  reason. `--dry-run` reads the log and the record, says what would happen, and writes nothing.
+
 - The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
   unsent, working, question, permission and exit — are captured as fixtures, the trust dialog is
   unchanged and its model row under the footer is gone again, and the launch test's boundary moves
