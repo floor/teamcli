@@ -111,7 +111,7 @@ ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
 team doctor: nothing missing, 2 warnings
 what 0.5.0 must not pretend:
-  The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.
+  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
   A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
   Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
   Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.

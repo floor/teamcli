@@ -349,7 +349,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           docs: 'https://github.com/floor/teamcli',
           must_not_pretend: [
             {
-              text: 'The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.',
+              text: 'The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.',
               ref: 'Kernel §11, §12, §14',
             },
           ],

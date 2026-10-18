@@ -27,7 +27,7 @@ test('--version prints the package version and --about prints version, licence, 
   expect(about.out).toContain(`team ${version()}`);
   expect(about.out).toContain('licence: MIT');
   expect(about.out).toContain('what 0.5.0 must not pretend:');
-  expect(about.out).toContain('The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.');
+  expect(about.out).toContain('The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.');
 
   const aboutJson = io();
   expect(await main(['--about', '--json'], aboutJson)).toBe(0);
@@ -43,7 +43,7 @@ test('--version prints the package version and --about prints version, licence, 
   expect(parsed.licence).toBe('MIT');
   expect(parsed.must_not_pretend).toHaveLength(5);
   expect(parsed.must_not_pretend[0]).toEqual({
-    text: 'The checks in 0.5.0 stop mistakes, not an agent on this machine that runs as you and sets out to get around those checks.',
+    text: 'The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.',
     ref: 'Kernel §11, §12, §14',
   });
 });
