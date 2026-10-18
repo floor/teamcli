@@ -1,7 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { stripSgr } from '../ansi.ts';
 import { YamlError, type YamlEntry, type YamlNode } from '../yaml.ts';
+import { TRUST_CAPTURES } from './trust-captures.ts';
 /** How a trust dialog shows the one folder it will trust. */
 export type Extract = {
   after: string;
@@ -253,20 +252,15 @@ export function labelMatches(record: TrustRecord, screen: string): boolean {
   return footer === null || lines.some((line) => line.includes(footer));
 }
 
-type Manifest = { screens?: { file?: string; cli?: string; provenance?: string }[] };
-
 let captures: Set<string> | null = null;
 
-/** The registered captures, keyed by their whole manifest path — never by basename. */
+/**
+ * The registered captures, keyed by their whole manifest path — never by basename. Embedded at
+ * build time (src/profiles/trust-captures.ts, generated from the manifest): the package ships
+ * dist/ only, so reading test/fixtures/conformance.json at runtime would fail when installed.
+ */
 function captureNames(): Set<string> {
-  if (captures) return captures;
-  const path = fileURLToPath(new URL('../../test/fixtures/conformance.json', import.meta.url));
-  const manifest = JSON.parse(readFileSync(path, 'utf8')) as Manifest;
-  captures = new Set();
-  for (const screen of manifest.screens ?? []) {
-    if (screen.provenance !== 'capture' || !screen.cli || !screen.file) continue;
-    captures.add(`${screen.cli} ${screen.file}`);
-  }
+  captures ??= new Set(TRUST_CAPTURES);
   return captures;
 }
 
