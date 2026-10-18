@@ -393,7 +393,9 @@ because they load the file first.
 `human` is optional on a seat: `human: true` marks its pane as a person's. A send to it walks the
 `drop` leg alone, whatever its delivery order or the default says — every other leg is skipped,
 each one's reason recorded on the history line the send writes — so the message arrives in the
-drop file and the pane is never touched. The watch types no
+drop file and the pane is never touched. A human seat needs no `delivery_order`: `drop` is the
+order whatever the seat's key says, and `team check` reports no difference for a word it writes.
+The watch types no
 retry there and no nudge: a held send's marker is given up on with the reason, and its message
 waits in the drop file. `team send --wait` is refused for such a seat, since the wait rides the
 native leg. The key is part of the seat's digest, and a file that marks no seat keeps every digest

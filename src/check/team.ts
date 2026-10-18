@@ -974,6 +974,9 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
   }
   for (const seat of team.seats) {
     if (seat.deliveryOrder === undefined) continue;
+    // A human seat walks `drop` alone whatever its word says, so the resolver's set-aside verdict
+    // never describes its delivery: human wins, and a word it writes is no difference.
+    if (seat.human === true) continue;
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({
