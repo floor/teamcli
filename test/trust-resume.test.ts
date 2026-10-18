@@ -15,7 +15,7 @@ import { lobbyOf } from '../src/lobby/recorded.ts';
 import { rulesFilePath } from '../src/launch/rules-file.ts';
 import { writeGrant } from '../src/permissions/grants.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { emptySession, readState, updateState } from '../src/state.ts';
+import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
@@ -406,6 +406,75 @@ describe('trust dialog resume and pane naming', () => {
     expect(recorded?.rules).toBe('message');
     expect(recorded?.pane).toBe('w46:p1');
     expect(existsSync(rulesFilePath('acme', w.root, w.home, 'operator-1')!)).toBe(true);
+  });
+
+  test("(1b2) a stale waiting record never types the rules line into a human's pane", async () => {
+    // The record says a trust dialog is waiting, but the file has since marked the seat a
+    // human's. The mark is the last word: register still adopts the pane, and no rules line is
+    // written or typed into it.
+    const w = makeWorld();
+    writeFileSync(w.file, readFileSync(w.file, 'utf8').replace('    launch: agy\n', '    launch: agy\n    human: true\n'));
+    await approve(w.root, w.home);
+    updateState(w.dir, (state) => {
+      state.sessions.acme = {
+        ...emptySession(),
+        seats: {
+          'operator-1': {
+            stage: 'launched',
+            pane: 'w46:p1',
+            workspace: 'w46',
+            launched: { shell: 200, cli: [201] },
+            waiting: { state: 'waiting-owner', classification: 'trust' },
+          },
+        },
+      };
+    });
+
+    const renames: string[] = [];
+    const sent: string[] = [];
+    const regSources: RegisterSources = {
+      home: w.home,
+      now: () => NOW,
+      standing: (r) => approvalStanding(r, w.home),
+      sessionState: () => 'running',
+      agents: () => [
+        { name: null, agent: 'agy', pane: 'w46:p1', workspace: 'w46', status: 'idle', cwd: null },
+      ],
+      processInfo: () => ({ shell: 200, foreground: [201] }),
+      foreground: () => ['agy'],
+      paneText: () => AGY_IDLE,
+      agentStatus: () => 'idle',
+      renameAgent: (session, pane, name) => {
+        renames.push(`${session}:${pane}:${name}`);
+        return true;
+      },
+      renameWorkspace: () => true,
+      reportDisplayAgent: () => true,
+      typeText: (_session, pane, text) => {
+        sent.push(`${pane}:${text}`);
+        return true;
+      },
+      pressEnter: (_session, pane) => {
+        sent.push(`${pane}:Enter`);
+        return true;
+      },
+      sleep: async () => {},
+    };
+
+    const io = testIo(w.root, { kind: 'owner' });
+    const code = await runRegister(['operator-1'], io, regSources);
+    expect(code).toBe(0);
+    expect(io.out).toContain("operator-1: the pane is a human's; no rules line was typed; left as it is\n");
+    expect(io.out).toContain('operator-1: registered — pane w46:p1; nothing was launched\n');
+    expect(renames).toEqual(['acme:w46:p1:operator-1']);
+    // The mark spares the pane: no typed line and no Enter, and no rules file to point at.
+    expect(sent).toEqual([]);
+    const recorded = readState(w.dir).sessions.acme?.seats['operator-1'];
+    expect(recorded?.stage).toBe('ready');
+    expect(recorded?.waiting).toBeUndefined();
+    expect(recorded?.rules).toBeUndefined();
+    expect(existsSync(rulesFilePath('acme', w.root, w.home, 'operator-1')!)).toBe(false);
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain("operator-1: no rules line; the pane is a human's");
   });
 
   test('(1c) answer finds a waiting-for-trust seat by its recorded pane when paused before rename, renames it, and delivers rules', async () => {

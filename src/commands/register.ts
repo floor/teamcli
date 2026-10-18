@@ -750,7 +750,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
 
   let finishedRules: 'option' | 'message' | undefined;
   if (waitingTrust) {
-    if (profile.rulesOption !== null) {
+    // A record a launch wrote before the file marked this seat a human's may still say a trust
+    // dialog is waiting. The mark is the last word: nothing is typed into a human's pane, so no
+    // rules file is written and no rules line is typed, and the run says why.
+    if (seat.human) {
+      out.stdout(`${plainLine(name)}: the pane is a human's; no rules line was typed; left as it is\n`);
+      logLine(dir, 'register', callerLabel(walked), `${name}: no rules line; the pane is a human's`, now);
+    } else if (profile.rulesOption !== null) {
       finishedRules = 'option';
     } else {
       const standing = (sources.standing ?? ((r: string) => approvalStanding(r, sources.home)))(root);
