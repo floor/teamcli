@@ -11,7 +11,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
-import { pendingPath } from '../src/send/pending.ts';
+import { PENDING_NATIVE_TTL_MS, pendingDir, pendingPath, sweepPendingNative } from '../src/send/pending.ts';
 import { updateState } from '../src/state.ts';
 import { testIo, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -360,4 +360,64 @@ test('a registered sender records from_id and confirm refuses a replaced agent o
   expect(await runSend(['--confirm', ID], replacedIo, host)).toBe(1);
   expect(replacedIo.err).toContain(`it was printed for agent ${helperAgent.id} (seat helper), and this call has agent ${replacement.id}`);
   expect(existsSync(pending(made))).toBe(true);
+});
+
+test('the 24h sweep keeps records younger than or at 24h, deletes records older than 24h, and recovers dead-PID .taken files', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+
+  const idYounger = '22222222-2222-4222-8222-222222222221';
+  const idExact = '22222222-2222-4222-8222-222222222222';
+  const idOlder = '22222222-2222-4222-8222-222222222223';
+  const idNew = '22222222-2222-4222-8222-222222222224';
+
+  const tsOlder = new Date(NOW.getTime() - PENDING_NATIVE_TTL_MS - 1);
+  const tsExact = new Date(NOW.getTime() - PENDING_NATIVE_TTL_MS);
+  const tsYounger = new Date(NOW.getTime() - PENDING_NATIVE_TTL_MS + 1);
+
+  expect(
+    await runSend(['lead', 'older'], helperCaller(made.root), fake(made, { now: () => tsOlder, newId: () => idOlder })),
+  ).toBe(0);
+  expect(
+    await runSend(['lead', 'exact'], helperCaller(made.root), fake(made, { now: () => tsExact, newId: () => idExact })),
+  ).toBe(0);
+  expect(
+    await runSend(['lead', 'younger'], helperCaller(made.root), fake(made, { now: () => tsYounger, newId: () => idYounger })),
+  ).toBe(0);
+
+  // Writing a new handoff at NOW triggers the sweep: only the record strictly older than 24h
+  // (24h + 1ms) is deleted; both the 24h - 1ms record and the exact 24h boundary record remain.
+  expect(
+    await runSend(['lead', 'new'], helperCaller(made.root), fake(made, { now: () => NOW, newId: () => idNew })),
+  ).toBe(0);
+
+  expect(existsSync(pendingPath('acme', made.root, made.home, idOlder))).toBe(false);
+  expect(existsSync(pendingPath('acme', made.root, made.home, idExact))).toBe(true);
+  expect(existsSync(pendingPath('acme', made.root, made.home, idYounger))).toBe(true);
+  expect(existsSync(pendingPath('acme', made.root, made.home, idNew))).toBe(true);
+
+  // Simulate a crashed confirm leaving a `.${id}.${pid}.taken` file from a dead PID (999999)
+  // and another from a live PID (process.pid).
+  const dir = pendingDir('acme', made.root, made.home);
+  const deadTaken = join(dir, `.${idYounger}.999999.taken`);
+  const liveTaken = join(dir, `.${idExact}.${String(process.pid)}.taken`);
+  writeFileSync(deadTaken, readFileSync(pendingPath('acme', made.root, made.home, idYounger), 'utf8'));
+  unlinkSync(pendingPath('acme', made.root, made.home, idYounger));
+  writeFileSync(liveTaken, readFileSync(pendingPath('acme', made.root, made.home, idExact), 'utf8'));
+  unlinkSync(pendingPath('acme', made.root, made.home, idExact));
+
+  sweepPendingNative('acme', made.root, made.home, NOW, (pid) => pid === process.pid);
+
+  // Dead PID's `.taken` was restored to `${idYounger}.json`; live PID's `.taken` stayed in flight.
+  expect(existsSync(deadTaken)).toBe(false);
+  expect(existsSync(pendingPath('acme', made.root, made.home, idYounger))).toBe(true);
+  expect(existsSync(liveTaken)).toBe(true);
+  expect(existsSync(pendingPath('acme', made.root, made.home, idExact))).toBe(false);
+
+  // And the restored record confirms cleanly.
+  const confirmIo = helperCaller(made.root);
+  expect(await runSend(['--confirm', idYounger], confirmIo, fake(made, { now: () => NOW }))).toBe(0);
+  expect(existsSync(pendingPath('acme', made.root, made.home, idYounger))).toBe(false);
 });
