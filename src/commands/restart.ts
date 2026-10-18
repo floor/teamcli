@@ -77,7 +77,6 @@ import { blocksLaunch, doctorFindings, realSources as doctorSources, type Doctor
 import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
-import { registerInbox } from '../mcp/register.ts';
 
 export const USAGE = `Usage: team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
 
@@ -706,7 +705,9 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: () => null,
     paneRun: launch.paneRun,
-    registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
+    ...(launch.registerInbox
+      ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+      : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }
       : {}),
