@@ -23,7 +23,7 @@ export const GENERAL_BRIEF_RULE = 'the launch delivers it to every seat of its t
 export const GENERAL_BRIEF_FROM = 'the launch';
 
 /** The brief's record id: a lowercase UUID derived from the text, so the same brief has one id in
- *  every seat's folder and `ensureRecord` leaves a delivered one untouched. */
+ *  every seat's folder and a record already at it is verified and kept. */
 export function generalBriefId(): string {
   const hex = createHash('sha256').update(GENERAL_BRIEF).digest('hex').slice(0, 32).split('');
   // The version and variant nibbles of a name-derived UUID: any lowercase UUID is a valid record
