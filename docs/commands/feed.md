@@ -159,23 +159,26 @@ team beacon, session "beacon"
 exit 0
 ```
 
-After a send, `team feed` prints the exchange with its timestamp, sender, recipient, outcome and body:
+After a send, `team feed` prints the exchange with its timestamp, sender, recipient, outcome and
+body. No server serves this seat's inbox, so the send walks to its drop folder — `via drop` —
+and reads `sent (unconfirmed)` until the seat's own turn-start read writes the signed receipt,
+which a running watch records as one more line, `delivered (read)`:
 
 ```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: delivered
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms)
 exit 0
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                           SEAT                   DETAIL
-  09:00:00  delivered (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                   SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                           SEAT                   DETAIL
-  09:00:00  delivered (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                   SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 ```

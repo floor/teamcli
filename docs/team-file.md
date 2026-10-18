@@ -414,9 +414,9 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
 is an ordinary change, and a file that writes none reads as the default order.
-Omitted, the order is `native`, then `mcp-inbox`, then `typed`, then `drop`; the typed leg is
-terminal, so a walk reaches `drop` only when a level puts it before `typed` or leaves `typed`
-out.
+Omitted, the order is `mcp-inbox`, then `drop`, then `typed`; `native` is never in the default,
+and only a declared word can add it. The typed leg is terminal, so a walk reaches `drop` only
+when it comes before `typed` or `typed` is left out.
 
 ```yaml
 delivery_order: [typed]
@@ -428,19 +428,21 @@ delivery_order: [typed]
   the four is `delivery_order "<word>" must be one of: native, mcp-inbox, typed, drop`; a
   repeated one is `delivery_order names "<word>" twice`.
 - The four legs: `native` is the frame on a Claude Code seat's cross-session socket;
-  `mcp-inbox` is the seat's own MCP inbox, which this build does not carry — a walk that reaches
-  it records it unavailable; `typed` is the 0600 drop file and one composer trigger line; `drop`
-  is the same 0600 drop file and nothing typed into the pane at all — no trigger line and no
-  socket frame. `delivery_order: [drop]` is the opt-in for a receiver that watches its own drop
-  folder, and for a pane that must never receive typing; a seat the file marks `human` walks
-  `drop` alone, whatever its order holds.
+  `mcp-inbox` is the seat's own MCP inbox, which takes the send only while a server serves it —
+  a live `.inbox-listener` marker names the seat, session and root, and a walk with none records
+  `mcp-inbox: no live inbox listener` and moves on; `typed` is the 0600 drop file and one
+  composer trigger line; `drop` is the same 0600 drop file and nothing typed into the pane at
+  all — no trigger line and no socket frame, its run ending `sent (unconfirmed)` until the seat's
+  own read writes the receipt. `delivery_order: [drop]` takes the drop leg alone, for a receiver
+  that watches its own drop folder and for a pane that must never receive typing; a seat the
+  file marks `human` walks `drop` alone, whatever its order holds.
 - The receiving seat's chain is read outermost first: the entity, the project's registry record,
   this file's key, then the seat's own key. No entity record carries an order in this build, so
   that level is always silent; the project's word is `delivery_order` beside `teams` in
   `projects.yaml`, written `[typed]` the same way. Each level may drop legs from the order in
-  force or put the legs it keeps in a different order, and may never add one: a word naming a
-  leg the order in force does not have is set aside, and the order in force stands. A word
-  equal to the order in force is no word at all.
+  force or put the legs it keeps in a different order, and may add only `native`, the sender's
+  own frame: a word naming any other leg the order in force does not have is set aside, and the
+  order in force stands. A word equal to the order in force is no word at all.
 - A seat's word is written on the seat, and is part of the seat's digest — writing or changing
   it changes the digest, like every other field of the seat:
 

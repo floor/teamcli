@@ -137,9 +137,11 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+    delivery_order: [native, typed]
 ```
 
-The coordinator sends the scribe a message; the handoff writes the record under the id it prints.
+The coordinator sends the scribe a message; the scribe's delivery order adds `native`, so the
+handoff writes the record under the id it prints.
 
 ```console caller=claude-keeper
 $ team send claude-scribe "the draft is ready for review" ; echo "exit $?"
