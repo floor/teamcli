@@ -90,11 +90,18 @@ function setsSettings(launch: string): boolean {
  *  installs, the MCP inbox server the launch registers where the CLI has an MCP front, or
  *  nothing. A launch line that sets its own settings gets no hook from this run, so that seat is
  *  served by its MCP inbox when it has one; a CLI with neither route watches nothing, and the
- *  send side leaves the drop leg out of its order (`src/send/delivery.ts`). */
+ *  send side leaves the drop leg out of its order (`src/send/delivery.ts`). The launch records
+ *  the watcher it leaves (`SeatState.watcher`) and the dry run says it on the launch line. */
 export type CliWatcher = 'hook' | 'inbox' | 'none';
 
-export function cliWatcher(cli: string, launch: string): CliWatcher {
-  if (supportsCliHook(cli) && !setsSettings(launch)) return 'hook';
+/**
+ * `hookInstalled` is what this run knows about the hook: false when the seat is absent from the
+ * run's own settings map, so the hook will not be there and the seat falls back to its MCP
+ * inbox. A caller that has no map (a plan built by hand, a file-shape reading that has no run)
+ * leaves it true and reads what the launch would install.
+ */
+export function cliWatcher(cli: string, launch: string, hookInstalled = true): CliWatcher {
+  if (hookInstalled && supportsCliHook(cli) && !setsSettings(launch)) return 'hook';
   const inbox = profileFor(cli)?.mcpInbox ?? null;
   return inbox === null ? 'none' : 'inbox';
 }

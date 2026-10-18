@@ -203,11 +203,13 @@ describe('up --dry-run', () => {
         '  wait until session acme-web is running (30 s at most)',
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label claude-coordinator-acme --no-focus',
         "+ herdr --session acme-web pane run <pane of claude-coordinator-acme> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules.'",
+        '    (reads its drops at each turn start)',
         '  wait until claude-coordinator-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-coordinator-acme> claude-coordinator-acme',
         "+ herdr --session acme-web pane report-metadata <pane of claude-coordinator-acme> --source team --display-agent 'Claude Opus 5.5 default'",
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label grok-acme --no-focus',
         "+ herdr --session acme-web pane run <pane of grok-acme> 'AGENT_UNATTENDED=1 grok --always-approve --rules Rules.'",
+        '    (reads its drops through its MCP inbox)',
         '  wait until grok-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of grok-acme> grok-acme',
         "+ herdr --session acme-web pane report-metadata <pane of grok-acme> --source team --display-agent 'Claude Opus 5.5 default'",
@@ -215,6 +217,7 @@ describe('up --dry-run', () => {
         '  skip grok-acme: stopped in the file; start it with `team add grok-acme`',
         '+ herdr --session acme-web workspace create --cwd /work/acme-web/docs --label docs --no-focus',
         "+ herdr --session acme-web pane run <pane of claude-docs> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules.'",
+        '    (reads its drops at each turn start)',
         '  wait until claude-docs shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-docs> claude-docs',
         "+ herdr --session acme-web pane report-metadata <pane of claude-docs> --source team --display-agent 'Claude Opus 5.5 default'",
@@ -253,6 +256,78 @@ describe('up --dry-run', () => {
     );
     // The map is by seat, and only a CLI that reads the file is ever named one.
     expect(commands.some((command) => command.includes('grok') && command.includes('--settings'))).toBe(false);
+  });
+
+  test('the dry run names how each seat will learn a drop is waiting', () => {
+    const plan = upPlan({
+      root: '/work/acme-web',
+      session: 'acme-web',
+      sessionRunning: true,
+      seats: [
+        seat('hooked'),
+        seat('inboxed', { cli: 'codex', launch: 'codex' }),
+        seat('blind', { cli: 'muse', launch: 'muse' }),
+        // A claude-code seat the run's map does not hold: the hook does not land, and there is
+        // no MCP inbox behind it, so the launch says it watches nothing.
+        seat('unhooked'),
+      ],
+      watchLabel: 'Watch · acme-web',
+      startWatch: false,
+      cliHooks: { hooked: '/work/acme-web/.agents/hooks/hooked.json' },
+    });
+    const notes = plan.flatMap((step) => (step.do?.do === 'launch' ? [step.note ?? ''] : []));
+    expect(notes).toEqual([
+      'reads its drops at each turn start',
+      'reads its drops through its MCP inbox',
+      'watches nothing: a drop sent here is never read',
+      'watches nothing: a drop sent here is never read',
+    ]);
+  });
+
+  test('the launch records the watcher it leaves beside the seat', async () => {
+    // The record is what a later reading asks; the plan's own words are the dry run's answer.
+    // A hook named in the run's map lands; a hook the map leaves out does not, and a seat with
+    // no inbox behind it records that it watches nothing.
+    const records: { seat: string; watcher: string }[] = [];
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
+      paneRun: () => true,
+      typeLine: () => false,
+      renameAgent: () => true,
+      reportDisplayAgent: () => true,
+      closeWorkspace: () => true,
+      stopSession: () => true,
+      kill: () => true,
+      agentPanes: () => [],
+      classify: () => 'idle',
+      sleep: async () => {},
+      now: () => 0,
+      allow: () => null,
+      record: (_seat, patch) => {
+        if (patch.watcher) records.push({ seat: _seat, watcher: patch.watcher });
+      },
+      running: () => {},
+      drop: () => {},
+      say: () => {},
+      log: () => {},
+    };
+    const plan = upPlan({
+      root: '/work/acme-web',
+      session: 'acme-web',
+      sessionRunning: true,
+      seats: [seat('hooked'), seat('inboxed', { cli: 'codex', launch: 'codex' }), seat('unhooked')],
+      watchLabel: 'Watch · acme-web',
+      startWatch: false,
+      cliHooks: { hooked: '/work/acme-web/.agents/hooks/hooked.json' },
+    });
+
+    await executePlan(plan, 'acme-web', host);
+
+    expect(new Set(records.map((record) => `${record.seat}:${record.watcher}`))).toEqual(
+      new Set(['hooked:hook', 'inboxed:inbox', 'unhooked:none']),
+    );
   });
 
   test('never holds a command that answers, closes or deletes', () => {

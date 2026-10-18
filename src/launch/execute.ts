@@ -4,6 +4,7 @@ import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import type { CliWatcher } from './cli-hook.ts';
 import { IDLE_POLL_MS, type Step } from './plan.ts';
 import {
   closeTarget,
@@ -136,6 +137,8 @@ export type Host = {
       launch_line?: string;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
+      /** How this launch leaves the seat watching for drops (`CliWatcher`). */
+      watcher?: CliWatcher;
     },
   ): void;
   /** The seat is really running, so the next seat's ceiling check counts it. */
@@ -827,6 +830,7 @@ export async function executePlan(
             workspace: made.workspace,
             createdWorkspace: true,
             waiting: null,
+            ...(op.watcher ? { watcher: op.watcher } : {}),
           });
           host.running(op.seat);
         }
@@ -854,6 +858,10 @@ export async function executePlan(
           break;
         }
         host.running(op.seat);
+        // The watcher is what this run left beside the seat: a hook the map installed, an MCP
+        // inbox the launch registered, or nothing. Written even when the launch path had no
+        // created workspace to record it with.
+        if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
         break;
       }
       case 'idle': {
@@ -884,6 +892,9 @@ export async function executePlan(
         // process read sits after it and before the comparison: a model the CLI is not running
         // still leaves a `launched` identity, and the read stays ahead of the process read.
         const idleOnwards = (): void => {
+          // What this run leaves watching for a drop is recorded before the screen is read, so
+          // a seat whose identity cannot be read still carries the truth beside it.
+          if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
           const model = op.model;
           const version = op.version;
           const screen = model !== undefined && version !== undefined
