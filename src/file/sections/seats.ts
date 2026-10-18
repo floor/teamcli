@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
+import { displayEffort } from '../../profiles/profile.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
 import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
@@ -279,9 +280,12 @@ export function workspaceLabel(seat: { name: string; role: string; label: string
   return `${seat.name} · ${seat.role}`;
 }
 
-/** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets none. Herdr writes the status word and ` · ` in front of this text. */
-export function displayAgent(seat: { display: string; effort?: string }): string {
-  return `${seat.display} ${seat.effort || 'default'}`;
+/** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets
+ *  none. A CLI whose launcher takes no effort setting carries the display alone. Herdr writes the
+ *  status word and ` · ` in front of this text. */
+export function displayAgent(seat: { display: string; effort?: string; cli: string }): string {
+  const effort = displayEffort(seat.cli, seat.effort);
+  return effort === null ? seat.display : `${seat.display} ${effort}`;
 }
 
 /** A seat's `liveness:` map, checked: only the three thresholds, each a whole number of seconds,

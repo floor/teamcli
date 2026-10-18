@@ -151,6 +151,20 @@ export function supportsEffortLaunch(cli: string): boolean {
   return cli === 'claude-code' || cli === 'antigravity' || cli === 'grok' || cli === 'codex' || cli === 'muse';
 }
 
+/** True when an effort word can exist for this CLI at all: its launch line takes one, or its
+ *  screen names one (`cursor`'s row word, read in `src/labels/observe.ts`). */
+export function hasEffort(cli: string): boolean {
+  return supportsEffortLaunch(cli) || cli === 'cursor';
+}
+
+/** The effort word a pane's display line carries for this CLI: the seat's own word, or `default`
+ *  when the seat sets none. Null when the CLI has no effort setting — the line is the display
+ *  alone, with no `default` token (jules, gemini). */
+export function displayEffort(cli: string, effort?: string): string | null {
+  if (!hasEffort(cli)) return null;
+  return effort || 'default';
+}
+
 /**
  * Resolves a `--model` value against a CLI profile. Accepts either a CLI model id
  * (`claude-sonnet-5-5`, `gpt-6-sol`, `gemini-3.1-pro`, `grok-4.7`, `composer-2.5`)

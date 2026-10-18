@@ -12,6 +12,7 @@
 // check` and the watch's model-drift check report the difference. The effort word, once seen,
 // stays until a later screen shows a different one.
 import { stripSgr } from '../ansi.ts';
+import { displayEffort } from '../profiles/profile.ts';
 import { runningModel } from '../status/statusline.ts';
 import { statusRow } from '../watch/screen.ts';
 
@@ -31,8 +32,9 @@ export function observeLabel(
   rememberedEffort?: string,
 ): { line: string; effort?: string } {
   const seen = observedEffort(seat.cli, screen);
-  const effort = seen ?? rememberedEffort ?? (seat.effort || 'default');
-  return { line: `${displayOf(seat, screen)} ${effort}`, ...(seen ? { effort: seen } : {}) };
+  const effort = displayEffort(seat.cli, seen ?? rememberedEffort ?? seat.effort);
+  const display = displayOf(seat, screen);
+  return { line: effort === null ? display : `${display} ${effort}`, ...(seen ? { effort: seen } : {}) };
 }
 
 /** The effort word this pane itself shows, when this version can read one — the same read the
