@@ -12,8 +12,10 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
+import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
+import { isBareShellPane } from '../send/daemon.ts';
 import {
   clearPending,
   PENDING_MAX_AGE_MS,
@@ -36,6 +38,9 @@ export type RetrySources = {
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   sleep(ms: number): Promise<void>;
+  /** The pane's process identity, as the send's typed leg reads it; null when herdr can't tell.
+   *  A pane whose foreground is its own shell is not the seat, and no retry is typed there. */
+  processes?(pane: string, session: string): PaneProcesses | null;
 };
 
 export type RetryScene = {
@@ -83,7 +88,9 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
  * One held drop, when its seat is free. The screen is read first, and a dialog, another's draft,
  * or a status that is not idle/done ends the pass here — the box is never typed blind. The seat
  * lock is taken for the delivery, so a second watch and a `team send` cannot type into one pane
- * at once, then the box is read again by the delivery itself, which is the final guard.
+ * at once, then the box is read again by the delivery itself, which is the final guard. A pane
+ * back at its shell is refused under the lock, as the typed leg and the daemon refuse it: its
+ * CLI has exited, and the shell's box is not a composer to type a trigger into.
  */
 async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
   // The marker is only a convenience; the drop file is the message. A record left behind a drop
@@ -111,6 +118,13 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
   const lock = acquireSeatLock(scene.dir, scene.session, drop.to);
   if (!('release' in lock)) return;
   try {
+    // A pane back at its shell is no longer the seat: the CLI has exited, and a trigger typed
+    // there reaches the shell. The typed leg and the daemon refuse the state with these words;
+    // the retry records the same reason and keeps the drop file for a person to send again.
+    if (isBareShellPane(scene.dir, scene.session, drop.to, scene.sources.processes?.(pane, scene.session) ?? null)) {
+      giveUp(scene, dropDir, drop, 'the seat is back at its shell; nothing was typed');
+      return;
+    }
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, { submitHeld: true });
     if (result.outcome === 'delivered') {
       clearPending(dropDir, drop.id);

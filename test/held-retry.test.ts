@@ -4,6 +4,8 @@
 // makes the send exit `held`, and a seat that never takes the trigger makes it `not-submitted`:
 // both leave the drop on disk with a marker beside it, and the watch's next passes deliver it —
 // never by typing over the text that held it, and never for longer than the record's bounds.
+// A pane back at its shell is refused as the typed leg and the daemon refuse it: no keystroke,
+// the reason said, the drop kept.
 // The pane here is a scripted screen; no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -226,6 +228,33 @@ describe('retryHeldDrops', () => {
     ]);
     // The message itself waits on disk: the person reads the drop file.
     expect(readFileSync(join(dropDir, 'drop-human'), 'utf8')).toBe('from the owner\n\nhello');
+  });
+
+  test('a pane back at its shell is not typed into: the reason is said and the drop kept', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made.dir, 'acme', 'lead', 'drop-shell', 'from the owner\n\nhello');
+    // An idle status and an empty-looking box, but the foreground is the pane's own shell: the
+    // seat's CLI has exited, and a trigger typed here would reach the shell, not the seat.
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const sources = scripts(one);
+    sources.processes = () => ({ shell: 111, foreground: [111] });
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources, now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(said).toEqual([
+      `lead: a held send from owner was not delivered (the seat is back at its shell; nothing was typed); the drop file is at ${join(dropDir, 'drop-shell')}; send it again`,
+    ]);
+    // The message waits on disk for the seat's return or a person's hand.
+    expect(readFileSync(join(dropDir, 'drop-shell'), 'utf8')).toBe('from the owner\n\nhello');
   });
 
   test('a trigger left unsent in the box is submitted, never typed over', async () => {

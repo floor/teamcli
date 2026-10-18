@@ -312,7 +312,9 @@ line on stderr and has none.
 
 A running watch retries a `held`, `not-submitted` or dialog-stopped send once the seat is idle,
 up to three tries in thirty minutes; the line the send printed tells the sender so, and a retry
-that stops says where the message is. A `delivered (taken, not yet confirmed)` send is never
+that stops says where the message is. A retry never types into a pane back at its shell — the
+seat's CLI has exited, so it is given up with `the seat is back at its shell; nothing was typed`
+and the drop file stays. A `delivered (taken, not yet confirmed)` send is never
 retried: the seat took the line, and a running watch reads the transcript and the status on its
 later passes for the sign that it acted on it. A sign confirms the delivery silently; a seat that
 sits free for a minute past the send, or a record thirty minutes old, with no sign at all, is said
