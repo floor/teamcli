@@ -7,7 +7,7 @@
 // owns — the shape `test/send.test.ts` measured. No pane is read and no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import type { NativePane } from '../../src/send/native.ts';
 import { sendFrame, type SendOutcome } from '../../src/send/uds.ts';
-import { testIo } from '../helpers.ts';
+import { recordBody, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-16T04:00:00.000Z');
 
@@ -168,7 +168,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
     expect(host.pane.enters).toBe(1);
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('a socket file that would refuse is not tried either', async () => {
@@ -208,7 +208,7 @@ describe('team send: a typed send with no socket at all', () => {
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(host.pane.typed[0]).toContain(path);
     expect(host.pane.typed[0]).not.toContain('hello');
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 });
 
