@@ -248,10 +248,18 @@ describe('team init', () => {
     mkdirSync(join(project, '.agents', 'seat-state'));
     writeFileSync(join(project, '.agents', 'hooks', 'worker.json'), '{}');
     writeFileSync(join(project, '.agents', 'seat-state', 'worker.json'), '{}');
+    // The transport tree: one signed record per message a send writes, its read receipt, and
+    // the inbox server's listener marker. The drop folder belongs to the session, under the
+    // seat the message is addressed to.
+    mkdirSync(join(project, '.agents', 'send-drops', 'acme', 'worker'), { recursive: true });
+    writeFileSync(join(project, '.agents', 'send-drops', 'acme', 'worker', '11111111-1111-4111-8111-111111111111'), '{"payload":{}}');
+    writeFileSync(join(project, '.agents', 'send-drops', 'acme', 'worker', '11111111-1111-4111-8111-111111111111.read.json'), '{}');
+    writeFileSync(join(project, '.agents', 'send-drops', 'acme', 'worker', '.inbox-listener'), '{}');
     expect(git(project, 'status', '--porcelain')).toBe('');
     expect(existsSync(join(project, '.gitignore'))).toBe(false);
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/team.yaml\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/messages/\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/send-drops/\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/leases/\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/hooks/\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/seat-state/\n');
