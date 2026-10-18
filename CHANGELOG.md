@@ -65,14 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read receipt `<id>.read.json` in that one step; the seat's inbox server writes the same receipt
   for each message it returns, and verifies the record before anything is shown, so an unsigned
   or tampered file prints no body and leaves no receipt. The history keeps the conversation:
-  every line carries `thread`, the first message's id, a reply also carries `in-reply-to`, the
+  every line carries `thread`, the first message's id, a reply also carries `in_reply_to`, the
   feed's DETAIL opens a reply with `re <id>: `, and its `--json` event carries a `status` derived
   from the outcome — `sent`, `held`, `delivered`, `read` or `replied` — never a stored one.
   `team reply <id> <text>` answers the sender of a record on its thread: one signed reply record,
   delivered as the drop leg delivers — left in the sender's folder, nothing typed, no frame sent
   — and the signed `<id>.replied.json` receipt beside the record it answers. `team reply <id>
   --close` writes a signed `<id>.closed.json` instead; a thread also ends when its newest record
-  is 24 hours old or when it reaches 50 records, and a reply on a closed thread opens a new
+  is 72 hours old or when it reaches 50 records, and a reply on a closed thread opens a new
   thread that cites the record it answers. A reply goes only to the sender, admitted by
   `reply-on-open-thread`; a record the owner sent has no seat to answer, so a reply to it is
   refused before anything is written.
