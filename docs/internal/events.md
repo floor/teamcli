@@ -8,9 +8,16 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 ## 1. The event log (`src/bus/log.ts`)
 
 - **Location and permissions**: `<home>/.config/team/<project>-<hash>/events.jsonl` (rotated to `.1`
-  and `.2` at `MAX_EVENT_LOG_BYTES = 1_000_000`, keeping `EVENT_LOG_KEPT = 3` files). Every directory
+  at `MAX_EVENT_LOG_BYTES = 100_000_000`, keeping `EVENT_LOG_KEPT = 2` files). Every directory
   in the store ladder is checked without following symbolic links (`O_NOFOLLOW` + `lstat`) and sealed
   at mode `0700`; every event log file is written and rotated at mode `0600`.
+- **Retention**: the log keeps 30 days (`EVENT_THRESHOLDS.retention_days`) or 100 MB per team
+  (`EVENT_LOG_TOTAL_BYTES`), whichever comes first. Past either bound, the oldest sealed segment is
+  dropped first — a segment is dated by its last write. An idle live file past the window is sealed
+  and dropped by the same pass. The bus applies the window at start (`pruneEventLog`) and after each
+  append. A segment is unlinked whole and a surviving file is never rewritten, so every record still
+  read is byte for byte the one that was verified; each pass that drops something writes one
+  operational record to `.agents/team.log` (`bus [event-log] retention dropped …`).
 - **Signed records**: Each line is a JSON object `{ payload, signature }`, where `signature` is an
   Ed25519 signature over the canonical JSON of `payload` under domain `team.event.v1\n` using the
   checkout's message key (`messageKeyOf(home)`). Unverified or malformed lines are skipped and

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { appendFileSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -20,6 +20,7 @@ import {
   createSequenceTracker,
   EVENT_DOMAIN,
   eventLogPath,
+  pruneEventLog,
   readEvents,
   readEventsFromCursor,
   verifySignedEvent,
@@ -455,5 +456,100 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
     expect(tracker.cursor).toBe(3);
     expect(tracker.accept(makePayload(2))).toBe(false);
     expect(tracker.cursor).toBe(3);
+  });
+});
+
+describe('event-log retention: 30 days or 100 MB per team, oldest first', () => {
+  const TS = '2026-10-18T12:00:00.000Z';
+  const DAY_MS = 86_400 * 1_000;
+
+  function appendOne(root: string, home: string, id: string, options: Parameters<typeof appendEvent>[4] = {}) {
+    return appendEvent('acme', root, home, { ts: TS, kind: 'message.arrived', session: 'acme', record_id: id }, options);
+  }
+
+  function dropLines(root: string): string[] {
+    const path = join(root, '.agents', 'team.log');
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter((line) => line.includes('retention dropped'));
+  }
+
+  test('a segment past the age window is dropped whole, one record names the drop, and the surviving record is never rewritten', () => {
+    const { root, home } = makeScratch();
+    expect(appendOne(root, home, 'old-1').ok).toBe(true);
+    expect(appendOne(root, home, 'old-2').ok).toBe(true);
+
+    const path = eventLogPath('acme', root, home);
+    const monthAgo = new Date(Date.now() - 31 * DAY_MS);
+    utimesSync(path, monthAgo, monthAgo);
+
+    // The append seals the idle file, then the prune drops it: both old records go, the new one stays.
+    const fresh = appendOne(root, home, 'fresh-1');
+    expect(fresh.ok).toBe(true);
+    if (!fresh.ok) return;
+    expect(existsSync(`${path}.1`)).toBe(false);
+
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((event) => event.payload.record_id)).toEqual(['fresh-1']);
+    expect(read.oldestSeq).toBe(3);
+    expect(read.unverified).toBe(0);
+
+    // Retention unlinks a whole segment and never rewrites a file it keeps: the surviving line is
+    // byte for byte the signed record that was written.
+    expect(readFileSync(path, 'utf8')).toBe(`${JSON.stringify(fresh.record)}\n`);
+
+    const drops = dropLines(root);
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toContain('events.jsonl.1');
+    expect(drops[0]).toContain('past 2592000s old');
+  });
+
+  test('the oldest sealed segment is dropped first when the team log is over its size cap', () => {
+    const { root, home } = makeScratch();
+    for (let i = 1; i <= 12; i++) {
+      expect(appendOne(root, home, `msg-${String(i)}`, { maxBytes: 600, kept: 2, maxTotalBytes: 450 }).ok).toBe(true);
+    }
+
+    const read = readEvents('acme', root, home, { kept: 2 });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.newestSeq).toBe(12);
+    expect(read.oldestSeq!).toBeGreaterThan(1);
+    expect(read.unverified).toBe(0);
+
+    // What is kept is the newest contiguous run of verified records: no hole inside the window.
+    const seqs = read.events.map((event) => event.payload.seq);
+    expect(seqs).toEqual(seqs.map((_, at) => seqs[0]! + at));
+
+    const drops = dropLines(root);
+    expect(drops.length).toBeGreaterThan(0);
+    for (const line of drops) {
+      expect(line).toContain('events.jsonl.1');
+      expect(line).toContain('past 450 bytes');
+    }
+  });
+
+  test('the bus-start prune drops an idle live file without appending anything', () => {
+    const { root, home } = makeScratch();
+    expect(appendOne(root, home, 'old-1').ok).toBe(true);
+    expect(appendOne(root, home, 'old-2').ok).toBe(true);
+
+    const path = eventLogPath('acme', root, home);
+    const monthAgo = new Date(Date.now() - 31 * DAY_MS);
+    utimesSync(path, monthAgo, monthAgo);
+
+    pruneEventLog('acme', root, home);
+
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(`${path}.1`)).toBe(false);
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events).toEqual([]);
+    expect(read.oldestSeq).toBeNull();
+    expect(dropLines(root)).toHaveLength(1);
   });
 });
