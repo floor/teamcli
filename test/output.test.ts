@@ -656,6 +656,8 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
             body: 'status?',
             id: 'm1',
             outcome: 'delivered',
+            status: 'delivered',
+            thread: 'm1',
           }],
         }),
       ],
