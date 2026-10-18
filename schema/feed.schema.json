@@ -89,6 +89,9 @@
           "in_reply_to": {
             "type": "string"
           },
+          "from_team": {
+            "type": "string"
+          },
           "ms": {
             "type": "number"
           },

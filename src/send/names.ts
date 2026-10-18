@@ -56,22 +56,25 @@ export function defaultNaming(viewerTeam: string | null = null): SenderNaming {
 }
 
 /**
- * The team a sender sits in: the record's own field when it names one; otherwise the registry's
- * roster line that holds it — by the agent id first, because ids are unique across the registry,
- * then by the seat name inside the reader's own team, and last by a seat name only one team
- * declares. A name more than one team could claim and no id to tell them apart is no answer, and
- * the reading falls back to the seat alone. A sender read from a record carries no team of its
+ * The team a sender sits in: the registry's roster line that holds it — by the agent id first,
+ * because ids are unique across the registry, then by the seat name inside the reader's own team,
+ * and last by a seat name only one team declares — and a record's own team field when no roster
+ * holds the id. A name more than one team could claim and no id to tell them apart is no answer,
+ * and the reading falls back to the seat alone. A sender read from a record carries no team of its
  * own: the drop and the mailbox hold the seat and the id, and the roster is where the id's team
  * is found.
  */
 function teamOf(sender: SenderIdentity, naming: SenderNaming): string | null {
-  if (sender.team != null) return sender.team;
   const teams = naming.teams;
+  // The id first: it is unique across the registry, while a record's own team field may name a
+  // team this machine's registry does not hold yet — a stale id would hide the roster line that
+  // knows both the nickname and the team's name.
   if (sender.id) {
     for (const [id, team] of Object.entries(teams)) {
       if (team.roster.some((line) => line.agent === sender.id)) return id;
     }
   }
+  if (sender.team != null) return sender.team;
   if (naming.viewerTeam !== null && teams[naming.viewerTeam]?.roster.some((line) => line.seat === sender.seat)) {
     return naming.viewerTeam;
   }
@@ -170,7 +173,9 @@ export function sessionDisplayName(input: {
  * for a send, the caller for a listing; absent, only the team's and the project's words count.
  */
 export function senderNameModeFor(input: {
-  home: string;
+  /** The home the registry is read under; absent, only the file's words and a handed-in reader
+   *  answer, and the chain stops at `auto` rather than reaching for another home. */
+  home?: string;
   root: string;
   seat?: string | null;
   file?: TeamFile | null;
@@ -181,7 +186,7 @@ export function senderNameModeFor(input: {
   let file: TeamFile | null = input.file ?? null;
   if (file === null) {
     try {
-      const loaded = loadTeamFile(input.root, { home: input.home });
+      const loaded = loadTeamFile(input.root, input.home === undefined ? {} : { home: input.home });
       file = loaded.ok ? loaded.team : null;
     } catch {
       file = null;
@@ -200,7 +205,9 @@ export function senderNameModeFor(input: {
   }
   if (team === null) return DEFAULT_SENDER_NAME;
   try {
-    return senderNameModeOf(input.projectOfTeam ? input.projectOfTeam(team) : projectOfTeam(input.home, team));
+    if (input.projectOfTeam) return senderNameModeOf(input.projectOfTeam(team));
+    if (input.home === undefined) return DEFAULT_SENDER_NAME;
+    return senderNameModeOf(projectOfTeam(input.home, team));
   } catch {
     return DEFAULT_SENDER_NAME;
   }

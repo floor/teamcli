@@ -34,7 +34,7 @@ Options:
   --audit <path>   include Desk or bridge audit JSONL lines from <path>
   --briefs <dir>   include <from>-to-<to>.md brief files from <dir>
   --follow         keep reading as new lines arrive, across log rotations
-  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, status, thread?, in_reply_to?, spec?, resolved?, ms?, via?, failed?}]})
+  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, status, thread?, in_reply_to?, spec?, resolved?, from_team?, ms?, via?, failed?}]})
 
 Exits 0 when the feed is printed, 1 when the history log can't be read, 2 when the invocation or team file can't be read.
 `;
@@ -554,6 +554,9 @@ function oneOutcomePerId(entries: readonly HistoryEntry[]): HistoryEntry[] {
     }
     if (kept.spec === undefined && entry.spec !== undefined) kept.spec = entry.spec;
     if (kept.resolved === undefined && entry.resolved !== undefined) kept.resolved = entry.resolved;
+    // A receipt line follows the send's own and carries no sender team of its own; the send's
+    // line for the same id is where the team it was written from lives.
+    if (kept.from_team === undefined && entry.from_team !== undefined) kept.from_team = entry.from_team;
     // The thread and the record a reply answers are on every line the send of this version
     // writes; an older line for the same id carries neither, and the newer line's values stand.
     if (kept.thread === undefined && entry.thread !== undefined) kept.thread = entry.thread;
@@ -589,6 +592,7 @@ function eventJson(entry: HistoryEntry): Record<string, unknown> {
   // Present only when the send recorded them, so older readers see the same object.
   if (entry.spec !== undefined) obj.spec = entry.spec;
   if (entry.resolved !== undefined) obj.resolved = entry.resolved;
+  if (entry.from_team !== undefined) obj.from_team = entry.from_team;
   if (entry.ms !== undefined) obj.ms = entry.ms;
   if (entry.via !== undefined) obj.via = entry.via;
   if (entry.failed !== undefined) obj.failed = entry.failed;
@@ -614,6 +618,15 @@ function detailOf(entry: HistoryEntry): string {
   return entry.in_reply_to === undefined ? entry.body : `re ${entry.in_reply_to}: ${entry.body}`;
 }
 
+/** The SEAT cell's sender: a line that recorded the team it was written from resolves like the
+ *  drop and the mailbox do — the same rule, the same registry rosters. A line without it (one an
+ *  older build wrote, or a brief or audit line) reads as its plain seat name: guessing a team
+ *  from the reader's own roster would print a local nickname for another team's sender. */
+function readableFrom(entry: HistoryEntry, naming: SenderNaming): string {
+  if (entry.from_team === undefined) return entry.from;
+  return senderDisplayName({ seat: entry.from, team: entry.from_team }, naming);
+}
+
 /** One batch of events: the context line when it has not opened the run yet, the four-column
  *  table, and the batch's count. `--follow` prints one batch per pass that brought new events. */
 function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): void {
@@ -625,7 +638,7 @@ function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): voi
     rows: entries.map((entry) => [
       timeOf(entry.ts),
       kindOf(entry),
-      `${senderDisplayName({ seat: entry.from }, scope.naming)} -> ${entry.to}`,
+      `${readableFrom(entry, scope.naming)} -> ${entry.to}`,
       detailOf(entry),
     ]),
     indent: scope.context === null ? '' : '  ',

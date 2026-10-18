@@ -529,6 +529,9 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     ts: at,
     from: me,
     to: target,
+    // The team the replying seat stands in: a reader of this history resolves the sender the way
+    // the record does, never by a local seat name it happens to share.
+    from_team: teamIdOf(root),
     body,
     id: replyId,
     thread,

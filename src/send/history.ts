@@ -73,6 +73,12 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
+  /** The team the sender sits in, by team id, written by the send that made the line. The feed
+   *  needs it to read a sender from another team by its address: without it a seat name shared
+   *  with a local seat would read as the local nickname. A line written before this field (or by
+   *  a reader's own seam, a brief or an audit) carries none, and the feed prints the plain seat
+   *  name rather than guessing a team. */
+  from_team?: string;
   /** The address the caller wrote, when it was not the resolved seat's own name: a `@<nickname>`,
    *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id. It lets a reader see what was
    *  addressed beside `to`, the seat it resolved to. */
@@ -228,6 +234,7 @@ export function appendHistory(project: string, root: string, home: string, entry
     outcome: entry.outcome,
   };
   // Written only when the run recorded them, so a plain line keeps its exact older shape.
+  if (entry.from_team !== undefined) record.from_team = entry.from_team;
   if (entry.spec !== undefined) record.spec = entry.spec;
   if (entry.resolved !== undefined) record.resolved = entry.resolved;
   if (entry.ms !== undefined) record.ms = entry.ms;
@@ -351,7 +358,10 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `spec`, `resolved`, `ms`, `via`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  // `from_team`, `spec`, `resolved`, `ms`, `via`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  if (typeof obj.from_team === 'string' && obj.from_team !== '') {
+    entry.from_team = obj.from_team;
+  }
   if (typeof obj.spec === 'string' && obj.spec !== '') {
     entry.spec = obj.spec;
   }

@@ -312,6 +312,7 @@ describe('the walk records the channel and the legs it skipped', () => {
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
+      from_team: teamIdOf(w.root),
       body: `${HEADER}hello`,
       id: expect.any(String),
       thread: expect.any(String),
@@ -345,7 +346,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
-    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
   test('a codex seat walks the default order: the inbox is skipped, the drop file takes it', async () => {
@@ -418,6 +419,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
+      from_team: teamIdOf(w.root),
       body: `${HEADER}hello`,
       id,
       thread: id,
@@ -444,6 +446,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
+      from_team: teamIdOf(w.root),
       body: `${HEADER}hello`,
       id,
       thread: id,
@@ -742,6 +745,7 @@ describe('the drop leg', () => {
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
+      from_team: teamIdOf(w.root),
       body: `${HEADER}hello`,
       id: expect.any(String),
       thread: expect.any(String),
@@ -823,6 +827,7 @@ describe('a human seat is never typed into', () => {
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
+      from_team: teamIdOf(w.root),
       body: `${HEADER}hello`,
       id: expect.any(String),
       thread: expect.any(String),

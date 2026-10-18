@@ -510,9 +510,13 @@ sender_name: nickname
       sender_name: seat@team
   ```
 
-- A sender's team is resolved from the record: the registry id names the roster line, and that
-  line gives the nickname and the team's own name. A team no registry record holds is no answer,
-  so the nickname — or the seat name when the file writes none — stands.
+- A sender's team is resolved by the registry id first: the id names the roster line, and that
+  line gives the nickname and the team's own name; a record's own team field answers only when no
+  roster holds the id. A team no registry record holds is no answer, so the nickname — or the seat
+  name when the file writes none — stands. A [history line](commands/feed.md) records the
+  sender's team as the send wrote it, so a cross-team sender whose seat name another team also
+  uses reads by its address in the feed when the registry holds that team; a line from a build
+  that recorded none reads the plain seat name, never a guessed nickname.
 
 ## `grant`
 

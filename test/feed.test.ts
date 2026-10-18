@@ -21,6 +21,7 @@ import { runFeed, USAGE } from '../src/commands/feed.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { FEED_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { appendHistory, historyPath, MAX_HISTORY_BYTES, readHistory } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
@@ -199,13 +200,14 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the seat's readable name, and the rule.
     const seatHeader = 'from helper — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
       ts: NOW.toISOString(),
       from: 'helper',
       to: 'lead',
+      from_team: teamIdOf(root),
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
       outcome: 'delivered',
@@ -299,6 +301,61 @@ describe('team send history log & team feed', () => {
     expect(await runFeed(['--limit', '1', '--json'], plainIo, { home })).toBe(0);
     const plainDoc = JSON.parse(plainIo.out) as { events: Record<string, unknown>[] };
     expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'status', 'to', 'ts', 'via']);
+  });
+
+  test('a line that records its sender\'s team reads by address; one without it reads the plain seat', async () => {
+    const { root, home } = world();
+    const acme = teamIdOf(root);
+    // The reader's own roster gives `helper` a nickname, and so does another registered team. A
+    // line from the other team must read by its address, never as the local nickname; an older
+    // line that records no team must read as the plain seat name rather than guess a local one.
+    upsertTeam(home, acme, {
+      project: 'acme',
+      session: 'acme',
+      root,
+      roster: [{ agent: 'agt_aaaaaaaaaaaa', seat: 'helper', role: 'implementer', nickname: 'Iris' }],
+      at: NOW.toISOString(),
+    });
+    const labs = 'cccccccccccc';
+    upsertTeam(home, labs, {
+      project: 'labs',
+      session: 'labs',
+      root: join(base, 'labs'),
+      roster: [{ agent: 'agt_bbbbbbbbbbbb', seat: 'helper', role: 'implementer', nickname: 'Hermes' }],
+      at: NOW.toISOString(),
+    });
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      from_team: labs,
+      body: `${OWNER_HEADER}from the other team`,
+      id: 'seed-cross',
+      outcome: 'delivered',
+    });
+    appendHistory('acme', root, home, {
+      ts: new Date(NOW.getTime() + 60_000).toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: `${OWNER_HEADER}an older line`,
+      id: 'seed-old',
+      outcome: 'delivered',
+    });
+
+    const io = testIo(root);
+    expect(await runFeed([], io, { home })).toBe(0);
+    expect(io.out).toContain('helper@labs -> lead');
+    expect(io.out).toContain('helper -> lead');
+    expect(io.out).not.toContain('Iris');
+    expect(io.out).not.toContain('Hermes');
+
+    // The document keeps the machine shape: the team on the line that recorded it, nothing on
+    // the line that did not.
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const doc = JSON.parse(jsonIo.out) as { events: Array<Record<string, unknown>> };
+    expect(doc.events.find((entry) => entry.id === 'seed-cross')?.from_team).toBe(labs);
+    expect(doc.events.find((entry) => entry.id === 'seed-old')?.from_team).toBeUndefined();
   });
 
   test('one message is one row: a later receipt replaces the unconfirmed line it updates', async () => {
