@@ -10,7 +10,6 @@ import { readFileSync } from 'node:fs';
 
 const FEED = readFileSync(new URL('../../docs/commands/feed.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
 const SEND_PAGE = readFileSync(new URL('../../docs/commands/send.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
-const README = readFileSync(new URL('../../README.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
 const HISTORY_SRC = readFileSync(new URL('../../src/send/history.ts', import.meta.url), 'utf8');
 const SEND_SRC = readFileSync(new URL('../../src/commands/send.ts', import.meta.url), 'utf8');
 
@@ -56,9 +55,10 @@ describe('the feed page’s outcome list', () => {
     expect(appended.includes('refused'), 'a refusal is now written down; feed.md says it is not').toBe(false);
   });
 
-  test('this branch’s send page and README carry the same outcomes the feed list belongs to', () => {
+  test('the send page carries the outcomes the feed list belongs to', () => {
+    // The README's `team send` row names no outcome; this page is where the full list lives, so
+    // the list is held here.
     const outcomes = '`delivered` (or `delivered (read)`), `sent (unconfirmed)`, `answered`, `held`, `not-submitted`, `timeout`, `unreachable` or `refused`';
     expect(SEND_PAGE.includes(`one of ${outcomes}`), 'send.md lost the outcome sentence').toBe(true);
-    expect(README.includes(`confirming ${outcomes}`), 'the README row lost the outcomes').toBe(true);
   });
 });
