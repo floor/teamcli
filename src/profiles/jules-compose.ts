@@ -5,7 +5,8 @@
 // no local file, and its work order is created only by that confirm.
 //
 // Captured from jules 0.1.42 (herdr 0.7.1, a 54x23 pane, 2026-10-17), step by step:
-//   * the table's input line is ` > Search sessions or type / to use`; `/` then Enter opens
+//   * the table's input line is ` > Search sessions or type / to use` at 54 columns and
+//     ` > Search sessions or type / to use commands` at 148, and `/` then Enter opens
 //     the new-session form, whose repo list is taller than the pane (its head, and its marker
 //     when the marker is above the pane's window, are not in `pane read --visible`).
 //   * `jules remote list --repo` printed 38 repos, `floor/agents` first and `floor/welcome`
@@ -28,7 +29,10 @@
 //     `Press any key to go back to the session table`.
 //   * Escape walks back one screen at a time: confirmation → task box → repo list → table.
 //     At the table, `ctrl+c: quit` and no escape is ever pressed there.
-//   * logged out, the table is replaced by `Welcome to Jules CLI!` and
+//   * at 148 columns the CLI's banner and `Welcome to Jules CLI!` stay on screen above a
+//     logged-in table (a 148x39 capture), so the banner marks no state; the table is the
+//     footer's, and the login refusal is the failed list's.
+//   * logged out, the table is replaced by
 //     `Failed to list tasks: ... (did you forget to login?)` /
 //     `Jules authentication is required. Please use the /log...`.
 import { ComposeError, type ComposeIo, type ComposeProfile } from './compose.ts';
@@ -52,9 +56,11 @@ const LIST_FOOTER = /enter: select repo/;
 const CHOSEN_HEADER = /^ Choose a repo$/;
 const CHOSEN_ROW = /^ ([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)$/;
 
-/** The table's input line, ` > <text>` (the placeholder when empty). */
+/** The table's input line, ` > <text>` (the placeholder when empty). The placeholder line is
+ *  clipped by the pane: 54 columns draw `Search sessions or type / to use`, 148 draw
+ *  `Search sessions or type / to use commands`, so its start is what is matched. */
 const INPUT_LINE = /^ > (.*)$/;
-const INPUT_PLACEHOLDER = 'Search sessions or type / to use';
+const INPUT_PLACEHOLDER = /^Search sessions or type \/ to use/;
 
 /** The confirmation screen and its marked choice. */
 const CONFIRM_MARK = /enter to select/;
@@ -65,12 +71,12 @@ const MARKED_NO = '> no';
 const CREATED = /Session created: (https:\/\/jules\.google\.com\/session\/\S+)/;
 const CARD_FOOTER = /enter: select action/;
 
-/** The logged-out screen and its banners. */
+/** The logged-out screen: the failed task list and its login lines. The CLI's banner is not
+ *  one of them — it stays on screen above the table at wide widths, so it proves nothing. */
 const LOGGED_OUT: readonly RegExp[] = [
   /Jules authentication is required/,
   /Failed to list tasks/,
   /forget to login\?/,
-  /Welcome to Jules CLI!/,
 ];
 
 const REPAIR = 'read the pane: leave the CLI at its session table and retry';
@@ -83,6 +89,10 @@ function some(lines: readonly string[], pattern: RegExp): boolean {
   return lines.some((line) => pattern.test(line));
 }
 
+function anyOf(lines: readonly string[], patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => some(lines, pattern));
+}
+
 /** The pane's visible lines, or a ComposeError when it cannot be read. */
 function read(io: ComposeIo, typed: boolean): string[] {
   const text = io.text();
@@ -92,7 +102,7 @@ function read(io: ComposeIo, typed: boolean): string[] {
 
 /** The login refusal when the screen is the logged-out one, else null. */
 function loggedOut(lines: readonly string[]): ComposeError | null {
-  if (!some(lines, /Jules authentication is required|Failed to list tasks|forget to login\?|Welcome to Jules CLI!/)) return null;
+  if (!anyOf(lines, LOGGED_OUT)) return null;
   return new ComposeError('its CLI is logged out, and nothing was sent', 'run jules login in its pane, then retry');
 }
 
@@ -156,7 +166,7 @@ function draftOf(lines: readonly string[]): string | null {
     const match = INPUT_LINE.exec(line);
     if (match === null) continue;
     const rest = match[1]!.trim();
-    return rest === '' || rest === INPUT_PLACEHOLDER ? null : rest;
+    return rest === '' || INPUT_PLACEHOLDER.test(rest) ? null : rest;
   }
   return null;
 }

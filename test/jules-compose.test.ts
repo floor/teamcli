@@ -10,7 +10,7 @@
 // floor/jules-sandbox, the private repo Jules probes are confined to.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ComposeError, type ComposeIo, type ComposeSeat } from '../src/profiles/compose.ts';
@@ -22,6 +22,8 @@ import type { NativePane } from '../src/send/native.ts';
 const SANDBOX = 'floor/jules-sandbox';
 const MESSAGE = 'Say PING in one line.';
 const PROOF = 'Session created: https://jules.google.com/session/<id>';
+/** The real 148x39 table: the banner and `Welcome to Jules CLI!` stay on screen above it. */
+const WIDE = readFileSync(new URL('./fixtures/jules/0.1.42/wide.txt', import.meta.url), 'utf8');
 
 /** The account's list: nine repos, an `<add a new repo>` row, then the sandbox at index 9
  *  (row 10), then two more. The walk has to count the add row to reach it. */
@@ -66,15 +68,19 @@ class FakeJules {
   readonly created: string[] = [];
   /** Set if any path ever sends the table's delete key. Nothing may. */
   deleted = false;
+  /** Draws the real wide capture at the table instead of the 54-column lines. */
+  wide = false;
 
-  constructor(options: { screen?: ScreenName; repos?: readonly string[]; cursor?: number } = {}) {
+  constructor(options: { screen?: ScreenName; repos?: readonly string[]; cursor?: number; wide?: boolean } = {}) {
     this.screen = options.screen ?? 'table';
     this.repos = options.repos ?? REPOS;
     this.rows = chooserRows(this.repos);
     this.cursor = options.cursor ?? 5;
+    this.wide = options.wide ?? false;
   }
 
   text(): string {
+    if (this.wide && this.screen === 'table' && this.tableInput === '') return WIDE;
     const lines: string[] = [];
     switch (this.screen) {
       case 'table':
@@ -226,6 +232,15 @@ afterEach(() => {
 describe('the jules compose walk', () => {
   test('a brief is created on the seat\'s repo, though the chooser sat on another', async () => {
     const pane = new FakeJules({ cursor: 11 }); // the list opens on probe/two
+    const proof = await compose(ioOf(pane, seatOf(SANDBOX, REPOS)), MESSAGE);
+    expect(proof).toBe(PROOF);
+    expect(pane.created).toEqual([SANDBOX]);
+    expect(pane.box).toBe(MESSAGE);
+    expect(pane.deleted).toBe(false);
+  });
+
+  test('the real 148-column table, banner and full placeholder, walks to a created session', async () => {
+    const pane = new FakeJules({ wide: true });
     const proof = await compose(ioOf(pane, seatOf(SANDBOX, REPOS)), MESSAGE);
     expect(proof).toBe(PROOF);
     expect(pane.created).toEqual([SANDBOX]);
