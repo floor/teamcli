@@ -69,11 +69,11 @@ const D_RECORD_READ = '5fa02b6c-c374-4fb1-0b82-6d7e8f9a0b1c';
 const OWNER_HEADER = 'from the owner — admitted by: the owner';
 /** The form a build before readable names wrote: the registry id, the name and the address. A
  *  drop written then is still read the same way. */
-const AGENT_HEADER = 'from agt_d18cddafed22 (orchestrator, orchestrator@acme) — admitted by: an orchestrator or operator to a seat of its own team';
+const AGENT_HEADER = 'from agt_000000000001 (orchestrator, orchestrator@acme) — admitted by: an orchestrator or operator to a seat of its own team';
 const FILE_SEAT_HEADER = "from the file's seat worker (no registry record yet) — admitted by: the file's seat";
 /** The form this build writes: the readable name the project's `sender_name` word chose. */
 const READABLE_HEADER = "from orchestrator@acme — admitted by: a seat to its own team's orchestrator";
-const NICKNAME_HEADER = "from Iris — admitted by: a seat to its own team's orchestrator";
+const NICKNAME_HEADER = "from Bea — admitted by: a seat to its own team's orchestrator";
 
 let base: string;
 let root: string;
@@ -172,7 +172,7 @@ describe('team drops', () => {
     // read receipt the inbox writes carries its status in the name (`<id>.read.json`).
     const recordPath = plantRecord(home, root, 'acme', 'lead', D_RECORD, 'the record body', {
       from: 'orchestrator',
-      from_id: 'agt_d18cddafed22',
+      from_id: 'agt_000000000001',
       rule: 'an orchestrator or operator to a seat of its own team',
     });
     const readRecorded = plantRecord(home, root, 'acme', 'lead', D_RECORD_READ, 'already read');
@@ -254,22 +254,22 @@ describe('team drops', () => {
       project: 'acme',
       session: 'acme',
       root,
-      roster: [{ agent: 'agt_d18cddafed22', seat: 'orchestrator', role: 'orchestrator', nickname: 'Atlas' }],
+      roster: [{ agent: 'agt_000000000001', seat: 'orchestrator', role: 'orchestrator', nickname: 'Ada' }],
       at: '2026-10-04T09:00:00.000Z',
     });
     const recordPath = plantRecord(home, root, 'acme', 'lead', D_RECORD, 'the record body', {
       from: 'orchestrator',
-      from_id: 'agt_d18cddafed22',
+      from_id: 'agt_000000000001',
       rule: "a seat to its own team's orchestrator",
     });
     // The signed record on disk still carries the registry id; only the headline a person reads
     // changes.
     const record = JSON.parse(readFileSync(recordPath, 'utf8')) as { payload: { from: string; from_id: string } };
     expect(record.payload.from).toBe('orchestrator');
-    expect(record.payload.from_id).toBe('agt_d18cddafed22');
+    expect(record.payload.from_id).toBe('agt_000000000001');
     const table = await run();
     expect(table.code).toBe(0);
-    expect(table.out).toContain('Atlas');
+    expect(table.out).toContain('Ada');
     expect(table.out).not.toContain('orchestrator');
     expect(table.out).not.toContain('agt_');
     // `--json` stays the record's own reading: the registry id rides the payload, and the display
@@ -368,7 +368,7 @@ describe('team drops', () => {
     expect(senderOf(FILE_SEAT_HEADER)).toBe('worker');
     expect(senderOf(AGENT_HEADER)).toBe('orchestrator');
     expect(senderOf(READABLE_HEADER)).toBe('orchestrator@acme');
-    expect(senderOf(NICKNAME_HEADER)).toBe('Iris');
+    expect(senderOf(NICKNAME_HEADER)).toBe('Bea');
     expect(senderOf('a body with no header')).toBeNull();
     expect(senderOf('from  — admitted by: the owner')).toBeNull();
   });

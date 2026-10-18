@@ -50,11 +50,11 @@ function teamRecord(id: string, project: string, roster: RosterEntry[]): TeamRec
  *  nickname the senders below carry, to prove a cross-team nickname is not read bare. */
 const TEAMS: Record<string, TeamRecord> = {
   [FLOOR]: teamRecord(FLOOR, 'floor', [
-    { agent: 'agt_0f1e2d3c4b5a', seat: 'orchestrator', role: 'orchestrator', nickname: 'Atlas' },
+    { agent: 'agt_0f1e2d3c4b5a', seat: 'orchestrator', role: 'orchestrator', nickname: 'Ada' },
     { agent: 'agt_1a2b3c4d5e6f', seat: 'builder', role: 'builder' },
   ]),
   [LABS]: teamRecord(LABS, 'labs', [
-    { agent: 'agt_2b3c4d5e6f70', seat: 'helper', role: 'helper', nickname: 'Iris' },
+    { agent: 'agt_2b3c4d5e6f70', seat: 'helper', role: 'helper', nickname: 'Bea' },
   ]),
 };
 
@@ -68,7 +68,7 @@ const LABS_HELPER = { seat: 'helper', team: LABS, id: 'agt_2b3c4d5e6f70' };
 
 describe('senderDisplayName', () => {
   test('auto reads the nickname inside the sender’s own team', () => {
-    expect(senderDisplayName(FLOOR_LEAD, naming('auto'))).toBe('Atlas');
+    expect(senderDisplayName(FLOOR_LEAD, naming('auto'))).toBe('Ada');
     // The same seat with no nickname in the file reads as its seat name.
     expect(senderDisplayName(FLOOR_BUILDER, naming('auto'))).toBe('builder');
   });
@@ -85,7 +85,7 @@ describe('senderDisplayName', () => {
     // both the team and the nickname — the stale team field does not hide it. The fixture's line
     // carries a nickname, so the two orders read differently and the scene proves which one wins.
     const stray = { seat: 'orchestrator', team: 'unheard-of', id: 'agt_0f1e2d3c4b5a' };
-    expect(senderDisplayName(stray, naming('auto'))).toBe('Atlas');
+    expect(senderDisplayName(stray, naming('auto'))).toBe('Ada');
     // The same sender read from another team is its address, resolved through the id's team.
     expect(senderDisplayName(stray, naming('auto', LABS))).toBe('orchestrator@floor');
     // A sender the id answers for in no roster falls back to its own team field, as before.
@@ -100,7 +100,7 @@ describe('senderDisplayName', () => {
   });
 
   test('nickname always reads the nickname, or the seat name when the file writes none', () => {
-    expect(senderDisplayName(LABS_HELPER, naming('nickname'))).toBe('Iris');
+    expect(senderDisplayName(LABS_HELPER, naming('nickname'))).toBe('Bea');
     expect(senderDisplayName(FLOOR_BUILDER, naming('nickname'))).toBe('builder');
     expect(senderDisplayName({ seat: 'stranger' }, naming('nickname'))).toBe('stranger');
   });
@@ -126,17 +126,17 @@ describe('senderDisplayName', () => {
 
 describe('sessionDisplayName', () => {
   test('auto and nickname name the session by its nickname, the seat name when none is written', () => {
-    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Atlas', team: FLOOR, teamName: 'floor', mode: 'auto' })).toBe('Atlas');
+    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Ada', team: FLOOR, teamName: 'floor', mode: 'auto' })).toBe('Ada');
     expect(sessionDisplayName({ seat: 'builder', nickname: null, team: FLOOR, teamName: 'floor', mode: 'auto' })).toBe('builder');
     expect(sessionDisplayName({ seat: 'builder', nickname: null, team: FLOOR, teamName: 'floor', mode: 'nickname' })).toBe('builder');
   });
 
   test('seat and seat@team read the seat name and the address', () => {
-    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Atlas', team: FLOOR, teamName: 'floor', mode: 'seat' })).toBe('orchestrator');
-    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Atlas', team: FLOOR, teamName: 'floor', mode: 'seat@team' })).toBe('orchestrator@floor');
+    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Ada', team: FLOOR, teamName: 'floor', mode: 'seat' })).toBe('orchestrator');
+    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Ada', team: FLOOR, teamName: 'floor', mode: 'seat@team' })).toBe('orchestrator@floor');
     // With no team name at hand the id is the address, and with no team at all the seat stands.
-    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Atlas', team: FLOOR, mode: 'seat@team' })).toBe(`orchestrator@${FLOOR}`);
-    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Atlas', team: null, mode: 'seat@team' })).toBe('orchestrator');
+    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Ada', team: FLOOR, mode: 'seat@team' })).toBe(`orchestrator@${FLOOR}`);
+    expect(sessionDisplayName({ seat: 'orchestrator', nickname: 'Ada', team: null, mode: 'seat@team' })).toBe('orchestrator');
   });
 });
 

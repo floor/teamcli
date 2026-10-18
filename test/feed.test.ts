@@ -313,7 +313,7 @@ describe('team send history log & team feed', () => {
       project: 'acme',
       session: 'acme',
       root,
-      roster: [{ agent: 'agt_aaaaaaaaaaaa', seat: 'helper', role: 'implementer', nickname: 'Iris' }],
+      roster: [{ agent: 'agt_aaaaaaaaaaaa', seat: 'helper', role: 'implementer', nickname: 'Bea' }],
       at: NOW.toISOString(),
     });
     const labs = 'cccccccccccc';
@@ -346,7 +346,7 @@ describe('team send history log & team feed', () => {
     expect(await runFeed([], io, { home })).toBe(0);
     expect(io.out).toContain('helper@labs -> lead');
     expect(io.out).toContain('helper -> lead');
-    expect(io.out).not.toContain('Iris');
+    expect(io.out).not.toContain('Bea');
     expect(io.out).not.toContain('Hermes');
 
     // The document keeps the machine shape: the team on the line that recorded it, nothing on

@@ -299,20 +299,20 @@ describe('the startup_reads a profile may name', () => {
     const claude = profileFor('claude-code');
     const codex = profileFor('codex');
     if (!claude || !codex) throw new Error('the shipped profiles are missing');
-    expect(launchCommand(claude, 'claude --model claude-opus-5-5', 'Rules.', undefined, undefined, 'Atlas')).toBe(
-      "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --name Atlas --append-system-prompt Rules.",
+    expect(launchCommand(claude, 'claude --model claude-opus-5-5', 'Rules.', undefined, undefined, 'Ada')).toBe(
+      "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --name Ada --append-system-prompt Rules.",
     );
     expect(launchCommand(claude, 'claude --model claude-opus-5-5', 'Rules.', undefined, undefined, 'builder@floor')).toBe(
       "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --name builder@floor --append-system-prompt Rules.",
     );
     // The line's own `--name`, in either spelling, is what the file chose; an empty name adds none.
-    expect(launchCommand(claude, 'claude --model claude-opus-5-5 --name mine', 'Rules.', undefined, undefined, 'Atlas')).not.toContain('--name Atlas');
-    expect(launchCommand(claude, 'claude --model claude-opus-5-5 -n mine', 'Rules.', undefined, undefined, 'Atlas')).not.toContain('--name Atlas');
+    expect(launchCommand(claude, 'claude --model claude-opus-5-5 --name mine', 'Rules.', undefined, undefined, 'Ada')).not.toContain('--name Ada');
+    expect(launchCommand(claude, 'claude --model claude-opus-5-5 -n mine', 'Rules.', undefined, undefined, 'Ada')).not.toContain('--name Ada');
     expect(launchCommand(claude, 'claude', 'Rules.', undefined, undefined, '')).toBe(
       "AGENT_UNATTENDED=1 claude --dangerously-skip-permissions --append-system-prompt Rules.",
     );
     // No measured flag on the other CLIs: the name is not passed to one that has no such word.
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, 'Atlas')).not.toContain('--name');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, 'Ada')).not.toContain('--name');
   });
 
   test('the shipped profiles name the files a working-folder run showed each CLI reading at start', () => {

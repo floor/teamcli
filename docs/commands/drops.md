@@ -140,7 +140,7 @@ first line, and this build still reads that form; the line it writes names the s
 receiving team's [`sender_name`](../team-file.md#sender_name) word asks:
 
 ```file file=.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
-from agt_d18cddafed22 (orchestrator, orchestrator@5e46a02374b3) — admitted by: an orchestrator or operator to a seat of its own team
+from agt_000000000001 (orchestrator, orchestrator@0123456789ab) — admitted by: an orchestrator or operator to a seat of its own team
 
 orchestrator: read the review note, then report.
 ```
