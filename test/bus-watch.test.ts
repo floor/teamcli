@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PRIVILEGED_SELF_SUBSCRIPTION_RULE } from '../src/bus/kinds.ts';
-import { createSequenceTracker, type SignedEventRecord } from '../src/bus/log.ts';
+import { createSequenceTracker, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
 import {
   busSocket,
@@ -54,6 +54,17 @@ seats:
     launch: claude
   - role: worker
     name: worker-1
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "4.6"
+    launch: claude
+`;
+
+// The same team with an ordinary seat whose name is also a word the bus treats as a delivery
+// target: the name confers nothing.
+const WATCH_SEAT_TEAM_YAML = `${SAMPLE_TEAM_YAML}  - role: worker
+    name: watch
     cli: claude-code
     vendor: anthropic
     model: Claude Sonnet
@@ -271,6 +282,63 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     }
   });
 
+  test('a seat named watch has no name equivalence and its privileged self-subscription is refused', async () => {
+    const { root, home } = makeScratch();
+    writeFileSync(join(root, '.agents', 'team.yaml'), WATCH_SEAT_TEAM_YAML);
+    const parsed = validateTeamFile(WATCH_SEAT_TEAM_YAML);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    handles.push(started.handle);
+
+    // An event the policy routes to the lead, the subject and the owner.
+    const grant = await publishToBus(root, {
+      ts: '2026-10-18T12:00:00.000Z',
+      kind: 'team.grant-issued',
+      session: 'acme',
+      record_id: 'grant-1',
+      subject: 'worker-1',
+    });
+    expect(grant.kind).toBe('published');
+
+    // The name alone receives nothing: the seat is a plain recipient like any other.
+    const plain = await subscribeBusOnce(root, { seat: 'watch', cursor: 0 });
+    expect(plain.kind).toBe('events');
+    if (plain.kind === 'events') expect(plain.events).toEqual([]);
+
+    // A privileged self-subscription is refused under the policy, and the refusal is recorded.
+    const refused = await subscribeBusOnce(root, { seat: 'watch', cursor: 0, kinds: ['seat.at-prompt'] });
+    expect(refused.kind).toBe('refused');
+    if (refused.kind === 'refused') {
+      expect(refused.at).toBe('policy');
+      expect(refused.rule).toBe(PRIVILEGED_SELF_SUBSCRIPTION_RULE);
+      expect(refused.eventKind).toBe('seat.at-prompt');
+    }
+
+    const log = readEvents('acme', root, home);
+    expect(log.ok).toBe(true);
+    if (!log.ok) return;
+    const record = log.events.find((e) => e.payload.kind === 'team.policy-refused');
+    expect(record?.payload.rule).toBe(PRIVILEGED_SELF_SUBSCRIPTION_RULE);
+    expect(record?.payload.seat).toBe('watch');
+
+    // The owner's delivery path still reads the routed event and the refusal.
+    const owner = await subscribeBusOnce(root, { seat: 'owner', cursor: 0 });
+    expect(owner.kind).toBe('events');
+    if (owner.kind === 'events') {
+      expect(owner.events.map((e) => e.payload.kind)).toEqual(['team.grant-issued', 'team.policy-refused']);
+    }
+  });
+
   test('answers gap when subscriber buffer limit is exceeded or cursor was rotated out', async () => {
     const { root, home } = makeScratch();
     const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
@@ -320,7 +388,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
 
     // 1. No bus running: syncWatchBus returns false cleanly without throwing.
     const noBus = await syncWatchBus(root, tracker, {
-      busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 200 }),
+      busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'owner', cursor }, { deadlineMs: 200 }),
       onBusEvent: (ev) => seenEvents.push(ev),
       onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
     });
@@ -421,7 +489,8 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       root,
       tracker,
       {
-        busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 500 }),
+        // The owner's delivery path subscribes with the owner's identity, never a seat name.
+        busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'owner', cursor }, { deadlineMs: 500 }),
         onBusEvent: (ev) => seenEvents.push(ev),
         onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
       },
@@ -440,11 +509,11 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     ).toEqual([
       // An owner-addressed report is one event addressed to `owner`: the owner's copy and the
       // operator's copy of the same observation merge, so the list carries one line, not two.
+      // The two reports no policy routes to `owner` and the raising side does not address to it
+      // stay off the owner's path.
       { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'permission', to: 'owner' },
-      { kind: 'seat.blocked', seat: 'worker-1', prompt: undefined, to: undefined },
       { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'vendor notice', to: 'owner' },
       { kind: 'seat.blocked', seat: 'worker-2', prompt: undefined, to: 'owner' },
-      { kind: 'seat.unreachable', seat: 'worker-3', prompt: undefined, to: undefined },
       { kind: 'seat.at-prompt', seat: 'worker-4', prompt: 'rate limit', to: 'owner' },
       { kind: 'seat.blocked', seat: 'worker-5', prompt: undefined, to: 'owner' },
     ]);
@@ -453,11 +522,11 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
 
     // 3. Subsequent sync with no new events advances nothing and duplicates nothing.
     const nextSync = await syncWatchBus(root, tracker, {
-      busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 500 }),
+      busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'owner', cursor }, { deadlineMs: 500 }),
       onBusEvent: (ev) => seenEvents.push(ev),
     });
     expect(nextSync).toBe(true);
-    expect(seenEvents.length).toBe(7);
+    expect(seenEvents.length).toBe(5);
 
     // 4. Pin the gap rebuild end-to-end (N6):
     //    - `gapFollower` and `fullReplayFollower` both observe `t0` (state before the gap).

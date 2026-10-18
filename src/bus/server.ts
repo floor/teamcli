@@ -493,8 +493,9 @@ function matchesSubscriber(
   resolveSeat?: SeatRecipientResolver,
 ): boolean {
   const { payload } = record;
-  // `watch` observes all session events so it can wake seats and report problems without polling.
-  if (seat === 'watch') return true;
+  // An event addressed to a seat by the raising side reaches that seat. The owner is addressed
+  // this way for a report the policy's routing does not name him in (§4.5).
+  if (payload.to !== undefined && payload.to !== '' && payload.to === seat) return true;
   if (selfKinds !== null && selfKinds.has(payload.kind)) {
     return true;
   }
@@ -746,7 +747,9 @@ function dispatchBusRequest(
   }
   const seat = claimed.seat;
   const leads = leadSeatsOf(input.team);
-  const isOwner = seat === 'owner' || seat === 'watch';
+  // The owner's own identity: `owner` is the delivery target §4.5 defines, and no seat name
+  // carries it. The watch process subscribes as `owner` only when its own caller check admits it.
+  const isOwner = seat === 'owner';
   const isLead = leads.has(seat);
   const isOperator = input.team.operator === seat;
   const declaredSeat = isOwner || input.team.seats.some((s) => s.name === seat);

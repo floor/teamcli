@@ -1670,6 +1670,40 @@ describe('team watch', () => {
     expect(readState(join(dir, '.agents')).sessions['acme-web']?.watch).toBeUndefined();
   });
 
+  test('only the owner\'s delivery path subscribes to the bus', async () => {
+    // A seat's own watch runs its passes and never subscribes with the owner's identity, so the
+    // bus never hands it a kind the policy routes to the owner.
+    let fromSeat = 0;
+    const seatIo = testIo(dir, { kind: 'seat', name: 'deepseek-acme', pane: 'w3:p1' });
+    expect(await runWatch([], seatIo, sources(1, {
+      busSubscribe: async () => {
+        fromSeat += 1;
+        return { kind: 'events', events: [], cursor: 0 };
+      },
+    }))).toBe(0);
+    expect(fromSeat).toBe(0);
+
+    // The owner at a terminal outside herdr is that path.
+    let fromOwner = 0;
+    expect(await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1, {
+      busSubscribe: async () => {
+        fromOwner += 1;
+        return { kind: 'events', events: [], cursor: 0 };
+      },
+    }))).toBe(0);
+    expect(fromOwner).toBe(1);
+
+    // So is the watch pane `up` starts: an agentless pane, placed by its own root.
+    let fromPane = 0;
+    expect(await runWatch([], testIo(dir, { kind: 'pane', pane: 'w9:p1' }), sources(1, {
+      busSubscribe: async () => {
+        fromPane += 1;
+        return { kind: 'events', events: [], cursor: 0 };
+      },
+    }))).toBe(0);
+    expect(fromPane).toBe(1);
+  });
+
   test('--no-nudge types nothing and --no-notify notifies nothing; the log still has it', async () => {
     // A message waits at the idle seat, so the pass has its one typed line — and refuses it.
     const io = testIo(dir, { kind: 'owner' });
