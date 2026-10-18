@@ -58,10 +58,11 @@ const GUIDANCE: Record<GuardRule, string> = {
 type Segment = { words: string[]; piped: boolean };
 
 /**
- * Splits a command line on unquoted `;`, `&` and newlines (and `|`, remembering the pipe). Quotes
- * and backslash escapes are honoured, so `git commit -m "do not chmod"` is one word sequence the
- * guard never reads as a chmod. This is not a shell parser: it only needs to find where a command
- * word stands.
+ * Splits a command line on unquoted `;`, a lone `&` and newlines (and `|`, remembering the pipe).
+ * Quotes and backslash escapes are honoured, so `git commit -m "do not chmod"` is one word
+ * sequence the guard never reads as a chmod. Redirects stay inside their command: `2>&1`, `>&2`
+ * and `&>` are not segment breaks, and `|&` is one pipe. This is not a shell parser: it only
+ * needs to find where a command word stands.
  */
 function segments(line: string): Segment[] {
   const out: Segment[] = [];
@@ -70,6 +71,7 @@ function segments(line: string): Segment[] {
   let quote: '"' | "'" | null = null;
   let escaped = false;
   let piped = false;
+  let justPiped = false;
   const endWord = (): void => {
     if (word !== '') {
       words.push(word);
@@ -81,10 +83,12 @@ function segments(line: string): Segment[] {
     if (words.length > 0) out.push({ words, piped });
     words = [];
   };
-  for (const char of line) {
+  for (let at = 0; at < line.length; at += 1) {
+    const char = line[at]!;
     if (escaped) {
       word += char;
       escaped = false;
+      justPiped = false;
       continue;
     }
     if (quote !== null) {
@@ -98,37 +102,99 @@ function segments(line: string): Segment[] {
     }
     if (char === '"' || char === "'") {
       quote = char;
+      justPiped = false;
       continue;
     }
-    if (char === ';' || char === '\n' || char === '&' || char === '|') {
+    if (char === '&') {
+      // `|&` is the pipe already taken; `>&`, `<&` and `&>` are redirects, not breaks.
+      if (justPiped) {
+        justPiped = false;
+        continue;
+      }
+      if (word.endsWith('>') || word.endsWith('<') || line[at + 1] === '>') {
+        word += char;
+        justPiped = false;
+        continue;
+      }
+      endSegment();
+      piped = false;
+      justPiped = false;
+      continue;
+    }
+    if (char === ';' || char === '\n' || char === '|') {
       endSegment();
       // Every separator ends the segment; only `|` makes the next one a pipe's right side.
       piped = char === '|';
+      justPiped = char === '|';
       continue;
     }
     if (char === ' ' || char === '\t') {
       endWord();
+      justPiped = false;
       continue;
     }
     word += char;
+    justPiped = false;
   }
   endSegment();
   return out;
 }
 
-/** The command word and arguments of a segment, after the prefixes that run another command:
- *  `VAR=value`, `env`, `command`, `exec` and `nohup`. */
+/** A leading assignment, the kind a command line puts before the command word. */
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** The words of an `env -S` string: the shell-like split that flag's argument asks for. */
+function splitString(words: readonly string[]): string[] {
+  return words.join(' ').split(/\s+/).filter((word) => word !== '');
+}
+
+/**
+ * The command word and arguments of a segment, after the prefixes that run another command:
+ * `VAR=value`, `env`, `command`, `exec` and `nohup` — each recognised by its base name, so
+ * `/usr/bin/env` is a prefix too. `env`'s own options are read properly: `-u NAME` and `-C DIR`
+ * take a value, `-S STRING` is split and judged as the command it holds, `--` ends the options,
+ * and anything else starting with `-` is a flag.
+ */
 function commandOf(words: readonly string[]): string[] {
   let at = 0;
   while (at < words.length) {
     const word = words[at]!;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+    if (ASSIGNMENT.test(word)) {
       at += 1;
       continue;
     }
-    if (word === 'env' || word === 'command' || word === 'exec' || word === 'nohup') {
+    const name = base(word);
+    if (name === 'env') {
       at += 1;
-      while (at < words.length && (words[at]!.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]!))) at += 1;
+      while (at < words.length) {
+        const arg = words[at]!;
+        if (arg === '--') {
+          at += 1;
+          break;
+        }
+        if (ASSIGNMENT.test(arg)) {
+          at += 1;
+          continue;
+        }
+        if (arg === '-u' || arg === '--unset' || arg === '-C' || arg === '--chdir') {
+          at += 2;
+          continue;
+        }
+        if (arg === '-S' || arg === '--split-string') {
+          return splitString(words.slice(at + 1));
+        }
+        if (arg.startsWith('--split-string=')) return splitString([arg.slice('--split-string='.length), ...words.slice(at + 1)]);
+        if (arg.startsWith('-')) {
+          at += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    if (name === 'command' || name === 'exec' || name === 'nohup') {
+      at += 1;
+      while (at < words.length && (words[at]!.startsWith('-') || ASSIGNMENT.test(words[at]!))) at += 1;
       continue;
     }
     break;
@@ -284,7 +350,8 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
   if (word === 'rm' && recursiveRm(args)) return { rule: 'rm-recursive', guidance: GUIDANCE['rm-recursive'] };
   if (word === 'git') {
     const { sub, rest } = gitSubcommand(args);
-    if (sub === 'push' && rest.some((arg) => arg === '--force' || /^-[A-Za-z]*f[A-Za-z]*$/.test(arg))) {
+    if (sub === 'push' && rest.some((arg) =>
+      arg === '--force' || /^-[A-Za-z]*f[A-Za-z]*$/.test(arg) || arg.startsWith('+'))) {
       return { rule: 'git-push-force', guidance: GUIDANCE['git-push-force'] };
     }
     if (sub === 'reset' && rest.includes('--hard')) {
@@ -307,6 +374,11 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
     // `find … | xargs chmod +x`: the command xargs runs is the first word that is not its option.
     const at = args.findIndex((arg) => !arg.startsWith('-'));
     if (at !== -1) return matchSegment(args.slice(at));
+  }
+  if (word === 'find') {
+    // `find … -exec chmod …` / `-execdir`: the word after the action is the command it runs.
+    const action = args.findIndex((arg) => arg === '-exec' || arg === '-execdir');
+    if (action !== -1 && action + 1 < args.length) return matchSegment(args.slice(action + 1));
   }
   return null;
 }
