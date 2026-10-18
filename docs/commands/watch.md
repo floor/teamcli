@@ -232,8 +232,8 @@ stopped. Neither flag removes the log line, and neither reaches `team status`: a
 shows on the budgets table, and a record that is not in force still shows there.
 
 A prompt never goes silent. When the seat at the prompt is the team's lead, or when any seat has
-held its prompt for the escalation window — `prompt_escalation_seconds`, five minutes by default
-and an event threshold the owner sets shorter, never longer — the watch raises
+held its prompt for the escalation window — `prompt_escalation_seconds`, a fixed five minutes in
+0.5.1; the owner's setter for it, shorten-only, comes in 0.5.2 — the watch raises
 `seat.prompt-escalated` beside its report. The routing sends that event, and a lead's own
 `seat.at-prompt`, to the entity's own lead and to the owner at once, and the watch leaves one
 signed record in the entity lead's mailbox under the entity team's own root, where that team's
