@@ -309,6 +309,23 @@ describe('version matching', () => {
 });
 
 describe('team answer', () => {
+  test("a human seat takes no dialog key and no rules line", async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby).replace('    name: lead\n', '    name: lead\n    human: true\n'));
+    await approve(root, home);
+    // The pane shows a trust dialog and herdr names the agent: without the mark every check
+    // below would pass and the key would be pressed.
+    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe("lead: the pane is a human's; no dialog key is pressed and no rules line is typed; left as it is\n");
+    expect(host.keys).toEqual([]);
+    expect(host.typed).toEqual([]);
+    expect(host.entered).toBe(0);
+    expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain('answer [owner] lead: refused trust: human');
+  });
+
   test('cursor and antigravity each send their one key, then become ready', async () => {
     for (const cli of ['cursor', 'antigravity'] as const) {
       const { root, home, lobby, dir } = world();

@@ -92,7 +92,7 @@ export const realHost: AnswerHost = {
   standing: (root) => approvalStanding(root, homedir()),
 };
 
-type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery';
+type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery' | 'human';
 
 /** A refusal class that is also a contract row: every class word is the row id's last word. */
 type RefusalClass = Exclude<Reason, 'idle' | 'rule delivery'>;
@@ -196,6 +196,13 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
 
   const callerProblem = callerProblemOf(caller, team, seatName, standingOf(dir, session, caller));
   if (callerProblem) return refused(callerProblem);
+  // A pane the file marks as a human's never takes a dialog key or a rules line: this command
+  // presses one and types the other, so it refuses before the seat's lock, state or screen is
+  // read. The mark is the file's, the last word over any record a launch left behind.
+  const humanSeat = team.seats.find((seat) => seat.name === seatName);
+  if (humanSeat?.human === true) {
+    return refused(refusedClass('human', `${seatName}: the pane is a human's; no dialog key is pressed and no rules line is typed; left as it is`));
+  }
   // The setting is the owner's live grant: a team grant carrying `dialogs.trust`, read fresh
   // here. No file key and no approval stand behind it — off is the default, the owner turns it
   // on with `team grant @team --capabilities dialogs.trust`, and a revocation ends it at the
@@ -502,6 +509,7 @@ function refuse(
   // exit: answer.folder
   // exit: answer.action
   // exit: answer.process
+  // exit: answer.human
   return 1;
 }
 
