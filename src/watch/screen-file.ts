@@ -375,12 +375,13 @@ function composerOf(node: YamlNode): Composer {
     return { mode: name, statusLine: statusLineField(entries, node.line), ...(below ? { statusBelow: statusBelowOf(below) } : {}), prompt: regexField(entries, 'prompt', node.line), placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value), placeholderStyle, wrap, frameRows, ...(border ? { border: borderOf(border) } : {}) };
   }
   if (name === 'status-then-one') {
-    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'strip_suffix', 'fallback', 'wrap', 'frame_rows', 'border', 'own_rows']);
+    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'strip_suffix', 'fallback', 'wrap', 'frame_rows', 'border', 'own_rows', 'chrome']);
     const suffix = optional(entries, 'strip_suffix');
     const fallback = required(entries, 'fallback', node.line);
     const below = optional(entries, 'status_below');
     const border = optional(entries, 'border');
     const own = optional(entries, 'own_rows');
+    const chrome = chromeRowsField(entries);
     return {
       mode: name,
       statusLine: statusLineField(entries, node.line),
@@ -394,6 +395,7 @@ function composerOf(node: YamlNode): Composer {
       frameRows,
       ...(border ? { border: borderOf(border) } : {}),
       ...(own ? { ownRows: ownRowsOf(own.value) } : {}),
+      ...(chrome ? { chrome } : {}),
     };
   }
   if (name === 'two-rules-footer-below') {
@@ -516,6 +518,27 @@ function ownRowsOf(node: YamlNode): RegExp[] {
     const compiled = patternOf(text, false, item.line);
     if (CHOICE_SAMPLES.some((sample) => compiled.test(sample))) {
       fail(item.line, 'an own_rows pattern would match a numbered choice line');
+    }
+    return compiled;
+  });
+}
+
+// The pane's own chrome row under the status line: one string, or a non-empty list read as the
+// union, each anchored to the whole line — the row is the pane's, so a pattern that would match
+// only part of it would let anything ride along. A composer that declares none keeps the
+// trailing rule it had (see the core's statusIndex).
+function chromeRowsField(entries: YamlEntry[]): RegExp[] | undefined {
+  const entry = optional(entries, 'chrome');
+  if (entry === undefined) return undefined;
+  const items = entry.value.kind === 'seq' ? entry.value.items : [entry.value];
+  if (items.length === 0) fail(entry.line, '"chrome" must be a string or a non-empty list of strings');
+  return items.map((item) => {
+    const text = stringOf(item);
+    if (text === null) fail(item.line, '"chrome" entries must be strings');
+    if (!anchored(text)) fail(item.line, 'a chrome pattern must match the whole line: "^…$"');
+    const compiled = patternOf(text, false, item.line);
+    if (CHOICE_SAMPLES.some((sample) => compiled.test(sample))) {
+      fail(item.line, 'a chrome pattern would match a numbered choice line');
     }
     return compiled;
   });

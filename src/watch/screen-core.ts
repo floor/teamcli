@@ -92,13 +92,15 @@ function statusRowAt(
 
 /**
  * The index of the composer's status line in the window, or -1. A `status-last` composer pins it
- * as the last non-blank line; a `status-then-one` composer allows one chrome line below it. Where
- * the profile pins the row's place, a candidate that is not in its place is ordinary text: the
- * scan skips it (the lines below a lower candidate are then not the frame a place needs, so a
- * higher one fails too). A row the profile exempts from the place test keeps the trailing rule
- * the other profiles read it by. The classification and the quota read both take their line
- * from here,
- * so the two cannot disagree about which line the composer's status line is.
+ * as the last non-blank line; a `status-then-one` composer allows one chrome line below it, and
+ * a composer that declares `chrome` allows only a line matching that vocabulary: the pane's own
+ * hint row, never text the seat printed, so a status-shaped line followed by arbitrary output is
+ * never read as the row a quota figure comes from. Where the profile pins the row's place, a
+ * candidate that is not in its place is ordinary text: the scan skips it (the lines below a
+ * lower candidate are then not the frame a place needs, so a higher one fails too). A row the
+ * profile exempts from the place test keeps the trailing rule the other profiles read it by.
+ * The classification and the quota read both take their line from here, so the two cannot
+ * disagree about which line the composer's status line is.
  */
 function statusIndex(
   composer: Extract<ScreenData['composer'], { mode: 'status-last' | 'status-then-one' }>,
@@ -108,6 +110,7 @@ function statusIndex(
   expectedCwd?: string | null,
   home?: string,
 ): number | 'stop' {
+  const chrome = composer.mode === 'status-then-one' ? composer.chrome : undefined;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (tick()) return 'stop';
     if (!statusMatches(composer, lines[i] ?? '')) continue;
@@ -119,8 +122,14 @@ function statusIndex(
     if (allowOneTrailing) {
       if (trailing.length === 0) return i;
       if (trailing.some((line) => composer.prompt.test(line))) return -1;
-      if (trailing.length === 1) return i;
-      // Multiple trailing lines: whole-line grammar matching foreground_cwd
+      if (trailing.length === 1) {
+        if (chrome !== undefined && !chrome.some((pattern) => pattern.test(trailing[0] ?? ''))) return -1;
+        return i;
+      }
+      // Multiple trailing lines: a declared chrome vocabulary names exactly one row, so more
+      // than one line below the status row is never the pane's chrome.
+      if (chrome !== undefined) return -1;
+      // Whole-line grammar matching foreground_cwd
       if (expectedCwd) {
         let joined = trailing.map((l) => l.trim()).join('');
         if (home && (joined === '~' || joined.startsWith('~/'))) {

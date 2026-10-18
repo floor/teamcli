@@ -452,6 +452,13 @@
           "minItems": 1,
           "description": "Rows the pane draws of its own between the input row and the status row, declared only where a capture shows them. A matching row is not text in the box. Only status-then-one reads the key."
         },
+        "chrome": {
+          "description": "The pane's own chrome row under the status line: one string, or a list read as the union, each matching the whole line. Only status-then-one reads the key. Declared, a line under the status row is chrome only when it matches — any other line there leaves the row unread, so text the seat prints can never stand in for the pane's row and feed a quota figure. A composer that declares none keeps the trailing rule it had.",
+          "oneOf": [
+            { "$ref": "#/$defs/patternString" },
+            { "type": "array", "items": { "$ref": "#/$defs/patternString" }, "minItems": 1 }
+          ]
+        },
         "frame_rows": {
           "type": "integer",
           "minimum": 0,
@@ -489,7 +496,8 @@
         { "if": { "required": ["status_below"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
         { "if": { "required": ["status"] }, "then": { "properties": { "mode": { "const": "box-to-rule" } } } },
         { "if": { "required": ["border"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
-        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
+        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } },
+        { "if": { "required": ["chrome"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
       ]
     }
   }
