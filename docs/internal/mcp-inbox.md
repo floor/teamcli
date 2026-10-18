@@ -67,7 +67,10 @@ and ends the walk there: the message is safe, and the seat's client may still re
 promotes a receipt to one `delivered (read)` history line and clears the marker, typing nothing.
 After `INBOX_FALLBACK_MS` with no receipt the watch's retry pass types the drop's existing
 trigger, records `mcp-inbox: no receipt within 10m` in the history line's `failed`, and the typed
-leg's own verification decides the outcome. The retry obeys the existing pane rules: a dialog, a
+leg's own verification decides the outcome. The same folder serves the `drop` leg, whose marker
+says `leg: drop`: nothing ever types it — the seat's turn-start `team drops --read` writes the
+same receipt — and past `PENDING_MAX_AGE_MS` with no receipt the watch gives up on the marker
+with the drop file's path. The retry obeys the existing pane rules: a dialog, a
 draft that is not the trigger, an unreadable status or a human's own pane is never typed into,
 and a drop that runs out of bounds is reported with its path rather than lost.
 
