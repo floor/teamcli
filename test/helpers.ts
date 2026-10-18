@@ -3,6 +3,7 @@ import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import { PROFILES } from '../src/clis.ts';
 import type { Io } from '../src/io.ts';
+import { deliverGeneralBrief } from '../src/launch/general-brief.ts';
 import { rulesText } from '../src/launch/rules.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import { signedRecordOf, type SignedRecord } from '../src/send/record.ts';
@@ -20,6 +21,27 @@ export function recordAt(path: string): SignedRecord {
 /** The body the record at `path` carries. */
 export function recordBody(path: string): string {
   return recordAt(path).payload.body;
+}
+
+/**
+ * The launch's own general-brief delivery, for a fixture whose state records launched seats: one
+ * signed record in each seat's drop folder and the session's `briefs` entry, exactly as `team up`
+ * leaves them before it types. Throws when a delivery did not land, so a fixture never stands on
+ * a half-made world.
+ */
+export function deliverBriefs(input: {
+  dir: string;
+  root: string;
+  session: string;
+  seats: readonly string[];
+  home: string;
+  at?: string;
+}): void {
+  const report = deliverGeneralBrief(input);
+  const failed = report.deliveries.filter((delivery) => !delivery.ok);
+  if (failed.length > 0 || report.recording !== undefined) {
+    throw new Error(`the fixture's briefs were not delivered: ${JSON.stringify(report)}`);
+  }
 }
 
 /** The seven-rule message the Codex 0.160.0 and Cursor 2026.10.01 captures were typed with,

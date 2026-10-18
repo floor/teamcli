@@ -13,7 +13,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
 
@@ -58,6 +58,8 @@ function place(): { base: string; root: string; home: string } {
       watch: { pid: 1, heartbeat: NOW.toISOString() },
     };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir: join(root, '.agents'), root, session: 'acme', seats: ['lead'], home, at: NOW.toISOString() });
   return { base, root, home };
 }
 

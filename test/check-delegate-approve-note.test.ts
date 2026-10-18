@@ -16,7 +16,7 @@ import { CHECK_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T11:00:00Z');
@@ -70,9 +70,13 @@ function place(text: string): string {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-approve-')));
   made.push(base);
   const root = join(base, 'acme');
+  const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(home);
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   writeFileSync(join(root, '.agents/team.yaml'), text);
+  const parsed = validateTeamFile(text);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
   // The seat's pane as the launch recorded it, and a watch pass recent enough that the run
   // itself is no difference: the two ambient findings every clean check world seeds away.
   updateState(join(root, '.agents'), (state) => {
@@ -81,6 +85,15 @@ function place(text: string): string {
       worktrees: {},
       watch: { pid: 1, heartbeat: NOW.toISOString() },
     };
+  });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({
+    dir: join(root, '.agents'),
+    root,
+    session: parsed.team.session,
+    seats: parsed.team.seats.map((seat) => seat.name),
+    home,
+    at: NOW.toISOString(),
   });
   return root;
 }

@@ -86,7 +86,7 @@ import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
 import { skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -867,8 +867,8 @@ async function checked(place: Place, argv: string[], caller: Caller, sources: Ch
   return { code: await check(argv, io, loader(place), sources), out: io.out, err: io.err };
 }
 
-function checkSources(live: Live | null, standing: Standing = { kind: 'none' }): CheckSources {
-  return { live: () => live, branch: () => 'main', standing: () => standing, now: () => NOW };
+function checkSources(live: Live | null, standing: Standing = { kind: 'none' }, home?: string): CheckSources {
+  return { live: () => live, branch: () => 'main', standing: () => standing, now: () => NOW, ...(home === undefined ? {} : { home }) };
 }
 
 // The state record a passing seat stands on: the file's own seat, on the pane herdr lists it in.
@@ -892,6 +892,8 @@ scene('check.ok', async (place) => {
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
     session.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir: join(place.root, '.agents'), root: place.root, session: 'acme', seats: ['lead'], home: place.home, at: NOW.toISOString() });
   approve(place, TEAM);
   const matched: Live = {
     running: true,
@@ -901,7 +903,7 @@ scene('check.ok', async (place) => {
     // difference the check reports, so a healthy team's pane says what it is.
     screens: { 'w1:p1': IDLE },
   };
-  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home))), 'no differences');
+  return show(await checked(place, [], owner, checkSources(matched, approvalStanding(place.root, place.home), place.home)), 'no differences');
 });
 scene('check.findings', async (place) => {
   write(place, TEAM);
@@ -933,6 +935,8 @@ scene('check.repaired', async (place) => {
     session.seats.gone = { stage: 'ready', pane: 'w1:p2', workspace: 'w1' };
     state.sessions.left = { seats: {}, worktrees: {} };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir: join(place.root, '.agents'), root: place.root, session: 'acme', seats: ['lead'], home: place.home, at: NOW.toISOString() });
   approve(place, TEAM);
   const matched: Live = {
     running: true,
@@ -940,7 +944,7 @@ scene('check.repaired', async (place) => {
     workspaces: [{ id: 'w1', label: 'lead' }],
     screens: { 'w1:p1': IDLE },
   };
-  const sources = checkSources(matched, approvalStanding(place.root, place.home));
+  const sources = checkSources(matched, approvalStanding(place.root, place.home), place.home);
   return show(await checked(place, ['--repair'], owner, sources), 'repaired:');
 });
 scene('check.not-yours', async (place) => {

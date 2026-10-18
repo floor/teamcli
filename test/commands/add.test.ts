@@ -17,7 +17,7 @@ import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { writePolicySet } from '../../src/policy/index.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
@@ -1056,6 +1056,8 @@ describe('team add', () => {
         session.seats.worker = { stage: 'ready', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] } };
         state.sessions.acme = session;
       });
+      // The launch delivered the general brief before it typed: the seat's record and its state entry.
+      deliverBriefs({ dir: join(project, '.agents'), root: project, session: 'acme', seats: ['worker'], home, at: NOW.toISOString() });
       const before = readFileSync(join(project, '.agents/team.state.json'), 'utf8');
       const made = world();
       const closes: string[] = [];

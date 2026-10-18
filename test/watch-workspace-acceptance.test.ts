@@ -21,7 +21,7 @@ import { installKey } from '../src/store/keys.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
 const PROJECT = 'acme';
@@ -195,6 +195,8 @@ function seed(heartbeat: string, watch: { pane?: string; workspace?: string; pid
     session.seats[SEAT] = { stage: 'ready', pane: SEAT_PANE, workspace: 'w1' };
     session.watch = { ...watch, heartbeat };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir: join(root, '.agents'), root, session: SESSION, seats: [SEAT], home, at: NOW.toISOString() });
 }
 
 function quiet(seatLabel: string): Live {

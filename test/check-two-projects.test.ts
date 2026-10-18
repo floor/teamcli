@@ -20,7 +20,7 @@ import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T00:30:00Z');
 
@@ -69,7 +69,19 @@ function place(text: string = TEXT): { base: string; root: string; home: string 
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-projects-')));
   const home = join(base, 'home');
   mkdirSync(home);
-  return { base, root: checkout(base, 'acme', text), home };
+  const root = checkout(base, 'acme', text);
+  const parsed = validateTeamFile(text);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+  // The launch delivered the general brief before it typed: each seat's record and state entry.
+  deliverBriefs({
+    dir: join(root, '.agents'),
+    root,
+    session: parsed.team.session,
+    seats: parsed.team.seats.map((seat) => seat.name),
+    home,
+    at: NOW.toISOString(),
+  });
+  return { base, root, home };
 }
 
 /** One checkout: a git repository with its team file, and the state recording the seat running

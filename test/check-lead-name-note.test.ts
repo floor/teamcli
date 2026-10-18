@@ -17,7 +17,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
@@ -79,7 +79,9 @@ function place(text: string): string {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-lead-name-')));
   made.push(base);
   const root = join(base, 'acme');
+  const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(home);
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   writeFileSync(join(root, '.agents/team.yaml'), text);
   const parsed = validateTeamFile(text);
@@ -91,6 +93,15 @@ function place(text: string): string {
     parsed.team.seats.forEach((seat, index) => {
       session.seats[seat.name] = { stage: 'ready', pane: `w${String(index + 1)}:p1`, workspace: `w${String(index + 1)}` };
     });
+  });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({
+    dir: join(root, '.agents'),
+    root,
+    session: parsed.team.session,
+    seats: parsed.team.seats.map((seat) => seat.name),
+    home,
+    at: NOW.toISOString(),
   });
   return root;
 }

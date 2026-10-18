@@ -21,7 +21,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { emptySession, readState, STATE_FILE, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T15:00:00Z');
 const OWNER: Caller = { kind: 'owner' };
@@ -107,6 +107,12 @@ function seed(w: World, sessions: Record<string, 'lead' | 'empty'>): void {
       }
     }
   });
+  // The launch delivered the general brief before it typed: each launched lead's record and entry.
+  for (const [name, kind] of Object.entries(sessions)) {
+    if (kind === 'lead') {
+      deliverBriefs({ dir: w.dir, root: w.root, session: name, seats: ['lead'], home: w.home, at: NOW.toISOString() });
+    }
+  }
 }
 
 /** The live read of the file's own session: the declared lead, idle on its pane. */
