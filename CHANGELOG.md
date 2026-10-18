@@ -143,6 +143,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `privileged-self-subscription`, logs the refusal, and raises `team.policy-refused` to the
   owner.
 
+- **Routing, and the owner's own delivery.** An event's recipients come from its kind's release
+  defaults, folded through the routing words in force: a word may add a recipient for a kind,
+  and cannot remove one it did not add, and a privileged kind keeps its default owner. A
+  recipient may name a seat by its plain name or by the agent registry id that holds it — a
+  claimed pane must match the one the registry holds, a retired agent's id names nobody, and an
+  id the registry does not know is left as written. An event routed or addressed to `owner`
+  reaches the owner with no seat in the path: the machine notification the watch raises and a
+  signed record in the owner's mailbox, the list `team messages` reads, so a held or unreachable
+  seat silences neither, and the watch's owner report merges with the operator's copy of the
+  same observation, so the owner's list holds it once. A kind on the owner's immediacy list —
+  `owner-at-once`, an owner-sovereign setting whose release default is the owner's
+  `seat.at-prompt`, `seat.unreachable` and `seat.done`, plus every roster, grant and policy
+  event — rings and lands as its own record; everything else collects in the pass and lands as
+  one digest record at its flush, and both ids are deterministic, so a watch restarted from
+  cursor 0 rings and writes nothing again. `--no-notify` never silences an owner push.
+
 - **The watcher each launch leaves.** The launch plan reads, once per seat, how the seat's CLI
   will learn that a drop is waiting — the turn-start hook the launch installs, the MCP inbox
   server its profile registers, or nothing — carries it through the launch's steps, and stores
