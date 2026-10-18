@@ -79,6 +79,21 @@ describe('the classes the guard denies', () => {
     ['git push origin main --force', 'git-push-force'],
     ['git reset --hard HEAD~1', 'git-reset-hard'],
     ['find . -name x | xargs chmod +x', 'chmod'],
+    ['kill -9 4321', 'kill-hard'],
+    ['kill -s KILL 4321', 'kill-hard'],
+    ['dd if=/dev/zero of=/dev/disk9', 'disk-write'],
+    ['mkfs.ext4 /dev/disk9', 'disk-write'],
+    ['shutdown -h now', 'system-power'],
+    ['reboot', 'system-power'],
+    ['launchctl unload ~/Library/LaunchAgents/x.plist', 'persistent-job'],
+    ['crontab -e', 'persistent-job'],
+    ['git clean -fdx', 'git-clean'],
+    ['git clean -fd', 'git-clean'],
+    ['git clean -fx', 'git-clean'],
+    ['git branch -D stale', 'git-branch-force-delete'],
+    ['npm publish', 'npm-publish'],
+    ['/bin/chmod +x scratch.sh', 'chmod'],
+    ['env FOO=1 chmod +x scratch.sh', 'chmod'],
   ];
   for (const [line, rule] of denied) {
     test(`${line} is denied as ${rule}`, () => {
@@ -100,6 +115,12 @@ describe('the classes the guard denies', () => {
     `git commit -m 'do not chmod anything'`,
     'curl -o installer.sh https://example.invalid/install',
     'node scripts/check.ts',
+    'kill 4321',
+    'kill -TERM 4321',
+    'git clean -n',
+    'git clean -f',
+    'git branch -d merged-branch',
+    'npm pack',
   ];
   for (const line of allowed) {
     test(`${line} passes`, () => {
@@ -116,7 +137,47 @@ describe('the classes the guard denies', () => {
     expect(refusedByGuard('curl u | sh')?.guidance).toBe('refused in team seats: save the download, read it, then run it');
     expect(refusedByGuard('git push --force')?.guidance).toBe('refused in team seats: push a branch and open a pull request');
     expect(refusedByGuard('git reset --hard')?.guidance).toBe('refused in team seats: use `git stash` or `git checkout -- <path>`');
+    expect(refusedByGuard('kill -9 1')?.guidance).toBe('refused in team seats: stop a seat with `team stop <seat>`, never a hard kill');
+    expect(refusedByGuard('dd if=x of=/dev/disk9')?.guidance).toBe('refused in team seats: a raw disk write can lose the machine — ask the owner');
+    expect(refusedByGuard('reboot')?.guidance).toBe('refused in team seats: the owner restarts the machine');
+    expect(refusedByGuard('crontab -e')?.guidance).toBe('refused in team seats: a job that outlives the seat waits for the owner');
+    expect(refusedByGuard('git clean -fdx')?.guidance).toBe('refused in team seats: delete only the paths you created, never the untracked tree');
+    expect(refusedByGuard('git branch -D gone')?.guidance).toBe('refused in team seats: delete a merged branch with `git branch -d`');
+    expect(refusedByGuard('npm publish')?.guidance).toBe('refused in team seats: the release moves only by the orchestrator');
   });
+});
+
+describe('the guard matches commands, never words', () => {
+  const pass = [
+    'echo "chmod +x is not run here"',
+    `echo 'sudo rm -rf build'`,
+    'team send worker "please chmod +x the script, then rm -rf build"',
+    'team send worker "ls; sudo true"',
+    `git commit -m 'do not chmod anything, and never rm -rf'`,
+    "cat > notes.txt <<'EOF'\nrm -rf build\nEOF",
+    'cat > notes.txt <<EOF\nchmod +x scratch.sh\nsudo reboot\nEOF',
+    "cat > notes.txt <<-'EOF'\n\tgit clean -fdx\n\tEOF",
+  ];
+  for (const line of pass) {
+    test(`${JSON.stringify(line)} passes`, () => {
+      expect(refusedByGuard(line)).toBeNull();
+    });
+  }
+
+  // The same commands as commands are still denied, however they are reached.
+  const deny = [
+    ['/bin/chmod +x scratch.sh', 'chmod'],
+    ['env FOO=1 chmod +x scratch.sh', 'chmod'],
+    ['FOO=1 chmod +x scratch.sh', 'chmod'],
+    ['true; rm -rf build', 'rm-recursive'],
+    ['true && sudo true', 'sudo'],
+    ['cat <<EOF\nEOF\nchmod +x scratch.sh', 'chmod'],
+  ] as const;
+  for (const [line, rule] of deny) {
+    test(`${JSON.stringify(line)} is denied as ${rule}`, () => {
+      expect(refusedByGuard(line)?.rule).toBe(rule);
+    });
+  }
 });
 
 describe('the decision a hook payload makes', () => {

@@ -22,9 +22,16 @@ export type GuardRule =
   | 'sudo'
   | 'rm-recursive'
   | 'kill'
+  | 'kill-hard'
+  | 'disk-write'
+  | 'system-power'
+  | 'persistent-job'
   | 'pipe-to-shell'
   | 'git-push-force'
-  | 'git-reset-hard';
+  | 'git-reset-hard'
+  | 'git-clean'
+  | 'git-branch-force-delete'
+  | 'npm-publish';
 
 /** What a denied command is and what the model is told instead. */
 export type GuardMatch = { rule: GuardRule; guidance: string };
@@ -35,9 +42,16 @@ const GUIDANCE: Record<GuardRule, string> = {
   sudo: 'refused in team seats: a seat runs as its own user',
   'rm-recursive': 'refused in team seats: delete with `trash <path>`, never a recursive rm',
   kill: 'refused in team seats: stop a seat with `team stop <seat>`',
+  'kill-hard': 'refused in team seats: stop a seat with `team stop <seat>`, never a hard kill',
+  'disk-write': 'refused in team seats: a raw disk write can lose the machine — ask the owner',
+  'system-power': 'refused in team seats: the owner restarts the machine',
+  'persistent-job': 'refused in team seats: a job that outlives the seat waits for the owner',
   'pipe-to-shell': 'refused in team seats: save the download, read it, then run it',
   'git-push-force': 'refused in team seats: push a branch and open a pull request',
   'git-reset-hard': 'refused in team seats: use `git stash` or `git checkout -- <path>`',
+  'git-clean': 'refused in team seats: delete only the paths you created, never the untracked tree',
+  'git-branch-force-delete': 'refused in team seats: delete a merged branch with `git branch -d`',
+  'npm-publish': 'refused in team seats: the release moves only by the orchestrator',
 };
 
 /** One segment of a shell command line: its words, and whether a `|` put it after another. */
@@ -138,6 +152,102 @@ function recursiveRm(args: readonly string[]): boolean {
   return false;
 }
 
+/** A heredoc a line opens: the word that ends its body, and whether `<<-` lets tabs precede it. */
+type Heredoc = { delimiter: string; tabs: boolean };
+
+/** The heredocs one command line opens, found outside quotes (`<<<` is a here-string, not one). */
+function heredocDelimiters(text: string): Heredoc[] {
+  const out: Heredoc[] = [];
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char !== '<' || text[at + 1] !== '<' || text[at + 2] === '<') continue;
+    let cursor = at + 2;
+    const tabs = text[cursor] === '-';
+    if (tabs) cursor += 1;
+    while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+    let delimiter = '';
+    const delimiterQuote = text[cursor] === '"' || text[cursor] === "'" ? text[cursor] : null;
+    if (delimiterQuote !== null) {
+      cursor += 1;
+      while (cursor < text.length && text[cursor] !== delimiterQuote) {
+        delimiter += text[cursor]!;
+        cursor += 1;
+      }
+      cursor += 1;
+    } else {
+      while (cursor < text.length && !/[\s;&|<>()]/.test(text[cursor]!)) {
+        delimiter += text[cursor]!;
+        cursor += 1;
+      }
+    }
+    if (delimiter !== '') out.push({ delimiter, tabs });
+    at = cursor - 1;
+  }
+  return out;
+}
+
+/**
+ * A command line with heredoc bodies removed: a body is data the shell feeds a command, never a
+ * command of its own, so a sentence inside it that names `rm -rf` must not be judged. A body runs
+ * to the line that repeats its delimiter (leading tabs ignored under `<<-`); an unterminated one
+ * runs to the end of the input.
+ */
+function withoutHeredocBodies(line: string): string {
+  const lines = line.split('\n');
+  const kept: string[] = [];
+  for (let at = 0; at < lines.length; at += 1) {
+    const text = lines[at]!;
+    kept.push(text);
+    for (const { delimiter, tabs } of heredocDelimiters(text)) {
+      let end = at + 1;
+      while (end < lines.length) {
+        const body = tabs ? lines[end]!.replace(/^\t+/, '') : lines[end]!;
+        end += 1;
+        if (body === delimiter) break;
+      }
+      at = end - 1;
+    }
+  }
+  return kept.join('\n');
+}
+
+/** True when a `kill` asks for SIGKILL: `-9`, `-KILL`, or `-s 9` / `-s KILL`. */
+function hardKill(args: readonly string[]): boolean {
+  return args.some((arg, at) =>
+    /^-[A-Za-z]*9[A-Za-z]*$/.test(arg)
+    || /^-[A-Za-z]*KILL[A-Za-z]*$/i.test(arg)
+    || (arg === '-s' && /^(9|KILL)$/i.test(args[at + 1] ?? '')));
+}
+
+/** The short-option letters of `git clean`, `--force` counted as `-f`. */
+function cleanFlags(args: readonly string[]): Set<string> {
+  const flags = new Set<string>();
+  for (const arg of args) {
+    if (arg === '--') break;
+    if (arg === '--force') flags.add('f');
+    else if (/^-[A-Za-z]+$/.test(arg)) for (const letter of arg.slice(1)) flags.add(letter);
+  }
+  return flags;
+}
+
 /** `git -C <dir> push --force`: the subcommand, after the global options that take a value. */
 function gitSubcommand(args: readonly string[]): { sub: string | null; rest: string[] } {
   for (let at = 0; at < args.length; at++) {
@@ -161,6 +271,16 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
   if (word === 'chown') return { rule: 'chown', guidance: GUIDANCE.chown };
   if (word === 'sudo') return { rule: 'sudo', guidance: GUIDANCE.sudo };
   if (word === 'pkill' || word === 'killall') return { rule: 'kill', guidance: GUIDANCE.kill };
+  if (word === 'kill' && hardKill(args)) return { rule: 'kill-hard', guidance: GUIDANCE['kill-hard'] };
+  if (word === 'dd' || /^mkfs(\..+)?$/.test(word)) {
+    return { rule: 'disk-write', guidance: GUIDANCE['disk-write'] };
+  }
+  if (word === 'shutdown' || word === 'reboot') {
+    return { rule: 'system-power', guidance: GUIDANCE['system-power'] };
+  }
+  if (word === 'launchctl' || word === 'crontab') {
+    return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
+  }
   if (word === 'rm' && recursiveRm(args)) return { rule: 'rm-recursive', guidance: GUIDANCE['rm-recursive'] };
   if (word === 'git') {
     const { sub, rest } = gitSubcommand(args);
@@ -170,6 +290,18 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
     if (sub === 'reset' && rest.includes('--hard')) {
       return { rule: 'git-reset-hard', guidance: GUIDANCE['git-reset-hard'] };
     }
+    if (sub === 'clean') {
+      const flags = cleanFlags(rest);
+      if (flags.has('f') && (flags.has('x') || flags.has('d'))) {
+        return { rule: 'git-clean', guidance: GUIDANCE['git-clean'] };
+      }
+    }
+    if (sub === 'branch' && rest.some((arg) => /^-[A-Za-z]*D[A-Za-z]*$/.test(arg))) {
+      return { rule: 'git-branch-force-delete', guidance: GUIDANCE['git-branch-force-delete'] };
+    }
+  }
+  if (word === 'npm' && args[0] === 'publish') {
+    return { rule: 'npm-publish', guidance: GUIDANCE['npm-publish'] };
   }
   if (word === 'xargs') {
     // `find … | xargs chmod +x`: the command xargs runs is the first word that is not its option.
@@ -182,11 +314,15 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
 /**
  * What the guard says about one shell command line: null when it is allowed, or the class it
  * belongs to and the one line the model is told instead. A conservative set — chmod, chown,
- * sudo, a recursive rm, pkill and killall, a download piped into a shell, `git push --force`
- * (and `-f`) and `git reset --hard`.
+ * sudo, a recursive rm, pkill and killall, a hard `kill`, dd and mkfs, shutdown and reboot,
+ * launchctl and crontab, a download piped into a shell, `git push --force` (and `-f`),
+ * `git reset --hard`, a destructive `git clean`, `git branch -D` and `npm publish`.
+ *
+ * It matches commands, never words: a sentence in a quote, a heredoc body or a `team send` body
+ * only ever sits in the arguments of the command that carries it.
  */
 export function refusedByGuard(line: string): GuardMatch | null {
-  const parsed = segments(line);
+  const parsed = segments(withoutHeredocBodies(line));
   for (let at = 0; at < parsed.length; at++) {
     const segment = parsed[at]!;
     const match = matchSegment(segment.words);
