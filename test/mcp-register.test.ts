@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { profileFor } from '../src/profiles/profile.ts';
@@ -14,14 +14,14 @@ afterEach(() => {
 });
 
 /** A seat's folder: the fixture's team file, and in a repository when `repo` says so. */
-function folder(options: { repo?: 'plain' | 'ignored' } = {}): string {
+function folder(options: { repo?: 'plain' | 'ignored'; ignore?: string } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
   dirs.push(dir);
   mkdirSync(join(dir, '.agents'));
   writeFileSync(join(dir, '.agents', 'team.yaml'), example);
   if (options.repo) {
     execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
-    if (options.repo === 'ignored') writeFileSync(join(dir, '.gitignore'), '.gemini/\n');
+    if (options.repo === 'ignored') writeFileSync(join(dir, '.gitignore'), options.ignore ?? '.gemini/\n');
   }
   return dir;
 }
@@ -146,5 +146,91 @@ describe('registerInbox', () => {
     expect(registerInbox({ cli: 'codex', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
     expect(registerInbox({ cli: 'muse', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
     expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
+  });
+});
+
+describe('the cursor file route', () => {
+  test('cursor declares its own project config and the approval its launch needs', () => {
+    expect(profileFor('cursor')?.mcpInbox).toEqual({
+      launchArgs: ['--approve-mcps'],
+      add: null,
+      target: null,
+      file: '.cursor/mcp.json',
+    });
+  });
+
+  test('a folder outside a repository gets the file, holding the runner and the seat', () => {
+    const dir = folder();
+    const runner = selfRunner();
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8'))).toEqual({
+      mcpServers: {
+        'team-inbox': {
+          command: runner.command,
+          args: [runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web'],
+        },
+      },
+    });
+    expect(statSync(join(dir, '.cursor', 'mcp.json')).mode & 0o777).toBe(0o600);
+  });
+
+  test('an existing file keeps its other keys and its other servers', () => {
+    const dir = folder();
+    mkdirSync(join(dir, '.cursor'));
+    writeFileSync(join(dir, '.cursor', 'mcp.json'), JSON.stringify({ theme: 'dark', mcpServers: { other: { command: 'x', args: [] } } }));
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+    const written = JSON.parse(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8'));
+    expect(written.theme).toBe('dark');
+    expect(Object.keys(written.mcpServers).sort()).toEqual(['other', 'team-inbox']);
+    expect(written.mcpServers.other).toEqual({ command: 'x', args: [] });
+  });
+
+  test('a work tree that does not ignore the file refuses, and nothing is created', () => {
+    const dir = folder({ repo: 'plain' });
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
+      ok: false,
+      reason: 'its project does not ignore .cursor/mcp.json',
+    });
+    expect(() => readFileSync(join(dir, '.cursor', 'mcp.json'))).toThrow();
+  });
+
+  test('a work tree that ignores the file registers', () => {
+    const dir = folder({ repo: 'ignored', ignore: '.cursor/\n' });
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+  });
+
+  test('a file that is not JSON is left exactly as it is', () => {
+    const dir = folder();
+    mkdirSync(join(dir, '.cursor'));
+    writeFileSync(join(dir, '.cursor', 'mcp.json'), 'not json\n');
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
+      ok: false,
+      reason: '.cursor/mcp.json is not JSON, so it was left as it is',
+    });
+    expect(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8')).toBe('not json\n');
+  });
+
+  test('an mcpServers that is not an object is a refusal, not an overwrite', () => {
+    const dir = folder();
+    mkdirSync(join(dir, '.cursor'));
+    writeFileSync(join(dir, '.cursor', 'mcp.json'), '{"mcpServers": []}\n');
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
+      ok: false,
+      reason: '.cursor/mcp.json holds mcpServers that is not an object, so it was left as it is',
+    });
+    expect(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8')).toBe('{"mcpServers": []}\n');
+  });
+
+  test('a link is never followed: the file it names is not written through', () => {
+    const dir = folder();
+    mkdirSync(join(dir, '.cursor'));
+    const outside = join(dir, 'outside.json');
+    writeFileSync(outside, '{"untouched": true}\n');
+    symlinkSync(outside, join(dir, '.cursor', 'mcp.json'));
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
+      ok: false,
+      reason: '.cursor/mcp.json is not a regular file',
+    });
+    expect(readFileSync(outside, 'utf8')).toBe('{"untouched": true}\n');
   });
 });

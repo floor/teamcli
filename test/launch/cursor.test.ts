@@ -25,6 +25,10 @@ describe('Cursor launch and captured screens', () => {
     expect(launchCommand(cursor, 'cursor-agent --model grok-4.7-high', 'Rules.')).toBe(
       'AGENT_UNATTENDED=1 cursor-agent --model grok-4.7-high --force --sandbox disabled',
     );
+    // The launch approves the inbox server team registers in the seat's `.cursor/mcp.json`.
+    expect(launchCommand(cursor, 'cursor-agent', 'Rules.', undefined, { seat: 'helper', session: 'acme-web', command: '/opt/bun', entry: '/src/cli.ts' })).toBe(
+      'AGENT_UNATTENDED=1 cursor-agent --force --sandbox disabled --approve-mcps',
+    );
     expect(cursor.rulesOption).toBeNull();
     expect(cursor.loginCheck).toEqual(['status']);
     expect(cursor.loginHint).toBe('cursor-agent login');
