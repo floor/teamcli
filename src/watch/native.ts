@@ -10,13 +10,17 @@
 // - for a `drop` leg (such as a human-pane seat with `delivery_order: [native, drop]`): writes the
 //   0600 drop file in `.agents/send-drops/<session>/<seat>/<id>` with zero pane writes, and
 //   appends one history line (`outcome: 'delivered'`, `via: 'drop'`, `failed`);
-// - for `mcp-inbox`: records `mcp-inbox: unavailable; this build carries no mcp-inbox leg` and
-//   continues to the next leg;
+// - for `mcp-inbox`: writes the same 0600 drop file into the seat's own inbox when a live listener
+//   is there, marks it pending with `leg: 'mcp-inbox'` and appends one history line (`outcome:
+//   'sent (unconfirmed)'`, `via: 'mcp-inbox'`) — the watch's own inbox pass promotes a read and
+//   types the trigger once the fallback window ends; without a listener it records
+//   `mcp-inbox: no live inbox listener` and continues to the next leg;
 // - for `typed`: writes the 0600 drop file, delivers the trigger when the seat is free (or marks
 //   the drop pending for `retryHeldDrops`), and appends the history line.
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadTeamFile } from '../file/load.ts';
+import { inboxLive } from '../mcp/inbox.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -39,7 +43,6 @@ import { readState } from '../state.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
 
-const MCP_INBOX_UNAVAILABLE = 'unavailable; this build carries no mcp-inbox leg';
 const NATIVE_UNCONFIRMED_10M = 'native: unconfirmed after 10m';
 
 function hostOf(scene: RetryScene, session: string): DeliverHost {
@@ -118,8 +121,58 @@ async function expireOne(
 
   for (const leg of legs) {
     if (leg === 'mcp-inbox') {
-      failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
-      continue;
+      // The seat's own inbox is a leg this build walks: a live listener beside the message means
+      // the handoff's body is written into it — the same 0600 drop the send's inbox leg leaves —
+      // and the watch's own passes take it from there, promoting a read or typing the trigger once
+      // the fallback window ends. No listener is a leg that definitely cannot take it.
+      const live = inboxLive(dropDir, record.root, record.session, record.to);
+      if (!live.live) {
+        failures.push(`mcp-inbox: ${live.reason}`);
+        continue;
+      }
+      const lock = acquireSeatLock(toDir, record.session, record.to);
+      if (!('release' in lock)) {
+        restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
+        return;
+      }
+      try {
+        try {
+          writeDropFile(toDir, record.session, record.to, record.id, record.body);
+        } catch {
+          restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
+          return;
+        }
+        // The marker names the inbox leg, so the retry pass never mistakes this message for a
+        // held typed send: a receipt promotes it, and only the fallback window lets it be typed.
+        markPending(dropDir, {
+          id: record.id,
+          from: record.from,
+          to: record.to,
+          body: record.body,
+          ts: scene.now.toISOString(),
+          leg: 'mcp-inbox',
+        });
+        appendHistory(record.project, record.root, home, {
+          ts: scene.now.toISOString(),
+          from: record.from,
+          to: record.to,
+          ...sentAs,
+          body: record.body,
+          id: record.id,
+          outcome: 'sent (unconfirmed)',
+          ms: elapsedMs,
+          via: 'mcp-inbox',
+          failed: [...failures],
+        });
+        dropTaken(taken.taken);
+        scene.say(
+          `${record.to}: a native handoff from ${record.from} was unconfirmed after 10m; written to its MCP inbox`,
+          false,
+        );
+        return;
+      } finally {
+        lock.release();
+      }
     }
 
     if (leg === 'drop') {

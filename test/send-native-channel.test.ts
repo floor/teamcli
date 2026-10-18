@@ -4,7 +4,7 @@
 // confirm line — and `team send --confirm <id>` writes the one history line. `--wait` to a
 // Claude Code seat is refused while the socket is not the channel. No live pane.
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -337,7 +337,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       via: 'typed',
       failed: [
         `native: no socket was found for its pane's processes (looked in ${made.sockets})`,
-        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+        'mcp-inbox: no live inbox listener',
       ],
     },
   ]);
@@ -593,6 +593,69 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
   ]);
 });
 
+test('expiry writes the handoff into a live MCP inbox and leaves the retry a marker, zero pane writes', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  expect(existsSync(pending(made))).toBe(true);
+
+  // The record a running inbox server leaves: a live listener for this seat, session and root.
+  const dir = dropDir(made.dir, 'lead');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({
+    v: 1,
+    seat: 'lead',
+    session: 'acme',
+    root: made.root,
+    cli: 'claude-code',
+    pid: process.pid,
+    ts: NOW.toISOString(),
+  })}\n`);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
+  await expirePendingNative(scene);
+
+  // The handoff's body is the inbox message, marked for the inbox leg; nothing was typed.
+  expect(existsSync(pending(made))).toBe(false);
+  expect(watchPane.typed).toEqual([]);
+  expect(watchPane.enters).toBe(0);
+  expect(readdirSync(dir).filter((name) => !name.startsWith('.') && !name.endsWith('.pending'))).toEqual([ID]);
+  expect(readFileSync(join(dir, ID), 'utf8')).toBe(HANDOFF_BODY);
+  expect(JSON.parse(readFileSync(join(dir, `${ID}.pending`), 'utf8'))).toEqual({
+    id: ID,
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    ts: expiredAt.toISOString(),
+    tries: 0,
+    leg: 'mcp-inbox',
+  });
+  expect(said).toEqual([
+    'lead: a native handoff from helper was unconfirmed after 10m; written to its MCP inbox',
+  ]);
+
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: expiredAt.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      outcome: 'sent (unconfirmed)',
+      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
+      via: 'mcp-inbox',
+      failed: ['native: unconfirmed after 10m'],
+    },
+  ]);
+});
+
 test('confirm after expiry is refused and never causes a second delivery', async () => {
   const made = world();
   cleanup = made.cleanup;
@@ -708,7 +771,7 @@ test('expiry typed leg refuses a pane back at its shell with no drop file and no
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
       failed: [
         'native: unconfirmed after 10m',
-        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+        'mcp-inbox: no live inbox listener',
       ],
     },
   ]);
@@ -882,7 +945,7 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(history.ok && history.entries[1]?.via).toBe('drop');
   expect(history.ok && history.entries[1]?.failed).toEqual([
     'native: unconfirmed after 10m',
-    'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+    'mcp-inbox: no live inbox listener',
     "typed: the pane is a human's, and nothing is typed into it",
   ]);
 });
