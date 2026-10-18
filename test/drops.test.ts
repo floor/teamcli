@@ -4,12 +4,15 @@
 // another pane.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
+import { plantRecord } from '../src/commands/messages.ts';
 import { DROPS_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { signReceiptPayload, writeReceipt, type ReceiptPayload } from '../src/send/record.ts';
+import { messageKeyState } from '../src/store/keys.ts';
 import { updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -45,6 +48,8 @@ const D_OWNER = '0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d';
 const D_AGENT = '1b6c8d2e-9f30-4b7c-8d4e-2f3a4b5c6d7e';
 const D_READ = '2c7d9e3f-a041-4c8d-9e5f-3a4b5c6d7e8f';
 const D_HEADLESS = '3d8e0f4a-b152-4d9e-8f60-4b5c6d7e8f9a';
+const D_RECORD = '4e9f1a5b-b263-4ea0-9a71-5c6d7e8f9a0b';
+const D_RECORD_READ = '5fa02b6c-c374-4fb1-0b82-6d7e8f9a0b1c';
 
 const OWNER_HEADER = 'from the owner — admitted by: the owner';
 const AGENT_HEADER = 'from agt_d18cddafed22 (orchestrator, orchestrator@acme) — admitted by: an orchestrator or operator to a seat of its own team';
@@ -132,6 +137,26 @@ describe('team drops', () => {
     drop(`${D_READ}.read`, '');
     // A file whose first line is no sender header is still a drop, and its sender is unknown.
     const headlessPath = drop(D_HEADLESS, 'a body with no sender line\n');
+    // A send of this version leaves one signed record: the payload names the sender, and the
+    // read receipt the inbox writes carries its status in the name (`<id>.read.json`).
+    const recordPath = plantRecord(home, root, 'acme', 'lead', D_RECORD, 'the record body', {
+      from: 'orchestrator',
+      from_id: 'agt_d18cddafed22',
+      rule: 'an orchestrator or operator to a seat of its own team',
+    });
+    const readRecorded = plantRecord(home, root, 'acme', 'lead', D_RECORD_READ, 'already read');
+    const receipt: ReceiptPayload = {
+      kind: 'receipt',
+      status: 'read',
+      id: D_RECORD_READ,
+      to: 'lead',
+      root,
+      session: 'acme',
+      at: '2026-10-04T09:00:00.000Z',
+    };
+    const written = writeReceipt(dropDir, signReceiptPayload(receipt, home));
+    expect(written.ok).toBe(true);
+    expect(readRecorded.endsWith(D_RECORD_READ)).toBe(true);
 
     const result = await run();
     expect(result).toEqual({
@@ -142,12 +167,25 @@ describe('team drops', () => {
         `  the owner     ${ownerPath}`,
         `  orchestrator  ${agentPath}`,
         `  unknown       ${headlessPath}`,
+        `  orchestrator  ${recordPath}`,
         '',
-        '3 drops',
+        '4 drops',
         '',
       ].join('\n'),
       err: '',
     });
+  });
+
+  test('a record the message key does not verify leaves its sender unknown', () => {
+    const path = plantRecord(home, root, 'acme', 'lead', D_RECORD, 'tampered after signing');
+    const record = JSON.parse(readFileSync(path, 'utf8')) as { signature: string };
+    record.signature = 'not-this-key';
+    writeFileSync(path, `${JSON.stringify(record)}\n`);
+    const state = messageKeyState(home);
+    if (state.kind !== 'key') throw new Error('the fixture wrote no key');
+    const listing = listDrops(dropDir, state.key);
+    if (listing.kind !== 'ok') throw new Error(listing.reason);
+    expect(listing.rows.map((row) => [row.id, row.from])).toEqual([[D_RECORD, null]]);
   });
 
   test('--json is the same reading as one team.drops document', async () => {
