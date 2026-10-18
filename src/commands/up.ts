@@ -1289,7 +1289,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // The seats' own state hooks: a settings file per seat, named at the end of its launch line.
   // A dry run plans the map it would write; the real run writes the files below, before the
   // plan is built, and a seat whose file did not land launches exactly as the file declares.
-  const hookSeats = () => seats.map(({ name, cli, launch }) => ({ name, cli, launch }));
+  const hookSeats = () => seats.map(({ name, cli, launch, human }) => ({ name, cli, launch, ...(human ? { human: true as const } : {}) }));
   let cliHooks = plannedCliHooks(dir, session, hookSeats());
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
@@ -1485,7 +1485,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     stampGrantedTrust();
     // The settings files land before the plan types a line, so every launch carries its flag. A
     // seat whose file did not land is said once, in the log, and its launch is the plain line.
-    const installed = installCliHooks(dir, session, hookSeats());
+    const installed = installCliHooks(dir, session, hookSeats(), { project: team.project, root, home: sources.home });
     for (const name of Object.keys(cliHooks)) {
       if (installed[name] === undefined) {
         logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());

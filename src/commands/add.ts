@@ -953,7 +953,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and launches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat], { project: prepared.team.project, root, home: sources.home });
     const who = describeCaller(caller);
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
