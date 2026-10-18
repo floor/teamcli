@@ -18,7 +18,7 @@ import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
 import { readReply } from '../src/send/reply.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
-import { testIo } from './helpers.ts';
+import { recordBody, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-05T04:00:00.000Z');
@@ -211,7 +211,7 @@ describe('team send: delivered', () => {
     expect(pane.typed[0]).not.toContain('hello world');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops)[0] as string);
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello world');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello world');
     expect(pane.typed[0]).toContain(path);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('send [owner] lead: delivered');
@@ -230,7 +230,7 @@ describe('team send: delivered', () => {
     expect(code).toBe(0);
     expect(host.frames).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('from the owner — admitted by: the owner\n\nline one\nline two\n');
+    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe('from the owner — admitted by: the owner\n\nline one\nline two\n');
     expect(pane.typed[0]).not.toContain('line one');
   });
 
@@ -245,7 +245,7 @@ describe('team send: delivered', () => {
     expect(code).toBe(0);
     expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
       `from agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')} (lead, lead@acme) — admitted by: an orchestrator to another orchestrator\n\na note`,
     );
   });
@@ -262,7 +262,7 @@ describe('team send: delivered', () => {
     expect(io.err).toBe('');
     expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
       `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: a seat to its own team's orchestrator\n\na note`,
     );
   });
@@ -280,7 +280,7 @@ describe('team send: delivered', () => {
     expect(io.err).toBe('');
     expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
       "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
     );
   });
@@ -900,7 +900,7 @@ describe('team send: native drop', () => {
     expect(statSync(dropsRoot).mode & 0o777).toBe(0o700);
     expect(statSync(sessionDir).mode & 0o777).toBe(0o700);
     expect(statSync(drops).mode & 0o777).toBe(0o700);
-    expect(readFileSync(path, 'utf8')).toBe(`from the owner — admitted by: the owner\n\n${body}`);
+    expect(recordBody(path)).toBe(`from the owner — admitted by: the owner\n\n${body}`);
     expect(trigger).toContain(path);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('herdr status working');
@@ -955,7 +955,7 @@ describe('team send: native drop', () => {
     const names = readdirSync(drops);
     const name = names.filter((entry) => !entry.endsWith('.pending'))[0] as string;
     expect(io.err).toContain(join(drops, name));
-    expect(readFileSync(join(drops, name), 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(join(drops, name))).toBe('from the owner — admitted by: the owner\n\nhello');
     // A not-submitted drop is marked pending so a running watch retries it.
     expect(names.filter((entry) => entry.endsWith('.pending'))).toHaveLength(1);
   });
@@ -1113,7 +1113,7 @@ describe('team send: native drop', () => {
     expect(code).toBe(1);
     expect(io.err).toContain('the pane did not take the trigger');
     const drops = join(dir, 'send-drops', 'acme', 'native');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('a dialog the classifier already knows is not reached, and nothing further is pressed', async () => {

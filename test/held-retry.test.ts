@@ -32,7 +32,7 @@ import type { Live } from '../src/status/compare.ts';
 import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage } from '../src/mcp/inbox.ts';
 import { promoteInboxDrops, retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
-import { claudeBox, testIo } from './helpers.ts';
+import { claudeBox, recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
 // Inbox ids are what `team send` writes — a lowercase UUID — because the server serves no other
@@ -248,7 +248,7 @@ describe('retryHeldDrops', () => {
     expect(one.enters).toBe(0);
     expect(readPending(dropDir)).toEqual([]);
     expect(said).toEqual([
-      `lead: a held send from owner was not delivered (the pane is a human's, and nothing is typed into it); the drop file is at ${join(dropDir, 'drop-human')}; send it again`,
+      `lead: a held send from owner was not delivered (the pane is a human's, and nothing is typed into it); the record is at ${join(dropDir, 'drop-human')}; send it again`,
     ]);
     // The message itself waits on disk: the person reads the drop file.
     expect(readFileSync(join(dropDir, 'drop-human'), 'utf8')).toBe('from the owner\n\nhello');
@@ -275,7 +275,7 @@ describe('retryHeldDrops', () => {
     expect(one.enters).toBe(0);
     expect(readPending(dropDir)).toEqual([]);
     expect(said).toEqual([
-      `lead: a held send from owner was not delivered (the seat is back at its shell; nothing was typed); the drop file is at ${join(dropDir, 'drop-shell')}; send it again`,
+      `lead: a held send from owner was not delivered (the seat is back at its shell; nothing was typed); the record is at ${join(dropDir, 'drop-shell')}; send it again`,
     ]);
     // The message waits on disk for the seat's return or a person's hand.
     expect(readFileSync(join(dropDir, 'drop-shell'), 'utf8')).toBe('from the owner\n\nhello');
@@ -324,7 +324,7 @@ describe('retryHeldDrops', () => {
     await retryHeldDrops(at);
     expect(readPending(dropDir)).toEqual([]);
     expect(said).toHaveLength(1);
-    expect(said[0]).toContain('the drop file is at');
+    expect(said[0]).toContain('the record is at');
     expect(said[0]).toContain(join(dropDir, 'drop-3'));
     expect(said[0]).toContain('send it again');
     expect(said[0]).toContain(`in ${PENDING_MAX_TRIES} tries`);
@@ -353,7 +353,7 @@ describe('retryHeldDrops', () => {
     expect(one.enters).toBe(0);
     expect(readPending(dropDir)).toEqual([]);
     expect(said).toEqual([
-      `lead: a held send from owner was not delivered (the retry window passed); the drop file is at ${join(dropDir, 'drop-4')}; send it again`,
+      `lead: a held send from owner was not delivered (the retry window passed); the record is at ${join(dropDir, 'drop-4')}; send it again`,
     ]);
   });
 
@@ -376,7 +376,7 @@ describe('retryHeldDrops', () => {
     expect(one.enters).toBe(0);
     expect(readPending(dropDir)).toEqual([]);
     expect(said).toEqual([
-      `lead: a held send from owner was not delivered (the retry window passed); the drop file is at ${join(dropDir, 'drop-gone-seat')}; send it again`,
+      `lead: a held send from owner was not delivered (the retry window passed); the record is at ${join(dropDir, 'drop-gone-seat')}; send it again`,
     ]);
   });
 
@@ -644,7 +644,7 @@ describe('a retry that ends taken', () => {
     expect(one.enters).toBe(0);
     expect(readTaken(dropDir)).toEqual([]);
     expect(said.at(-1)).toBe(
-      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDir, id)}`,
+      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDir, id)}`,
     );
   });
 });
@@ -674,7 +674,7 @@ describe('team send leaves the record the retry reads', () => {
     const code = await runSend(['lead', 'hello'], io, host);
     expect(code).toBe(1);
     expect(io.err).toContain('held: the composer already holds unsent text');
-    expect(io.err).toContain('the drop file is at');
+    expect(io.err).toContain('the record is at');
     expect(io.err).toContain('a running watch retries it when the seat is idle');
     expect(one.typed).toEqual([]);
 
@@ -684,7 +684,7 @@ describe('team send leaves the record the retry reads', () => {
     const drop = drops[0] as PendingDrop;
     expect(drop).toMatchObject({ from: 'owner', to: 'lead', tries: 0, ts: NOW.toISOString() });
     expect(drop.body).toContain('hello');
-    expect(readFileSync(join(dropDir, drop.id), 'utf8')).toBe(drop.body);
+    expect(recordBody(join(dropDir, drop.id))).toBe(drop.body);
     expect(pendingDropPath(dropDir, drop.id)).toContain(drop.id);
 
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
@@ -728,7 +728,7 @@ describe('team send leaves the record the retry reads', () => {
     const code = await runSend(['lead', 'hello'], io, host);
     expect(code).toBe(1);
     expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle');
-    expect(io.err).toContain('the drop file is at');
+    expect(io.err).toContain('the record is at');
     // A dialog is nobody's to submit: the Enter stays unspent.
     expect(one.enters).toBe(0);
 
@@ -737,7 +737,7 @@ describe('team send leaves the record the retry reads', () => {
     expect(drops).toHaveLength(1);
     const drop = drops[0] as PendingDrop;
     expect(drop).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
-    expect(readFileSync(join(dropDir, drop.id), 'utf8')).toBe(drop.body);
+    expect(recordBody(join(dropDir, drop.id))).toBe(drop.body);
 
     // Once the prompt is answered the seat is free, and the watch delivers the drop.
     one.screen = claudeBox('');

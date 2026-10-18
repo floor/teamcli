@@ -32,7 +32,7 @@ import { triggerLine } from '../src/send/native.ts';
 import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { filed } from './send-native-fixtures.ts';
-import { testIo } from './helpers.ts';
+import { recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T17:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -264,7 +264,7 @@ describe('the send daemon\'s boundaries', () => {
     // The drop, and the retry record a held send leaves beside it.
     const directFiles = readdirSync(directDrops).filter((name) => !name.endsWith('.pending'));
     expect(directFiles.length).toBe(1);
-    expect(readFileSync(join(directDrops, directFiles[0]!), 'utf8')).toBe(filed(longBrief));
+    expect(recordBody(join(directDrops, directFiles[0]!))).toBe(filed(longBrief));
     expect(readdirSync(directDrops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
 
     // 2. Direct send when composer shows a paste chip instead of the trigger
@@ -341,6 +341,8 @@ describe('the send daemon\'s boundaries', () => {
     if (line === null) throw new Error('the fixture path makes a trigger line the native gate would refuse');
     expect(host.typed[0]?.text).toBe(line);
     expect(host.typed[0]?.text.includes(body)).toBe(false);
+    // The daemon's own state-folder drop, not the checkout's record tree: it still holds the
+    // raw body, and the daemon is not wired into a live send.
     expect(readFileSync(dropPath, 'utf8')).toBe(filed(body));
     expect(lstatSync(dropPath).mode & 0o777).toBe(0o600);
 

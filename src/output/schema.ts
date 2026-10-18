@@ -794,7 +794,7 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['ts', 'from', 'to', 'body', 'id', 'outcome'],
+        required: ['ts', 'from', 'to', 'body', 'id', 'outcome', 'status'],
         properties: {
           ts: { type: 'string' },
           from: { type: 'string' },
@@ -802,6 +802,14 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
           body: { type: 'string' },
           id: { type: 'string' },
           outcome: { type: 'string' },
+          // The status the line's outcome derives (§3.3): `sent`, `held`, `delivered`, `read` or
+          // `replied`. An attempt outcome the history records — `timeout`, `not-submitted`,
+          // `unreachable` — folds to `sent`: it moved no status on the record.
+          status: { type: 'string' },
+          // The thread the message belongs to (the first message's id), and — on a reply — the
+          // record it answers. Present on every line a send of this version writes.
+          thread: { type: 'string' },
+          in_reply_to: { type: 'string' },
           // Present only on a line the sender measured, as the history log writes it.
           ms: { type: 'number' },
           via: { type: 'string' },

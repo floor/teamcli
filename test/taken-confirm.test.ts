@@ -234,7 +234,7 @@ describe('a taken delivery its seat never acted on', () => {
     confirmTakenDrops(at);
 
     expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDirOf(made), id)}`,
+      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
     ]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
 
@@ -270,7 +270,7 @@ describe('a taken delivery its seat never acted on', () => {
     confirmTakenDrops(at);
 
     expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDirOf(made), id)}`,
+      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
     ]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
   });
@@ -299,7 +299,7 @@ describe('a taken delivery its seat never acted on', () => {
     confirmTakenDrops(at);
 
     expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDirOf(made), id)}`,
+      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
     ]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
   });

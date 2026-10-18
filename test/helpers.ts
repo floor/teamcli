@@ -5,7 +5,22 @@ import { PROFILES } from '../src/clis.ts';
 import type { Io } from '../src/io.ts';
 import { rulesText } from '../src/launch/rules.ts';
 import { readAgents } from '../src/registry/agents.ts';
+import { signedRecordOf, type SignedRecord } from '../src/send/record.ts';
 import { updateState } from '../src/state.ts';
+
+/** The signed record at `path`, parsed: a test that asserts the message's body asserts the
+ *  record's payload, never the envelope's bytes. Throws when the file is not a record. */
+export function recordAt(path: string): SignedRecord {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  const record = signedRecordOf(parsed);
+  if (record === null) throw new Error(`not a message record: ${path}`);
+  return record;
+}
+
+/** The body the record at `path` carries. */
+export function recordBody(path: string): string {
+  return recordAt(path).payload.body;
+}
 
 /** The seven-rule message the Codex 0.160.0 and Cursor 2026.10.01 captures were typed with,
  *  as today's `rulesText` composes it: 17 lines and 1194 characters. Only the first own-rule

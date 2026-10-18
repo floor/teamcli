@@ -52,6 +52,8 @@ export type PendingDrop = {
    *  retry's own business; `mcp-inbox` on a message left in the seat's inbox, whose marker is
    *  followed by the inbox leg rather than typed by the retry pass. */
   leg?: 'mcp-inbox';
+  /** The thread the message belongs to; absent on a marker written before the thread spine. */
+  thread?: string;
 };
 
 /** The marker's path: the drop's own name with `.pending` after it. */
@@ -114,6 +116,7 @@ function readPendingDrops(dropDir: string): PendingDrop[] {
         ts: parsed.ts,
         tries: typeof parsed.tries === 'number' && Number.isInteger(parsed.tries) && parsed.tries >= 0 ? parsed.tries : 0,
         ...(parsed.leg === 'mcp-inbox' ? { leg: 'mcp-inbox' as const } : {}),
+        ...(typeof parsed.thread === 'string' && parsed.thread !== '' ? { thread: parsed.thread } : {}),
       });
     } catch {
       continue;
@@ -184,6 +187,9 @@ export type PendingNative = {
   fallback?: readonly PendingNativeFallbackLeg[];
   /** The whole body the sender was told to send, sender header and nonce included. */
   body: string;
+  /** The thread the message belongs to: the first message's id. Absent on a record written
+   *  before the thread spine; such a record's thread is its own id. */
+  thread?: string;
 };
 
 export type PendingRead = { ok: true; record: PendingNative | null } | { ok: false; reason: string };
@@ -494,6 +500,7 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
   }
   if (flat.from_id !== null && typeof flat.from_id !== 'string') return null;
   if (flat.to_id !== null && typeof flat.to_id !== 'string') return null;
+  if (flat.thread !== undefined && (typeof flat.thread !== 'string' || flat.thread === '')) return null;
   if (fields.some((field) => (flat[field] as string) === '')) return null;
   if (!Number.isFinite(Date.parse(flat.ts as string))) return null;
   let sentAs: { spec: string; resolved: string } | undefined;
@@ -532,6 +539,7 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
     root: flat.root as string,
     ...(sentAs ?? {}),
     ...(fallback !== undefined ? { fallback } : {}),
+    ...(typeof flat.thread === 'string' ? { thread: flat.thread } : {}),
     body: flat.body as string,
   };
 }

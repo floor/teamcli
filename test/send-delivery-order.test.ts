@@ -40,7 +40,7 @@ import { triggerLine } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
 import { storePath } from '../src/store/store.ts';
-import { testIo } from './helpers.ts';
+import { recordBody, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T06:00:00.000Z');
@@ -283,17 +283,20 @@ describe('the walk records the channel and the legs it skipped', () => {
     const trigger = triggerLine(dropped(w.root, 'lead'));
     if (trigger === null) throw new Error('the drop path did not fit a trigger line');
     expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);
-    expect(lastEntry(w.root, w.home)).toEqual({
+    const entry = lastEntry(w.root, w.home);
+    expect(entry).toEqual({
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
+      thread: expect.any(String),
       outcome: 'delivered',
       ms: 0,
       via: 'typed',
       failed: [NATIVE_SKIP, MCP_SKIP],
     });
+    expect(entry.thread).toBe(entry.id);
   });
 
   test('a level that drops the native leg leaves only the skips still walked', async () => {
@@ -315,7 +318,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
-    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
   test('a codex seat has no native leg to walk, so only the mcp-inbox skip is recorded', async () => {
@@ -383,6 +386,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id,
+      thread: id,
       outcome: 'delivered (read)',
       ms: 0,
       via: 'mcp-inbox',
@@ -409,6 +413,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id,
+      thread: id,
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'mcp-inbox',
@@ -422,6 +427,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id,
+      thread: id,
       tries: 0,
       leg: 'mcp-inbox',
     });
@@ -615,13 +621,14 @@ describe('the drop leg', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home)).toEqual({
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
+      thread: expect.any(String),
       outcome: 'delivered',
       ms: 0,
       via: 'drop',
@@ -658,7 +665,7 @@ describe('the drop leg', () => {
     expect(doc.status).toBe('delivered');
     expect(doc.channel).toBe('drop');
     expect(doc.action_summary).toBe('lead: delivered (dropped)');
-    expect(readFileSync(join(dropDir(w.root, 'lead'), doc.ids.sent), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(join(dropDir(w.root, 'lead'), doc.ids.sent))).toBe(`${HEADER}hello`);
   });
 
   test('its dry run names the drop file and no typing', async () => {
@@ -695,13 +702,14 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home)).toEqual({
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
+      thread: expect.any(String),
       outcome: 'delivered',
       ms: 0,
       via: 'drop',
