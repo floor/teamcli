@@ -2877,6 +2877,7 @@ describe('rules text', () => {
     expect(sharedRules).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (lead) in one line and keep working.',
+      'If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.',
       'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
       'In a protected checkout, never switch the branch, reset or commit.',
       'Never break CI.',

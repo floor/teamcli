@@ -37,6 +37,10 @@ export function seatRules(input: RulesInput): string[] {
   const own = [
     'End every commit message and every pull request body with your signature, given below.',
     `Never stop at a question: tell the orchestrator (${input.orchestrator}) in one line and keep working.`,
+    // The inbox is client-pull: a seat sees a message only when it asks. The sentence is
+    // conditional because only a CLI with a measured registration carries the server — every
+    // other seat has no such tool, and the line asks it for nothing.
+    'If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.',
     'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     'In a protected checkout, never switch the branch, reset or commit.',
   ];
