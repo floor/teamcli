@@ -472,6 +472,7 @@ The sender makes the call with its own SendMessage, then runs the printed line.
 
 ```console caller=claude-keeper
 $ team send claude-scribe "the draft is ready for review" ; echo "exit $?"
+team beacon, session "beacon"
 claude-scribe: native: nothing was sent; make the call with your own SendMessage, then record it
 to: uds:~/cc-socks/4200.sock
 message:
@@ -487,6 +488,7 @@ span from the handoff to the confirm, and clears the pending record. A second co
 
 ```console caller=claude-keeper
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
+team beacon, session "beacon"
 claude-scribe: confirmed (native, 0 ms)
 exit 0
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"

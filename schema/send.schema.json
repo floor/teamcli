@@ -51,6 +51,8 @@
             "delivered",
             "answered",
             "recorded",
+            "native",
+            "confirmed",
             "dry-run"
           ]
         },
@@ -86,6 +88,17 @@
             "native",
             null
           ]
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confirm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
         },
         "ids": {
           "type": "object",
