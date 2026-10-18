@@ -677,6 +677,10 @@ export async function executePlan(
     if (stopped) return;
     if (!parallel && abort) return;
     if (seat && dropped.has(seat)) return;
+    // A seat settled ready during its idle wait — the owner answered its prompt with
+    // `team answer` — has nothing left in the plan: a rename would overwrite the ready stage,
+    // and a delivery would send the rules a second time while the first turn is still running.
+    if (seat && ready.has(seat)) return;
 
     if (step.kind === 'skip') {
       if (op?.do === 'record' && op.seat) {
