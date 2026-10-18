@@ -9,7 +9,9 @@
 // after 10m` in `failed`, and walks the remaining legs in the recipient's `delivery_order`:
 // - for a `drop` leg (such as a human-pane seat with `delivery_order: [native, drop]`): writes the
 //   0600 drop file in `.agents/send-drops/<session>/<seat>/<id>` with zero pane writes, and
-//   appends one history line (`outcome: 'delivered'`, `via: 'drop'`, `failed`);
+//   appends one history line (`outcome: 'delivered'`, `via: 'drop'`, `failed`); a seat the file
+//   marks `human` walks this leg alone, whatever its fallback holds: every kept-out leg (`mcp-inbox`,
+//   `typed`) is recorded in `failed` with the same human reason the send gives;
 // - for `mcp-inbox`: writes the same 0600 drop file into the seat's own inbox when a live listener
 //   is there, marks it pending with `leg: 'mcp-inbox'` and appends one history line (`outcome:
 //   'sent (unconfirmed)'`, `via: 'mcp-inbox'`) — the watch's own inbox pass promotes a read and
@@ -108,9 +110,19 @@ async function expireOne(
 
   const rawLegs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['mcp-inbox', 'typed', 'drop'];
   const human = isHumanSeat(scene, home, record);
-  const legs: readonly PendingNativeFallbackLeg[] =
-    human && !rawLegs.includes('drop') ? [...rawLegs, 'drop'] : rawLegs;
+  // A seat the file marks `human` is never typed into and is never handed an inbox message: the
+  // expiry walks the drop leg alone, and `failed` records each kept-out leg with the human reason.
+  const legs: readonly PendingNativeFallbackLeg[] = human ? ['drop'] : rawLegs;
   const failures: string[] = [NATIVE_UNCONFIRMED_10M];
+  if (human) {
+    for (const leg of rawLegs) {
+      if (leg === 'mcp-inbox') {
+        failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
+      } else if (leg === 'typed') {
+        failures.push("typed: the pane is a human's, and nothing is typed into it");
+      }
+    }
+  }
   const sentAs =
     record.spec !== undefined && record.resolved !== undefined
       ? { spec: record.spec, resolved: record.resolved }

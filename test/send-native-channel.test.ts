@@ -923,7 +923,8 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
 
-  // If a pending handoff expires while the seat is marked human: true, watch expiry skips typed and drops the file.
+  // If a pending handoff expires while the seat is marked human: true, watch expiry walks the
+  // drop leg alone: no inbox write, nothing typed.
   writeFileSync(join(made.sockets, '222.sock'), '');
   const id2 = '22222222-2222-4222-8222-222222222222';
   const hostDefault = fake(made, { native: pane, newId: () => id2 });
@@ -945,7 +946,70 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(history.ok && history.entries[1]?.via).toBe('drop');
   expect(history.ok && history.entries[1]?.failed).toEqual([
     'native: unconfirmed after 10m',
-    'mcp-inbox: no live inbox listener',
+    "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
     "typed: the pane is a human's, and nothing is typed into it",
+  ]);
+});
+
+test("a human seat's expired-native fallback goes to drop, never a live inbox, with zero pane writes", async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  expect(existsSync(pending(made))).toBe(true);
+
+  // A live listener is beside the seat's inbox: the inbox leg would take the message, but the
+  // human rule keeps it out and the expiry writes the drop file alone.
+  const dir = dropDir(made.dir, 'lead');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({
+    v: 1,
+    seat: 'lead',
+    session: 'acme',
+    root: made.root,
+    cli: 'claude-code',
+    pid: process.pid,
+    ts: NOW.toISOString(),
+  })}\n`);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
+  const leadSeat = scene.team.seats.find((s) => s.name === 'lead');
+  if (leadSeat) leadSeat.human = true;
+
+  await expirePendingNative(scene);
+
+  // The drop file is the whole delivery: no marker for the retry pass, no inbox promotion.
+  expect(existsSync(pending(made))).toBe(false);
+  expect(watchPane.typed).toEqual([]);
+  expect(watchPane.enters).toBe(0);
+  expect(readdirSync(dir).filter((name) => !name.startsWith('.') && !name.endsWith('.pending'))).toEqual([ID]);
+  expect(readFileSync(join(dir, ID), 'utf8')).toBe(HANDOFF_BODY);
+  expect(existsSync(join(dir, `${ID}.pending`))).toBe(false);
+  expect(said).toEqual([
+    `lead: a native handoff from helper was unconfirmed after 10m; delivered (dropped ${String(HANDOFF_BODY.length)} characters)`,
+  ]);
+
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: expiredAt.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      outcome: 'delivered',
+      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
+      via: 'drop',
+      failed: [
+        'native: unconfirmed after 10m',
+        "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
+        "typed: the pane is a human's, and nothing is typed into it",
+      ],
+    },
   ]);
 });
