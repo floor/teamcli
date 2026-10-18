@@ -163,32 +163,61 @@ export class OwnerDelivery {
   ): { ok: true } | { ok: false; error: string } {
     const home = this.input.home;
     if (home === undefined) return { ok: false, error: 'no home to sign the record with' };
-    const payload: MessagePayload = {
-      kind: 'message',
-      id,
-      to: OWNER_MAILBOX,
+    return writeRuntimeMailboxRecord({
       root: this.input.root,
+      home,
+      to: OWNER_MAILBOX,
+      id,
+      text,
       session,
       at: this.now().toISOString(),
-      body: text,
-      from: OWNER_RECORD_FROM,
-    };
-    let signature: string;
-    try {
-      signature = signDomain(MESSAGE_DOMAIN, payload as unknown as Json, messageKeyOf(home));
-    } catch (error) {
-      return { ok: false, error: `the message key could not be read: ${String(error)}` };
-    }
-    try {
-      writePrivateAtomic(
-        messageFile(this.input.root, OWNER_MAILBOX, id),
-        `${JSON.stringify({ payload, signature }, null, 2)}\n`,
-      );
-    } catch (error) {
-      return { ok: false, error: String(error) };
-    }
-    return { ok: true };
+    });
   }
+}
+
+export type RuntimeMailboxRecordInput = {
+  root: string;
+  home: string;
+  /** The mailbox the record lands in: `owner`, or a seat's own name. */
+  to: string;
+  id: string;
+  text: string;
+  session: string;
+  /** The instant the record carries; `new Date()` when absent. */
+  at?: string;
+};
+
+/** Writes one signed message into a mailbox as the Runtime — the writer the owner's delivery
+ *  path already used, shared so a command that speaks to the owner or the lead writes the same
+ *  record (mode 0600, renamed into place). It writes unconditionally: the callers that must not
+ *  repeat themselves check the mailbox first (`OwnerDelivery`), and a merge rewrites the one
+ *  record it counts. */
+export function writeRuntimeMailboxRecord(
+  input: RuntimeMailboxRecordInput,
+): { ok: true; path: string } | { ok: false; error: string } {
+  const payload: MessagePayload = {
+    kind: 'message',
+    id: input.id,
+    to: input.to,
+    root: input.root,
+    session: input.session,
+    at: input.at ?? new Date().toISOString(),
+    body: input.text,
+    from: OWNER_RECORD_FROM,
+  };
+  let signature: string;
+  try {
+    signature = signDomain(MESSAGE_DOMAIN, payload as unknown as Json, messageKeyOf(input.home));
+  } catch (error) {
+    return { ok: false, error: `the message key could not be read: ${String(error)}` };
+  }
+  const path = messageFile(input.root, input.to, input.id);
+  try {
+    writePrivateAtomic(path, `${JSON.stringify({ payload, signature }, null, 2)}\n`);
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+  return { ok: true, path };
 }
 
 /** Whether the event is addressed to the owner: routed to `owner` by the policy in force, or
