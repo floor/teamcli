@@ -276,7 +276,7 @@ describe('the up row (owner-or-leads)', () => {
     expect(await runUp(['--dry-run'], dry, sources)).toBe(1);
     expect(dry.err).toBe('');
     expect(dry.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is pilot\n');
-    expect(dry.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(dry.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(dry.out).toContain('dry run: nothing was run\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
@@ -329,7 +329,7 @@ describe('the up row (owner-or-leads)', () => {
     expect(code).toBe(1);
     expect(io.err).toBe('');
     expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
-    expect(io.out).toContain('! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toContain('! to unblock: a `leads` seat runs `team up --file other.yaml` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(io.out).not.toContain('dry run: nothing was run');
   });
 
@@ -360,7 +360,7 @@ describe('the up row (owner-or-leads)', () => {
     expect(await runUp(['--dry-run', '--session', 'other'], dry, sources)).toBe(1);
     expect(dry.err).toBe('');
     expect(dry.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is worker\n');
-    expect(dry.out).toContain('! to unblock: the owner runs `team up --session other` from this folder, at a terminal outside herdr\n');
+    expect(dry.out).toContain('! to unblock: a `leads` seat runs `team up --session other` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(dry.out).not.toContain('dry run: nothing was run');
 
     // `other.yaml` does not exist: the caller sentence, not the file's exit 2, is the proof the
@@ -368,7 +368,7 @@ describe('the up row (owner-or-leads)', () => {
     const flagged = testIo(root, seatCaller('worker', 'worker-pane'));
     expect(await runUp(['--dry-run', '--file', 'other.yaml'], flagged, sources)).toBe(1);
     expect(flagged.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is worker\n');
-    expect(flagged.out).toContain('! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n');
+    expect(flagged.out).toContain('! to unblock: a `leads` seat runs `team up --file other.yaml` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -426,7 +426,7 @@ describe('the register row (owner-or-own-team)', () => {
     expect(await runRegister(['pilot', '--dry-run'], dry, registerSources([['pilot', 'pilot-pane']]))).toBe(1);
     expect(dry.err).toBe('');
     expect(dry.out).toContain(`! register would refuse: ${line}\n`);
-    expect(dry.out).toContain('! to unblock: the owner runs `team register pilot` from this folder, at a terminal outside herdr\n');
+    expect(dry.out).toContain('! to unblock: a seat of this team runs `team register pilot` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(dry.out).not.toContain('would register');
     expect(readAgents(home)).toEqual([]);
   });

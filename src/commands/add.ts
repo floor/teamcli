@@ -369,11 +369,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         refuse(io, true, 'add', {
           id: 'add.caller',
           message: mayRun,
-          repair: 'the owner runs `team add …` from a terminal outside herdr',
+          repair: 'an approved delegate runs `team add …` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr',
           rule: 'owner-only',
         });
       } else if (dry) {
-        out.stdout(`! add would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(ownerAddRun(argv))}\n`);
+        out.stdout(`! add would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(unblockingAddRun(argv))}\n`);
       } else out.stderr(`team add: ${plainText(mayRun)}\n`);
       // exit: add.caller
       return 1;
@@ -1474,12 +1474,13 @@ function hostOf(input: {
   };
 }
 
-/** The one command that unblocks an `add` this caller cannot run: the owner's own, in this
- *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's and the
- *  document's own flags dropped, so the printed line is a command that runs. */
-function ownerAddRun(argv: string[]): string {
+/** The one command that unblocks an `add` this caller cannot run: an approved delegate's own,
+ *  from its pane, when the file names one, otherwise the owner's, in this folder from a terminal
+ *  outside herdr. The caller's words are kept, the dry run's and the document's own flags
+ *  dropped, so the printed line is a command that runs. */
+function unblockingAddRun(argv: string[]): string {
   const words = ['team', 'add', ...withoutOutputFlags(argv).map(shellQuote)];
-  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+  return `an approved delegate runs \`${words.join(' ')}\` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr`;
 }
 
 /** The caller's words without this run's own output flags: the repair names a command that

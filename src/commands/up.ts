@@ -619,14 +619,14 @@ function placementRefusal(caller: Caller): string {
   return `only the owner or \`leads\` starts the team; this call is ${describeCaller(caller)}`;
 }
 
-/** The one command that unblocks a run this caller cannot start: the owner's own, in this folder,
- *  from a terminal outside herdr. The flags the caller named are kept, spelled the way the plan
- *  spells a word, so the printed line is a command that runs. */
-function ownerUpRun(values: { file?: string; session?: string }): string {
+/** The one command that unblocks a run this caller cannot start: a `leads` seat's own, from its
+ *  pane, or the owner's, in this folder from a terminal outside herdr. The flags the caller named
+ *  are kept, spelled the way the plan spells a word, so the printed line is a command that runs. */
+function unblockingUpRun(values: { file?: string; session?: string }): string {
   const words = ['team up'];
   if (values.file !== undefined) words.push('--file', shellQuote(values.file));
   if (values.session !== undefined) words.push('--session', shellQuote(values.session));
-  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+  return `a \`leads\` seat runs \`${words.join(' ')}\` from its own pane (the owner runs it from this folder, at a terminal outside herdr)`;
 }
 
 /** Pulls the dev-mode warnings out of `refusals` and joins them into the one line. */
@@ -797,7 +797,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         refuse(io, true, 'up', { id: 'up.not-owner', message: 'deny', repair: null, rule: 'no-record' });
       } else if (dry) {
         out.stdout(`! up would refuse: ${plainText(placementRefusal(walked))}${devModeExpiryNote(aimedDev)}\n`);
-        out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+        out.stdout(`! to unblock: ${plainText(unblockingUpRun(args.values))}\n`);
       } else {
         out.stderr('deny\n');
         const expiry = devModeExpiryLine(aimedDev);
@@ -1342,7 +1342,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // A caller the run does not admit is the one refusal with a command of its own behind it:
       // nothing in the file changes it, the owner's run does. So the dry run names that command.
       if (said.includes(placementRefusal(caller))) {
-        out.stdout(`! to unblock: ${plainText(ownerUpRun(args.values))}\n`);
+        out.stdout(`! to unblock: ${plainText(unblockingUpRun(args.values))}\n`);
       }
       out.stdout(plainText(formatPlan(buildPlan())));
     }

@@ -168,7 +168,7 @@ test('add: a dry run says what it would refuse and the one command that unblocks
   expect(await runAdd(['worker', '--dry-run'], io, addSources(made.home))).toBe(1);
   expect(io.err).toBe('');
   expect(io.out).toBe(`! add would refuse: ${ADD_LINE}\n`
-    + '! to unblock: the owner runs `team add worker` from this folder, at a terminal outside herdr\n');
+    + '! to unblock: an approved delegate runs `team add worker` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr\n');
   expect(existsSync(join(made.root, '.agents', 'team.log'))).toBe(false);
 });
 
@@ -196,7 +196,7 @@ test('restart: a dry run says what it would refuse and the one command that unbl
   expect(await runRestart(['worker', '--dry-run'], io, restartSources(made.home))).toBe(1);
   expect(io.err).toBe('');
   expect(io.out).toBe(`! restart would refuse: ${RESTART_LINE}\n`
-    + '! to unblock: the owner runs `team restart worker` from this folder, at a terminal outside herdr\n');
+    + '! to unblock: a `leads` seat runs `team restart worker` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
   expect(existsSync(join(made.root, '.agents', 'team.log'))).toBe(false);
 });
 

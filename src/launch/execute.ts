@@ -558,7 +558,7 @@ export async function executePlan(
     if (dialog?.mode === 'keep') {
       host.recordWaiting?.(seat, { state: 'waiting-owner', classification }, here.pane, here.workspace);
       dropped.add(seat);
-      final(seat, { kind: 'left out', reason: classification }, `  the owner finishes it with \`team up\`\n`);
+      final(seat, { kind: 'left out', reason: classification }, `  a lead finishes it with \`team up\`\n`);
       return 'settled';
     }
     if (dialog?.mode === 'close-no-terminal') {
@@ -637,7 +637,7 @@ export async function executePlan(
       if (dialog.mode === 'keep') {
         host.recordWaiting?.(op.seat, { state: 'waiting-owner', classification }, op.pane, op.workspace);
         dropped.add(op.seat);
-        final(op.seat, { kind: 'left out', reason: classification }, `  the owner finishes it with \`team up\`\n`);
+        final(op.seat, { kind: 'left out', reason: classification }, `  a lead finishes it with \`team up\`\n`);
         return 'settled';
       }
       if (dialog.mode === 'close-no-terminal') {

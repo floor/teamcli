@@ -4115,7 +4115,7 @@ for (const command of ['up', 'down', 'add', 'register'] as const) {
           // owner's own command instead, which this holds to the caller the real run answered.
           const dryText = `${dry.err}${dry.out}`;
           expect(dryText, id).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
-          expect(dryText, id).toContain('! to unblock: the owner runs `team up');
+          expect(dryText, id).toContain('! to unblock: a `leads` seat runs `team up');
           continue;
         }
         expect(refusalCore(`${dry.err}${dry.out}`), id).toContain(shared);

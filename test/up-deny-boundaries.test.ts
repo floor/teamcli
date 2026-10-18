@@ -243,7 +243,7 @@ describe('the deny answer on the up page', () => {
     expect(page.includes('a caller the run admits'), 'up.md lost the admitted-caller row').toBe(true);
     expect(
       page.includes(
-        'a caller the run does not admit | a real run is answered with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1. A `--dry-run` is never denied: it prints `! up would refuse:` with that reason, `! to unblock:` with the owner\'s own run of this folder, and — when no flag kept the file unread — the plan, and exits 1',
+        'a caller the run does not admit | a real run is answered with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1. A `--dry-run` is never denied: it prints `! up would refuse:` with that reason, `! to unblock:` with a `leads` seat\'s own run of this folder from its pane (or the owner\'s, from a terminal outside herdr), and — when no flag kept the file unread — the plan, and exits 1',
       ),
       'up.md lost the deny row',
     ).toBe(true);
@@ -265,7 +265,7 @@ describe('the deny answer on the up page', () => {
       page.includes(
         'team up --dry-run --file other.yaml ; echo "exit $?"\n' +
           '! up would refuse: only the owner or `leads` starts the team; this call is unplaced (it is run by an agent (claude) outside herdr)\n' +
-          '! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\nexit 1',
+          '! to unblock: a `leads` seat runs `team up --file other.yaml` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\nexit 1',
       ),
       'up.md lost the dry-run example',
     ).toBe(true);
@@ -291,7 +291,7 @@ describe('the deny answer on the up page', () => {
     expect(await runUp(['--dry-run'], own, sources)).toBe(1);
     expect(own.err).toBe('');
     expect(own.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is pilot\n');
-    expect(own.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(own.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(own.out).toContain('dry run: nothing was run\n');
     expect(own.out.indexOf('! up would refuse:')).toBeLessThan(own.out.indexOf('dry run: nothing was run'));
     expect(own.out).toContain('+ ');
@@ -302,7 +302,7 @@ describe('the deny answer on the up page', () => {
     expect(await runUp(['--dry-run', '--file', 'other.yaml'], aimed, sources)).toBe(1);
     expect(aimed.err).toBe('');
     expect(aimed.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)\n');
-    expect(aimed.out).toContain('! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n');
+    expect(aimed.out).toContain('! to unblock: a `leads` seat runs `team up --file other.yaml` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(aimed.out).not.toContain('dry run: nothing was run');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });

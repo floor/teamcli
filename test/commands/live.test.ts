@@ -5130,7 +5130,7 @@ describe('team up, delegated', () => {
     // command, and the refusal leaves through the real run's exit — the plan, nothing run.
     expect(io.err).toBe('');
     expect(io.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is it runs in pane main/w9:p1, which no grant lists\n');
-    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(made.starts).toBe(0);
     expect(made.creates).toEqual([]);
   });

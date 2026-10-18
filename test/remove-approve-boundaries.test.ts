@@ -340,7 +340,7 @@ describe('an agent the grant does not name', () => {
     expect(await runUp(['--dry-run'], dry, sources)).toBe(1);
     expect(dry.err).toBe('');
     expect(dry.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
-    expect(dry.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(dry.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(made.events.filter((line) => line.startsWith('create:'))).toEqual([]);
     expect(audits).toEqual([]);
   });

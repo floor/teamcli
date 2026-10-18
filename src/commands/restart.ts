@@ -246,9 +246,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         out,
         json,
         mayRun,
-        dry ? `! restart would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(ownerRestartRun(argv))}\n` : undefined,
+        dry ? `! restart would refuse: ${plainText(mayRun)}\n! to unblock: ${plainText(unblockingRestartRun(argv))}\n` : undefined,
         'owner-or-leads',
-        ownerRestartRun(argv),
+        unblockingRestartRun(argv),
       );
     }
   }
@@ -899,12 +899,13 @@ function detachedExit(out: Io, json: boolean, message: string): number {
   return 1;
 }
 
-/** The one command that unblocks a `restart` this caller cannot run: the owner's own, in this
- *  folder, at a terminal outside herdr. The caller's words are kept, the dry run's own flag
- *  dropped, so the printed line is a command that runs. */
-function ownerRestartRun(argv: string[]): string {
+/** The one command that unblocks a `restart` this caller cannot run: a `leads` seat's own, from
+ *  its pane, or the owner's, in this folder from a terminal outside herdr. The caller's words are
+ *  kept, the dry run's and the document's own flags dropped, so the printed line is a command
+ *  that runs. */
+function unblockingRestartRun(argv: string[]): string {
   const words = ['team', 'restart', ...withoutOutputFlags(argv).map(shellQuote)];
-  return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+  return `a \`leads\` seat runs \`${words.join(' ')}\` from its own pane (the owner runs it from this folder, at a terminal outside herdr)`;
 }
 
 /** The caller's words without this run's own output flags: the repair names a command that

@@ -524,7 +524,7 @@ async function refresh(input: PauseInput, host: PauseHost, view: View): Promise<
 /** The ask ran out its idle timeout with no key. The seat stays as it is: nothing focused,
  *  nothing closed, the waiting record kept, and the run goes on to the next seat. */
 function unanswered(seconds: number): PauseResult {
-  return { kind: 'left out', reason: `timed out after ${seconds} s waiting for its owner; left as it is`, detail: '' };
+  return { kind: 'left out', reason: `timed out after ${seconds} s waiting for an answer; left as it is`, detail: '' };
 }
 
 /** The seat was made ready under this run's feet, by the orchestrator's `team answer`. */

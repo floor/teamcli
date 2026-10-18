@@ -83,9 +83,9 @@ token's — never reads stdin and never prompts, so every dialog is left for the
 changes nothing, prints the refusals it would hit as `! up would refuse: …` above the plan. A caller
 the run does not admit — not the owner, no grant, no delegate, no token — is refused with the word
 `deny` alone on a real run: no reason, no plan, exit 1. Its `--dry-run` is never
-denied: the same `! up would refuse:` line carries the placement reason, `! to unblock:` carries the
-owner's own run of this folder, and the plan follows when no `--file` or `--session` kept the file
-unread — a flagged target is read on the real run's own terms, never to fill a plan.
+denied: the same `! up would refuse:` line carries the placement reason, `! to unblock:` carries
+the run that admits the caller — a `leads` seat's own, from its pane, or the owner's, from a
+terminal outside herdr — and the plan follows when no `--file` or `--session` kept the file unread — a flagged target is read on the real run's own terms, never to fill a plan.
 A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch). It returns before these real-run failures, and never takes their status:
 
 - `up.no-launch`, this call has no way to reach herdr (`src/commands/up.ts:1176`)
@@ -288,7 +288,7 @@ The ask waits at most the profile's idle timeout (90 s today). That bound covers
 permission prompt too, including one re-read on each tick while the lead may answer it. When it
 ends with no `o`, `s` or `q`, the seat is left exactly as it is — workspace and waiting record
 kept, nothing focused, nothing closed — with `<seat>: left out: timed out after <n> s waiting
-for its owner; left as it is`, and `up` goes on to the next seat. The next `up` asks again, with
+for an answer; left as it is`, and `up` goes on to the next seat. The next `up` asks again, with
 the same cap. Pressing `o` spends the open-pane poll's own timeout and then starts a new ask.
 
 `o`, `s` and `q` are the whole answer. One chunk is one key only when it is exactly one byte and

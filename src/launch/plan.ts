@@ -586,7 +586,7 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({
         kind: 'wait',
         text: waiting
-          ? `${seat.name}: waiting for owner (${waiting.classification}); its recorded pane is read fresh and the owner is asked (${profile.idleTimeout} s at most)`
+          ? `${seat.name}: waiting for owner (${waiting.classification}); its recorded pane is read fresh and the caller is asked (${profile.idleTimeout} s at most)`
           : `until ${seat.name} shows its idle prompt (${profile.idleTimeout} s at most); ` +
             'anything else is reported, its workspace closed without input, and the seat left out',
         ...(said ? { note: said } : {}),

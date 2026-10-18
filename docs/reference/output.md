@@ -339,7 +339,7 @@ When a command fails (exit code `1`, `2`, or `64`) while `--json` is passed, it 
   "error": {
     "id": "add.caller",
     "message": "only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is seat codex-acme",
-    "repair": "the owner runs `team add …` from a terminal outside herdr",
+    "repair": "an approved delegate runs `team add …` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr",
     "rule": "owner-only"
   }
 }

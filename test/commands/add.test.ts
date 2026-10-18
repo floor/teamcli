@@ -669,7 +669,7 @@ describe('team add', () => {
     const made = world();
     // The pane comes up at a trust question. §6: `add` never prompts and never closes — the
     // workspace is kept, the seat is recorded as waiting for its owner, nothing is sent into
-    // the pane, and the owner finishes it with `team up`.
+    // the pane, and a lead finishes it with `team up`.
     const trust = readFileSync(new URL('../fixtures/codex/0.157.0/trust.txt', import.meta.url), 'utf8');
     const plain = made.launch.paneText;
     made.launch.paneText = (session, pane) => {
@@ -684,7 +684,7 @@ describe('team add', () => {
     const io = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'scribe', '--until', 'merged:fix/fresh'], io, sources(made))).toBe(1);
     expect(io.out).toContain('scribe-tmp-01: left out: trust\n');
-    expect(io.err).toContain('  the owner finishes it with `team up`\n');
+    expect(io.err).toContain('  a lead finishes it with `team up`\n');
     expect(closes).toEqual([]);
     expect(existsSync(file)).toBe(false);
     const seat = readState(join(project, '.agents')).sessions.acme?.seats['scribe-tmp-01'];
@@ -892,7 +892,7 @@ describe('team add', () => {
     // its stderr detail and the log all name the reading without claiming any close.
     const line = 'worker: left out: permission';
     expect(io.out).toContain(`${line}\n`);
-    expect(io.err).toContain('  the owner finishes it with `team up`\n');
+    expect(io.err).toContain('  a lead finishes it with `team up`\n');
     expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toContain(line);
     expect(closed).toEqual([]);
     expect(readState(join(project, '.agents')).sessions.acme?.seats.worker)
@@ -919,7 +919,7 @@ describe('team add', () => {
     const code = await runAdd(['worker'], io, sources(made));
     expect(code).toBe(1);
     expect(io.out).toContain('worker: left out: question\n');
-    expect(io.err).toContain('  the owner finishes it with `team up`\n');
+    expect(io.err).toContain('  a lead finishes it with `team up`\n');
     expect(closed).toEqual([]);
     expect(sent).toEqual([]);
     expect(readState(join(project, '.agents')).sessions.acme?.seats.worker).toMatchObject({
@@ -947,7 +947,7 @@ describe('team add', () => {
     const io = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'scribe', '--until', 'merged:fix/fresh'], io, sources(made))).toBe(1);
     expect(io.out).toContain('scribe-tmp-01: left out: vendor notice\n');
-    expect(io.err).toContain('  the owner finishes it with `team up`\n');
+    expect(io.err).toContain('  a lead finishes it with `team up`\n');
     expect(closed).toEqual([]);
     expect(sent).toEqual([]);
     const seat = readState(join(project, '.agents')).sessions.acme?.seats['scribe-tmp-01'];

@@ -358,11 +358,12 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // writes the seat's record again.
   const warning: string[] = [];
   // The caller gate is the one refusal with a command of its own behind it: nothing in the file
-  // changes who may run this, the owner's own run does. `up`'s sentence, for this command.
+  // changes who may run this; a seat of this team runs it from its own pane, or the owner runs it
+  // in this folder from a terminal outside herdr. `up`'s sentence, for this command.
   const unblock = (values: { session?: string }): string => {
     const words = ['team register', shellQuote(name)];
     if (values.session !== undefined) words.push('--session', shellQuote(values.session));
-    return `the owner runs \`${words.join(' ')}\` from this folder, at a terminal outside herdr`;
+    return `a seat of this team runs \`${words.join(' ')}\` from its own pane (the owner runs it from this folder, at a terminal outside herdr)`;
   };
 
   const walked = walkCaller(io);

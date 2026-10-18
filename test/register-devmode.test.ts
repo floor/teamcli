@@ -39,7 +39,7 @@ const WORKSPACE = 'ws-1';
 const CALLER_GATE =
   'only the owner or a seat of this team registers a running seat; this call is unplaced (it runs under herdr)';
 /** The one command behind that gate: the owner's own run, from the same folder. */
-const UNBLOCK = '! to unblock: the owner runs `team register lead` from this folder, at a terminal outside herdr';
+const UNBLOCK = '! to unblock: a seat of this team runs `team register lead` from its own pane (the owner runs it from this folder, at a terminal outside herdr)';
 
 const made: string[] = [];
 // The address refresh reads herdr on its own; no pane of this machine's is behind it here, and

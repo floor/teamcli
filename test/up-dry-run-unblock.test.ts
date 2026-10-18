@@ -253,7 +253,7 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
     expect(io.out).toContain('dry run: nothing was run\n');
     expect(io.out).toContain('+ ');
     // No flag named, so the owner's command is the bare one.
-    expect(io.out).toContain('! to unblock: the owner runs `team up` from this folder, at a terminal outside herdr\n');
+    expect(io.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
     expect(trace).toMatchObject({ workspaces: [], closed: [], audits: [] });
   });
 
@@ -270,7 +270,7 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
       '! up would refuse: only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)\n',
     );
     expect(io.out).toContain(
-      '! to unblock: the owner runs `team up --file other.yaml` from this folder, at a terminal outside herdr\n',
+      '! to unblock: a `leads` seat runs `team up --file other.yaml` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n',
     );
     // The named file keeps its meaning for the owner's run and is never read here — the file's
     // grant does not make the aim ordinary — so there is no plan for this folder's own file.
@@ -292,7 +292,7 @@ describe("up's dry run: the refusal, the owner's command, the plan", () => {
       '! up would refuse: only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)\n',
     );
     expect(io.out).toContain(
-      '! to unblock: the owner runs `team up --session beta` from this folder, at a terminal outside herdr\n',
+      '! to unblock: a `leads` seat runs `team up --session beta` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n',
     );
     expect(io.out).not.toContain('dry run: nothing was run');
   });
