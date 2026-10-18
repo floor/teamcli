@@ -80,9 +80,8 @@ function waitingView(
       stored: 'trust-sent-recovery',
       difference: {
         what: `${name}: trust sent; recovery required`,
-        repair: 'the owner runs team up',
+        repair: "the team's lead runs team up",
         needs: 'approve',
-        owner: true,
       },
     };
   }
@@ -93,9 +92,8 @@ function waitingView(
     stored: 'waiting-owner',
     difference: {
       what: `${name}: ${phrase}`,
-      repair: answer ? `team answer ${name} trust` : 'the owner runs team up',
+      repair: answer ? `team answer ${name} trust` : "the team's lead runs team up",
       needs: 'approve',
-      ...(answer ? {} : { owner: true as const }),
     },
   };
 }
@@ -200,7 +198,6 @@ export function compare(
           what: `${seat.name}: its launch line starts a launcher, and the process in its pane is not the one team launched`,
           repair: seatRestartRepair(team, seat.name),
           needs: 'approve',
-          owner: true,
         });
       }
       // A ready seat with no identity is not relaunched by `up` when its model differs. A seat
@@ -289,9 +286,8 @@ export function compare(
       if (isUnsent && recorded?.stage === 'named' && !unidentifiedMismatch) {
         differences.push({
           what: `${seat.name}: its launch stopped at "named", and it holds text in its input box that was never sent`,
-          repair: 'the owner clears or sends it in the pane, then runs team up (it resumes the launch)',
+          repair: "the team's lead clears or sends it in the pane, then runs team up (it resumes the launch)",
           needs: 'approve',
-          owner: true,
         });
       } else {
         if (recorded && recorded.stage !== 'ready' && !unidentifiedMismatch) {
@@ -301,7 +297,7 @@ export function compare(
           // team is the one who repairs it.
           differences.push({
             what: `${seat.name}: its launch stopped at "${recorded.stage}"`,
-            repair: 'team up (it resumes the launch)',
+            repair: "the team's lead runs team up (it resumes the launch)",
             needs: 'approve',
           });
         }
@@ -429,10 +425,9 @@ export function compare(
       // With the session up, `team restart <seat>` is the per-seat repair the map admits to the
       // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
       // this line must be handed a command it can run. With nothing running the session itself is
-      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
-      repair: anyRunning ? `team restart ${seat.name}` : 'the owner runs team up',
+      // down, a lead cannot prove its pane, and `team up` is what starts it.
+      repair: anyRunning ? `team restart ${seat.name}` : "the team's lead runs team up",
       needs: 'approve',
-      ...(anyRunning ? {} : { owner: true as const }),
     });
   }
 
@@ -584,7 +579,6 @@ function cannotTie(
         what: restoredProcessWhat(seat, running, launcher),
         repair: seatRestartRepair(team, seat.name),
         needs: 'approve',
-        owner: true,
       },
     };
   }
@@ -640,7 +634,7 @@ function notLaunched(
       // The same repair `up` makes: it closes the pane without typing and launches the seat
       // fresh. Admitted by the map's `up` row for the owner and the team's leads alike, so it is
       // not counted among the owner's.
-      repair: 'team up',
+      repair: "the team's lead runs team up",
       needs: 'approve',
     },
     // A note, not a difference: it names what the screen shows and does not change the exit.

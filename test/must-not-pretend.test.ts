@@ -176,12 +176,12 @@ describe('team check omits the footer on every run; team doctor and team --about
     expect(ran.out).toBe(
       'team beacon, session "beacon"\n' +
         'difference: claude-keeper is in the file and is not running\n' +
-        '  repair: the owner runs team up\n' +
-        '  who: the owner\n' +
+        '  repair: the team\'s lead runs team up\n' +
+        '  who: the team\'s lead\n' +
         'difference: claude-beacon is in the file and is not running\n' +
-        '  repair: the owner runs team up\n' +
-        '  who: the owner\n' +
-        '2 differences, 2 for the owner\n',
+        '  repair: the team\'s lead runs team up\n' +
+        '  who: the team\'s lead\n' +
+        '2 differences\n',
     );
     expect(ran.out).not.toContain(NOT_KNOWN);
     expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
@@ -200,7 +200,7 @@ describe('team status omits the footer on every run; team --about prints NOT_PRE
   test('a status reading with differences ends with the summary count and omits the footer', async () => {
     const ran = await status(down);
     expect(ran.code).toBe(1);
-    expect(ran.out).toEndWith('2 differences, 2 for the owner\n');
+    expect(ran.out).toEndWith('2 differences\n');
     expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
 

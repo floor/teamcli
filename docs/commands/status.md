@@ -32,7 +32,8 @@ not the one team launched`; the row stays the one the live session gives it. And
 record cannot tie is repaired by that restart — `team remove <seat> --keep, then team add <seat>`,
 or `team down, then team up` for a lead — when its screen names a model the file does not carry,
 or its launch line starts a launcher; a pane it can say nothing about is repaired by looking at
-it. Nothing either report says starts a seat.
+it. Nothing either report says starts a seat. The `add` in that restart is the owner's (or an
+approved delegate's, when the file names one); the `remove --keep` before it is a lead's.
 
 A seat no source has heard from past the blind threshold — five minutes shipped, tightened by the
 machine, an entity, a project, the team or the seat, and opened again only by a project — counts
