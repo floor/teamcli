@@ -6,7 +6,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import {
   contextLine,
@@ -321,10 +321,11 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   }
   const root = findRoot(io.cwd);
   if (!root) {
+    // `team messages` takes no `--file`, so the no-repository refusal must not offer one.
     if (json) {
-      writeJsonError(io, 'messages.not-a-repo', NOT_A_REPO, null);
+      writeJsonError(io, 'messages.not-a-repo', NOT_A_REPO_NO_FILE, null);
     } else {
-      io.stderr(`team messages: ${NOT_A_REPO}\n`);
+      io.stderr(`team messages: ${NOT_A_REPO_NO_FILE}\n`);
     }
     // exit: messages.not-a-repo
     return 2;

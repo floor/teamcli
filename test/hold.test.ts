@@ -330,6 +330,22 @@ describe('team hold', () => {
     expect(stored(where)).toBeUndefined();
   });
 
+  test('outside any project the refusal names only the project: hold takes no --file', async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-hold-outside-')));
+    files.push(base);
+    const home = join(base, 'home');
+    mkdirSync(home);
+    const now = () => NOW;
+    const io = testIo(base, OWNER);
+    expect(await runHold(['freeze deploys'], io, { home, now })).toBe(2);
+    expect(io.err).toBe('team hold: not inside a git repository: run team from a project\n');
+    const json = testIo(base, OWNER);
+    expect(await runHold(['freeze deploys', '--json'], json, { home, now })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, { id: 'hold.file', messageContains: 'not inside a git repository: run team from a project' });
+    expect(json.out).not.toContain('--file');
+  });
+
   test('--json emits team.hold on placed and released and team.error on refusals', async () => {
     const where = place();
     const placed = await hold(['freeze deploys', '--until', '2026-10-04T12:00:00Z', '--json'], where);

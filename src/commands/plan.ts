@@ -6,7 +6,7 @@
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
 import type { BrokerRequest } from '../broker/protocol.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
@@ -105,8 +105,9 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
   }
   const root = findRoot(io.cwd);
   if (!root) {
-    if (json) writeJsonError(io, 'plan.not-a-repo', NOT_A_REPO, 'run team plan from inside the git checkout');
-    else out.stderr(`team plan: ${NOT_A_REPO}\n`);
+    // `team plan` takes no `--file`, so the no-repository refusal must not offer one.
+    if (json) writeJsonError(io, 'plan.not-a-repo', NOT_A_REPO_NO_FILE, 'run team plan from inside the git checkout');
+    else out.stderr(`team plan: ${NOT_A_REPO_NO_FILE}\n`);
     // exit: plan.not-a-repo
     return 2;
   }

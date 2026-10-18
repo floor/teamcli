@@ -2,7 +2,7 @@ import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { lobbyDir } from '../lobby/gate.ts';
@@ -667,8 +667,9 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
     session = loaded.team.session;
     root = loaded.root;
   } else if (!allTeams && !inDeskLobby) {
+    // `team feed` takes no `--file`, so the no-repository refusal must not offer one.
     const message = loaded.errors
-      .map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message))
+      .map((problem) => (problem.line ? `line ${problem.line}: ${withoutFileOffer(problem.message)}` : withoutFileOffer(problem.message)))
       .join('; ');
     return configuration(io, message || 'the team file cannot be read', json);
   }

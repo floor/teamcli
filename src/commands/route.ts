@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, detachedRefusal, judgeCallerIn, logTag, standingOf } from '../caller.ts';
 import { PROFILES, processNameMatches } from '../clis.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import type { Agent } from '../registry/agents.ts';
@@ -82,7 +82,10 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
 
   const loaded = loadTeamFile(io.cwd, { home: host.home });
   if (!loaded.ok) {
-    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
+    // `team route` takes no `--file`, so the no-repository refusal must not offer one.
+    const message = loaded.errors
+      .map((problem) => (problem.line ? `line ${problem.line}: ${withoutFileOffer(problem.message)}` : withoutFileOffer(problem.message)))
+      .join('; ');
     return configuration(io, message || 'the team file cannot be read', report);
   }
   const { team, root } = loaded;

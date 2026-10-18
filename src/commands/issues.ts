@@ -3,7 +3,7 @@
 // here: this command connects to no broker, holds no tracker credential, and has no seat gate —
 // and it keeps holding none of those. A listing is not a claim and not the intake rule.
 import { readArgs } from '../args.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import {
@@ -102,8 +102,9 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
   }
   const root = findRoot(io.cwd);
   if (!root) {
-    if (json) writeJsonError(io, 'issues.not-a-repo', NOT_A_REPO, 'run team issues from inside the git checkout');
-    else out.stderr(`team issues: ${NOT_A_REPO}\n`);
+    // `team issues` takes no `--file`, so the no-repository refusal must not offer one.
+    if (json) writeJsonError(io, 'issues.not-a-repo', NOT_A_REPO_NO_FILE, 'run team issues from inside the git checkout');
+    else out.stderr(`team issues: ${NOT_A_REPO_NO_FILE}\n`);
     // exit: issues.not-a-repo
     return 2;
   }

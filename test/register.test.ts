@@ -32,6 +32,7 @@ import { readTeams, teamIdOf } from '../src/registry/teams.ts';
 import { defaultSocketsDir } from '../src/send/address.ts';
 import { emptySession, LOG_FILE, mintSeatId, readState, SEAT_ID_PATTERN, STATE_FILE, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { assertJsonErrorShape } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T21:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -434,6 +435,22 @@ describe('a cli mismatch', () => {
 
     expect(r.code).toBe(1);
     expect(r.err).toContain('not the seat at its prompt (unknown); nothing was registered');
+    expect(written(w)).toEqual(NOTHING);
+  });
+});
+
+describe('a run outside any project', () => {
+  test('refuses with the sentence that names only the project: register takes no --file', async () => {
+    const w = world();
+    const io = testIo(w.base, OWNER);
+    expect(await runRegister(['lead'], io, sources(w))).toBe(2);
+    expect(io.err).toBe('team register: not inside a git repository: run team from a project\n');
+
+    const json = testIo(w.base, OWNER);
+    expect(await runRegister(['lead', '--json'], json, sources(w))).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, { id: 'register.file', messageContains: 'not inside a git repository: run team from a project' });
+    expect(json.out).not.toContain('--file');
     expect(written(w)).toEqual(NOTHING);
   });
 });

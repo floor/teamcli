@@ -13,7 +13,7 @@ import { main } from '../src/cli.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan, USAGE, type PlanSources } from '../src/commands/plan.ts';
-import { NOT_A_REPO } from '../src/file/load.ts';
+import { NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { PLAN_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -285,7 +285,7 @@ describe('team plan', () => {
     ready();
     expect(await run(['extra'])).toEqual({ code: 2, out: '', err: `team plan: unexpected "extra"\n${USAGE}` });
     expect(await run(['--mine'])).toEqual({ code: 2, out: '', err: `team plan: unknown option --mine\n${USAGE}` });
-    expect(await run([], lead, {}, base)).toEqual({ code: 2, out: '', err: `team plan: ${NOT_A_REPO}\n` });
+    expect(await run([], lead, {}, base)).toEqual({ code: 2, out: '', err: `team plan: ${NOT_A_REPO_NO_FILE}\n` });
   });
 
   test('cadence in the file changes nothing about the queue', async () => {
@@ -364,7 +364,8 @@ describe('team plan --json', () => {
     const folder = await run(['--json'], lead, {}, base);
     expect(folder.code).toBe(2);
     expect(folder.err).toBe('');
-    assertJsonErrorShape(folder.out, { id: 'plan.not-a-repo', messageContains: NOT_A_REPO });
+    assertJsonErrorShape(folder.out, { id: 'plan.not-a-repo', messageContains: NOT_A_REPO_NO_FILE });
+    expect(folder.out).not.toContain('--file');
   });
 });
 

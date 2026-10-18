@@ -401,6 +401,24 @@ describe('team issues', () => {
     assertJsonErrorShape(inline.out, { id: 'issues.invocation', messageContains: 'unknown option --json' });
   });
 
+  test('outside a repository, the refusal offers no --file: issues takes none', async () => {
+    project();
+    const outside = join(base, 'outside');
+    mkdirSync(outside);
+    const plain = testIo(outside);
+    expect(await runIssues([], plain, { home })).toBe(2);
+    expect(plain.err).toBe('team issues: not inside a git repository: run team from a project\n');
+
+    const json = testIo(outside);
+    expect(await runIssues(['--json'], json, { home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'issues.not-a-repo',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
+    expect(json.out).not.toContain('--file');
+  });
+
   test('an old approval adopts an omitted tasks section, and adding one differs', () => {
     const bare = validateTeamFile(TEAM);
     const added = validateTeamFile(WITH);

@@ -439,10 +439,16 @@ describe('team send history log & team feed', () => {
       events: [],
     });
 
+    // Outside any checkout the refusal names only the project: feed takes no --file.
+    const plain = testIo(base);
+    expect(await runFeed([], plain, { home })).toBe(2);
+    expect(plain.err).toBe('team feed: not inside a git repository: run team from a project\n');
+
     const noFile = testIo(base);
     expect(await runFeed(['--json'], noFile, { home })).toBe(2);
     expect(noFile.err).toBe('');
-    assertJsonErrorShape(noFile.out, { id: 'feed.configuration', messageContains: 'not inside a git repository' });
+    assertJsonErrorShape(noFile.out, { id: 'feed.configuration', messageContains: 'not inside a git repository: run team from a project' });
+    expect(noFile.out).not.toContain('--file');
 
     const usage = testIo(root);
     expect(await runFeed(['--json', 'extra'], usage, { home })).toBe(2);

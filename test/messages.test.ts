@@ -405,7 +405,8 @@ difference: lead/m1 does not verify: the record is not a message
     const notARepo = await runJson(['--json'], base);
     expect(notARepo.code).toBe(2);
     expect(notARepo.err).toBe('');
-    assertJsonErrorShape(notARepo.out, { id: 'messages.not-a-repo', messageContains: 'not inside a git repository' });
+    assertJsonErrorShape(notARepo.out, { id: 'messages.not-a-repo', messageContains: 'not inside a git repository: run team from a project' });
+    expect(notARepo.out).not.toContain('--file');
 
     rmSync(join(root, '.agents', 'team.yaml'));
     const file = await runJson();
