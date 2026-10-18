@@ -266,7 +266,7 @@ describe('a pass of the watch', () => {
     const { labels, ...rest } = pass({
       team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory(),
     });
-    expect(rest).toEqual({ reports: [], nudge: null, work: [], fallback: null, ring: null, mailboxNote: null, readings: [], machineReadings: [], refusals: [] });
+    expect(rest).toEqual({ reports: [], work: [], ring: null, mailboxNote: null, readings: [], machineReadings: [], refusals: [] });
     expect(labels.length).toBe(5);
   });
 
@@ -401,7 +401,6 @@ describe('a pass of the watch', () => {
     const stuck = live({ 'deepseek-acme': { status: 'idle', screen: permission } });
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 0, memory });
     expect(first.reports).toEqual([{ key: 'blocked:deepseek-acme', text: 'deepseek-acme waits at a permission prompt: its owner\'s to answer', to: 'owner' }]);
-    expect(first.nudge).toBeNull();
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 30 * MIN, memory }).reports).toEqual([]);
   });
 
@@ -411,7 +410,6 @@ describe('a pass of the watch', () => {
     const stuck = live({ 'codex-acme': { status, screen } });
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 0, memory });
     expect(first.reports).toEqual([{ key: 'blocked:codex-acme', text: "codex-acme waits at a permission prompt: its owner's to answer", to: 'owner' }]);
-    expect(first.nudge).toBeNull();
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 30 * MIN, memory }).reports).toEqual([]);
   });
 
@@ -422,9 +420,9 @@ describe('a pass of the watch', () => {
     const stalled = live({ 'codex-acme': { status: 'done', screen: 'Some unknown output without composer\n' } });
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: stalled, machine: fine, now: 0, memory });
     expect(first.reports).toEqual([{ key: 'unknown:codex-acme', text: 'codex-acme: herdr reports the status "done"', to: 'operator' }]);
-    // No idle seat is free: the leads are not the nudge, and this seat's screen is not an empty prompt.
-    expect(first.nudge).toBeNull();
-    expect(memory.pending).toEqual(['codex-acme: herdr reports the status "done"']);
+    // No work drop is due yet, and the report is never typed anywhere.
+    expect(first.work).toEqual([]);
+    expect(first.ring).toBeNull();
     // Once: the same sight is not reported again.
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stalled, machine: fine, now: 30 * MIN, memory }).reports).toEqual([]);
   });
@@ -436,7 +434,6 @@ describe('a pass of the watch', () => {
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: update, machine: fine, now: 0, memory });
     // Its owner's to act on — never a question the operator nudges, and never an idle seat.
     expect(first.reports).toEqual([{ key: 'vendor notice:codex-acme', text: "codex-acme shows a vendor notice: its owner's to act on", to: 'owner' }]);
-    expect(first.nudge).toBeNull();
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: update, machine: fine, now: 30 * MIN, memory }).reports).toEqual([]);
   });
 
@@ -446,13 +443,18 @@ describe('a pass of the watch', () => {
     expect(result.reports).toEqual([{ key: 'question:deepseek-acme-2', text: 'deepseek-acme-2 asked a question: the operator\'s to act on', to: 'operator' }]);
   });
 
-  test('a condition is reported once, and again only after it has cleared', () => {
+  test('a condition is reported once, and again only after two passes that cleared', () => {
+    // One pass where the condition is not seen is a flicker, not a new period: the key survives
+    // it, and the condition's return is the same report. Two passes in a row drop the key.
     const memory = newMemory();
     const stuck = live({ 'deepseek-acme': { status: 'idle', screen: permission } });
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 0, memory }).reports.length).toBe(1);
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: MIN, memory }).reports.length).toBe(0);
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 2 * MIN, memory }).reports.length).toBe(0);
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 3 * MIN, memory }).reports.length).toBe(1);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 3 * MIN, memory }).reports.length).toBe(0);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 4 * MIN, memory }).reports.length).toBe(0);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 5 * MIN, memory }).reports.length).toBe(0);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 6 * MIN, memory }).reports.length).toBe(1);
   });
 
   test('unsent input is its own condition, after unsent_after, for the coordinator too', () => {
@@ -610,7 +612,9 @@ describe('a pass of the watch', () => {
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
     // The pane back at its own shell: the same condition, no second report. A shell is not the launcher line.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([]);
-    // The recorded process in front again: the condition cleared.
+    // The recorded process in front again: the condition cleared, and one clear pass is a flicker.
+    expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
+    // Cleared for a second pass in a row: the mark is dropped.
     expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
     // Held by another process anew — a new change, reported anew.
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([restored, launcher]);
@@ -677,8 +681,7 @@ describe('a pass of the watch', () => {
 
   test('a temporary seat at herdr\'s done on a screen no profile reads is reported the same way', () => {
     // The stalled-seat shape the fail-safe was built from: a temporary seat, herdr reporting
-    // done, no profile reading its screen. A temporary seat is not the nudge, and no file
-    // seat is idle, so the report waits.
+    // done, no profile reading its screen. The report stands on its own; it is never typed.
     const state = { ...emptySession(), seats: { 'codex-acme-tmp-1': { stage: 'ready' as const, temporary: { like: 'codex-acme', until: 'result:out.md' } } } };
     const now = live();
     now.agents.push(agent('codex-acme-tmp-1', 'w7', 'done'));
@@ -686,8 +689,8 @@ describe('a pass of the watch', () => {
     const memory = newMemory();
     const first = pass({ team: team(), watch: team().watch, state, live: now, machine: fine, now: 0, memory });
     expect(first.reports).toEqual([{ key: 'unknown:codex-acme-tmp-1', text: 'codex-acme-tmp-1: herdr reports the status "done"', to: 'operator' }]);
-    expect(first.nudge).toBeNull();
-    expect(memory.pending).toEqual(['codex-acme-tmp-1: herdr reports the status "done"']);
+    expect(first.work).toEqual([]);
+    expect(first.ring).toBeNull();
   });
 
   test('a seat that runs another maker\'s model through Claude Code is unread, never wrong', () => {
@@ -850,79 +853,59 @@ describe('the idle anchor', () => {
   });
 });
 
-describe('the nudge', () => {
-  const asked = (seat: { status?: string; screen?: string } = {}) =>
-    live({
-      'deepseek-acme-2': { status: 'blocked', screen: question },
-      'deepseek-acme': { status: 'idle', screen: idle, ...seat },
-    });
-
-  test('is typed into the idle seat at an empty idle prompt', () => {
-    const result = pass({ team: team(), watch: team().watch, state: emptySession(), live: asked(), machine: fine, now: 0, memory: newMemory() });
-    expect(result.nudge).toEqual({
-      pane: 'w3:p1',
-      seat: 'deepseek-acme',
-      cli: 'claude-code',
-      text: NUDGE_TEXT,
-      pending: ['deepseek-acme-2 asked a question: the operator\'s to act on'],
-    });
-  });
-
-  test('is one constant line: no report text, no digit, nothing a dialog could take as an answer', () => {
-    const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: asked(), machine: fine, now: 0, memory: newMemory() }).nudge;
-    const gone = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
-    gone.agents = gone.agents.filter((one) => one.name !== 'deepseek-acme-2');
-    const second = pass({ team: team(), watch: team().watch, state: emptySession(), live: gone, machine: fine, now: 0, memory: newMemory() }).nudge;
-    // The same line whatever the reports: the report text never travels in the nudge.
-    expect(first?.text).toBe(NUDGE_TEXT);
-    expect(second?.text).toBe(NUDGE_TEXT);
-    expect(first?.text).not.toContain('deepseek-acme-2');
-    // A dialog can open between the screen read and the typing: a digit would pick an option.
-    expect(NUDGE_TEXT).not.toMatch(/[0-9]/);
-    expect(NUDGE_TEXT).not.toMatch(/^[yYnN]/);
-  });
-
+describe('reports and the passes that carry them', () => {
   const askedLine = 'deepseek-acme-2 asked a question: the operator\'s to act on';
-  const idleStarted = 'deepseek-acme has been idle since the watch started';
-  // Each variant: the seat's state on the first pass, what waits behind the question then, and
-  // what waits when the free seat takes the nudge five minutes in — the idle seat's own lead
-  // report joins the queue that pass, when the clock has run since it was first seen quiet. A
-  // seat first seen mid-turn counts from that work; at a prompt, the clock has not started.
-  const variants: [string, { status?: string; screen?: string }, string[], string[]][] = [
-    ['mid-turn', { status: 'working', screen: busy }, [askedLine], [askedLine, 'deepseek-acme has been idle for 5 minutes']],
-    ['at a permission prompt that herdr calls idle', { status: 'idle', screen: permission }, [askedLine], [askedLine]],
-    ['holding unsent text', { status: 'idle', screen: unsent }, [askedLine], [askedLine, idleStarted]],
-    // The seat's own screen is one nothing reads, so the fail-safe reports that too: the
-    // question waits behind it, and is still never dropped.
-    ['with a screen the watch doesn\'t recognise', { status: 'idle', screen: 'Welcome back!' }, [`deepseek-acme: herdr reports the status "idle"`, askedLine], [`deepseek-acme: herdr reports the status "idle"`, askedLine, idleStarted]],
-  ];
-  for (const [name, seat, waiting, laterWaiting] of variants) {
-    test(`waits while the idle seat is ${name}, and is never dropped`, () => {
-      const memory = newMemory();
-      expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: asked(seat), machine: fine, now: 0, memory }).nudge).toBeNull();
-      expect(memory.pending).toEqual(waiting);
-      const later = pass({ team: team(), watch: team().watch, state: emptySession(), live: asked(), machine: fine, now: 5 * MIN, memory });
-      expect(later.nudge?.pane).toBe('w3:p1');
-      expect(later.nudge?.text).toBe(NUDGE_TEXT);
-      expect(later.nudge?.pending).toEqual(laterWaiting);
-      expect(memory.pending).toEqual([]);
-    });
-  }
 
-  test('becomes a notification after nudge_wait', () => {
+  test('an operator report with free builders nudges no builder', () => {
+    // A question waits for the operator and a builder sits free at an empty prompt. The first
+    // pass has no work drop due, and the report is never typed. Five minutes on, the builder is
+    // reached by its work drop on the idle cadence — the fixed line, never the report's text.
+    const scene = live({
+      'deepseek-acme-2': { status: 'blocked', screen: question },
+      'deepseek-acme': { status: 'idle', screen: idle },
+    });
     const memory = newMemory();
-    const stuck = asked({ status: 'working', screen: busy });
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 0, memory }).fallback).toBeNull();
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 9 * MIN, memory }).fallback).toBeNull();
-    const result = pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 10 * MIN, memory });
-    expect(result.nudge).toBeNull();
-    expect(result.fallback).toBe('no idle seat could be nudged for 10 minutes; 1 report wait: deepseek-acme-2 asked a question: the operator\'s to act on');
-    expect(memory.pending).toEqual([]);
+    const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: scene, machine: fine, now: 0, memory });
+    expect(first.reports).toEqual([{ key: 'question:deepseek-acme-2', text: askedLine, to: 'operator' }]);
+    expect(first.work).toEqual([]);
+    expect(first.ring).toBeNull();
+    const later = pass({ team: team(), watch: team().watch, state: emptySession(), live: scene, machine: fine, now: 5 * MIN, memory });
+    expect(later.work).toEqual([{ pane: 'w3:p1', seat: 'deepseek-acme', cli: 'claude-code', body: NUDGE_TEXT }]);
+    expect(later.work[0]?.body).not.toContain('asked a question');
   });
 
-  test('carries no report that is the owner\'s to answer', () => {
-    const stuck = live({ 'deepseek-acme': { status: 'idle', screen: permission } });
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 0, memory: newMemory() }).nudge).toBeNull();
+  test('a flickering unknown screen reports once across known/unknown/known passes', () => {
+    // The fail-safe's key survives one pass where the screen reads known — a flicker is not a
+    // clear — and two known passes in a row drop it, so a condition that really cleared reports
+    // again when it comes back.
+    const memory = newMemory();
+    const unknown = live({ 'codex-acme': { status: 'done', screen: 'Some unknown output without composer\n' } });
+    const known = live();
+    const at = (scene: Live, minute: number) => pass({
+      team: team(), watch: team().watch, state: emptySession(), live: scene, machine: fine, now: minute * MIN, memory,
+    }).reports.map((report) => report.text);
+    const line = 'codex-acme: herdr reports the status "done"';
+    expect(at(unknown, 0)).toEqual([line]);
+    expect(at(known, 2)).toEqual([]);
+    expect(at(unknown, 4)).toEqual([]);
+    expect(at(known, 6)).toEqual([]);
+    // The second known pass in a row: the condition has cleared.
+    expect(at(known, 8)).toEqual([]);
+    expect(at(unknown, 10)).toEqual([line]);
+  });
+
+  test('a real new idle period still reports', () => {
+    const memory = newMemory();
+    const quiet = live({ 'deepseek-acme': { status: 'idle', screen: idle } });
+    const at = (scene: Live, minute: number) => pass({
+      team: team(), watch: team().watch, state: emptySession(), live: scene, machine: fine, now: minute * MIN, memory,
+    }).reports.map((report) => report.text);
+    expect(at(quiet, 0)).toEqual([]);
+    expect(at(quiet, 5)).toEqual(['deepseek-acme has been idle since the watch started']);
+    // Works, then goes quiet again: a new period, reported once idle_first has run from the work.
+    expect(at(live(), 20)).toEqual([]);
+    expect(at(quiet, 24)).toEqual([]);
+    expect(at(quiet, 30)).toEqual(['deepseek-acme has been idle for 10 minutes']);
   });
 });
 
@@ -971,6 +954,13 @@ describe('team watch', () => {
       pid: 4242,
       ...over,
     };
+  }
+
+  // A message waiting for a seat: the ring is the watch's one fixed typed line, so the delivery
+  // safety tests below type it, while every report beside it is only logged and notified.
+  function waiting(seat = 'deepseek-acme', at = '2026-10-03T13:59:00.000Z'): Partial<WatchSources> {
+    planted(seat, 'the message body itself', at);
+    return { home: join(dir, 'home') };
   }
 
   beforeEach(() => {
@@ -1025,11 +1015,11 @@ describe('team watch', () => {
       kind: 'refused' as const,
       why: 'the record does not carry a valid signature: it was changed after approval, or written without the key',
     })],
-  ] satisfies Array<[string, WatchSources['standing']]>)('still nudges an idle seat while the record is %s', async (_name, standing) => {
+  ] satisfies Array<[string, WatchSources['standing']]>)('still rings an idle seat while the record is %s', async (_name, standing) => {
     const io = testIo(dir, { kind: 'owner' });
-    const code = await runWatch(['--file', file], io, sources(1, { standing }));
+    const code = await runWatch(['--file', file], io, sources(1, { ...waiting(), standing }));
     expect(code).toBe(0);
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
   });
 
   test('types nothing when herdr lists two agents of the idle seat', async () => {
@@ -1041,7 +1031,7 @@ describe('team watch', () => {
     const worker = doubled.agents.find((agent) => agent.name === 'deepseek-acme');
     if (!worker) throw new Error('the fixture has no idle seat');
     doubled.agents.push({ ...worker, pane: 'w9:p1', workspace: 'w9' });
-    const code = await runWatch(['--file', file], io, sources(1, { live: () => doubled }));
+    const code = await runWatch(['--file', file], io, sources(1, { ...waiting(), live: () => doubled }));
     expect(code).toBe(0);
     expect(typed).toEqual([]);
   });
@@ -1049,7 +1039,7 @@ describe('team watch', () => {
   test('a status line changed between passes reaches line 2 on the sweep, once per change', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const pushed: string[] = [];
-    // Nobody idle: no nudge, so the pane text the sweep reads is only what this test sets.
+    // Nobody idle: no ring, so the pane text the sweep reads is only what this test sets.
     const working = live({ 'deepseek-acme': { status: 'working', screen: busy }, 'deepseek-acme-2': { status: 'working', screen: busy } });
     let waits = 0;
     const code = await runWatch(['--file', file], io, sources(1, {
@@ -1093,17 +1083,18 @@ describe('team watch', () => {
   test('reports to the log, the desktop and the operator, and writes its heartbeat', async () => {
     const io = testIo(dir, { kind: 'owner' });
     let beat: unknown;
-    const code = await runWatch(['--file', file], io, sources(2, {
+    const code = await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       wait: async () => { beat ??= readState(join(dir, '.agents')).sessions['acme-web']?.watch; return false; },
     }));
     expect(code).toBe(0);
     expect(beat).toEqual({ pid: 4242, heartbeat: '2026-10-03T14:00:00.000Z' });
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
     expect(typed[0]).not.toContain('asked a question');
     expect(notified[0]).toBe('deepseek-acme-2 asked a question: the operator\'s to act on');
     const log = readFileSync(join(dir, '.agents', 'team.log'), 'utf8');
     expect(log).toContain('watch [watch] deepseek-acme-2 asked a question');
-    expect(log).toContain('watch [watch] nudged deepseek-acme');
+    expect(log).toContain('watch [watch] rang deepseek-acme');
   });
 
   test('the readings are written once per ten minutes, and not more, whether or not anything is wrong', async () => {
@@ -1188,34 +1179,37 @@ describe('team watch', () => {
     expect(notified[notified.length - 1]).toBe('the watch of "acme-web" stopped');
   });
 
-  test('a prompt that appeared since the pass keeps the nudge pending: nothing is typed', async () => {
+  test('a prompt that appeared since the pass keeps the ring back: nothing is typed', async () => {
     screenNow = permission;
-    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1));
+    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1, waiting()));
     expect(typed).toEqual([]);
     screenNow = idle;
   });
 
-  test('a kept nudge is typed on a later pass, once the operator is free again', async () => {
+  test('a ring held back by a prompt is typed on a later pass, once the prompt clears', async () => {
     let calls = 0;
-    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(2, { screen: () => (calls++ === 0 ? permission : screenNow) }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
+    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(2, {
+      ...waiting(),
+      screen: () => (calls++ === 0 ? permission : screenNow),
+    }));
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
   });
 
-  test('a nudge the pane has not drawn yet is waited for, read back, and then sent', async () => {
-    // The pair of real Claude Code captures: the instant after the nudge line was typed the
-    // pane still reads idle with its placeholder, and about two seconds later the box holds
-    // exactly the line, wrapped onto its continuation row. The reading that decides the Enter
-    // waits for the draw — the fault was reading back once, at once, and telling 'typed and
-    // not sent' about a pane that had simply not drawn yet.
+  test('a ring the pane has not drawn yet is waited for, read back, and then sent', async () => {
+    // The real Claude Code capture of the instant after a line was typed: the pane still reads
+    // idle with its placeholder, and a moment later the box holds the line. The reading that
+    // decides the Enter waits for the draw — the fault was reading back once, at once, and
+    // telling 'typed and not sent' about a pane that had simply not drawn yet.
     const justTyped = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-idle-ansi.txt', import.meta.url), 'utf8');
-    const drawn = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-unsent-ansi.txt', import.meta.url), 'utf8');
+    const drawn = claudeBox(RING_TEXT);
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
       sleep: async (ms) => { clock += ms; screenNow = drawn; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).toContain('nudged deepseek-acme');
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(io.out).toContain('rang deepseek-acme');
     expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
@@ -1225,27 +1219,29 @@ describe('team watch', () => {
     // first poll, and the remainder of the line a moment later. On main, the first unsent reading
     // ended settleScreen immediately, saw boxHoldsText false, and gave up without sending Enter.
     // The bounded loop waits up to DRAW_WAIT_MS for the box to hold the whole line, and sends the Enter.
-    const partial = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-partial-ansi.txt', import.meta.url), 'utf8');
-    const drawn = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-unsent-ansi.txt', import.meta.url), 'utf8');
+    const partial = claudeBox(RING_TEXT.slice(0, 15));
+    const drawn = claudeBox(RING_TEXT);
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = partial; return true; },
       sleep: async (ms) => { clock += ms; screenNow = drawn; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).toContain('nudged deepseek-acme');
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(io.out).toContain('rang deepseek-acme');
     expect(io.out).not.toContain('a nudge was typed and not sent');
   });
 
-  test('a pane that never draws the nudge is left, with the line that says so', async () => {
+  test('a pane that never draws the ring is left, with the line that says so', async () => {
     // The wait is bounded, as the exit typing's is: a screen still idle at the deadline is the
     // text never drawn, and nothing but the typing was sent.
     const justTyped = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-idle-ansi.txt', import.meta.url), 'utf8');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
@@ -1256,12 +1252,13 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     let sleeps = 0;
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
       sleep: async () => { sleeps++; },
       now: () => new Date('2026-10-03T14:00:00Z'),
     }));
     expect(sleeps).toBe(1);
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
@@ -1271,11 +1268,11 @@ describe('team watch', () => {
     // pass saw the scene's idle prompt; the read before delivery finds this box. With no record
     // in this process of typing it, the text is its owner's — no key goes out, nothing is typed
     // over it, and nothing clears it.
-    const held = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-unsent-ansi.txt', import.meta.url), 'utf8');
+    const held = claudeBox(RING_TEXT);
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1, { screen: () => held }));
+    await runWatch(['--file', file], io, sources(1, { ...waiting(), screen: () => held }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain('nudged deepseek-acme');
+    expect(io.out).not.toContain('rang deepseek-acme');
   });
 
   test('a line this watch typed itself, left unsent, is sent by a later pass and not typed again', async () => {
@@ -1283,16 +1280,17 @@ describe('team watch', () => {
     // stays in the box — this process's own leftover, recorded at the typing. Pass 2 finds the
     // box holding exactly that line and sends it, instead of typing the same text a second time.
     const justTyped = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-idle-ansi.txt', import.meta.url), 'utf8');
-    const held = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-unsent-ansi.txt', import.meta.url), 'utf8');
+    const held = claudeBox(RING_TEXT);
     let waits = 0;
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(2, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
       // The pane draws the line between the passes: unsent, and this watch's own.
       wait: async (seconds) => { clock += seconds * 1000; screenNow = held; return waits++ === 0; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).toContain('nudged deepseek-acme (its own unsent line was already in its box)');
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(io.out).toContain('rang deepseek-acme: ' + RING_TEXT);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
@@ -1301,30 +1299,31 @@ describe('team watch', () => {
     // it remembers no typing, so the same box is text it cannot claim, and it is never sent —
     // the unsent report from the check is what a person or the next stop acts on.
     const justTyped = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-idle-ansi.txt', import.meta.url), 'utf8');
-    const held = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-unsent-ansi.txt', import.meta.url), 'utf8');
+    const held = claudeBox(RING_TEXT);
     await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     // The pane drew the line between the runs: the box now holds exactly the watch's line.
     screenNow = held;
     typed = [];
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1));
+    await runWatch(['--file', file], io, sources(1, { ...waiting(), screen: () => held }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain('nudged deepseek-acme');
+    expect(io.out).not.toContain('rang deepseek-acme');
   });
 
   test('a box holding any other text is never sent into, typed over or cleared', async () => {
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1, { screen: () => unsent }));
+    await runWatch(['--file', file], io, sources(1, { ...waiting(), screen: () => unsent }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain('nudged deepseek-acme');
+    expect(io.out).not.toContain('rang deepseek-acme');
   });
 
   test('a pane with no live agent is not typed into', async () => {
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(2, { foreground: () => ['zsh'] }));
+    await runWatch(['--file', file], io, sources(2, { ...waiting(), foreground: () => ['zsh'] }));
     expect(typed).toEqual([]);
     const line = 'a nudge was not typed: no live agent in deepseek-acme\'s pane';
     expect(io.out.split(line).length - 1).toBe(1);
@@ -1334,41 +1333,43 @@ describe('team watch', () => {
     let live = true;
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       foreground: () => (live ? ['claude'] : ['zsh']),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); live = false; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was not typed: no live agent in deepseek-acme\'s pane');
   });
 
   test('an operator that turns working during the draw wait is not sent the Enter', async () => {
-    // The reviewer's focused case: the pass saw the operator free, the typing goes in, and while
-    // the pane draws the box the operator starts a turn. The status read before the wait must not
+    // The reviewer's focused case: the pass saw the seat free, the typing goes in, and while
+    // the pane draws the box the seat starts a turn. The status read before the wait must not
     // clear the key: the Enter's checks are the live agent, the status as it reads at the key and
     // the box, all taken with no await between them, so a turn that began under the wait leaves
-    // the nudge typed and unsent. Read before the fix, this sent `w0:p1 <enter>` anyway.
+    // the line typed and unsent.
     const justTyped = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-idle-ansi.txt', import.meta.url), 'utf8');
-    const drawn = readFileSync(new URL('./fixtures/nudge-typing/claude-code-nudge-unsent-ansi.txt', import.meta.url), 'utf8');
+    const drawn = claudeBox(RING_TEXT);
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = justTyped; return true; },
       sleep: async (ms) => { clock += ms; screenNow = drawn; statusNow = 'working'; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
   test('an operator that started working since the pass is not typed into', async () => {
     statusNow = 'working';
-    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1));
+    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1, waiting()));
     expect(typed).toEqual([]);
   });
 
   test('a dialog that opens between the text and the Enter never gets the Enter', async () => {
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1, { screen: () => (looks++ === 0 ? idle : permission) }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    await runWatch(['--file', file], io, sources(1, { ...waiting(), screen: () => (looks++ === 0 ? idle : permission) }));
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
@@ -1378,7 +1379,7 @@ describe('team watch', () => {
     // seat's own text — so the Enter went to the dialog's first choice.
     const codexIdle = readFileSync(new URL('./fixtures/codex/0.157.0/idle.txt', import.meta.url), 'utf8');
     const pinned = readFileSync(new URL('./fixtures/codex/0.157.0/permission-pinned.txt', import.meta.url), 'utf8');
-    // The example's codex-acme is parked, and a parked seat is not nudged.
+    // The example's codex-acme is parked, and a parked seat is not rung.
     writeFileSync(file, example.replace('    parked: true\n', ''));
     scene = live({
       'codex-acme': { status: 'idle', screen: codexIdle },
@@ -1386,121 +1387,125 @@ describe('team watch', () => {
     });
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1, { screen: () => (looks++ === 0 ? codexIdle : pinned) }));
-    expect(typed).toEqual([`w2:p1 ${NUDGE_TEXT}`]);
+    await runWatch(['--file', file], io, sources(1, { ...waiting('codex-acme'), screen: () => (looks++ === 0 ? codexIdle : pinned) }));
+    expect(typed).toEqual([`w2:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
-  test('the box, read back before the Enter, is the nudge\'s own: the Enter is sent', async () => {
-    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
+  test('the box, read back before the Enter, is the line\'s own: the Enter is sent', async () => {
+    await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1, waiting()));
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
   });
 
-  test('a wrapped box that reads back as the nudge gets its Enter', async () => {
-    // A narrow pane wraps the nudge onto continuation rows. Claude Code's captures show no
-    // composer wrap, so no wrap is modelled for it: the rows must read back as the nudge's own
-    // text in order, and then the Enter is the nudge's.
-    const wrapped = claudeBox(wordWrap(NUDGE_TEXT, 24).join('\n'));
+  test('a wrapped box that reads back as the line gets its Enter', async () => {
+    // A narrow pane wraps the line onto continuation rows. Claude Code's captures show no
+    // composer wrap, so no wrap is modelled for it: the rows must read back as the line's own
+    // text in order, and then the Enter is the line's.
+    const wrapped = claudeBox(wordWrap(RING_TEXT, 12).join('\n'));
     await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
   });
 
   test('a wrapped box with a blank row between its rows never gets the Enter', async () => {
-    // An empty continuation row is not part of the nudge: the pane draws one only where the
-    // nudge itself has a blank line, and it has none. The nudge is typed, and not sent.
-    const rows = wordWrap(NUDGE_TEXT, 24);
+    // An empty continuation row is not part of the line: the pane draws one only where the
+    // line itself has a blank line, and it has none. The line is typed, and not sent.
+    const rows = wordWrap(RING_TEXT, 12);
     const [firstRow = '', ...rest] = rows;
     const wrapped = claudeBox([firstRow, '', ...rest].join('\n'));
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
-  test('a trailing blank row after the wrapped nudge never gets the Enter', async () => {
-    // The same reproduction on the nudge path: the wrapped nudge's rows, then one more empty
-    // row inside the box, above the closing rule. No capture shows Claude Code drawing an empty
-    // row of its own inside the composer, so a trailing blank row is a row the nudge does not
-    // have. The nudge is typed, and not sent.
-    const rows = wordWrap(NUDGE_TEXT, 24);
+  test('a trailing blank row after the wrapped line never gets the Enter', async () => {
+    // The same reproduction: the wrapped line's rows, then one more empty row inside the box,
+    // above the closing rule. No capture shows Claude Code drawing an empty row of its own
+    // inside the composer, so a trailing blank row is a row the line does not have.
+    const rows = wordWrap(RING_TEXT, 12);
     const [firstRow = '', ...rest] = rows;
     const [rule = ''] = claudeBox('').split('\n');
     const wrapped = claudeBox([firstRow, ...rest].join('\n')).replace(`\n${rule}\n`, `\n\n${rule}\n`);
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
-  test('a rule-looking row after the wrapped nudge never gets the Enter', async () => {
-    // The same shape on the nudge path: the wrapped nudge's rows, then one more indented row
-    // of forty ─ inside the box, above its closing rule. The pane draws content rows at the
-    // text's own column, and the closing rule is the window's last rule row, an unbroken run
-    // of ─ from the pane's first column (unsent-typed-ansi.txt) — the extra row is neither.
-    // The nudge is typed, and not sent.
-    const rows = wordWrap(NUDGE_TEXT, 24);
+  test('a rule-looking row after the wrapped line never gets the Enter', async () => {
+    // The same shape: the wrapped line's rows, then one more indented row of forty ─ inside the
+    // box, above its closing rule. The pane draws content rows at the text's own column, and
+    // the closing rule is the window's last rule row, an unbroken run of ─ from the pane's
+    // first column — the extra row is neither.
+    const rows = wordWrap(RING_TEXT, 12);
     const [firstRow = '', ...rest] = rows;
     const wrapped = claudeBox([firstRow, ...rest, '─'.repeat(40)].join('\n'));
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
-  test('a rule-looking row between two nudge rows never gets the Enter', async () => {
-    // The rule-looking row between the nudge's rows is content the nudge does not have, and
-    // neither is the box that shows it. The nudge is typed, and not sent.
-    const rows = wordWrap(NUDGE_TEXT, 24);
+  test('a rule-looking row between two line rows never gets the Enter', async () => {
+    // The rule-looking row between the line's rows is content the line does not have, and
+    // neither is the box that shows it. The line is typed, and not sent.
+    const rows = wordWrap(RING_TEXT, 12);
     const [firstRow = '', ...rest] = rows;
     const wrapped = claudeBox([firstRow, '─'.repeat(40), ...rest].join('\n'));
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = wrapped; return true; },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
   test('a box that holds someone else\'s text gets no Enter', async () => {
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1, { screen: () => (looks++ === 0 ? idle : unsent) }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`]);
+    await runWatch(['--file', file], io, sources(1, { ...waiting(), screen: () => (looks++ === 0 ? idle : unsent) }));
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
-  test('a prompt-glyph continuation row in the operator\'s box is never typed into and never gets the Enter', async () => {
-    // The round-6 reproduction on the nudge path: the operator's box holds their own text and
-    // then a continuation row carrying only the prompt glyph. The box is not idle — the input
-    // row is the box's first row under its opening rule, and the glyph row is content — so
-    // nothing is typed. Read by glyph, the box was idle, the nudge was appended after the
-    // glyph, and the nudge and the operator's text were submitted together.
+  test('a prompt-glyph continuation row in the seat\'s box is never typed into and never gets the Enter', async () => {
+    // The round-6 reproduction: the seat's box holds its own text and then a continuation row
+    // carrying only the prompt glyph. The box is not idle — the input row is the box's first
+    // row under its opening rule, and the glyph row is content — so nothing is typed. Read by
+    // glyph, the box was idle, the line was appended after the glyph, and the line and the
+    // person's text were submitted together.
     screenNow = claudeBox('person text\n❯');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = claudeBox(`person text\n❯ ${text}`); return true; },
     }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain('nudged deepseek-acme');
+    expect(io.out).not.toContain('rang deepseek-acme');
   });
 
-  test('a second glyph row at the operator\'s prompt column is never typed into and never gets the Enter', async () => {
-    // The 0.2.1 boundary on the nudge path, in Codex's shape: the operator's box holds their
-    // own text and then a row carrying the prompt at the input row's own column. No capture
-    // draws a person's continuation there — continuations are indented two columns — so the
-    // read is `unknown`: not idle, and nothing is typed. Read by its lowest row the box was
-    // idle, the nudge was appended after the second glyph, the read-back held only the nudge,
-    // and the Enter submitted the operator's own text with it.
+  test('a second glyph row at the seat\'s prompt column is never typed into and never gets the Enter', async () => {
+    // The 0.2.1 boundary, in Codex's shape: the seat's box holds its own text and then a row
+    // carrying the prompt at the input row's own column. No capture draws a person's
+    // continuation there — continuations are indented two columns — so the read is `unknown`:
+    // not idle, and nothing is typed. Read by its lowest row the box was idle, the line was
+    // appended after the second glyph, the read-back held only the line, and the Enter submitted
+    // the person's own text with it.
     const codexIdle = readFileSync(new URL('./fixtures/codex/0.157.0/idle.txt', import.meta.url), 'utf8');
-    // The example's codex-acme is parked, and a parked seat can't be the operator.
+    // The example's codex-acme is parked, and a parked seat can't be rung.
     writeFileSync(file, example.replace('    parked: true\n', ''));
     scene = live({
       'codex-acme': { status: 'idle', screen: codexIdle },
@@ -1509,6 +1514,7 @@ describe('team watch', () => {
     screenNow = codexIdle.replace('› Ask Codex to do anything', '› person text\n›');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting('codex-acme'),
       typeText: (pane, text) => {
         typed.push(`${pane} ${text}`);
         screenNow = codexIdle.replace('› Ask Codex to do anything', `› person text\n› ${text}`);
@@ -1516,14 +1522,14 @@ describe('team watch', () => {
       },
     }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain('nudged deepseek-acme');
+    expect(io.out).not.toContain('rang codex-acme');
   });
 
-  test('the transcript echo above the blank frame is nudged: the box is idle under it', async () => {
-    // The routine post-send layout, in Codex's shape: the operator's sent message echoed at the
-    // prompt column, the captured blank frame, the empty input row. It is the transcript's
-    // echo, not a row of the person's box (a box row is drawn indented), so the box reads
-    // `idle` and the nudge is typed and entered — the seat exists to be nudged.
+  test('the transcript echo above the blank frame is rung: the box is idle under it', async () => {
+    // The routine post-send layout, in Codex's shape: the sent message echoed at the prompt
+    // column, the captured blank frame, the empty input row. It is the transcript's echo, not a
+    // row of the person's box (a box row is drawn indented), so the box reads `idle` and the
+    // line is typed and entered — the seat exists to be rung.
     const codexIdle = readFileSync(new URL('./fixtures/codex/0.157.0/idle.txt', import.meta.url), 'utf8');
     writeFileSync(file, example.replace('    parked: true\n', ''));
     scene = live({
@@ -1533,20 +1539,21 @@ describe('team watch', () => {
     screenNow = codexIdle.replace('› Ask Codex to do anything', '› person text\n\n›');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting('codex-acme'),
       typeText: (pane, text) => {
         typed.push(`${pane} ${text}`);
         screenNow = codexIdle.replace('› Ask Codex to do anything', `› person text\n\n› ${text}`);
         return true;
       },
     }));
-    expect(typed).toEqual([`w2:p1 ${NUDGE_TEXT}`, 'w2:p1 <enter>']);
-    expect(io.out).toContain('nudged codex-acme');
+    expect(typed).toEqual([`w2:p1 ${RING_TEXT}`, 'w2:p1 <enter>']);
+    expect(io.out).toContain('rang codex-acme');
   });
 
-  test('an operator\'s box whose top frame scrolled off gets no nudge', async () => {
-    // The reviewer's second must-fix on the nudge path: the input row scrolled out, a visible
-    // indented continuation, then the prompt row. The row directly above the prompt is not
-    // blank, so the prompt is not a box top the captures draw — nothing is typed.
+  test('a seat\'s box whose top frame scrolled off gets no ring', async () => {
+    // The reviewer's second must-fix: the input row scrolled out, a visible indented
+    // continuation, then the prompt row. The row directly above the prompt is not blank, so the
+    // prompt is not a box top the captures draw — nothing is typed.
     const codexIdle = readFileSync(new URL('./fixtures/codex/0.157.0/idle.txt', import.meta.url), 'utf8');
     writeFileSync(file, example.replace('    parked: true\n', ''));
     scene = live({
@@ -1556,6 +1563,7 @@ describe('team watch', () => {
     screenNow = codexIdle.replace('› Ask Codex to do anything', '  person-owned visible continuation\n›');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting('codex-acme'),
       typeText: (pane, text) => {
         typed.push(`${pane} ${text}`);
         screenNow = codexIdle.replace('› Ask Codex to do anything', `  person-owned visible continuation\n› ${text}`);
@@ -1563,14 +1571,14 @@ describe('team watch', () => {
       },
     }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain('nudged deepseek-acme');
+    expect(io.out).not.toContain('rang codex-acme');
   });
 
-  test('the transcript echo above the blank frame is nudged: the box is idle under it (Cursor)', async () => {
+  test('the transcript echo above the blank frame is rung: the box is idle under it (Cursor)', async () => {
     // The Cursor twin of the routine post-send layout: `  → person text`, blank frame, `  →`.
     // typed-blank-middle.txt settles the shape — a person's box draws its third line at the
     // content column, so a second glyph at the prompt column after a blank is the transcript's
-    // echo. The box reads `idle` and the nudge is typed and entered.
+    // echo. The box reads `idle` and the line is typed and entered.
     const cursorIdle = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
     writeFileSync(file, example.replace(
       '    name: deepseek-acme\n    cli: claude-code           # DeepSeek\'s model, run by Claude Code',
@@ -1583,23 +1591,24 @@ describe('team watch', () => {
     screenNow = cursorIdle.replace('  → Plan, search, build anything', '  → person text\n\n  →');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
+      ...waiting(),
       typeText: (pane, text) => {
         typed.push(`${pane} ${text}`);
         screenNow = cursorIdle.replace('  → Plan, search, build anything', `  → person text\n\n  → ${text}`);
         return true;
       },
     }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).toContain('nudged deepseek-acme');
+    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    expect(io.out).toContain('rang deepseek-acme');
   });
 
   test.each(['close-short', 'close-long', 'open-short'] as const)(
-    'a nudge is not typed or sent into an Antigravity seat\'s mismatched-rules box (%s)',
+    'a ring is not typed or sent into an Antigravity seat\'s mismatched-rules box (%s)',
     async (shape) => {
-      // The round-7 reproduction on the nudge path: the seat's two rules disagree in
-      // width, so the frame cannot be established and the window is not idle. Without the
-      // width check the window read idle, the nudge was typed into it, the read-back held,
-      // and the Enter went with it. With it, nothing is typed.
+      // The round-7 reproduction: the seat's two rules disagree in width, so the frame cannot
+      // be established and the window is not idle. Without the width check the window read idle,
+      // the line was typed into it, the read-back held, and the Enter went with it. With it,
+      // nothing is typed.
       writeFileSync(file, example.replace(
         '    name: deepseek-acme\n    cli: claude-code           # DeepSeek\'s model, run by Claude Code',
         '    name: deepseek-acme\n    cli: antigravity',
@@ -1611,22 +1620,12 @@ describe('team watch', () => {
       screenNow = agyMismatchedFrame(shape);
       const io = testIo(dir, { kind: 'owner' });
       await runWatch(['--file', file], io, sources(1, {
+        ...waiting(),
         typeText: (pane, text) => { typed.push(`${pane} ${text}`); screenNow = agyMismatchedFrame(shape, text); return true; },
       }));
       expect(typed).toEqual([]);
-      expect(io.out).not.toContain('nudged deepseek-acme');
+      expect(io.out).not.toContain('rang deepseek-acme');
     });
-
-  test('--no-notify still notifies the fallback when the operator never frees up', async () => {
-    scene = live({
-      'deepseek-acme-2': { status: 'blocked', screen: question },
-      'claude-operator-acme': { status: 'working', screen: busy },
-    });
-    const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file, '--no-notify'], io, sources(6));
-    expect(notified.some((line) => line.startsWith('no idle seat could be nudged'))).toBe(true);
-    expect(notified).not.toContain('deepseek-acme-2 asked a question: the operator\'s to act on');
-  });
 
   test('--no-notify still delivers a floor report, and the log keeps it', async () => {
     writeFileSync(file, withAccounts(`  accounts:
@@ -1672,12 +1671,13 @@ describe('team watch', () => {
   });
 
   test('--no-nudge types nothing and --no-notify notifies nothing; the log still has it', async () => {
+    // A message waits at the idle seat, so the pass has its one typed line — and refuses it.
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file, '--no-nudge', '--no-notify'], io, sources(1));
+    await runWatch(['--file', file, '--no-nudge', '--no-notify'], io, sources(1, waiting()));
     expect(typed).toEqual([]);
     expect(notified).toEqual(['the watch of "acme-web" stopped']);
     expect(notified).not.toContain('deepseek-acme-2 asked a question: the operator\'s to act on');
-    expect(io.out).toContain(`nudge not typed (--no-nudge): ${NUDGE_TEXT}`);
+    expect(io.out).toContain(`ring not typed (--no-nudge): ${RING_TEXT}`);
     expect(readFileSync(join(dir, '.agents', 'team.log'), 'utf8')).toContain('deepseek-acme-2 asked a question');
   });
   test('a second watch on the same session refuses while the first is alive', async () => {
@@ -1909,13 +1909,17 @@ describe('team watch', () => {
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
   });
 
-  test('a report nudge is the one typed line when a message is also waiting', async () => {
+  test('a waiting report is never the typed line: the ring is', async () => {
+    // A report for the operator (the question at deepseek-acme-2) and a message waiting at an
+    // idle seat (the operator's own box) in the same pass. One line is typed, and it is the
+    // ring's fixed wake line — never the report's words.
     const body = 'the message body itself';
     planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home') }));
-    expect(typed).toEqual([`w3:p1 ${NUDGE_TEXT}`, 'w3:p1 <enter>']);
-    expect(io.out).not.toContain(RING_TEXT);
+    expect(typed).toEqual([`w0:p1 ${RING_TEXT}`, 'w0:p1 <enter>']);
+    expect(io.out).toContain('deepseek-acme-2 asked a question');
+    expect(io.out).not.toContain(`w3:p1 ${NUDGE_TEXT}`);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
   });
 

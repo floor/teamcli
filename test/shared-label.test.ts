@@ -170,7 +170,7 @@ describe('a shared label', () => {
     expect(out.differences.some((item) => item.what.startsWith('coordinator:') && item.what.includes('unnamed'))).toBe(false);
   });
 
-  test('the watch nudges the idle seat\'s pane, not the operator that shares its label', () => {
+  test('the work drop reaches the idle seat\'s pane, not the operator that shares its label', () => {
     const team = valid(SHARED);
     const idle = CLAUDE_IDLE;
     const live = {
@@ -186,13 +186,14 @@ describe('a shared label', () => {
       screens: { 'w1:p1': idle, 'w2:p1': idle },
     };
     const memory = newMemory();
-    memory.pending = ['coordinator asked a question'];
-    memory.pendingSince = 0;
     const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+    // The first pass starts the idle clock; the second has reached idle_first. The seat is
+    // chosen by its name: the operator shares its label, and is never a work-drop target.
+    pass({ team, state: emptySession(), live, machine: fine, now: 0, memory, approval: [], watch: team.watch });
     const result = pass({
-      team, state: emptySession(), live, machine: fine, now: 0, memory, approval: [], watch: team.watch,
+      team, state: emptySession(), live, machine: fine, now: 10 * 60_000, memory, approval: [], watch: team.watch,
     });
-    expect(result.nudge?.pane).toBe(live.agents[1]?.pane);
+    expect(result.work.map((item) => item.pane)).toEqual(['w2:p1']);
   });
 });
 

@@ -216,25 +216,22 @@ describe('a profile herdr cannot report reads its state from the screen', () => 
     expect(attentionOf(idle, 'unknown', false)).toBe('unknown');
   });
 
-  test('the watch reports neither attention nor a nudge failure at an idle table, and does nudge it', () => {
+  test('the watch reports no attention at an idle table, and types nothing into it', () => {
     const memory = newMemory();
     const quiet = julesLive(capture('idle'));
     const first = pass({ team: julesTeam(), watch: julesTeam().watch, state: emptySession(), live: quiet, machine: fine, now: 0, memory });
     expect(first.reports).toEqual([]);
-    expect(first.nudge).toBeNull();
+    expect(first.work).toEqual([]);
     // The same seat on a running card is working: no idle report, no attention.
     const busy = pass({ team: julesTeam(), watch: julesTeam().watch, state: emptySession(), live: julesLive(capture('working')), machine: fine, now: 10 * MIN, memory: newMemory() });
     expect(busy.reports).toEqual([]);
-    // Ten minutes at the table: the idle check counts it, as it counts any quiet seat.
+    // Ten minutes at the table: the idle check counts it, as it counts any quiet seat. The
+    // report stays in the log — the table is reached by no typed line.
     const later = pass({ team: julesTeam(), watch: julesTeam().watch, state: emptySession(), live: quiet, machine: fine, now: 10 * MIN, memory });
     expect(later.reports.map((report) => report.text)).toContain('jules-acme has been idle since the watch started');
     expect(later.reports.some((report) => report.text.includes('herdr reports'))).toBe(false);
-    // A report waiting for an operator picks the idle table as the seat to nudge.
-    const waiting = newMemory();
-    waiting.pending = ['a report waits'];
-    const nudged = pass({ team: julesTeam(), watch: julesTeam().watch, state: emptySession(), live: quiet, machine: fine, now: 0, memory: waiting });
-    expect(nudged.nudge?.pane).toBe('w1:p1');
-    expect(nudged.nudge?.seat).toBe('jules-acme');
+    expect(later.work).toEqual([]);
+    expect(later.ring).toBeNull();
   });
 });
 

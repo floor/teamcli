@@ -546,7 +546,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             return { readings: folded.readings, value: folded };
           });
         if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
-        // A liveness word the chain set aside: said once per process, as a line, never nudged
+        // A liveness word the chain set aside: said once per process, as a line, never typed
         // into a seat and never a desktop notice. The value in force stands.
         for (const refusal of result.refusals) {
           const key = `liveness:${refusal.setting}`;
@@ -582,7 +582,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             await deliver({
               pane: item.pane,
               text: written.trigger,
-              pending: [],
               cli: item.cli,
               seat: item.seat,
               said: item.body,
@@ -590,19 +589,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             delivered.add(item.pane);
           }
         }
-        if (result.nudge && result.nudge.pane === ownPane) {
-          // The watch's own pane is the owner's. The reports go back: this pass did not type them.
-          memory.pending.push(...result.nudge.pending);
-          if (result.nudge.pending.length > 0) memory.pendingSince ??= sources.now().getTime();
-        } else if (result.nudge && !delivered.has(result.nudge.pane)) {
-          if (args.flags.has('no-nudge')) say(`nudge not typed (--no-nudge): ${result.nudge.text}`, false);
-          else await deliver(result.nudge, team, session, sources, memory, say, tell, told);
-        } else if (!result.nudge && result.ring && delivered.size === 0) {
+        if (result.ring && delivered.size === 0) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${result.ring.text}`, false);
           else await deliver({
             pane: result.ring.pane,
             text: result.ring.text,
-            pending: [],
             cli: result.ring.cli,
             ring: { to: result.ring.to },
           }, team, session, sources, memory, say, tell, told);
@@ -623,7 +614,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
         }
-        if (result.fallback) tell(result.fallback, true);
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
       }
@@ -729,7 +719,7 @@ function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string):
 }
 
 async function deliver(
-  nudge: { pane: string; text: string; pending: string[]; cli?: string; seat?: string; ring?: { to: string }; said?: string }, team: TeamFile, session: string, sources: WatchSources,
+  nudge: { pane: string; text: string; cli?: string; seat?: string; ring?: { to: string }; said?: string }, team: TeamFile, session: string, sources: WatchSources,
   memory: ReturnType<typeof newMemory>, say: (text: string, desktop: boolean) => void,
   tell: (text: string, notify: boolean) => void, told: Set<string>,
 ): Promise<void> {
@@ -738,19 +728,11 @@ async function deliver(
   const look = () => readScreen(cli, sources.screen(nudge.pane, session) ?? undefined).kind;
   const holds = () => boxHoldsText(cli, nudge.text, sources.screen(nudge.pane, session) ?? undefined);
   const status = sources.status(nudge.pane, session);
-  const keep = () => {
-    // The nudge's text carries no report, so the reports it was raised for go back to pending:
-    // the fallback notification and the next passes need them. A ring carries none, and must
-    // not start the report clock.
-    memory.pending.push(...nudge.pending);
-    if (nudge.pending.length > 0) memory.pendingSince ??= sources.now().getTime();
-  };
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(sources.foreground(nudge.pane, session), names);
   const noAgent = 'nudge:no-agent';
   if (!live()) {
     tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
-    keep();
     return;
   }
   told.delete(noAgent);
@@ -767,13 +749,12 @@ async function deliver(
     memory.ownNudge = null;
   }
   // The free reading: herdr's idle or done, or — for a profile herdr cannot report — the seat's
-  // own screen, the same reading the pass chose the seat by. The screen check beside it stays
-  // the gate on what may be typed into: only an empty idle box takes the line.
+  // own screen. The screen check beside it stays the gate on what may be typed into: only an
+  // empty idle box takes the line.
   const quiet = herdrUnreliable(cli)
     ? kind === 'idle' || (mine && kind === 'unsent')
     : status === 'idle' || status === 'done';
   if (!quiet || (!mine && (kind !== 'idle' || !sources.typeText(nudge.pane, nudge.text, session)))) {
-    keep();
     return;
   }
   // The typing, and the record of whose it is: from here this process can claim the line, and a
@@ -783,7 +764,6 @@ async function deliver(
   // since the text was typed, and an unframed line is not a box to send.
   if (!live()) {
     tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
-    keep();
     return;
   }
   // The box is read back before the Enter: it must hold exactly the nudge's own text. The pane
@@ -802,13 +782,11 @@ async function deliver(
       const currentStatus = sources.status(nudge.pane, session);
       if (currentStatus !== 'idle' && currentStatus !== 'done') {
         tell(`a nudge was typed and not sent: ${who} was not free when the box was read back`, true);
-        keep();
         return;
       }
       const kind = look();
       if (kind !== 'idle' && kind !== 'unsent') {
         tell(`a nudge was typed and not sent: ${who}'s box does not hold it`, true);
-        keep();
         return;
       }
       if (sources.now().getTime() >= deadline) break;
@@ -824,18 +802,15 @@ async function deliver(
   // predates the wait, and a turn that began under it must fail closed.
   if (!live()) {
     tellOnce(told, noAgent, `a nudge was not typed: no live agent in ${who}'s pane`, tell);
-    keep();
     return;
   }
   if (!drawn) {
     tell(`a nudge was typed and not sent: ${who}'s box does not hold it`, true);
-    keep();
     return;
   }
   const free = sources.status(nudge.pane, session);
   if (free !== 'idle' && free !== 'done') {
     tell(`a nudge was typed and not sent: ${who} was not free when the box was read back`, true);
-    keep();
     return;
   }
   if (sources.pressEnter(nudge.pane, session)) {
@@ -847,7 +822,7 @@ async function deliver(
       : mine
         ? `nudged ${who} (its own unsent line was already in its box): ${spoken}`
         : `nudged ${who}: ${spoken}`, false);
-  } else keep();
+  }
 }
 
 /** The liveness words of the project a team sits in, or none when it sits in none, no home is

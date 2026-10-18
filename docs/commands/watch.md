@@ -2,20 +2,30 @@
 
 Watches a running team. Every `watch.interval` seconds it reads the session — the seats, their
 screens, the file, the record, the machine — prints what is wrong, and removes a merged worktree
-whose end holds. A temporary seat is left as it is: the owner removes it. When a report is
-waiting, it types one fixed line into an idle seat — the nudge —
-so that seat reads the log. The operator is not that seat. A missing record does not
-stop that line. It types nothing into a
-screen it can't read as an empty idle prompt, so a permission dialog and a half-typed sentence are
-left alone. `watch.nudge`, when the file sets it, is sent to each idle worker once
-`idle_first` has passed and again every `idle_repeat` when that is set. The body goes to the
-same drop file `team send` uses, and the pane receives one short line naming that file.
-When `watch.nudge` is omitted, that body is the report line. The text is taken from the
-live file, so it does not wait for a record. The operator, the orchestrator, and the
-pane the watch itself is running in are never the target, and neither is a pane that is in
-a dialog or already holds unsent text. A box that already holds the nudge's own line is sent, not typed into twice — and only
-by the watch process that typed it: the same text from anyone else, or found after a restart, is
-its owner's, and is never sent or cleared. A screen hatch is an escape hatch for a CLI whose
+whose end holds. A temporary seat is left as it is: the owner removes it.
+
+A report is never typed into a seat. It goes to `.agents/team.log` and to the desktop
+notification; the operator reads the log. The watch types two fixed lines,
+and neither carries a report's text. A message already waiting under
+`.agents/messages/<seat>/` is the ring: when that seat's box is an empty idle prompt, the watch
+types `Team: run team messages` — and not the body — so the seat reads its messages. The work
+drop reaches each idle worker once `idle_first` has passed and again every `idle_repeat` when
+that is set: `watch.nudge`, when the file sets it, is its body, and when the file omits it the
+body is the fixed line `Team watch: reports are waiting in .agents/team.log`. The body goes to
+the same drop file `team send` uses, and the pane receives one short line naming that file. Both
+texts are taken from the live file, so they do not wait for a record; a missing record does not
+stop the ring either. It types nothing into a screen it can't read as an empty idle prompt, so a
+permission dialog and a half-typed sentence are left alone. The operator, the orchestrator, and
+the pane the watch itself is running in are never the target of a work drop, and a pane that is
+in a dialog or already holds unsent text is not either. The ring goes only to the message's
+recipient, and only when that box is free. A box that already holds the ring this watch typed is
+sent, not typed into twice — and only by the watch process that typed it: the same text from
+anyone else, or found after a restart, is its owner's, and is never sent or cleared. An attention
+report — a permission prompt, a question, a vendor notice, an unknown screen, unsent text — is
+said once, and again only after it has cleared for two passes in a row: one pass that does not
+show it is the flicker grace, so a flickering screen reports once, not every other pass. Every
+other report keeps the drop-on-first-clear rule: it is said once and again as soon as it clears. A
+screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what load
 accepts; a hatch is trusted package code, not a sandbox.
 
@@ -38,7 +48,7 @@ swap, and, when a temporary seat's end is judged, git.
 Writes `.agents/team.state.json` (the pane it runs in, the workspace, its pid and a heartbeat, once
 a pass; a temporary seat's `worked` and `own_commits` when it sees them; the accounts' latest screen
 readings and the money the spend checks read), `.agents/team.log` (every line it prints), and,
-through herdr: the nudge's text and Enter, and the seats' sidebar lines — the workspace title from
+through herdr: the typed line and its Enter — a work drop's line naming its file, or the ring — and the seats' sidebar lines — the workspace title from
 the file, and the display line from the file and the pane's screen; it paints them on its first
 cycle and again when the title, the model or the effort changes.
 
@@ -114,7 +124,7 @@ repair is to stop it and run `team up`.
 | --- | --- |
 | `--session <name>` | the herdr session to watch, instead of `team.session` |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--no-nudge` | the owner's. Type nothing into any pane: no report nudge, no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
+| `--no-nudge` | the owner's. Type nothing into any pane: no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
 | `--json` | not used on the daemon loop: the flag is an invocation refusal, one `team.error` document on stdout with stderr empty, and exit 2 |
 | `--help`, `-h` | the usage — the exits below in its last lines — and exit 0 |
@@ -125,10 +135,12 @@ Every line carries its time, and every line goes to `.agents/team.log` as well:
 
     2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
     2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
-    2026-10-04T09:00:00.000Z nudged claude-beacon: Team watch: reports are waiting in .agents/team.log
     2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 
-A report is printed when it starts, and again only after it has cleared: a seat that stays blocked,
+An attention report — a dialog, a question, a vendor notice, an unknown screen, unsent text — is
+printed when it starts, and again only after it has cleared for two passes in a row: one pass
+that does not show it is the flicker grace, so a screen that comes and goes reports once. Every
+other report is printed when it starts and again as soon as it clears: a seat that stays blocked,
 or a machine that stays full, is said once, not every pass.
 
 Two things go to `.agents/team.log` without being printed: the watch writes the machine's own
@@ -189,7 +201,7 @@ entry under `liveness`. A lower level may tighten one — a shorter window — a
 longer one — unless the level above allows it. The blind window is the one the project may open
 again once something closed it; every level inside may close it again. A word that would loosen
 one is set aside, the value in force stands, and the watch says the rule once per setting, as a
-line of its own (never a report and never a nudge):
+line of its own (never a report and never a typed line):
 
     liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
 
@@ -205,25 +217,26 @@ The blind window is the one `team status` and `team check` read as `unknown (bli
 `tempo` does not scale `idle_owner` or `blind_after`; it scales the idle window after the
 tighten-only check, so `relaxed` lengthens the resolved window and is never read as a loosening.
 
-Each report is addressed to the owner or to the operator. The operator's is what the nudge stands
-for, and `--no-notify` can drop its desktop notification. The owner's — a permission prompt, a
+Each report is addressed to the owner or to the operator. The operator's is never typed into a
+seat — it goes to the log — and `--no-notify` can drop its desktop notification. The owner's — a
+permission prompt, a
 vendor notice, a machine figure, an account inside its reserve or at its floor, an idle seat past
 `idle_owner` — is notified anyway, and so are the watch's own notices: the file can't be read,
-herdr doesn't answer, no idle seat could be nudged, a typed nudge was not sent, and the watch
+herdr doesn't answer, a typed line was not sent, and the watch
 stopped. Neither flag removes the log line, and neither reaches `team status`: a reserve still
 shows on the budgets table, and a record that is not in force still shows there.
 
-A report that is the operator's to act on is also what the nudge stands for. The lines around it:
+The watch types two fixed lines, and never a report: the ring, when a message waits for a seat,
+and a work drop's line, when an idle worker is due one. The lines around them:
 
 | Line | Made when |
 | --- | --- |
 | `watching the session "<session>" every <n>s` | at the start; `, without nudges` is added by `--no-nudge` |
-| `nudged <seat>: Team watch: reports are waiting in .agents/team.log` | the nudge was typed into an idle seat and sent |
-| `nudged <seat> (its own unsent line was already in its box): <nudge>` | the box still held the line this same watch process had typed, its Enter never sent; that line is sent instead of typed again |
-| `nudge not typed (--no-nudge): <nudge>` | `--no-nudge`, with reports waiting |
-| `ring not typed (--no-nudge): Team: run team messages` | `--no-nudge`, with a message waiting and no report nudge to type; nothing is typed and the record stays |
-| `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the reports wait for the next pass |
-| `no idle seat could be nudged for <n> minutes; <k> report` / `<k> reports wait: <reports>` | no idle seat was free for `watch.nudge_wait`; this one is a desktop notification too |
+| `nudged <seat>: <the work drop's body>` | the work drop's line was typed into an idle worker and sent; its body is `watch.nudge`, or the fixed line `Team watch: reports are waiting in .agents/team.log` when the file omits it |
+| `nudged <seat> (its own unsent line was already in its box): <the body>` | the box still held the line this same watch process had typed, its Enter never sent; that line is sent instead of typed again |
+| `nudge not typed (--no-nudge): <the body>` | `--no-nudge`, with a work drop due; nothing is typed and no drop is written |
+| `ring not typed (--no-nudge): Team: run team messages` | `--no-nudge`, with a message waiting and the seat's box free; nothing is typed and the record stays |
+| `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the line is tried again on the next pass |
 | `rang <seat>: Team: run team messages` | a message was already waiting and that seat's box was an empty idle prompt; the line was typed and sent, and the body was not |
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |
@@ -237,7 +250,7 @@ A report that is the operator's to act on is also what the nudge stands for. The
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
 
-A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, and this pass is not already typing the report nudge, the watch types `Team: run team messages` and not the body. `--no-nudge` types neither line. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. The report nudge wins the pane: a pass that types it does not also type the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes that record. A report still leaves as the nudge.
+A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, the watch types `Team: run team messages` and not the body. `--no-nudge` types neither line. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. A work drop wins the pane: a pass that types one does not also type the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes that record. A report is never typed.
 
 ## Budgets
 
@@ -353,15 +366,13 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-A question is the operator's to act on, so the watch nudges an idle seat — one fixed line, which is
-not the report itself: the report is in the log, and the line says where. The operator is a lead
-and is not that seat.
+A question is the operator's to act on, and it is said in the log and nowhere else — the watch
+never types a report into a seat. The operator is a lead and is not nudged either way.
 
 ```console screens="claude-keeper=question"
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
 2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
-2026-10-04T09:00:00.000Z nudged claude-beacon: Team watch: reports are waiting in .agents/team.log
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
@@ -376,13 +387,13 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-`--no-nudge` keeps the reports and skips the typing — for a watch that must not type into a seat:
+`--no-nudge` keeps the reports and skips both typed lines — for a watch that must not type into a
+seat. The report is the same line either way: it never had one of its own.
 
 ```console screens="claude-keeper=question"
 $ team watch --no-nudge ; echo "exit $?"
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s, without nudges
 2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
-2026-10-04T09:00:00.000Z nudge not typed (--no-nudge): Team watch: reports are waiting in .agents/team.log
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```
@@ -459,7 +470,7 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-The watch reads its timings and nudge settings from the live file on each pass once a
+The watch reads its timings and work-drop settings from the live file on each pass once a
 verified record is in force. Edits take effect on the next pass. A file with no verified
 record uses the default timings.
 By default an idle seat is reported to its lead once per idle period (`idle_repeat` is off).

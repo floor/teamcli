@@ -14,9 +14,8 @@ one step. A record that does not verify prints no body and writes nothing.
 Nothing in this build writes a message record. No command writes the first record: not `team
 watch`, not `team messages`, not a seat. `team send` gives a seat the body in a drop file and one
 typed trigger line — its cross-session socket path is refused in this build — which is not this
-mailbox and leaves no record here. A report still leaves as today's
-nudge,
-`Team watch: reports are waiting in .agents/team.log`. The watch only rings
+mailbox and leaves no record here. A report is not typed into a seat: it goes to the log, and a
+report for the owner also to the desktop notification. The watch only rings
 `Team: run team messages` when a record is already there.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature

@@ -146,11 +146,10 @@ describe('a restored seat running outside its launcher', () => {
       processes: { 'w3:p1': { shell: 500, foreground: [501] } },
     });
     // The stored session is on the pane, so the generic line stays quiet: the flag is the
-    // launcher's alone, and it names the restart — the pass reports, it launches nothing,
-    // and the waiting report rides the nudge carrying that same repair line.
+    // launcher's alone, and it names the restart — the pass reports, it launches nothing and
+    // types nothing.
     expect(result.reports.map((report) => report.text)).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
-    expect(result.nudge?.pending).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
-    expect(result.fallback).toBeNull();
+    expect(result.work).toEqual([]);
     expect(result.ring).toBeNull();
   });
 
@@ -194,7 +193,9 @@ describe('a restored seat running outside its launcher', () => {
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([]);
     // The recorded process in front again: the condition cleared…
     expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
-    // …so a process team did not launch, anew, is a new change and reported anew.
+    // …for a second pass in a row, so the one-pass flicker grace is over and the mark is gone.
+    expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
+    // A process team did not launch, anew, is a new change and reported anew.
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([launcherLine('deepseek-acme', RESTART_SEAT)]);
   });
 });
