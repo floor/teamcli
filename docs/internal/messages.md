@@ -11,12 +11,13 @@ Shows a message that is already waiting and writes the receipt that says it was 
 the checkout may run it. It verifies the record, prints the body, and writes the receipt in that
 one step. A record that does not verify prints no body and writes nothing.
 
-Nothing in this build writes a message record. No command writes the first record: not `team
-watch`, not `team messages`, not a seat. `team send` gives a seat the body in a drop file and one
-typed trigger line — its cross-session socket path is refused in this build — which is not this
-mailbox and leaves no record here. A report is not typed into a seat: it goes to the log, and a
-report for the owner also to the desktop notification. The watch only rings
-`Team: run team messages` when a record is already there.
+`team send` writes the record: one signed message per send, into the recipient's folder
+`<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The typed
+leg types the wake line that names the record, the drop leg leaves the record for its seat, and
+the mcp-inbox leg puts the same record in the seat's inbox. The watch rings
+`Team: run team messages` when a record is already there, and never writes one. A message a
+previous build left in `.agents/messages/` is read the same way; nothing writes there any more. A
+report to the owner still goes to the log, and also to the desktop notification.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
@@ -30,11 +31,14 @@ The approval key never signs a message.
 ## What it reads and writes
 
 Reads the git checkout (`findRoot`), the team file's session, and
-`.agents/messages/<seat>/<id>.json`. The id is the filename. The recipient is the seat directory.
-The root is `findRoot`. The session is the team file's session. A copy under a new id, or into
-another seat's directory, or bound to another checkout or session, does not verify.
+`.agents/send-drops/<session>/<seat>/<id>`, and the older store's
+`.agents/messages/<seat>/<id>.json` where a previous build left one. The id is the filename. The
+recipient is the seat directory. The root is `findRoot`. The session is the team file's, or for a
+record the session directory it was found under. A copy under a new id, or into another seat's
+directory, or bound to another checkout or session, does not verify.
 
-Writes `.agents/messages/<seat>/<id>.read.json` for each record that verifies, signed with the
+Writes the signed read receipt beside the record, `<id>.read.json` in the same folder — the older
+store keeps its own receipt shape at `.agents/messages/<seat>/<id>.read.json` — signed with the
 message key under its own domain. The receipt is written only after `io.stdout` has returned the
 body: a write that throws leaves no receipt, and the record stays waiting. A receipt that does
 not verify leaves the message waiting.
@@ -66,29 +70,32 @@ A record that fails one of these prints no body and writes no receipt. It is a `
 the table, and the run prints its difference before the summary; `who` is `any seat`, and the
 repair names the file the table already shows:
 
-    difference: <seat>/<id> does not verify: the record is not a message
-      repair: remove .agents/messages/<seat>/<id>.json, or restore it from the sender
+    difference: <seat>/<id> does not verify: the record is not a message record
+      repair: remove .agents/send-drops/<session>/<seat>/<id>, or restore it from the sender
       who: any seat
 
     difference: <seat>/<id> does not verify: its id is <payload id>, and the filename is the id
-      repair: move .agents/messages/<seat>/<id>.json to .agents/messages/<seat>/<payload id>.json, or remove it
+      repair: move .agents/send-drops/<session>/<seat>/<id> to .agents/send-drops/<session>/<seat>/<payload id>, or remove it
       who: any seat
 
     difference: <seat>/<id> does not verify: it is addressed to <payload to>
-      repair: move .agents/messages/<seat>/<id>.json to .agents/messages/<payload to>/<id>.json, or remove it
+      repair: move .agents/send-drops/<session>/<seat>/<id> to .agents/send-drops/<session>/<payload to>/<id>, or remove it
       who: any seat
 
     difference: <seat>/<id> does not verify: it is bound to another checkout
-      repair: remove .agents/messages/<seat>/<id>.json: it is bound to another checkout
+      repair: remove .agents/send-drops/<session>/<seat>/<id>: it is bound to another checkout
       who: any seat
 
     difference: <seat>/<id> does not verify: it is bound to session "<session>"
-      repair: remove .agents/messages/<seat>/<id>.json: it is bound to another session
+      repair: remove .agents/send-drops/<session>/<seat>/<id>: it is bound to another session
       who: any seat
 
     difference: <seat>/<id> does not verify: the signature is not the message key's
-      repair: remove .agents/messages/<seat>/<id>.json, or have the sender re-send it
+      repair: remove .agents/send-drops/<session>/<seat>/<id>, or have the sender re-send it
       who: any seat
+
+A file in the older store prints the same differences with `.agents/messages/<seat>/<id>.json` in
+place of the record's path, and its shape refusal reads `the record is not a message`.
 
 A missing or unreadable message key is a refusal of the whole run, with nothing shown:
 

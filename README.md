@@ -57,7 +57,7 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 | [`team status`](https://github.com/floor/teamcli/blob/main/docs/commands/status.md) | the file against the running session, each difference with its repair |
 | [`team seats`](https://github.com/floor/teamcli/blob/main/docs/commands/seats.md) | each seat's state, and where it was read |
 | [`team send`](https://github.com/floor/teamcli/blob/main/docs/commands/send.md) | one message to one seat, with a delivery report |
-| [`team drops`](https://github.com/floor/teamcli/blob/main/docs/commands/drops.md) | the drop files waiting for this seat |
+| [`team drops`](https://github.com/floor/teamcli/blob/main/docs/commands/drops.md) | the messages waiting for this seat |
 | [`team watch`](https://github.com/floor/teamcli/blob/main/docs/commands/watch.md) | reports idle seats and nudges the operator |
 | [`team register`](https://github.com/floor/teamcli/blob/main/docs/commands/register.md) | writes the record for a seat that is already running |
 | [`team next`](https://github.com/floor/teamcli/blob/main/docs/commands/next.md) | claims the next task; `team plan` shows the queue |
@@ -69,8 +69,10 @@ Every command, flag, refusal and exit code is in
 ## What's new in 0.5.1
 
 0.5.1 adds the `drop` leg and `human: true` seats, the native handoff with `team send --confirm`,
-and `team mcp serve` with the `mcp-inbox` leg that reports `delivered (read)`. It also adds
-`team drops` and closes the human-seat guards across the commands. The full list is in
+and `team mcp serve` with the `mcp-inbox` leg that reports `delivered (read)`. A plain send is one
+signed message record in the recipient's folder before any leg runs, and `team messages` writes a
+signed receipt for each record it shows. It also adds `team drops` and closes the human-seat guards
+across the commands. The full list is in
 [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
 
 ## Learn more

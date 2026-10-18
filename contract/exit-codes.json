@@ -3029,7 +3029,7 @@
       "code": 0,
       "command": "send",
       "id": "send.delivered",
-      "meaning": "the seat's channel took the message",
+      "meaning": "the record is written and the seat's channel took the message",
       "trigger": "team send worker hello"
     },
     {
@@ -3071,7 +3071,7 @@
       "code": 0,
       "command": "send",
       "id": "send.sent-unconfirmed",
-      "meaning": "the mcp-inbox leg put the message in the seat's inbox and no receipt came back inside its grace",
+      "meaning": "the record is written, the mcp-inbox leg put it in the seat's inbox, and no receipt came back inside its grace",
       "trigger": "team send worker hello"
     },
     {
