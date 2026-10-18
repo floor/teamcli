@@ -7,23 +7,29 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync,
-  writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync,
+  symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { seatRegistryRows, type SeatRegistryRow } from '../src/commands/seats.ts';
-import { receiptPath } from '../src/mcp/inbox.ts';
+import { plantRecord } from '../src/commands/messages.ts';
+import { runSend, type SendHost } from '../src/commands/send.ts';
+import { listUnread, MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
+import { lobbyDir } from '../src/lobby/gate.ts';
+import { signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, writeRecord } from '../src/send/record.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
+import { messageKeyState } from '../src/store/keys.ts';
 import {
-  cliHookSettingsPath, cliHookStatePath, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
+  cliHookSettingsPath, cliHookStatePath, dropReadRunner, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
 import type { Comparison, Live } from '../src/status/compare.ts';
+import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 const ago = (seconds: number): string => new Date(NOW.getTime() - seconds * 1000).toISOString();
@@ -144,8 +150,46 @@ describe('the turn-start folder read', () => {
   const ID1 = '11111111-2222-3333-4444-555555555555';
   const ID2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const ID3 = '01234567-89ab-cdef-0123-456789abcdef';
+  const HEADER = 'from the owner — admitted by: the owner\n\n';
 
-  const seat = (session = SESSION, name = SEAT) => ({ name, cli: 'claude-code', launch: CLAUDE });
+  let project: string;
+  let home: string;
+
+  /** The fixture team file: one Claude Code seat, the session the launch writes into the hook. */
+  const teamYaml = (lobby: string, root: string): string => `format: 1
+project: acme
+coordinator: ${SEAT}
+operator: ${SEAT}
+session: ${SESSION}
+workspace:
+  mode: shared
+trust:
+  - ${lobby}
+  - ${root}
+seats:
+  - role: coordinator
+    name: ${SEAT}
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+`;
+
+  beforeEach(() => {
+    mkdirSync(join(base, 'acme'), { recursive: true });
+    project = realpathSync(join(base, 'acme'));
+    home = join(base, 'home');
+    mkdirSync(join(project, '.agents'), { recursive: true });
+    mkdirSync(home);
+    mkdirSync(lobbyDir(home), { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: project, stdio: 'ignore' });
+    writeFileSync(join(project, '.agents', 'team.yaml'), teamYaml(lobbyDir(home), project));
+  });
+
+  const seat = () => ({ name: SEAT, cli: 'claude-code', launch: CLAUDE });
+  const install = (session = SESSION): Record<string, string> => installCliHooks(join(project, '.agents'), session, [seat()]);
+  const dropsAt = (session = SESSION, name = SEAT): string => join(project, '.agents', 'send-drops', session, name);
 
   /** The drop-read command the settings file installs, as the CLI would run it. */
   function dropCommand(landed: Record<string, string>, name = SEAT): string {
@@ -153,20 +197,15 @@ describe('the turn-start folder read', () => {
       hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
     };
     const commands = (settings.hooks.UserPromptSubmit ?? []).flatMap((entry) => entry.hooks.map((one) => one.command));
-    const read = commands.find((one) => one.includes('drop_read'));
+    const read = commands.find((one) => one.includes('drops --read'));
     if (read === undefined) throw new Error('no drop read in the settings file');
     return read;
   }
 
-  /** The seat's drop folder, made the way a launch would find it. */
-  function drops(session = SESSION, name = SEAT): string {
-    const at = join(dir, 'send-drops', session, name);
-    mkdirSync(at, { recursive: true, mode: 0o700 });
-    return at;
-  }
-
+  /** Runs one installed hook command the way the CLI does: in the project, with the machine's
+   *  own home replaced by the fixture's, so the message key and the files are the test's. */
   function run(command: string): string {
-    return execFileSync('sh', ['-c', command], { encoding: 'utf8' });
+    return execFileSync('sh', ['-c', command], { cwd: project, encoding: 'utf8', env: { ...process.env, HOME: home } });
   }
 
   /** The `additionalContext` the hook's stdout carries. Claude Code reads a UserPromptSubmit
@@ -178,21 +217,31 @@ describe('the turn-start folder read', () => {
     return parsed.hookSpecificOutput?.additionalContext ?? '';
   }
 
-  /** The receipt's suffix, taken from the one name every writer uses (`receiptPath`), so these
-   *  scenes follow the sidecar rule instead of pinning its spelling. */
-  const RECEIPT_SUFFIX = basename(receiptPath('', '0')).slice(1);
-
-  function receiptOf(at: string, id: string): Record<string, unknown> {
-    return JSON.parse(readFileSync(receiptPath(at, id), 'utf8')) as Record<string, unknown>;
+  /** The signed read receipt beside a message: parsed, verified against the checkout's message
+   *  key, bound to this message, seat, checkout and session, and 0600. */
+  function expectReadReceipt(dir: string, id: string): void {
+    const at = receiptPath(dir, id);
+    const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
+    const key = messageKeyState(home);
+    if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
+    expect(verifyReceipt(receipt, key.key)).toBe(true);
+    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: SEAT, root: project, session: SESSION });
+    expect(statSync(at).mode & 0o777).toBe(0o600);
   }
 
-  test('the install adds the read to the same turn start, aimed at the seat’s own drop folder', () => {
-    const landed = installCliHooks(dir, SESSION, [seat()]);
+  /** One drop as `team send` writes it: the signed record, through the command's own planter. */
+  function plant(id: string, body: string): string {
+    return plantRecord(home, project, SESSION, SEAT, id, body, { from: 'the owner', rule: 'the owner' });
+  }
+
+  test('the install adds the read to the same turn start, run by this install’s own CLI', () => {
+    const landed = install();
     const command = dropCommand(landed);
-    expect(command).toContain(join(dir, 'send-drops', SESSION, SEAT));
-    expect(command).toContain('drop_read');
-    expect(command).toContain('umask 077');
-    // The read is the second command of the same turn start; the state word still comes first.
+    expect(command).toContain(dropReadRunner());
+    expect(command).toContain(`--seat ${SEAT}`);
+    expect(command).toContain(`--session ${SESSION}`);
+    // The receipt is the signed status receipt the inbox writes; no shell marker of its own.
+    expect(command).not.toContain('drop_read');
     const settings = JSON.parse(readFileSync(landed[SEAT]!, 'utf8')) as {
       hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
     };
@@ -200,97 +249,160 @@ describe('the turn-start folder read', () => {
     expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toContain('"state":"working"');
   });
 
-  test('a waiting message is handed to the turn once, and its receipt is written beside it at 0600', () => {
-    const at = drops();
-    writeFileSync(join(at, ID1), 'from the owner — admitted by: rule\nhello\n');
-    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
-    expect(landing(run(command))).toBe('from the owner — admitted by: rule\nhello');
-    expect(receiptOf(at, ID1)).toMatchObject({ v: 1, id: ID1, seat: SEAT, session: SESSION, tool: 'drop_read' });
-    expect(typeof receiptOf(at, ID1).ts).toBe('string');
-    expect(Number.isInteger(receiptOf(at, ID1).pid)).toBe(true);
-    expect(statSync(receiptPath(at, ID1)).mode & 0o777).toBe(0o600);
-    // The second turn reads nothing: the receipt is what says the message was handed over.
+  test('a plain send types nothing, and the turn-start read delivers it: receipt signed before the body', async () => {
+    const command = dropCommand(install());
+    const io = testIo(project, { kind: 'owner' });
+    const typed: { pane: string; text: string }[] = [];
+    const host: SendHost = {
+      agents: () => [],
+      processInfo: () => ({ shell: 1, foreground: [2] }),
+      socketsDir: join(base, 'sockets'),
+      deliver: async () => {
+        throw new Error('the inbox leg must not dial: this inbox has no listener');
+      },
+      native: {
+        typeText: (_session, pane, text) => {
+          typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: () => true,
+        status: () => 'idle',
+        wait: async () => {},
+        paneText: () => '',
+      },
+      now: () => NOW,
+      home,
+    };
+
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
+
+    // The default walk takes the drop leg: nothing is typed, and the sender's side has only the
+    // unconfirmed ending until the seat's own watcher reads the record.
+    expect(io.out).toContain('sent (unconfirmed)');
+    expect(typed).toEqual([]);
+    const dir = dropsAt();
+    const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
+    if (id === undefined) throw new Error('the send wrote no drop');
+
+    // The end-to-end proof: the installed hook command reads the record, and its body reaches
+    // the turn only after a signed read receipt is on disk.
+    expect(landing(run(command))).toBe(`${HEADER}hello`);
+    expectReadReceipt(dir, id);
+    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
+    // The receipt is what says it was handed over: the next turn prints nothing.
     expect(run(command)).toBe('');
-  });
+  }, 60_000);
 
-  test('a body the read cannot leave a receipt for is not printed', () => {
-    const at = drops();
-    writeFileSync(join(at, ID1), 'a message that must not be shown unproven\n');
-    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
-    chmodSync(at, 0o555);
-    try {
-      expect(run(command)).toBe('');
-    } finally {
-      chmodSync(at, 0o700);
-    }
-    expect(existsSync(receiptPath(at, ID1))).toBe(false);
-    // With the folder writable again the same turn-start reads it and leaves the receipt.
-    expect(landing(run(command))).toBe('a message that must not be shown unproven');
-    expect(existsSync(receiptPath(at, ID1))).toBe(true);
-  });
-
-  test('only a lowercase UUID is a message: links, other names and receipts are skipped', () => {
-    const at = drops();
-    const outside = join(base, 'outside-body');
-    writeFileSync(outside, 'a link target, never a message\n');
-    symlinkSync(outside, join(at, ID2));
-    writeFileSync(join(at, 'notes.txt'), 'not a message\n');
-    writeFileSync(join(at, ID3), 'already read\n');
-    writeFileSync(receiptPath(at, ID3), '{"v":1}\n');
-    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+  test('a waiting record is handed to the turn once, and its receipt is written beside it at 0600', () => {
+    const dir = dropsAt();
+    plant(ID1, 'hello');
+    const command = dropCommand(install());
+    expect(landing(run(command))).toBe('hello');
+    expectReadReceipt(dir, ID1);
     expect(run(command)).toBe('');
-    expect(existsSync(receiptPath(at, ID2))).toBe(false);
-    expect(existsSync(receiptPath(at, ID3))).toBe(true);
-    expect(readFileSync(receiptPath(at, ID3), 'utf8')).toBe('{"v":1}\n');
-  });
+  }, 30_000);
 
-  test('one turn reads ten messages at most, and the rest wait for the next', () => {
-    const at = drops();
-    const ids = Array.from({ length: 12 }, (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`);
-    for (const [index, id] of ids.entries()) writeFileSync(join(at, id), `message ${String(index)}\n`);
-    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
-    const first = landing(run(command));
-    expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(10);
-    expect(readdirSync(at).filter((name) => name.endsWith(RECEIPT_SUFFIX))).toHaveLength(10);
-    const second = landing(run(command));
-    expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
-    expect(readdirSync(at).filter((name) => name.endsWith(RECEIPT_SUFFIX))).toHaveLength(12);
-  });
+  test('a file an earlier build wrote is no signed record: it is never shown and gets no receipt', () => {
+    const dir = dropsAt();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, ID2), `${HEADER}an old raw drop\n`);
+    const command = dropCommand(install());
+    expect(run(command)).toBe('');
+    expect(existsSync(receiptPath(dir, ID2))).toBe(false);
+  }, 30_000);
+
+  test('a record bound to another inbox is refused, and no receipt is written for it', () => {
+    const dir = dropsAt();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const written = writeRecord(dir, signRecord({
+      kind: 'message',
+      id: ID3,
+      to: 'someone-else',
+      to_id: null,
+      root: project,
+      session: SESSION,
+      at: NOW.toISOString(),
+      body: 'not this inbox',
+      from: 'lead',
+      from_id: null,
+      rule: 'rule',
+      thread: ID3,
+    }, home));
+    expect(written.ok).toBe(true);
+    const command = dropCommand(install());
+    expect(run(command)).toBe('');
+    expect(existsSync(receiptPath(dir, ID3))).toBe(false);
+  }, 30_000);
+
+  test('a record whose signature does not verify is never shown', () => {
+    const dir = dropsAt();
+    const at = plant(ID1, 'tampered after signing');
+    const record = JSON.parse(readFileSync(at, 'utf8')) as { signature: string };
+    record.signature = 'not-this-key';
+    writeFileSync(at, `${JSON.stringify(record)}\n`);
+    const command = dropCommand(install());
+    expect(run(command)).toBe('');
+    expect(existsSync(receiptPath(dir, ID1))).toBe(false);
+  }, 30_000);
 
   test('the body is handed over literally, shell words and all', () => {
-    const at = drops();
-    const body = 'from the owner — admitted by: rule\n$(touch ' + join(base, 'surprise') + ') `whoami` "quoted"';
-    writeFileSync(join(at, ID1), `${body}\n`);
-    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    dropsAt();
+    const body = `from the owner\n\n$(touch ${join(base, 'surprise')}) \`whoami\` "quoted"`;
+    plant(ID1, body);
+    const command = dropCommand(install());
     expect(landing(run(command))).toBe(body);
     expect(existsSync(join(base, 'surprise'))).toBe(false);
-  });
+  }, 30_000);
 
   test('a body with quotes, backslashes and control bytes still arrives whole', () => {
-    const at = drops();
-    // A quote, a backslash, a tab, a control byte and a comma all have to survive the JSON the
-    // hook writes: the client parses that string, so one unescaped byte would drop the message.
     const body = 'a "quoted" line \\ with a backslash\tand a tab\x01 and \x1f\x08\x0c';
-    writeFileSync(join(at, ID1), `${body}\nsecond line\n`);
-    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    plant(ID1, `${body}\nsecond line`);
+    const command = dropCommand(install());
     expect(landing(run(command))).toBe(`${body}\nsecond line`);
-  });
+  }, 30_000);
 
-  test('two messages land as two paragraphs, oldest name first', () => {
-    const at = drops();
-    writeFileSync(join(at, ID1), 'first\n');
-    writeFileSync(join(at, ID2), 'second\n');
-    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+  test('two messages land as two paragraphs, oldest first', () => {
+    const one = plant(ID1, 'first');
+    plant(ID2, 'second');
+    utimesSync(one, new Date(NOW.getTime() - 2_000), new Date(NOW.getTime() - 2_000));
+    utimesSync(join(dropsAt(), ID2), new Date(NOW.getTime() - 1_000), new Date(NOW.getTime() - 1_000));
+    const command = dropCommand(install());
     expect(landing(run(command))).toBe('first\n\nsecond');
-  });
+  }, 30_000);
 
-  test('a session name with quotes and spaces still names a folder and a receipt', () => {
+  test('one turn reads ten messages at most, and the rest wait for the next', () => {
+    const dir = dropsAt();
+    const ids = Array.from({ length: 12 }, (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    for (const [index, id] of ids.entries()) {
+      const at = plant(id, `message ${String(index)}`);
+      const when = new Date(NOW.getTime() + index * 1_000);
+      utimesSync(at, when, when);
+    }
+    const command = dropCommand(install());
+    const first = landing(run(command));
+    expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(10);
+    expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
+    const second = landing(run(command));
+    expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
+    expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
+  }, 60_000);
+
+  test('a receipt path held by something that is not a file refuses the body', () => {
+    const dir = dropsAt();
+    plant(ID1, 'a message whose proof cannot land');
+    // A folder stands where the signed receipt goes: the read has nowhere to leave its proof, and
+    // no body is handed over without one. (A folder's mode cannot hold the write back: the drop
+    // writer widens its own folder to 0700 on every write.)
+    mkdirSync(receiptPath(dir, ID1));
+    const command = dropCommand(install());
+    expect(run(command)).toBe('');
+    expect(statSync(receiptPath(dir, ID1)).isDirectory()).toBe(true);
+  }, 30_000);
+
+  test('a session name with quotes and spaces is shell-quoted into the command', () => {
     const session = `it's a team`;
-    const at = drops(session);
-    writeFileSync(join(at, ID1), 'hello across a quoted session\n');
-    const landed = installCliHooks(dir, session, [seat(session)]);
-    expect(landing(run(dropCommand(landed)))).toBe('hello across a quoted session');
-    expect(receiptOf(at, ID1)).toMatchObject({ v: 1, id: ID1, seat: SEAT, session, tool: 'drop_read' });
+    const command = dropCommand(install(session));
+    expect(command).toContain(`--session 'it'\\''s a team'`);
   });
 });
 

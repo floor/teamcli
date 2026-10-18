@@ -29,7 +29,7 @@ import {
   readPending,
   type PendingDrop,
 } from '../src/send/pending.ts';
-import { signRecord, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, writeReceipt } from '../src/send/record.ts';
 import { readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -216,18 +216,26 @@ function readInbox(at: SeedWorld, id: string, seat: string, session: string): vo
 
 /** A drop and its record, as the drop leg leaves them: the sender's command has already said
  *  `sent (unconfirmed)`, and the marker waits for the seat's own watcher to read it. */
-function seedDropped(dir: string, session: string, seat: string, id: string, body: string, ts = NOW): string {
-  const dropDir = join(dir, 'send-drops', session, seat);
-  dropMessage(dropDir, id, body);
+function seedDropped(at: SeedWorld, session: string, seat: string, id: string, body: string, ts = NOW): string {
+  const dropDir = seedRecord(at, session, seat, id, body, ts);
   markPending(dropDir, { id, from: 'owner', to: seat, body, ts: ts.toISOString(), leg: 'drop' });
   return dropDir;
 }
 
-/** The receipt the turn-start hook writes, in its own shape: `drop_read`, naming this message,
- *  seat and session, at mode 0600. The end-to-end scene runs the installed command instead. */
-function readByHook(dropDir: string, id: string, seat: string, session: string): void {
-  const record = { v: 1, id, seat, session, tool: 'drop_read', ts: NOW.toISOString(), pid: 4242 };
-  writeFileSync(receiptPath(dropDir, id), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+/** The receipt the turn-start read writes: the signed status receipt the inbox server writes
+ *  too, naming this message, seat, checkout and session. The end-to-end scene runs the installed
+ *  hook command itself instead. */
+function readByHook(at: SeedWorld, dropDir: string, id: string, seat: string, session: string): void {
+  const written = writeReceipt(dropDir, signReceiptPayload({
+    kind: 'receipt',
+    status: 'read',
+    id,
+    to: seat,
+    root: realpathSync(at.root),
+    session,
+    at: NOW.toISOString(),
+  }, at.home));
+  if (!written.ok) throw new Error(written.reason);
 }
 
 describe('retryHeldDrops', () => {
@@ -601,7 +609,7 @@ describe('promoteInboxDrops', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const body = 'from the owner\n\nread at turn start';
-    const dropDir = seedDropped(made.dir, 'acme', 'lead', DROP_A, body);
+    const dropDir = seedDropped(made, 'acme', 'lead', DROP_A, body);
     const one = pane(claudeBox(''));
     const said: string[] = [];
     const at = {
@@ -617,13 +625,13 @@ describe('promoteInboxDrops', () => {
     expect(readPending(dropDir)).toHaveLength(1);
     expect(said).toEqual([]);
 
-    readByHook(dropDir, DROP_A, 'lead', 'acme');
+    readByHook(made, dropDir, DROP_A, 'lead', 'acme');
     expect(statSync(receiptPath(dropDir, DROP_A)).mode & 0o777).toBe(0o600);
     promoteInboxDrops(at);
 
     expect(readPending(dropDir)).toEqual([]);
-    // The drop is the message and stays: only the record beside it is done with.
-    expect(readFileSync(join(dropDir, DROP_A), 'utf8')).toBe(body);
+    // The record is the message and stays: only the receipt beside it is done with.
+    expect(recordBody(join(dropDir, DROP_A))).toBe(body);
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     const history = readHistory('acme', made.root, made.home);
@@ -651,7 +659,7 @@ describe('promoteInboxDrops', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const body = 'from the owner\n\nread through the inbox';
-    const dropDir = seedDropped(made.dir, 'acme', 'lead', DROP_B, body);
+    const dropDir = seedDropped(made, 'acme', 'lead', DROP_B, body);
     const one = pane(claudeBox(''));
     const said: string[] = [];
     const at = {
@@ -662,13 +670,17 @@ describe('promoteInboxDrops', () => {
     };
 
     // A receipt under the same id that names another seat is not this inbox's own proof.
-    readByHook(dropDir, DROP_B, 'helper', 'acme');
+    readByHook(made, dropDir, DROP_B, 'helper', 'acme');
     promoteInboxDrops(at);
     expect(readPending(dropDir)).toHaveLength(1);
     expect(said).toEqual([]);
 
+    // The receipt is write-once: the wrong proof is set aside before the seat's own read can
+    // leave its own at the name.
+    rmSync(receiptPath(dropDir, DROP_B));
+
     // The two watchers read one folder: the inbox client's receipt promotes the drop-leg marker.
-    readInbox(dropDir, DROP_B, 'lead', 'acme');
+    readInbox(made, DROP_B, 'lead', 'acme');
     promoteInboxDrops(at);
 
     expect(readPending(dropDir)).toEqual([]);
@@ -741,7 +753,7 @@ describe('an inbox send past its fallback window', () => {
   test('a drop marker is never typed, and past the age bound it is given up with the path', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedDropped(made.dir, 'acme', 'lead', DROP_A, 'from the owner\n\nunread');
+    const dropDir = seedDropped(made, 'acme', 'lead', DROP_A, 'from the owner\n\nunread');
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
@@ -773,7 +785,7 @@ describe('an inbox send past its fallback window', () => {
       `lead: a dropped send from owner was not read (no receipt within 30m); the drop file is at ${join(dropDir, DROP_A)}`,
     ]);
     // The message itself stays: only the watch's wait for a receipt ended.
-    expect(readFileSync(join(dropDir, DROP_A), 'utf8')).toBe('from the owner\n\nunread');
+    expect(recordBody(join(dropDir, DROP_A))).toBe('from the owner\n\nunread');
     expect(readHistory('acme', made.root, made.home)).toMatchObject({ ok: true, entries: [] });
   });
 });
@@ -1122,7 +1134,7 @@ describe('the turn-start read, end to end', () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]?.leg).toBe('drop');
     const id = pending[0]?.id as string;
-    const body = readFileSync(join(dropDir, id), 'utf8');
+    const body = recordBody(join(dropDir, id));
 
     // The launch installs the hook the seat's next turn start runs, and the read finds the drop.
     const landed = installCliHooks(made.dir, 'acme', [{ name: 'lead', cli: 'claude-code', launch: 'claude' }]);
@@ -1132,20 +1144,28 @@ describe('the turn-start read, end to end', () => {
     };
     const read = settings.hooks.UserPromptSubmit
       .flatMap((entry) => entry.hooks.map((hook) => hook.command))
-      .find((command) => command.includes('drop_read'));
+      .find((command) => command.includes('drops --read'));
     expect(typeof read).toBe('string');
 
     // The hook's stdout is the JSON envelope the CLI adds to the turn; the body arrives whole.
-    const out = execFileSync('sh', ['-c', read as string], { encoding: 'utf8' });
+    // It runs as the launch does: in the project, with the seat's own home for its message key.
+    const out = execFileSync('sh', ['-c', read as string], {
+      cwd: made.root,
+      encoding: 'utf8',
+      env: { ...process.env, HOME: made.home },
+    });
     const envelope = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(envelope.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
     expect(envelope.hookSpecificOutput.additionalContext).toBe(body);
 
-    // The receipt is the seat's proof, at the name, mode and shape the promotion reads.
+    // The receipt is the seat's proof, at the name, mode and shape the promotion reads: the same
+    // signed status receipt the inbox server writes, not a marker of the hook's own.
     expect(statSync(receiptPath(dropDir, id)).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(receiptPath(dropDir, id), 'utf8'))).toMatchObject({
-      v: 1, id, seat: 'lead', session: 'acme', tool: 'drop_read',
-    });
+    const receipt = signedReceiptOf(JSON.parse(readFileSync(receiptPath(dropDir, id), 'utf8')));
+    const key = messageKeyState(made.home);
+    if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
+    expect(verifyReceipt(receipt, key.key)).toBe(true);
+    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: 'lead', session: 'acme' });
 
     // The history's first line said what the sender could know; the receipt promotes it once.
     const said: string[] = [];
@@ -1164,5 +1184,5 @@ describe('the turn-start read, end to end', () => {
       [id, 'sent (unconfirmed)', 'drop'],
       [id, 'delivered (read)', 'drop'],
     ]);
-  });
+  }, 30_000);
 });

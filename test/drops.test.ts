@@ -4,14 +4,27 @@
 // another pane.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
 import { DROPS_OUTPUT_SCHEMA } from '../src/output/index.ts';
-import { signReceiptPayload, writeReceipt, type ReceiptPayload } from '../src/send/record.ts';
+import { signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, type ReceiptPayload } from '../src/send/record.ts';
+import { receiptPath } from '../src/mcp/inbox.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
@@ -317,5 +330,100 @@ describe('team drops', () => {
     expect(senderOf(AGENT_HEADER)).toBe('orchestrator');
     expect(senderOf('a body with no header')).toBeNull();
     expect(senderOf('from  — admitted by: the owner')).toBeNull();
+  });
+});
+
+describe('team drops --read', () => {
+  /** The signed read receipt beside a message: verified against the checkout's message key,
+   *  bound to this message, seat, checkout and session, and 0600. */
+  function expectReceipt(id: string, seat = 'lead'): void {
+    const at = receiptPath(dropDir, id);
+    const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
+    const key = messageKeyState(home);
+    if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
+    expect(verifyReceipt(receipt, key.key)).toBe(true);
+    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: seat, root, session: 'acme' });
+    expect(statSync(at).mode & 0o777).toBe(0o600);
+  }
+
+  test('the launch read serves the seat with no placed caller, receipting each record before its body', async () => {
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello');
+    const first = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(first).toEqual({ code: 0, out: 'hello\n', err: '' });
+    expectReceipt(D_RECORD);
+    // The receipt is what says it was handed over: the next turn finds nothing waiting.
+    const second = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(second).toEqual({ code: 0, out: '', err: '' });
+  });
+
+  test('--read is an invocation of the launch line, never a placed caller', async () => {
+    const noSeat = await run(['--read']);
+    expect(noSeat).toEqual({ code: 2, out: '', err: 'team drops: --read needs --seat <seat>\n' + USAGE });
+
+    const follow = await run(['--read', '--follow']);
+    expect(follow.code).toBe(2);
+    expect(follow.err).toBe('team drops: --read and --follow cannot be used together\n' + USAGE);
+
+    const json = await run(['--read', '--json']);
+    expect(json.code).toBe(2);
+    assertJsonErrorShape(json.out, { id: 'drops.invocation', messageContains: '--read and --json cannot be used together' });
+
+    // A launch option without the read that serves it is a mistake, not a silent no-op.
+    const seat = await run(['--seat', 'lead']);
+    expect(seat.code).toBe(2);
+    expect(seat.err).toStartWith('team drops: unknown option --seat\n');
+    const session = await run(['--session', 'acme']);
+    expect(session.code).toBe(2);
+    expect(session.err).toStartWith('team drops: unknown option --session\n');
+  });
+
+  test('a session or seat the launch line does not carry is refused', async () => {
+    const session = await run(['--read', '--seat', 'lead', '--session', 'other'], { kind: 'owner' });
+    expect(session).toEqual({ code: 1, out: '', err: 'team drops: the team\'s session is "acme", not "other"\n' });
+
+    const seat = await run(['--read', '--seat', 'helper'], { kind: 'owner' });
+    expect(seat).toEqual({ code: 1, out: '', err: 'team drops: the team file declares no seat "helper"\n' });
+  });
+
+  test('a turn reads ten records at most, oldest first, and leaves the rest waiting', async () => {
+    const ids = Array.from(
+      { length: 12 },
+      (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    for (const [index, id] of ids.entries()) {
+      const at = plantRecord(home, root, 'acme', 'lead', id, `message ${String(index)}`);
+      const when = new Date(Date.parse('2026-10-04T09:00:00.000Z') + index * 1_000);
+      utimesSync(at, when, when);
+    }
+    const first = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(first.code).toBe(0);
+    expect(first.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
+      Array.from({ length: 10 }, (_, index) => `message ${String(index)}`),
+    );
+    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
+    const second = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 10', 'message 11']);
+    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
+  });
+
+  test('a file an earlier build wrote is never handed over and gets no receipt', async () => {
+    drop(D_RECORD, `${OWNER_HEADER}\n\nan old raw drop\n`);
+    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(result.code).toBe(1);
+    expect(result.out).toBe('');
+    expect(result.err).toStartWith(`team drops: message ${JSON.stringify(D_RECORD)} is not a signed record: `);
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+  });
+
+  test('a link standing where the seat folder should be refuses the read', async () => {
+    const elsewhere = join(base, 'elsewhere');
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(root, '.agents', 'send-drops'));
+    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: 'team drops: the drop folder is not a real folder: a link or a file stands in its path\n',
+    });
   });
 });

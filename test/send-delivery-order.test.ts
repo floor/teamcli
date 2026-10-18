@@ -37,11 +37,12 @@ import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/
 import { deliveryChainOf } from '../src/send/delivery.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readPending } from '../src/send/pending.ts';
-import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
 import { storePath } from '../src/store/store.ts';
-import { testIo } from './helpers.ts';
+import { messageKeyState } from '../src/store/keys.ts';
+import { isRead, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { recordBody, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T06:00:00.000Z');
@@ -232,8 +233,11 @@ function inboxDrop(dir: string): string {
 }
 
 /** The receipt an `inbox_read` call would write, for the first message that appears while the
- *  send waits — a live server's answer without a server. Returns the stop for the poll. */
+ *  send waits — a live server's answer without a server. It is the signed status receipt the
+ *  server writes, through the same module, so the send's wait verifies it. Returns the stop for
+ *  the poll. */
 function receiptSoon(dir: string, home: string, root: string, over: { seat?: string; session?: string } = {}): () => void {
+  const context = { to: over.seat ?? 'lead', root, session: over.session ?? 'acme' };
   const timer = setInterval(() => {
     let names: string[];
     try {
@@ -243,20 +247,21 @@ function receiptSoon(dir: string, home: string, root: string, over: { seat?: str
     }
     const id = names.find((name) => MESSAGE_ID.test(name));
     if (id === undefined) return;
-    if (existsSync(receiptPath(dir, id))) {
+    const key = messageKeyState(home);
+    if (key.kind === 'key' && isRead(dir, id, context, key.key)) {
       clearInterval(timer);
       return;
     }
-    writeReceipt(dir, signReceiptPayload({
+    const written = writeReceipt(dir, signReceiptPayload({
       kind: 'receipt',
       status: 'read',
       id,
-      to: over.seat ?? 'lead',
+      to: context.to,
       root,
-      session: over.session ?? 'acme',
+      session: context.session,
       at: NOW.toISOString(),
-    }, home), home);
-    clearInterval(timer);
+    }, home));
+    if (written.ok) clearInterval(timer);
   }, 2);
   return () => clearInterval(timer);
 }
@@ -302,13 +307,14 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home)).toEqual({
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
+      thread: expect.any(String),
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'drop',
@@ -339,7 +345,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
-    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
   test('a codex seat walks the default order: the inbox is skipped, the drop file takes it', async () => {
@@ -414,12 +420,13 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id,
+      thread: id,
       outcome: 'delivered (read)',
       ms: 0,
       via: 'mcp-inbox',
     });
     expect(existsSync(join(dir, `${id}.pending`))).toBe(false);
-    expect(existsSync(join(dir, `${id}.read`))).toBe(true);
+    expect(existsSync(receiptPath(dir, id))).toBe(true);
   });
 
   test('no receipt inside the grace is sent (unconfirmed): exit 0, the message stays, nothing typed', async () => {
@@ -439,6 +446,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id,
+      thread: id,
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'mcp-inbox',
@@ -451,6 +459,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       to: 'lead',
       body: `${HEADER}hello`,
       id,
+      thread: id,
       tries: 0,
       leg: 'mcp-inbox',
     });
@@ -728,13 +737,14 @@ describe('the drop leg', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home)).toEqual({
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
+      thread: expect.any(String),
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'drop',
@@ -771,7 +781,7 @@ describe('the drop leg', () => {
     expect(doc.status).toBe('sent (unconfirmed)');
     expect(doc.channel).toBe('drop');
     expect(doc.action_summary).toBe('lead: sent (unconfirmed) (drop, 0 ms)');
-    expect(readFileSync(join(dropDir(w.root, 'lead'), doc.ids.sent), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(join(dropDir(w.root, 'lead'), doc.ids.sent))).toBe(`${HEADER}hello`);
   });
 
   test('its dry run names the drop file and no typing', async () => {
@@ -808,13 +818,14 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home)).toEqual({
       ts: NOW.toISOString(),
       from: 'owner',
       to: 'lead',
       body: `${HEADER}hello`,
       id: expect.any(String),
+      thread: expect.any(String),
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'drop',
@@ -854,7 +865,7 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     // The seat's shape puts `['drop']` itself: no typing leg was declared and then kept out, so
     // there is nothing for the walk to record.
     const entry = lastEntry(w.root, w.home);
@@ -874,7 +885,7 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
   });
 
@@ -890,7 +901,7 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     // The word is within the default — `native` is the one leg it may add, and `typed` and `drop`
     // are legs of the order in force — so the seat's order stands as written; the human walk keeps
     // native and typed out, one reason each, and the drop leg takes the send.
