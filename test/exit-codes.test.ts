@@ -17,6 +17,7 @@ import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
+import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
@@ -3111,6 +3112,36 @@ scene('broker.stopped', async (place) => {
   const ran = await brokered(place, [], { keyReader: okKey, stop });
   expect(existsSync(join(place.root, '.agents', 'broker.sock'))).toBe(false);
   return show(ran, 'team broker: stopped');
+});
+
+async function bussed(place: Place, argv: string[] = [], sources: BusCommandSources = {}, caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runBus(argv, io, { home: place.home, reconcileIntervalMs: 0, ...sources }), out: io.out, err: io.err };
+}
+
+scene('bus.usage', async (place) => show(await bussed(place, ['extra']), 'unexpected'));
+scene('bus.configuration', async (place) => show(await bussed(place), 'run team from a project\n'), false);
+scene('bus.refused', async (place) =>
+  show(await bussed(place, [], {}, { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }), 'only the owner runs `bus`'));
+scene('bus.started', async (place) => {
+  write(place, TEAM);
+  const stop = (end: () => void): (() => void) => {
+    setTimeout(end, 0);
+    return () => {};
+  };
+  const ran = await bussed(place, [], { stop });
+  expect(existsSync(join(place.root, '.agents', 'bus.sock'))).toBe(false);
+  return show(ran, 'team bus: answering on .agents/bus.sock');
+});
+scene('bus.stopped', async (place) => {
+  write(place, TEAM);
+  const stop = (end: () => void): (() => void) => {
+    setTimeout(end, 0);
+    return () => {};
+  };
+  const ran = await bussed(place, [], { stop });
+  expect(existsSync(join(place.root, '.agents', 'bus.sock'))).toBe(false);
+  return show(ran, 'team bus: stopped');
 });
 scene('next.broker', async (place) => {
   write(place, LINEAR);

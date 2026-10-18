@@ -691,7 +691,7 @@
       "code": 1,
       "command": "bus",
       "id": "bus.refused",
-      "meaning": "the caller is not the owner at a terminal outside herdr, or the socket could not be bound",
+      "meaning": "the caller is not the owner at a terminal outside herdr, a bus is already running or starting, or the socket could not be bound",
       "trigger": "team bus"
     },
     {

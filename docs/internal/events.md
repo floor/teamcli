@@ -31,7 +31,7 @@ implementing RFC 002 Amendment 01 §4.1–§4.4 and §7.
 
 ## 2. The reconciliation pass (`src/bus/reconcile.ts`)
 
-- Runs once when `team bus` starts and every `DEFAULT_RECONCILE_INTERVAL_SECONDS` (60s) thereafter.
+- Runs once when `team bus` starts and every `DEFAULT_RECONCILE_INTERVAL_SECONDS` (120s) thereafter.
 - Scans the durable records on disk:
   1. `.agents/send-drops/<session>/<seat>` for drop files (`message.arrived`), `.pending` markers
      (`message.held`), and `.delivered`/`.read`/`.replied` receipts;
@@ -45,19 +45,15 @@ implementing RFC 002 Amendment 01 §4.1–§4.4 and §7.
 ## 3. Event kinds, privileged kinds, and routing (`src/bus/kinds.ts`)
 
 - **Closed union (`EVENT_KINDS`)**: message lifecycle (`message.arrived`, `.delivered`, `.read`,
-  `.replied`, `.held`, `.expired`, `.unconfirmed`, `.not-submitted`, `.unreachable`), seat lifecycle
-  (`seat.working`, `.idle`, `.idle-timeout`, `.blocked`, `.at-prompt`, `.unreachable`, `.done`,
-  `.started`, `.stopped`, `.lost`, `.restored`, `.rate-limited`, `.provider-error`), work lifecycle
-  (`work.claimed`, `.taken`, `.done`, `.released`, `.gate`, `.suite`, `.branch-pushed`,
-  `.pr-opened`, `.pr-merged`), and team/governance (`team.up`, `.down`, `.seat-added`,
-  `.seat-removed`, `.seat-reloaded`, `.budget-mark`, `.grant-issued`, `.grant-added`,
-  `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`, `.hold-set`,
-  `.hold-cleared`).
+  `.replied`, `.held`), seat lifecycle (`seat.working`, `.idle`, `.idle-timeout`, `.blocked`,
+  `.at-prompt`, `.unreachable`, `.done`), work lifecycle (`work.claimed`, `.done`, `.released`,
+  `.gate`, `.suite`), and team/governance (`team.seat-added`, `.seat-removed`, `.seat-reloaded`,
+  `.grant-issued`, `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`).
 - **Privileged self-subscription ban**: `team.grant-*`, `team.policy-*`, `seat.at-prompt`, and any
   kind in the owner's `privileged-kinds` list are privileged. A seat that is not a default recipient
   (`lead`/`operator`) may never subscribe itself to a privileged kind. When a seat attempts to do
   so, the bus refuses the subscription with rule `privileged-self-subscription`, logs the refusal to
-  `.agents/team.log`, and appends a `team.policy-refused` event routed to the lead and the owner.
+  `.agents/team.log`, and appends a `team.policy-refused` event routed to the owner.
 - **Owner-at-once set (OD-20261018-05)**: `DEFAULT_OWNER_AT_ONCE_KINDS` names the urgent kinds
   delivered to the owner immediately rather than batched.
 
@@ -70,8 +66,8 @@ implementing RFC 002 Amendment 01 §4.1–§4.4 and §7.
   and closes the stream so the subscriber resyncs from durable records.
 - `team watch` subscribes to `.agents/bus.sock` at the start of each pass (`syncWatchBus`), applies
   events in sequence order, resyncs on `gap`, publishes `seat.unreachable`, `seat.at-prompt`, and
-  `seat.provider-error` when its poll detects a dead or prompted seat, and falls back cleanly to
-  polling when no bus is running.
+  `seat.blocked` when its poll detects a missing, prompted, or blocked seat, and falls back cleanly
+  to polling when no bus is running.
 
 ## 5. Same-user (`M`-not-`A`) boundary
 

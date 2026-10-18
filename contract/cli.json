@@ -220,6 +220,29 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "bus",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team bus"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true

@@ -18,6 +18,7 @@ import {
   type Json,
 } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
+import { DEFAULT_HELD_THRESHOLD_SECONDS } from './kinds.ts';
 import {
   appendEvent,
   readEvents,
@@ -33,6 +34,7 @@ export type ReconcileOptions = {
   now?: Date;
   maxBytes?: number;
   kept?: number;
+  heldThresholdSeconds?: number;
   onEvent?: (record: SignedEventRecord) => void;
 };
 
@@ -97,7 +99,10 @@ function parseDropSender(raw: string): { from?: string; ts?: string; thread?: st
 
 export function reconcilePass(options: ReconcileOptions): ReconcileResult {
   const { project, root, session, home } = options;
-  const nowIso = (options.now ?? new Date()).toISOString();
+  const nowDate = options.now ?? new Date();
+  const nowIso = nowDate.toISOString();
+  const nowMs = nowDate.getTime();
+  const heldThresholdMs = (options.heldThresholdSeconds ?? DEFAULT_HELD_THRESHOLD_SECONDS) * 1000;
 
   const existing = readEvents(project, root, home, { kept: options.kept });
   if (!existing.ok) return existing;
@@ -211,14 +216,17 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
           to: pending.to,
         });
         if (pending.leg !== 'mcp-inbox') {
-          raise({
-            ts: pending.ts,
-            kind: 'message.held',
-            session,
-            record_id: `${pending.id}:held`,
-            from: pending.from,
-            to: pending.to,
-          });
+          const heldAgeMs = nowMs - Date.parse(pending.ts);
+          if (!Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs) {
+            raise({
+              ts: pending.ts,
+              kind: 'message.held',
+              session,
+              record_id: `${pending.id}:held`,
+              from: pending.from,
+              to: pending.to,
+            });
+          }
         }
       }
 
@@ -411,31 +419,25 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
           to: entry.to,
         });
       } else if (entry.outcome === 'held') {
-        raise({
-          ts: entry.ts,
-          kind: 'message.held',
-          session,
-          record_id: `${entry.id}:held`,
-          from: entry.from,
-          to: entry.to,
-        });
-      } else if (entry.outcome === 'not-submitted') {
-        raise({
-          ts: entry.ts,
-          kind: 'message.not-submitted',
-          session,
-          record_id: `${entry.id}:not-submitted`,
-          from: entry.from,
-          to: entry.to,
-        });
+        const heldAgeMs = nowMs - Date.parse(entry.ts);
+        if (!Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs) {
+          raise({
+            ts: entry.ts,
+            kind: 'message.held',
+            session,
+            record_id: `${entry.id}:held`,
+            from: entry.from,
+            to: entry.to,
+          });
+        }
       } else if (entry.outcome === 'unreachable') {
         raise({
           ts: entry.ts,
-          kind: 'message.unreachable',
+          kind: 'seat.unreachable',
           session,
           record_id: `${entry.id}:unreachable`,
-          from: entry.from,
-          to: entry.to,
+          seat: entry.to,
+          subject: entry.to,
         });
       }
     }
@@ -453,7 +455,7 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
       if (typeof activeTs !== 'string' || !Number.isFinite(Date.parse(activeTs))) continue;
       const prevTs = lastSeatEventTs.get(seatName);
       if (prevTs !== undefined && Date.parse(activeTs) <= Date.parse(prevTs)) continue;
-      const kind = seatRecord.stage === 'ready' ? 'seat.working' : 'seat.started';
+      const kind = seatRecord.stage === 'ready' ? 'seat.working' : 'seat.idle';
       raise({
         ts: activeTs,
         kind,

@@ -57,10 +57,6 @@ export const EVENT_KINDS = [
   'message.read',
   'message.replied',
   'message.held',
-  'message.expired',
-  'message.unconfirmed',
-  'message.not-submitted',
-  'message.unreachable',
   // Seat lifecycle & state
   'seat.working',
   'seat.idle',
@@ -69,37 +65,21 @@ export const EVENT_KINDS = [
   'seat.at-prompt',
   'seat.unreachable',
   'seat.done',
-  'seat.started',
-  'seat.stopped',
-  'seat.lost',
-  'seat.restored',
-  'seat.rate-limited',
-  'seat.provider-error',
   // Work & tasks
   'work.claimed',
-  'work.taken',
   'work.done',
   'work.released',
   'work.gate',
   'work.suite',
-  'work.branch-pushed',
-  'work.pr-opened',
-  'work.pr-merged',
   // Team & governance
-  'team.up',
-  'team.down',
   'team.seat-added',
   'team.seat-removed',
   'team.seat-reloaded',
-  'team.budget-mark',
   'team.grant-issued',
-  'team.grant-added',
   'team.grant-revoked',
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
-  'team.hold-set',
-  'team.hold-cleared',
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];
@@ -110,62 +90,18 @@ export function isEventKind(value: unknown): value is EventKind {
   return typeof value === 'string' && EVENT_KIND_SET.has(value);
 }
 
-/** Positions that the default routing table and `event-routing` policy can name. */
-export type EventRecipientPosition = 'lead' | 'operator' | 'sender' | 'recipient' | 'subject' | 'owner';
+/** Prompt kinds on `seat.at-prompt` whose default routing includes the owner (Amendment 01 §4.3, §10). */
+export const OWNER_PROMPT_KINDS = [
+  'permission',
+  'trust',
+  'login',
+  'vendor notice',
+  'rate limit',
+] as const;
 
-/** Default recipients per event kind (Amendment 01 §4.3), extending `EVENT_ROUTING_DEFAULTS`.
- *  `seat.working` and `seat.idle` go to nobody by default: the bus and the watch read them,
- *  and a lead that wants them adds itself. `team.policy-refused` goes to the owner only (Q12). */
-export const DEFAULT_EVENT_RECIPIENTS: Readonly<Record<EventKind, readonly EventRecipientPosition[]>> = {
-  'message.arrived': ['recipient'],
-  'message.delivered': ['sender'],
-  'message.read': ['sender'],
-  'message.replied': ['sender'],
-  'message.held': ['sender', 'lead'],
-  'message.expired': ['sender', 'lead'],
-  'message.unconfirmed': ['sender'],
-  'message.not-submitted': ['sender', 'lead'],
-  'message.unreachable': ['sender', 'lead'],
+export type OwnerPromptKind = (typeof OWNER_PROMPT_KINDS)[number];
 
-  'seat.working': [],
-  'seat.idle': [],
-  'seat.idle-timeout': ['lead'],
-  'seat.blocked': ['lead', 'operator'],
-  'seat.at-prompt': ['lead', 'operator', 'owner'],
-  'seat.unreachable': ['lead', 'operator', 'owner'],
-  'seat.done': ['lead', 'operator', 'owner'],
-  'seat.started': ['lead'],
-  'seat.stopped': ['lead'],
-  'seat.lost': ['lead', 'operator', 'owner'],
-  'seat.restored': ['lead', 'operator'],
-  'seat.rate-limited': ['lead', 'operator', 'owner'],
-  'seat.provider-error': ['lead', 'operator', 'owner'],
-
-  'work.claimed': ['lead', 'subject'],
-  'work.taken': ['lead', 'subject'],
-  'work.done': ['lead', 'subject'],
-  'work.released': ['lead', 'subject'],
-  'work.gate': ['lead', 'subject', 'operator'],
-  'work.suite': ['lead', 'subject', 'operator'],
-  'work.branch-pushed': ['lead', 'subject'],
-  'work.pr-opened': ['lead', 'subject'],
-  'work.pr-merged': ['lead', 'subject'],
-
-  'team.up': ['lead', 'owner'],
-  'team.down': ['lead', 'owner'],
-  'team.seat-added': ['lead', 'owner'],
-  'team.seat-removed': ['lead', 'owner'],
-  'team.seat-reloaded': ['lead', 'owner'],
-  'team.budget-mark': ['lead', 'operator', 'owner'],
-  'team.grant-issued': ['lead', 'subject', 'owner'],
-  'team.grant-added': ['lead', 'subject', 'owner'],
-  'team.grant-revoked': ['lead', 'subject', 'owner'],
-  'team.grant-expired': ['lead', 'subject', 'owner'],
-  'team.policy-changed': ['lead', 'subject', 'owner'],
-  'team.policy-refused': ['owner'],
-  'team.hold-set': ['lead', 'owner'],
-  'team.hold-cleared': ['lead', 'owner'],
-};
+const OWNER_PROMPT_SET: ReadonlySet<string> = new Set<string>(OWNER_PROMPT_KINDS);
 
 /** Built-in privileged event kinds (Amendment 01 §4.4, Q12): `team.grant-*`, `team.policy-*`,
  *  and `seat.at-prompt`. The owner may grow this set via `privileged-kinds`; no level below
@@ -173,7 +109,6 @@ export const DEFAULT_EVENT_RECIPIENTS: Readonly<Record<EventKind, readonly Event
 export const DEFAULT_PRIVILEGED_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
   'team.grant-issued',
-  'team.grant-added',
   'team.grant-revoked',
   'team.grant-expired',
   'team.policy-changed',
@@ -192,28 +127,26 @@ export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
   'seat.unreachable',
   'seat.done',
-  'seat.lost',
-  'seat.provider-error',
-  'seat.rate-limited',
   'team.seat-added',
   'team.seat-removed',
   'team.seat-reloaded',
   'team.grant-issued',
-  'team.grant-added',
   'team.grant-revoked',
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
-  'team.budget-mark',
 ];
 
 const OWNER_AT_ONCE_SET: ReadonlySet<EventKind> = new Set<EventKind>(DEFAULT_OWNER_AT_ONCE_KINDS);
 
 export function isOwnerAtOnce(
   kind: EventKind,
-  context?: { seat?: string; leadSeats?: ReadonlySet<string> },
+  context?: { seat?: string; leadSeats?: ReadonlySet<string>; prompt?: string },
 ): boolean {
   if (!OWNER_AT_ONCE_SET.has(kind)) return false;
+  if (kind === 'seat.at-prompt' && context?.prompt !== undefined) {
+    return OWNER_PROMPT_SET.has(context.prompt);
+  }
   if ((kind === 'seat.unreachable' || kind === 'seat.done') && context?.leadSeats !== undefined) {
     return context.seat !== undefined && context.leadSeats.has(context.seat);
   }
@@ -263,7 +196,7 @@ export function checkPrivilegedSelfSubscription(
 
   for (const kind of requestedKinds) {
     if (!isPolicyPrivilegedKind(kind, privileged)) continue;
-    const defaults = DEFAULT_EVENT_RECIPIENTS[kind];
+    const defaults = EVENT_ROUTING_DEFAULTS[kind] ?? [];
     if (options.isLead === true && defaults.includes('lead')) continue;
     if (options.isOperator === true && defaults.includes('operator')) continue;
     const decision = checkRoutingWrite({
@@ -271,7 +204,7 @@ export function checkPrivilegedSelfSubscription(
       kind,
       change: { add: [{ seat: requester }] },
       actor: { kind: 'seat', seat: requester },
-      inherited: EVENT_ROUTING_DEFAULTS[kind] ?? [],
+      inherited: defaults,
       privileged,
     });
     if (!decision.ok) {
@@ -304,13 +237,6 @@ export function leadSeatsOf(team: TeamRoutingRoles): Set<string> {
   return leads;
 }
 
-const ROUTING_TABLE_FOR_FOLD: EventRouting = Object.fromEntries(
-  EVENT_KINDS.map((kind) => [
-    kind,
-    DEFAULT_EVENT_RECIPIENTS[kind].filter((pos): pos is Exclude<EventRecipientPosition, 'recipient'> => pos !== 'recipient'),
-  ]),
-);
-
 function toRoutingRecipient(entry: string): RoutingRecipient {
   if (entry === 'lead' || entry === 'operator' || entry === 'sender' || entry === 'subject' || entry === 'owner') {
     return entry;
@@ -319,8 +245,10 @@ function toRoutingRecipient(entry: string): RoutingRecipient {
 }
 
 /** Resolves the concrete recipient names (`owner` and seat names) for an event by folding the
- *  routing chain through `resolveRouting` (`src/bus/routing.ts`) and mapping positions (`lead`,
- *  `operator`, `sender`, `subject`, `owner`) and `{ seat }` recipients to concrete names. */
+ *  routing chain through `resolveRouting` (`src/bus/routing.ts`) against `EVENT_ROUTING_DEFAULTS`
+ *  and mapping positions (`lead`, `operator`, `sender`, `subject`, `owner`) and `{ seat }`
+ *  recipients to concrete names, plus §4.3's conditional owner clauses (`seat.at-prompt` of the
+ *  owner's prompt kinds and `seat.unreachable` / `seat.done` of a lead seat). */
 export function recipientsForEvent(
   event: {
     kind: EventKind;
@@ -328,6 +256,7 @@ export function recipientsForEvent(
     to?: string;
     seat?: string;
     subject?: string;
+    prompt?: string;
   },
   team: TeamRoutingRoles,
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>,
@@ -336,7 +265,7 @@ export function recipientsForEvent(
   const out = new Set<string>();
   const leads = leadSeatsOf(team);
 
-  if (DEFAULT_EVENT_RECIPIENTS[event.kind].includes('recipient') && event.to !== undefined && event.to !== '') {
+  if (event.kind === 'message.arrived' && event.to !== undefined && event.to !== '') {
     out.add(event.to);
   }
 
@@ -355,7 +284,7 @@ export function recipientsForEvent(
         ]
       : chain;
 
-  const resolved = resolveRouting(event.kind, effectiveChain, { defaults: ROUTING_TABLE_FOR_FOLD });
+  const resolved = resolveRouting(event.kind, effectiveChain, { defaults: EVENT_ROUTING_DEFAULTS });
   for (const recipient of resolved) {
     if (typeof recipient !== 'string') {
       if (recipient.seat !== '') out.add(recipient.seat);
@@ -374,5 +303,16 @@ export function recipientsForEvent(
       if (subj !== undefined && subj !== '') out.add(subj);
     }
   }
+
+  if (event.kind === 'seat.at-prompt' && event.prompt !== undefined && OWNER_PROMPT_SET.has(event.prompt)) {
+    out.add('owner');
+  } else if (
+    (event.kind === 'seat.unreachable' || event.kind === 'seat.done') &&
+    event.seat !== undefined &&
+    leads.has(event.seat)
+  ) {
+    out.add('owner');
+  }
+
   return out;
 }
