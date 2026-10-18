@@ -81,6 +81,9 @@ export const EVENT_KINDS = [
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
+  // Operational: retention declares the sequence range it dropped, so a reader, a reconcile
+  // pass and a gap-resync see a declared drop rather than an unexplained hole.
+  'team.event-log-dropped',
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];

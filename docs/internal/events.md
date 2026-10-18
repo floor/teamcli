@@ -16,8 +16,12 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   dropped first — a segment is dated by its last write. An idle live file past the window is sealed
   and dropped by the same pass. The bus applies the window at start (`pruneEventLog`) and after each
   append. A segment is unlinked whole and a surviving file is never rewritten, so every record still
-  read is byte for byte the one that was verified; each pass that drops something writes one
-  operational record to `.agents/team.log` (`bus [event-log] retention dropped …`).
+  read is byte for byte the one that was verified. Each pass that drops something writes one
+  operational line to `.agents/team.log` (`bus [event-log] retention dropped …`) and appends one
+  signed `team.event-log-dropped` record naming the dropped range and its reason (`age` or `size`):
+  `dropped_newest_seq` is the newest sequence that pass dropped, while `dropped_oldest_seq` is the
+  oldest sequence retention has dropped, carried forward from earlier declarations so losing a
+  declaration record with its segment does not leave an older hole undeclared.
 - **Signed records**: Each line is a JSON object `{ payload, signature }`, where `signature` is an
   Ed25519 signature over the canonical JSON of `payload` under domain `team.event.v1\n` using the
   checkout's message key (`messageKeyOf(home)`). Unverified or malformed lines are skipped and
@@ -31,10 +35,13 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   `via`, `reason`, `prompt`, `rule`). It never carries a message body.
 - **Subscriber sequence tracking and `gap` recovery**: Subscribers apply events through
   `createSequenceTracker`, which accepts only `seq > cursor` and drops duplicates or reordered
-  records. When a subscriber requests `cursor > 0` that is older than the oldest event retained in
-  the rotated log (`cursor < oldestSeq`), `readEventsFromCursor` returns
+  records. When the records between a subscriber's cursor and the oldest event retained in the
+  rotated log are missing (`cursor + 1 < oldestSeq`), `readEventsFromCursor` returns
   `{ ok: true, kind: 'gap', oldest_seq, newest_seq }` so the subscriber resyncs from the durable
-  records before following on.
+  records before following on. When the retained `team.event-log-dropped` records cover the whole
+  missing window, the answer also carries `reason: 'retention'` and the dropped bounds
+  (`dropped_oldest_seq`, `dropped_newest_seq`); an uncovered window carries neither, so a hole
+  nothing declares still reads as one.
 
 ## 2. The reconciliation pass (`src/bus/reconcile.ts`)
 
@@ -55,7 +62,9 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   `.replied`, `.held`), seat lifecycle (`seat.working`, `.idle`, `.idle-timeout`, `.blocked`,
   `.at-prompt`, `.unreachable`, `.done`), work lifecycle (`work.claimed`, `.done`, `.released`,
   `.gate`, `.suite`), and team/governance (`team.seat-added`, `.seat-removed`, `.seat-reloaded`,
-  `.grant-issued`, `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`).
+  `.grant-issued`, `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`), plus
+  the operational `team.event-log-dropped` that retention raises. That kind is not privileged and
+  is routed to `lead` and `operator` by default: it reports log maintenance, not governance.
 - **Recipients and how a seat is named**: a kind's recipients are positions — `lead` (the
   orchestrator's seat and every seat marked `leads`), `operator`, `sender` and `subject` (the
   record's own fields), and `owner` (the owner's runtime, never a seat) — or seats.
@@ -133,7 +142,7 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   the watch addresses its owner reports to `owner` this way; otherwise the routing table's
   recipients decide.
 - **`team watch`**: the owner's delivery path subscribes at the start of each pass
-  (`syncWatchBus`), applies events in sequence order, resyncs on `gap`, and hands owner-addressed
+  (`syncWatchBus`), applies events in sequence order, resyncs on `gap` (passing through whether the hole was retention), and hands owner-addressed
   events to `OwnerDelivery` (§4). Any watch publishes its check reports as events
   (`publishWatchReportsToBus`), merging an operator line and an owner line for one record id into
   one event addressed to `owner`; a watch a seat starts polls and publishes but never subscribes
