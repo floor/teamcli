@@ -675,6 +675,41 @@
     },
     {
       "code": 0,
+      "command": "bus",
+      "id": "bus.started",
+      "meaning": "the bus started and served on .agents/bus.sock",
+      "trigger": "team bus"
+    },
+    {
+      "code": 0,
+      "command": "bus",
+      "id": "bus.stopped",
+      "meaning": "the bus served until it was stopped",
+      "trigger": "team bus"
+    },
+    {
+      "code": 1,
+      "command": "bus",
+      "id": "bus.refused",
+      "meaning": "the caller is not the owner at a terminal outside herdr, or the socket could not be bound",
+      "trigger": "team bus"
+    },
+    {
+      "code": 2,
+      "command": "bus",
+      "id": "bus.configuration",
+      "meaning": "not inside a git repository or the team file cannot be read",
+      "trigger": "team bus"
+    },
+    {
+      "code": 2,
+      "command": "bus",
+      "id": "bus.usage",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team bus extra"
+    },
+    {
+      "code": 0,
       "command": "check",
       "id": "check.ok",
       "meaning": "nothing needs acting on",
