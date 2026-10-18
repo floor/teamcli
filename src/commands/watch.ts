@@ -1141,19 +1141,19 @@ export function watchReportEvent(
       reason: report.text,
     };
   }
+  if (prefix === 'rate-limit') {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:rate-limit:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: 'rate limit',
+      reason: report.text,
+    };
+  }
   if (prefix === 'provider-error') {
-    if (report.text.includes('rate limit')) {
-      return {
-        ts,
-        kind: 'seat.at-prompt',
-        session,
-        record_id: `watch:provider-error:${seat}:${ts}`,
-        seat,
-        subject: seat,
-        prompt: 'rate limit',
-        reason: report.text,
-      };
-    }
     return {
       ts,
       kind: 'seat.blocked',
