@@ -31,6 +31,7 @@ import { runRename } from '../../src/commands/rename.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
+import { deliverGeneralBrief } from '../../src/launch/general-brief.ts';
 import { signRecord } from '../../src/send/record.ts';
 import { runList } from '../../src/commands/list.ts';
 import { runSeats } from '../../src/commands/seats.ts';
@@ -167,6 +168,19 @@ async function setup(page: Page): Promise<void> {
   // Every approval a page records signs with one fixed key, so the fingerprint the commands
   // print is the same on every run: the fixture key, in before the first approve.
   installKey(fixture.home, JSON.parse(readFileSync(new URL('../fixtures/key.json', import.meta.url), 'utf8')));
+
+  // A page that says its seats were launched has their brief too: the launch writes it into every
+  // declared seat's drop folder before it types, and records it in the state.
+  if (page.spec.briefs === 'delivered' && page.team) {
+    deliverGeneralBrief({
+      dir,
+      root: fixture.root,
+      session: page.session,
+      seats: page.team.seats.map((seat) => seat.name),
+      home: fixture.home,
+      at: page.spec.now,
+    });
+  }
 
   if (page.spec.approved && page.team) {
     const parts: string[] = [];

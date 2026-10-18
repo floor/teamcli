@@ -27,6 +27,7 @@ import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
+import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import {
@@ -60,6 +61,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
+import { recordHolds } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
@@ -305,7 +307,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...signingDifferences(team, state, live, root, sources.home),
-    ...generalBriefDifferences(team, state),
+    ...generalBriefDifferences(team, state, root, sources.home, session),
     ...provenance.differences,
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
@@ -679,20 +681,37 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
 /**
  * The general seat brief every launch delivers first, by drop. A session that has launched a seat,
  * or recorded a delivery, is a session whose seats were due the brief: one with no record under
- * `briefs` never received it. The repair is the one both delivering paths answer to — `reload` for
- * a CLI seat, `up` for a human's, where reload refuses to touch the pane. A seat the comparison
- * already names as not running is left to that difference: its launch is its repair.
+ * `briefs` never received it. A recorded delivery is a claim about a file, so the file is checked,
+ * not the claim: the record at the current brief's id must be this brief and this checkout's
+ * message key must have signed it. A state entry naming anything else is a delivery that does not
+ * verify. The repair is the one both delivering paths answer to — `reload` for a CLI seat, `up`
+ * for a human's, where reload refuses to touch the pane. A seat the comparison already names as
+ * not running is left to that difference: its launch is its repair.
  */
-function generalBriefDifferences(team: TeamFile, state: SessionState): Difference[] {
+function generalBriefDifferences(
+  team: TeamFile,
+  state: SessionState,
+  root: string,
+  home: string | undefined,
+  session: string,
+): Difference[] {
   if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return [];
   const out: Difference[] = [];
   for (const seat of team.seats) {
-    if (state.briefs?.[seat.name] !== undefined) continue;
-    if (seat.human !== true && state.seats[seat.name] === undefined) continue;
-    out.push({
-      what: `${seat.name}: the general seat brief has not been delivered`,
-      repair: seat.human === true ? 'team up' : `team reload ${seat.name} or team up`,
-    });
+    const recorded = state.briefs?.[seat.name];
+    const repair = seat.human === true ? 'team up' : `team reload ${seat.name} or team up`;
+    if (recorded === undefined) {
+      if (seat.human !== true && state.seats[seat.name] === undefined) continue;
+      out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
+      continue;
+    }
+    // Without a home there is no message key to verify with; the entry stands as before.
+    if (home === undefined) continue;
+    const id = generalBriefId();
+    const expected = generalBriefRecord({ to: seat.name, root, session, at: recorded.at });
+    const path = join(root, '.agents', 'send-drops', session, seat.name, id);
+    if (recorded.id === id && recordHolds(path, expected, home)) continue;
+    out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });
   }
   return out;
 }

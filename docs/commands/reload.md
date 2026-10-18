@@ -44,7 +44,7 @@ seat that already matches is not written. A refusal is not written.
 
 Before anything is typed into the seat, the run writes the general seat brief to it as a
 signed drop — the same first message `team up` gives every seat — and records the delivery in
-the session's `briefs`. A seat that already holds this brief's record is left as it is, and a
+the session's `briefs`. A seat that already holds this brief's verified record is left as it is, and a
 delivery that cannot be written is said and logged without stopping the reload: `team check`
 names the seat with no record, and this command is its repair.
 

@@ -9,7 +9,7 @@
 // brief has the same record in every seat's folder, and a reworded brief is a new message.
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { ensureRecord, readRecord, signRecord, type RecordPayload } from '../send/record.ts';
+import { recordFile, recordHolds, readRecord, signRecord, writeRecordOver, type RecordPayload } from '../send/record.ts';
 import { emptySession, updateState } from '../state.ts';
 import { GENERAL_BRIEF, GENERAL_BRIEF_SHA256 } from './general-brief-text.ts';
 
@@ -71,11 +71,14 @@ export type BriefDeliveryReport = {
 
 /**
  * Writes the brief into each named seat's drop folder and records the delivery in the session's
- * `briefs` map, one state write for the whole run. A drop that cannot be written is reported for
- * its seat and does not stop the others: the launch is not the message, and `team check` names
- * the seat that has no record. The record on disk is the message; the state entry is the
- * delivery's proof, and a seat's entry names the record's own time, so a re-run after a lost
- * state file records when the seat first received it, never the re-run's clock.
+ * `briefs` map, one state write for the whole run. The name is derived from the text, so a file
+ * already at it counts only when it is this brief and this checkout's message key signed it: a
+ * planted or foreign file there is replaced through the signed record writer, and only a record
+ * read back and verified is recorded as delivered. A name held by a link, a folder or a FIFO is
+ * refused and never followed or replaced. A drop that cannot be written is reported for its
+ * seat and does not stop the others: the launch is not the message, and `team check` names the
+ * seat that has no verified record. The record's own time is the delivery's, so a re-run after
+ * a lost state file records when the seat first received it, never the re-run's clock.
  */
 export function deliverGeneralBrief(input: {
   dir: string;
@@ -90,25 +93,35 @@ export function deliverGeneralBrief(input: {
   const recorded: Record<string, { id: string; at: string }> = {};
   for (const seat of input.seats) {
     const payload = generalBriefRecord({ to: seat, root: input.root, session: input.session, at });
-    let signed;
-    try {
-      signed = signRecord(payload, input.home);
-    } catch {
-      deliveries.push({ seat, ok: false, reason: 'no message key; the general brief was not delivered' });
-      continue;
-    }
     const dropDir = join(input.root, '.agents', 'send-drops', input.session, seat);
-    const written = ensureRecord(dropDir, signed);
-    if (!written.ok) {
-      deliveries.push({ seat, ok: false, reason: written.reason });
-      continue;
+    const path = recordFile(dropDir, payload.id);
+    // An existing record is left as it is; anything else at the name is replaced below, so the
+    // seat never misses the brief because a file was planted at its derived id.
+    const existing = recordHolds(path, payload, input.home);
+    if (!existing) {
+      let signed;
+      try {
+        signed = signRecord(payload, input.home);
+      } catch {
+        deliveries.push({ seat, ok: false, reason: 'no message key; the general brief was not delivered' });
+        continue;
+      }
+      const written = writeRecordOver(dropDir, signed);
+      if (!written.ok) {
+        deliveries.push({ seat, ok: false, reason: written.reason });
+        continue;
+      }
+      if (!recordHolds(written.path, payload, input.home)) {
+        deliveries.push({ seat, ok: false, reason: 'the record written for the brief does not verify' });
+        continue;
+      }
     }
-    // The record's own time is the delivery's: on a re-run it is the first run's.
-    let deliveredAt = at;
-    const read = readRecord(written.path, payload.id);
-    if (read.ok && read.record !== null) deliveredAt = read.record.payload.at;
+    // The record's own time is the delivery's: on a re-run it is the first run's. It is read
+    // back after the write, so what the state records is what the seat will read.
+    const read = readRecord(path, payload.id);
+    const deliveredAt = read.ok && read.record !== null ? read.record.payload.at : at;
     recorded[seat] = { id: payload.id, at: deliveredAt };
-    deliveries.push({ seat, ok: true, id: payload.id, at: deliveredAt, ...(written.existing ? { existing: true } : {}) });
+    deliveries.push({ seat, ok: true, id: payload.id, at: deliveredAt, ...(existing ? { existing: true } : {}) });
   }
   if (Object.keys(recorded).length === 0) return { deliveries };
   try {
