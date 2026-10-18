@@ -609,7 +609,7 @@ export function upPlan(input: UpInput): Step[] {
         },
       });
     }
-    if (seat.stage !== 'named') {
+    if (seat.stage !== 'named' || waiting) {
       steps.push({
         kind: 'run',
         argv: herdr(session, 'agent', 'rename', pane, seat.name),
@@ -661,7 +661,7 @@ export function upPlan(input: UpInput): Step[] {
           ...(said ? { notice: said } : {}),
         },
       });
-    } else if (seat.stage === 'named') {
+    } else if (seat.stage === 'named' && !waiting) {
       const said = takeNotice();
       steps.push({
         kind: 'skip',

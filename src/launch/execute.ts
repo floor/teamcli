@@ -264,6 +264,8 @@ export async function executePlan(
   const created = new Map<string, { workspace: string; repairLine: string }>();
   /** Seats whose workspace this run closed: no path closes one twice. */
   const closed = new Set<string>();
+  /** Seats whose pane was already named right after creation, before any wait. */
+  const namedAtCreate = new Set<string>();
   /** Whether this run started the session: only then may `q` stop it. */
   let createdSession = false;
 
@@ -628,7 +630,8 @@ export async function executePlan(
       const problem = waitingProblem(waitingReads(op.pane), proof);
       if (problem) return leftOut(op.seat, problem.reason, problem.detail);
       const kind = host.classify(session, op.pane, op.cli);
-      if (kind === 'idle') {
+      const back = host.shellBack?.(session, op.pane) ?? null;
+      if (kind === 'idle' || (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, op.pane)))) {
         // The owner answered in the pane between runs: the seat carries on and finishes.
         host.clearWaiting?.(op.seat);
         return 'idle';
@@ -796,6 +799,13 @@ export async function executePlan(
           // repair followed by a create — is not "already closed": the stop pass must close
           // this new workspace too.
           closed.delete(op.seat);
+          // Name the pane right after it is created, before any wait, so a left-out pane is
+          // always findable.
+          if (host.renameAgent(session, made.pane, op.seat)) {
+            namedAtCreate.add(op.seat);
+          } else {
+            namedAtCreate.delete(op.seat);
+          }
           // A fresh workspace is a fresh seat: any waiting record named an older pane, and is
           // void here. Clearing it in the same write is what makes the whole-team repair
           // (`team down` then `team up`) clear the record the next `up` would otherwise resume.
@@ -1108,7 +1118,8 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
           break;
         }
-        if (!host.renameAgent(session, here.pane, op.seat)) {
+        const renamed = namedAtCreate.has(op.seat) || host.renameAgent(session, here.pane, op.seat);
+        if (!renamed) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'was not named in time; left at launched' });
           break;
