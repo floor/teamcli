@@ -1,0 +1,9 @@
+❯ codex -m gpt-6.1-sol
+Disconnected from this task. Any running work continue
+s.
+To reconnect, run:
+  codex resume <session-id>
+Stop the current turn: run codex agents, select this t
+ask, and press x.
+<workspace>            14s 07:55:35
+❯

@@ -826,8 +826,10 @@ function lineSomewhere(data: ScreenData, lines: string[], pattern: LinePattern, 
 /**
  * The line a rule's footer must be: the last non-blank one. The composer's own chrome is the one
  * thing allowed below it — a `status-last` mode pins the status line to the pane's last line, and
- * a dialog drawn above it is still the dialog its footer belongs to. Any other line below the
- * footer means the footer is not the dialog's, and the rule doesn't match.
+ * a `status-then-one` mode lets one chrome row stand under the status line, so the status row
+ * and that row are both chrome and a dialog drawn above them is still the dialog its footer
+ * belongs to. Any other line below the footer means the footer is not the dialog's, and the
+ * rule doesn't match.
  */
 function footerLine(data: ScreenData, lines: string[]): string {
   const nonBlank = lines.filter((line) => line.trim());
@@ -835,6 +837,12 @@ function footerLine(data: ScreenData, lines: string[]): string {
   const composer = data.composer;
   if (composer.mode === 'status-last' && statusMatches(composer, last)) {
     return (nonBlank[nonBlank.length - 2] ?? '').trim();
+  }
+  if (composer.mode === 'status-then-one') {
+    if (statusMatches(composer, last)) return (nonBlank[nonBlank.length - 2] ?? '').trim();
+    if (statusMatches(composer, nonBlank[nonBlank.length - 2] ?? '')) {
+      return (nonBlank[nonBlank.length - 3] ?? '').trim();
+    }
   }
   return last.trim();
 }
