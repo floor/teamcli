@@ -26,9 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reach: the phrase stops at the first terminal typed leg, and names only the drop channel when
   `drop` leads. A seat the team file marks `human: true` walks the drop leg alone, whatever its
   order or the default says: the typed trigger, the native frame and the seat's own inbox are
-  kept out, each one's reason recorded on the history line, so the message arrives in the drop
-  file and nothing reaches a pane or an inbox; a person reads it and writes no receipt, so no
-  marker waits there, and an expired handoff's fallback walks the same one leg. `--wait` is
+  kept out, the reason for each leg the order holds recorded on the history line, so the message
+  arrives in the drop file and nothing reaches a pane or an inbox; a `delivery_order` written on
+  such a seat is not a `team check` difference, because the seat walks `drop` alone whatever the
+  word says. A person reads the drop and writes no receipt, so no marker waits there, and an
+  expired handoff's fallback walks the same one leg. `--wait` is
   allowed for such a seat: the record is written on its `drop` leg, nothing is typed, and the run
   awaits a reply record on the thread. The watch types no retry, nudge, work drop or ring there,
   giving a held drop up with the reason instead.
@@ -59,8 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The message record, threads, and `team reply`.** A plain send writes the message whole as one
   signed record — the body, the sender, the rule that admitted the send, and the thread — into
   the recipient's folder at `.agents/send-drops/<session>/<seat>/<id>`, mode 0600, by renaming a
-  temporary file into place, before the delivery leg runs; the record is the message, and the
-  typed, drop and mcp-inbox legs all carry it. `team messages` reads every record still waiting,
+  temporary file into place, in the leg that takes the send and before that leg delivers it; a
+  walk no leg takes writes no record. The record is the message, and the typed, drop and
+  mcp-inbox legs all carry it. `team messages` reads every record still waiting,
   verifies its signature with the checkout's message key, prints the body and writes the signed
   read receipt `<id>.read.json` in that one step; the seat's inbox server writes the same receipt
   for each message it returns, and verifies the record before anything is shown, so an unsigned
@@ -99,9 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handed to the remaining legs of the recipient's order — a live inbox takes the body, the drop
   leg leaves it in the drop file, or the typed leg types its trigger — so a late `--confirm`
   finds no record and nothing is delivered twice. A handoff that cannot resolve the recipient's
-  live pane or its socket falls back to the typed drop, and a record that cannot be written
-  refuses. Without a running watch, an unconfirmed record does not fall back and is swept after
-  24 hours.
+  live pane or its socket hands the send to the next leg the recipient's order holds, and a
+  record that cannot be written refuses. Without a running watch, an unconfirmed record does not
+  fall back, and no timer sweeps it: the folder is pruned only when another pending record is
+  written or a confirm next reads it, so a record nobody touches again outlives the 24 hours.
 
 - **`team mcp serve`, and the `mcp-inbox` leg.** `team mcp serve --seat <seat>` runs the MCP server
   a seat's launch line starts: two tools over that seat's own drop folder, the seat and session
@@ -138,7 +142,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside herdr, one per clone: it owns the project's event log (`events.jsonl`), appends each
   event as a signed record, runs the reconciliation pass over durable message and seat records
   when it starts and every two minutes after, and serves `publish` and `subscribe` on
-  `.agents/bus.sock`; Ctrl-C removes the socket and exits 0. Nothing starts it for you in 0.5.1.
+  `.agents/bus.sock`; Ctrl-C removes the socket and exits 0. A segment rotates at 100 MB, and
+  when the bus starts an idle live file is sealed and the oldest sealed segments are dropped
+  whole once their last write is thirty days old or the retained files together pass 100 MB; one
+  signed `team.event-log-dropped` record names the dropped sequence range and whether the age
+  window or a size bound dropped it, so a reader and a gap-resync see a declared hole rather than
+  an unexplained one. Nothing starts it for you in 0.5.1.
   It refuses to start when the caller is not the owner, when a bus is already answering, when
   another start holds the socket lock, or when the socket cannot be bound, and exits 2 on a bad
   invocation or a team file it cannot read. With a bus answering, `team watch` reads new events
@@ -162,11 +171,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signed record in the owner's mailbox, the list `team messages` reads, so a held or unreachable
   seat silences neither, and the watch's owner report merges with the operator's copy of the
   same observation, so the owner's list holds it once. A kind on the owner's immediacy list —
-  `owner-at-once`, an owner-sovereign setting whose release default is the owner's
-  `seat.at-prompt`, `seat.unreachable` and `seat.done`, plus every roster, grant and policy
-  event — rings and lands as its own record; everything else collects in the pass and lands as
-  one digest record at its flush, and both ids are deterministic, so a watch restarted from
-  cursor 0 rings and writes nothing again. `--no-notify` never silences an owner push.
+  `owner-at-once`, an owner-sovereign setting whose release default holds `seat.at-prompt` only
+  at a permission, trust, login, vendor-notice or rate-limit prompt and `seat.unreachable` and
+  `seat.done` only for the team's lead, plus every roster, grant and policy event, both raise
+  kinds and both refusals — rings and lands as its own record; everything else collects in the
+  pass and lands as one digest record at its flush, and both ids are deterministic, so a watch
+  restarted from cursor 0 rings and writes nothing again. `--no-notify` never silences an owner
+  push.
 
 - **The watcher each launch leaves.** The launch plan reads, once per seat, how the seat's CLI
   will learn that a drop is waiting — the turn-start hook the launch installs, the MCP inbox
@@ -233,8 +244,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
   unsent, working, question, permission and exit — are captured as fixtures, the trust dialog is
-  unchanged and its model row under the footer is gone again, and the launch test's boundary moves
-  to 1.4.3.
+  unchanged, its fresh idle footer carries no model row again as on 1.4.0 — the row appears under
+  the box once a turn has run — and the launch test's boundary moves to 1.4.3.
 
 - The Cursor profile is tested with CLI 2026.10.01 to 2026.10.16: the 2026.10.16 screens — trust,
   idle, unsent, working, question, permission and exit — are captured as fixtures, the trust
@@ -278,6 +289,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session in the session-aware reading only, and the command judged the sessionless one, so the
   seat's own reply — and its own `--close` — was refused as `a caller of another session is not
   that seat`; it now judges the same session-aware placement `team send` does.
+
+- `team init` keeps `.agents/send-drops/` out of git. The exclude list it writes to
+  `.git/info/exclude` — never `.gitignore` — names the drop folder beside `.agents/messages/`, so
+  the records a send leaves in a seat's folder never show up as untracked changes.
 
 ### Known limits
 
