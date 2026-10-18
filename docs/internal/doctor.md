@@ -64,7 +64,8 @@ One line per finding, the level first, then two spaces:
 | `MISS` | a reason to refuse: something has to be installed or logged in first, or a record the machine cannot verify |
 | `note` | neither: a note, like whether the session is running |
 
-The findings come in order: the file's own warnings, one warning per seat whose name or label
+The findings come in order: the file's own warnings — each deprecated key among them, with the
+repair `team check` prints — one warning per seat whose name or label
 repeats the project or the session (the session already carries it; the warning never refuses the
 file), the approval — no line when there is no record or the record verifies, and one `MISS` with the case when the record is legacy (`approved before records were signed`) or refused — the override file when it is not the approved copy or cannot be parsed (a
 missing line either way: `up` and `add` refuse, and the approved copy stays in force — or the

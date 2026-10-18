@@ -1,6 +1,6 @@
 // `dialogs:` is the 0.4 line's trust-dialog setting. This build reads and ignores it: a file
 // that carries it still loads, the key grants nothing — trust answering is the owner's live team
-// grant — and only `team check` names the deprecation, with its repair. The key is not an owner
+// grant — and `team check` and `team doctor` name the deprecation, with its repair. The key is not an owner
 // section, so it changes no approval digest, and it is not a difference, so it changes no exit.
 // Fake herdr throughout: no live session is read.
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
+import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { OWNER_SECTIONS } from '../src/approve/fingerprint.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -114,8 +115,8 @@ describe('the dialogs section the 0.4 line wrote', () => {
     const result = validateTeamFile(text);
     if (!result.ok) throw new Error(JSON.stringify(result.errors));
     // Read and ignored: the parsed team has no dialogs value at all, so nothing downstream can
-    // act on the key. No warning either — deprecations travel in their own list, which only
-    // `team check` prints, so every other command stays quiet about it.
+    // act on the key. No warning either — deprecations travel in their own list, which `team
+    // check` and `team doctor` print, so every other command stays quiet about it.
     expect('dialogs' in result.team).toBe(false);
     expect(result.warnings).toEqual([]);
     expect(result.deprecations).toEqual([{
@@ -153,6 +154,29 @@ describe('the dialogs section the 0.4 line wrote', () => {
     expect(out).not.toContain('difference:');
     expect(out).toContain('no differences');
     expect(code).toBe(0);
+  });
+
+  test('team doctor names the deprecation too, with the message and repair check prints', async () => {
+    const text = teamYaml('dialogs:\n  trust: orchestrator\n');
+    const { root, home } = place(text);
+    const io = testIo(root, { kind: 'owner' });
+    const sources: DoctorSources = {
+      version: () => '2.1.288 (Claude Code)',
+      onPath: () => true,
+      loggedIn: () => true,
+      herdrVersion: () => '0.7.1',
+      sessionRunning: () => false,
+      now: () => NOW,
+      home,
+    };
+    await runDoctor(['--file', '.agents/team.yaml'], io, sources);
+    const line = text.split('\n').indexOf('dialogs:') + 1;
+    // The same sentence `team check` prints, in doctor's `warn` line.
+    expect(io.out).toContain(
+      `warn  the file, line ${line}: \`dialogs:\` is deprecated and grants nothing; `
+      + 'repair: remove dialogs: from .agents/team.yaml; trust answering is now an owner grant: '
+      + 'team grant @team --capabilities dialogs.trust',
+    );
   });
 
   test('a file without the key draws no warning', () => {
