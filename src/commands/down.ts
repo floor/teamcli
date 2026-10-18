@@ -879,6 +879,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const known = new Set(acting.seats.map((seat) => seat.name));
   const cliOf = new Map(acting.seats.map((seat) => [seat.name, seat.cli]));
   const cliFor = (name: string): string => cliOf.get(name) ?? 'unknown';
+  // A seat the file marks as a human's holds no CLI to ask: the plan leaves it running.
+  const humanOf = new Set(acting.seats.filter((seat) => seat.human).map((seat) => seat.name));
 
   if (!dry && args.flags.has('wait') && refusals.length === 0) {
     const deadline = sources.now().getTime() + WAIT_SECONDS * 1000;
@@ -922,6 +924,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
           pane: agent.pane,
           workspace: agent.workspace,
           state: 'free',
+          ...(humanOf.has(claim.name) ? { human: true as const } : {}),
           unnamed: true,
         });
       } else {
@@ -946,6 +949,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
             pane: agent.pane,
             workspace: agent.workspace,
             state: 'free',
+            ...(humanOf.has(claim.name) ? { human: true as const } : {}),
             title: name,
           });
         } else if (claim) {
@@ -994,6 +998,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       pane: agent.pane,
       workspace: agent.workspace,
       state: reading,
+      ...(humanOf.has(name) ? { human: true as const } : {}),
       ...(exitInBox ? { exitInBox: true } : {}),
       ...(shown.kind === 'exit question' ? { atExitQuestion: true } : {}),
     });

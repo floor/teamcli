@@ -282,6 +282,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const workspaces = sources.workspaces(session);
   if (agents === null || workspaces === null) return herdrRefused(out, json);
 
+  // A pane the file marks as a human's is never typed into or launched over: this command is a
+  // stop followed by a launch, so it steps over the seat entirely and says why.
+  if (declared.human) {
+    return notReadyRefused(out, json, `${name} is a human's pane: nothing is typed into it or launched over it; left as it is`);
+  }
+
   // Inspect the target seat's current pane before any preflight or stop.
   const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, caller.kind === 'owner', sources);
   if (inspected.kind === 'replaced') return replacedRefused(out, json, name);
@@ -666,6 +672,8 @@ function buildUpSeat(
     version: seat.version,
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: false,
+    // A human's pane: no launch, no key, no line. The plan skips it before any of that.
+    ...(seat.human ? { human: true as const } : {}),
     rules: rulesOf(team, seat, root),
     ...seatDeliveryOf(standing, team, seat, root, home, live),
     ...(start.lobby ? { lobby: true } : {}),

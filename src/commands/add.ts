@@ -441,6 +441,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // …); the plain line is the sentence it always printed.
     refuse(io, json, 'add', { id: built.id, message: built.error, repair: null });
     // exit: add.no-seat
+    // exit: add.human
     // exit: add.not-restored
     // exit: add.no-like
     // exit: add.until
@@ -1044,6 +1045,9 @@ function declaredSeat(
 ): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string; id: string } {
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) return { id: 'add.no-seat', error: `the file has no seat ${JSON.stringify(name)}` };
+  // A human's pane is never launched into or typed into. `add` names one seat, so it refuses
+  // with the reason rather than walk a plan that would skip the only seat it was asked to add.
+  if (seat.human) return { id: 'add.human', error: `${name} is a human's pane: nothing is typed into it or launched over it; left as it is` };
   let edited = current;
   if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
   const again = validateTeamFile(edited, { home, fs });
@@ -1135,6 +1139,8 @@ function seatPlan(
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: false,
+    // A human's pane: no launch, no key, no line. The plan skips it before any of that.
+    ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root),
     ...seatDeliveryOf(standing, team, seat, root, home, true),

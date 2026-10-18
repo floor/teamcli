@@ -252,6 +252,21 @@ describe('up --dry-run', () => {
     });
     expect(new Set(verbs)).toEqual(new Set(['workspace create', 'pane run', 'pane report-metadata', 'agent rename']));
   });
+
+  test("a seat the file marks as a human's is not launched into or typed into", () => {
+    const plan = upPlan({
+      root: '/work/a',
+      session: 'a',
+      sessionRunning: true,
+      seats: [seat('desk', { human: true })],
+      watchLabel: 'Watch · a',
+      startWatch: false,
+    });
+    // No workspace, no launch, no wait, no rules line: the skip is the whole of this seat.
+    expect(plan).toEqual([
+      { kind: 'skip', text: "desk: the pane is a human's; nothing is launched into it or typed into it; left as it is" },
+    ]);
+  });
 });
 
 describe('down --dry-run', () => {
@@ -326,6 +341,19 @@ describe('down --dry-run', () => {
       { kind: 'skip', text },
       { kind: 'skip', text: 'session s: not stopped, 1 agent left in it' },
     ]);
+  });
+
+  test("a seat the file marks as a human's is not typed into, even with --abandon", () => {
+    const human = { ...seat('w1'), human: true as const };
+    const left: Step[] = [
+      { kind: 'skip', text: "w1: the pane is a human's; nothing is typed into it; left running" },
+      { kind: 'skip', text: 'session s: not stopped, 1 agent left in it' },
+    ];
+    expect(downPlan({ session: 's', seats: [human], extra: 0, watchPid: null, keep: [] })).toEqual(left);
+    // The owner's abandon closes unasked panes; a human's pane is not one it may close.
+    expect(
+      downPlan({ session: 's', seats: [human], extra: 0, watchPid: null, keep: [], abandon: true, closeUnasked: true }),
+    ).toEqual(left);
   });
 
   test('a seat whose CLI exited is closed without typing, and the session follows it down', () => {
