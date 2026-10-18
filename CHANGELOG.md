@@ -10,21 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **The `drop` leg, and human seats.** A receiving seat's delivery order may name `drop`: the walk
-  writes the typed leg's own 0600 drop file and types nothing at all — no trigger line, no socket
-  frame, no daemon round trip, no pane read — so a receiver that watches its own drop folder finds
-  the message there. Its console line is `delivered (dropped)`, its history line says `via: drop`,
-  and the JSON channel is `drop`; the leg joins the vocabulary and the default order after
-  `typed`, so any level may name it and a seat that declares nothing is typed exactly as before.
-  The typed leg stays terminal, and the watch's drop-folder readers follow only typed-leg markers,
-  so a drop-leg file is never typed or retried; `team drops` reads the receiver's own folder, and
-  its `--follow` prints each drop that arrives. A dry run names only the legs it can
+  writes the record as the typed leg's own 0600 drop file and types nothing at all — no trigger
+  line, no socket frame, no daemon round trip, no pane read — so a receiver that watches its own
+  drop folder finds the message there. Its console line is `<seat>: sent (unconfirmed) (drop,
+  <n> ms)`, exit 0: the record is the message, safely on disk, and no signed receipt has come
+  back yet. Beside it the send leaves the marker `<id>.pending`; the seat's own watcher reads the
+  drop and writes the signed `<id>.read.json` receipt, and a running watch promotes it once — one
+  `delivered (read)` history line, the marker cleared, nothing typed. A drop no watcher read
+  thirty minutes after the send is given up on with the file's path: the marker is cleared, the
+  record stays in the folder, and it is never typed and never called lost. The history line says
+  `via: drop` and the JSON channel is `drop`; the leg sits in the default order between the
+  seat's own MCP inbox and the typed trigger. The typed leg stays terminal, and a drop-leg marker
+  is never typed or retried; `team drops` reads the receiver's own folder, and its `--follow`
+  prints each drop that arrives. A dry run names only the legs it can
   reach: the phrase stops at the first terminal typed leg, and names only the drop channel when
   `drop` leads. A seat the team file marks `human: true` walks the drop leg alone, whatever its
   order or the default says: the typed trigger, the native frame and the seat's own inbox are
   kept out, each one's reason recorded on the history line, so the message arrives in the drop
-  file and nothing reaches a pane or an inbox; an expired handoff's fallback walks the same one
-  leg. `--wait` is refused for such a seat, and the watch types no retry, nudge, work drop or
-  ring there, giving a held drop up with the reason instead.
+  file and nothing reaches a pane or an inbox; a person reads it and writes no receipt, so no
+  marker waits there, and an expired handoff's fallback walks the same one leg. `--wait` is
+  refused for such a seat, and the watch types no retry, nudge, work drop or ring there, giving
+  a held drop up with the reason instead.
 
 - **`team drops`.** The receiving seat reads its own folder under
   `.agents/send-drops/<session>/<seat>`: one row per waiting drop, the sender the record's payload
@@ -33,13 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not verify against the message key. A drop with the signed `<id>.read.json` receipt beside
   it is read, and is not listed — a receipt the key did not sign, or one naming another message,
   seat, checkout or session, proves nothing and the drop is still listed; a name with a dot in it
-  is a sidecar, never a drop. The
-  command only reads: it moves, deletes and marks nothing, and a folder that does not exist yet is
-  an empty one. Only the seat itself, on the pane the state records for it, may run it; the owner,
+  is a sidecar, never a drop. Apart from `--read`'s receipt, the command only reads: it moves,
+  deletes and marks nothing, and a folder that does not exist yet is an empty one. Only the seat
+  itself, on the pane the state records for it, may run it; the owner,
   another seat and a seat on another pane are refused. `--follow` prints
   `from <sender> — <path>` for each drop that appears while it runs — the drops already on disk
   are waiting, not new — flushed per line for a Monitor in the receiving seat, and Ctrl-C stops it
-  with exit 0. `--json` prints one `team.drops` document; it and `--follow` cannot be combined.
+  with exit 0. `--json` prints one `team.drops` document; it and `--follow` cannot be combined,
+  and `--read` combines with neither. `--read --seat <seat> [--session <session>]` is the
+  launch's own turn-start read: it verifies each waiting record with the checkout's message key,
+  writes the signed `<id>.read.json` receipt beside it before printing its body, hands over at
+  most ten records a run, and asks for no placed caller, because a CLI's hook runs outside any
+  pane. The team file must declare the seat, and a session it is given must be the team file's
+  own; a record it cannot verify or receipt is a refusal and its body is not printed. `--read` is
+  the one mode that writes, and it writes only the receipt (mode 0600): the drop itself is never
+  moved, deleted or marked. `--seat` or `--session` without `--read` is an invocation error.
 
 - **The message record, threads, and `team reply`.** A plain send writes the message whole as one
   signed record — the body, the sender, the rule that admitted the send, and the thread — into
@@ -122,14 +136,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in sequence order and publishes the events its reports imply — `seat.unreachable`,
   `seat.at-prompt` and `seat.blocked` — to the log, and after a sequence gap re-announces the
   reports that are still true; with no bus running it polls exactly as before. The reconciliation
-  pass appends only the events the on-disk records imply and the log
-  is missing, keyed by kind, record and session, so a pass over unchanged records adds no second
+  pass appends only the events the on-disk records imply and the log is missing, keyed by kind,
+  record and session, so a pass over unchanged records adds no second
   event. A seat that is not a default recipient may not subscribe itself to a privileged kind —
   a grant, a policy, `seat.at-prompt`, or one the owner has named — and the bus refuses it with
   `privileged-self-subscription`, logs the refusal, and raises `team.policy-refused` to the
   owner.
 
+- **The watcher each launch leaves.** The launch plan reads, once per seat, how the seat's CLI
+  will learn that a drop is waiting — the turn-start hook the launch installs, the MCP inbox
+  server its profile registers, or nothing — carries it through the launch's steps, and stores
+  it in the seat's record; `team up --dry-run` names it under the launch line it would type:
+  `reads its drops at each turn start`, `reads its drops through its MCP inbox`, or `watches
+  nothing: a drop sent here is never read`.
+
 ### Changed
+
+- **The default delivery order, and the words a level may add.** A send whose receiving seat
+  declares no order walks `mcp-inbox`, then `drop`, then `typed`: the seat's own inbox when a
+  server serves it, the 0600 drop file with nothing typed into the pane when one does not, and
+  the typed trigger line last. `native` is never in the default — the sender chooses it and
+  records the delivery itself — and it is the one leg a declared word may add to the order in
+  force; a word naming any other leg the order does not have is still set aside. A seat whose
+  file declares no word takes the one its shape implies: a pane marked `human` walks `drop`
+  alone, and a CLI whose launch installs no watcher — no turn-start hook and no MCP inbox —
+  leaves `drop` out, because nothing on its side would read the file.
 
 - **A human seat's pane is never touched, whichever command reaches it.** `up` skips the seat in
   its plan — no workspace, no launch line, no key — says why, and does not count it short of
@@ -150,6 +181,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to 1.4.3.
 
 ### Fixed
+
+- **A receipt file that proves nothing is replaced, not trusted.** The signed read receipt is
+  write-once per status for the message and context it verifies for: a signed receipt already at
+  `<id>.<status>.json` that names this message, seat, checkout and session is left untouched, so
+  a second read adds nothing. A regular file at that name that does not verify — unsigned,
+  unreadable, another message's, or signed for another seat, session or checkout — is replaced
+  by the signed receipt, so a planted or stale file cannot keep a message waiting forever; a
+  name held by a link, a folder or a FIFO is refused, and nothing is written through it.
 
 - `team doctor` names a launch record that carries the pane's process identity and no seat id —
   the one `team seats` shows as `-` in its ID column — with the sibling note and the same repair
