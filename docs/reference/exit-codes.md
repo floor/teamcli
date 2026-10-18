@@ -169,6 +169,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.herdr` | `down` | 2 | herdr doesn't answer | `team down` |
 | `down.invocation` | `down` | 2 | the invocation can't be read | `team down extra` |
 | `down.not-a-repo` | `down` | 2 | not inside a git repository | `team down` |
+| `drops.ok` | `drops` | 0 | the caller's unread drops were listed, or followed until it stopped | `team drops` |
+| `drops.file` | `drops` | 1 | the team file can't be read | `team drops` |
+| `drops.refused` | `drops` | 1 | the caller is not a placed seat of this team | `team drops` |
+| `drops.unreadable` | `drops` | 1 | the drop folder can't be read | `team drops` |
+| `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
+| `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
 | `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |

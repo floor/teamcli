@@ -21,6 +21,7 @@ import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
+import { runDrops } from '../src/commands/drops.ts';
 import { runFeed } from '../src/commands/feed.ts';
 import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
@@ -3510,6 +3511,54 @@ scene('feed.configuration', async (place) => {
   return inRepo;
 });
 scene('feed.usage', async (place) => show(await fed(place, ['extra']), 'unexpected "extra"'));
+
+// `team drops` reads one seat's own mailbox: the scenes place the lead on the pane the fixture
+// caller runs on, and the folder is the one `team send` would write.
+async function dropped(place: Place, argv: string[], caller: Caller = leadSeat): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const code = await runDrops(argv, io, { home: place.home });
+  return { code, out: io.out, err: io.err };
+}
+
+function placeLead(place: Place, pane = 'w1:p1'): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane };
+  });
+}
+
+scene('drops.ok', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, []), '0 drops');
+});
+scene('drops.file', async (place) => {
+  // A checkout with no team file yet: the folder cannot be named without the session.
+  placeLead(place);
+  return show(await dropped(place, []), 'no team file');
+});
+scene('drops.refused', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, [], owner), 'only a seat of this team reads its own drops');
+});
+scene('drops.unreadable', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  const dir = join(place.root, '.agents', 'send-drops', 'acme', 'lead');
+  mkdirSync(dir, { recursive: true });
+  chmodSync(dir, 0o000);
+  try {
+    return show(await dropped(place, []), "the drop folder can't be read");
+  } finally {
+    chmodSync(dir, 0o755);
+  }
+});
+scene('drops.invocation', async (place) => {
+  write(place, TEAM);
+  placeLead(place);
+  return show(await dropped(place, ['extra']), 'unexpected "extra"');
+});
+scene('drops.not-a-repo', async (place) => show(await dropped(place, []), 'not inside a git repository'), false);
 
 // --- team mcp: a synthetic helper, bridge and front, under the scene's own temp base. The tree
 // is real (modes, sizes and the config's bytes are read as the command reads them), while the

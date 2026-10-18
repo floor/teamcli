@@ -99,6 +99,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'route', args: ['route', 'claude-keeper', '--dry-run'], schemaKey: 'team.route' },
   { command: 'up', args: ['up', '--dry-run'], schemaKey: 'team.up' },
   { command: 'down', args: ['down', '--dry-run'], schemaKey: 'team.down' },
+  { command: 'drops', args: ['drops'], schemaKey: 'team.drops', asSeat: true },
   { command: 'add', args: ['add', 'claude-helper', '--dry-run'], schemaKey: 'team.add' },
   { command: 'grant', args: ['grant', 'claude-keeper', '--scope', 'up', '--dry-run'], schemaKey: 'team.grant' },
   { command: 'delegate', args: ['delegate', 'ext/w1:p1', '--commands', 'add', '--dry-run'], schemaKey: 'team.delegate' },

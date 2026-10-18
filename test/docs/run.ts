@@ -17,6 +17,7 @@ import { commits } from '../../src/commands/commits.ts';
 import { pr } from '../../src/commands/pr.ts';
 import { runDoctor } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
+import { runDrops } from '../../src/commands/drops.ts';
 import { runFeed } from '../../src/commands/feed.ts';
 import { runHold } from '../../src/commands/hold.ts';
 import { runInit } from '../../src/commands/init.ts';
@@ -233,6 +234,10 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runDoctor(rest, io, world.doctorSources());
     case 'down':
       return runDown(rest, io, world.downSources());
+    case 'drops':
+      // A page's follow example gets one poll and then stops: the docs clock is pinned, and a
+      // real follow would sit on the page's folder.
+      return runDrops(rest, io, { home: fixture.home, poll: async () => false });
     case 'feed':
       return runFeed(rest, io, { home: fixture.home, poll: async () => false });
     case 'hold':
