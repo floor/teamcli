@@ -3490,8 +3490,10 @@ function placeLead(place: Place): void {
 /** The id the handoff prints, pinned so the scene's output is exact. */
 const SEND_NATIVE_ID = '11111111-1111-4111-8111-111111111111';
 
-/** TWO without the worker's `stopped` mark: a live claude-code seat for a claude-code sender. */
-const LIVE_TWO = TWO.replace('    stopped: true\n', '');
+/** TWO without the worker's `stopped` mark: a live claude-code seat for a claude-code sender.
+ *  The team's own word names native first — a declared order is what puts that leg in the walk,
+ *  since the default leaves it out — followed by the two legs a handoff falls back to. */
+const LIVE_TWO = `${TWO.replace('    stopped: true\n', '')}delivery_order: [native, mcp-inbox, typed]\n`;
 
 /** The handoff: a claude-code sender gets the pending record and the exact target, and nothing
  *  is delivered by that run. */

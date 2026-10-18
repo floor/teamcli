@@ -212,9 +212,10 @@ export const LIVENESS_RULE = 'a liveness threshold may be tightened, never loose
 /**
  * An order setting: a list of legs, declared once per feature with the catalogue policy it is and
  * the order in force when no level declares one. An order only ever tightens: the catalogue
- * policy's `isWithin` honours a word that drops a leg or reorders the ones it keeps, and sets aside
- * one that adds a leg, names one twice, or names none — an order with no leg takes nothing at all.
- * A word equal to the order in force is no word at all.
+ * policy's `isWithin` honours a word that drops a leg or reorders the ones it keeps, sets aside
+ * one that adds a leg other than the delivery order's own `native`, names one twice, or names
+ * none — an order with no leg takes nothing at all. A word equal to the order in force is no word
+ * at all.
  */
 export type OrderSettingSpec<L extends string> = {
   /** The spelling the setting is written under in a team file and a report — the policy's alias. */
@@ -258,10 +259,11 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'ty
  * types nothing at all: a receiver that watches its folder — the inbox server where its CLI has
  * an MCP front, the launch's start-of-turn read where it has a hook — takes the message there,
  * and a seat that watches nothing never walks this leg (`src/send/delivery.ts` leaves it out of
- * that seat's order). The typed leg stays the last fallback. The `native` leg is never part of
- * the order in force: the sender chooses it and records the delivery itself. The chain is the
- * receiving seat's own — entity, project, team, seat — because the order says how that seat's
- * messages may travel.
+ * that seat's order). The typed leg stays the last fallback. The `native` leg is not in the
+ * default: a level that names it is the sender choosing the cross-session SendMessage and
+ * recording the delivery itself, so `native` is the one leg a declared word may add
+ * (`src/policy/types.ts`). The chain is the receiving seat's own — entity, project, team, seat —
+ * because the order says how that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',

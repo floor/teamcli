@@ -136,20 +136,23 @@ describe('delivery_order', () => {
     expect(deliveryOrder({ entity: [], project: [], team: [], seat: [] })).toEqual(['mcp-inbox', 'drop', 'typed']);
   });
 
-  test('a level may not add a leg: the word is set aside and the order in force stands', () => {
-    // `native` is the sender's own leg, chosen and recorded at the send: no order in force
-    // carries it, so a level that names it adds a leg and its word is set aside.
+  test('a level may add the native leg, and only that one', () => {
+    // `native` is not in the default order, and a level that names it is the sender choosing to
+    // deliver through its own SendMessage and record the delivery: the word is taken as it
+    // stands. Every other leg absent from the order in force is still an addition the word may
+    // not make.
     const resolved = resolveOrderSetting(
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({ entity: ['typed'], team: ['native', 'typed'] }),
     );
-    expect(resolved.value).toEqual(['typed']);
-    expect(resolved.source).toBe('entity');
-    expect(resolved.refused).toEqual([{ level: 'team', value: ['native', 'typed'] as DeliveryLeg[] }]);
+    expect(resolved.value).toEqual(['native', 'typed']);
+    expect(resolved.source).toBe('team');
+    expect(resolved.refused).toEqual([]);
     const unknown = resolveOrderSetting(
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({ entity: ['typed'], team: ['telepathy' as DeliveryLeg, 'typed'] }),
     );
+    expect(unknown.value).toEqual(['typed']);
     expect(unknown.refused).toEqual([{ level: 'team', value: ['telepathy', 'typed'] as DeliveryLeg[] }]);
   });
 
@@ -170,9 +173,9 @@ describe('delivery_order', () => {
     expect(resolved.value).toEqual(['mcp-inbox', 'drop', 'typed']);
     expect(resolved.source).toBeNull();
     expect(resolved.refused).toEqual([]);
-    // The older three-leg word names `native`, which the order in force does not carry: the
-    // word adds a leg and is set aside, so the default order stands.
-    expect(deliveryOrder({ team: ['native', 'mcp-inbox', 'typed'] })).toEqual(['mcp-inbox', 'drop', 'typed']);
+    // The older three-leg word names `native`, the one leg a word may add: it is taken as the
+    // team's order, with the drop leg the word leaves out gone.
+    expect(deliveryOrder({ team: ['native', 'mcp-inbox', 'typed'] })).toEqual(['native', 'mcp-inbox', 'typed']);
   });
 
   test('within a level the last word wins, judged against what the one before it left', () => {

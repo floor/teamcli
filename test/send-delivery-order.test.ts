@@ -1,15 +1,15 @@
 // The delivery-order walk: the receiving seat's own chain — entity, project, team, seat — decides
 // the order a plain send walks (mcp-inbox, drop, typed when nothing declares one); a level may
-// drop legs or reorder the ones it keeps, and may never add one nor empty it — an empty word is
-// set aside, and so is one naming `native`, the sender's own leg. A leg that definitely cannot
-// take the send hands it on and is recorded as a failure on the history line, and each leg says
-// its own reason. The mcp-inbox leg takes the send only while a listener for this seat, session
+// drop legs, reorder the ones it keeps, or add `native`, the sender's own recorded choice, and
+// may never empty it — an empty word is set aside, and so is one adding any other leg. A leg that
+// definitely cannot take the send hands it on and is recorded as a failure on the history line,
+// and each leg says its own reason. The mcp-inbox leg takes the send only while a listener for this seat, session
 // and root is alive, and then reports `delivered (read)` when the receipt lands inside its grace
 // or `sent (unconfirmed)` when it does not; without a listener it is recorded `no live inbox
 // listener`. The drop leg writes the same 0600 file the typed leg would and types nothing: a
 // scene here proves the pane sees no keystroke at all. The typed leg is the last fallback behind
 // it. A waited send is refused unless the native leg leads the order: the frame the reply
-// listener stands beside is that leg, and no declared word can put it there.
+// listener stands beside is that leg, and only a declared word can put it there.
 //
 // Both ways a chain reaches the walk are here: handed in on the host, and — the production
 // reading — left out, so the team file's own `delivery_order` and its seats' are what the walk
@@ -49,6 +49,8 @@ const HEADER = 'from the owner — admitted by: the owner\n\n';
 
 /** What the walk records for the legs it cannot take, exactly as send.ts words it. */
 const MCP_SKIP = 'mcp-inbox: no live inbox listener';
+/** The native skip an owner's send records: no SendMessage of this caller's carries the frame. */
+const NATIVE_UNAVAILABLE = "native: unavailable; the native leg is the sending session's own SendMessage";
 
 type Delivery = Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
 
@@ -350,19 +352,20 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(existsSync(dropped(w.root, 'native'))).toBe(true);
   });
 
-  test('an added leg is set aside and the walk in force stands', async () => {
+  test('a word adding a leg other than native is set aside and the walk in force stands', async () => {
     const w = world();
-    const host = walker(w, { team: ['native', 'mcp-inbox', 'typed'], seat: ['native', 'typed', 'telepathy' as DeliveryLeg] });
+    const host = walker(w, { team: ['native', 'mcp-inbox', 'typed'], seat: ['typed', 'telepathy' as DeliveryLeg] });
     const io = owner(w.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    // Both words name legs the order in force does not have — `native` is the sender's own leg
-    // and never part of it, and `telepathy` is no leg at all: each is no word, and the default
-    // order walks.
+    // The seat's word names `telepathy`, which is no leg at all, so the word is set aside; the
+    // team's word stands — `native` is the one leg a level may add. The walk enters native first
+    // and records the skip this sender gives it, then the inbox, and the typed leg takes it.
     const entry = lastEntry(w.root, w.home);
-    expect(entry.via).toBe('drop');
-    expect(entry.failed).toEqual([MCP_SKIP]);
+    expect(entry.via).toBe('typed');
+    expect(entry.failed).toEqual([NATIVE_UNAVAILABLE, MCP_SKIP]);
+    expect(host.typed[0]?.pane).toBe('pane-lead');
   });
 
   test('an empty order is set aside: the default walk still takes the send', async () => {
@@ -570,7 +573,7 @@ describe('the chain is read from the files when the host hands none in', () => {
     expect('failed' in entry).toBe(false);
   });
 
-  test('a seat word that would add a leg is set aside by the walk, over the project’s word', async () => {
+  test('a seat word that adds native is honoured over the project’s word, and native is walked first', async () => {
     const w = world({ lead: '    delivery_order: [native, typed]\n' });
     const host = walker(w);
     host.projects = projectSources(projectRecord(['typed']));
@@ -578,11 +581,13 @@ describe('the chain is read from the files when the host hands none in', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    // Honouring the seat's word would put the native leg back in and record its skip; it is not
-    // in the order in force, so the word is no word and the project's typed-only order stands.
+    // The project's typed-only word is in force, and the seat's word keeps that leg while adding
+    // `native` — the one leg a word may add. The walk enters native, records the skip this sender
+    // gives it, and the typed leg behind it takes the send.
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
-    expect('failed' in entry).toBe(false);
+    expect(entry.failed).toEqual([NATIVE_UNAVAILABLE]);
+    expect(host.typed[0]?.pane).toBe('pane-lead');
   });
 
   test('the team file’s word and the seat’s resolve to the team and seat levels', () => {
@@ -624,6 +629,40 @@ describe('the chain is read from the files when the host hands none in', () => {
     });
     expect(asked).toEqual([teamIdOf(w.root)]);
     expect(chain).toEqual({ project: ['mcp-inbox', 'typed'] });
+  });
+});
+
+describe('native leaves the default order and returns when a word names it', () => {
+  test('the default order never walks native: no frame, no dial, no native word in the history', async () => {
+    const w = world();
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    // The default order is mcp-inbox, drop, typed: the native leg is not in it at all, so the
+    // walk records no word about it and no frame is tried.
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(entry.failed).toEqual([MCP_SKIP]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+  });
+
+  test('a declared word naming native walks it first, and the walk records what this sender cannot do', async () => {
+    // The word drops the inbox leg and adds the native one: `native` is the one leg a declared
+    // order may add, so the walk enters it before the drop file, which still takes the send.
+    const w = world({ lead: '    delivery_order: [native, drop]\n' });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(entry.failed).toEqual([NATIVE_UNAVAILABLE]);
+    expect(host.typed).toEqual([]);
+    expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
   });
 });
 
@@ -780,7 +819,7 @@ describe('a human seat is never typed into', () => {
     });
   });
 
-  test('a word naming the native leg is set aside before the human walk, and drop takes it', async () => {
+  test('a human’s word naming native and typed records both legs kept out, and drop takes it', async () => {
     const w = world({ lead: `${HUMAN}    delivery_order: [native, typed]\n` });
     const host = walker(w);
     const io = owner(w.root);
@@ -792,10 +831,10 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    // The word adds `native`, which is never part of the order in force, so the whole word is set
-    // aside: the default order stands, and the human walk records keeping its inbox and typed legs
-    // out before the drop file takes the send.
-    expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
+    // The word is within the default — `native` is the one leg it may add — so the seat's order is
+    // `native, typed`; the human walk keeps both legs out, one reason each, and the drop file takes
+    // the send.
+    expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, TYPED_SKIP]);
   });
 
   test('a human seat that declares no order walks the drop file alone, with no failure', async () => {
@@ -847,9 +886,10 @@ describe('a human seat is never typed into', () => {
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
     expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
-    // The word names `native`, which no order in force holds, so the whole word is set aside and
-    // the inbox leg of the default order is recorded kept out in its place.
-    expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
+    // The word is within the default — `native` is the one leg it may add, and `typed` and `drop`
+    // are legs of the order in force — so the seat's order stands as written; the human walk keeps
+    // native and typed out, one reason each, and the drop leg takes the send.
+    expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, TYPED_SKIP]);
   });
 
   test('the dry run names only the drop leg, whatever the order holds', async () => {
@@ -916,16 +956,17 @@ describe('the dry run names only the legs this build can walk', () => {
     expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox; nothing was written\n');
   });
 
-  test('a word naming only the native leg is set aside, and the default order is named', async () => {
-    // `native` is never part of the order in force, so the word adds a leg and is no word at all;
-    // the dry run names the default walk.
+  test('a word naming only the native leg is honoured, and the dry run finds no channel this sender walks', async () => {
+    // `native` is the one leg a word may add, so the order in force is that leg alone; the sender
+    // is the owner, who makes no frame and no handoff, so nothing of the order is a channel this
+    // run could take.
     const w = world();
     const host = walker(w, { seat: ['native'] });
     const io = owner(w.root);
 
     expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane, then a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
   });
 
   test('a seat that watches nothing is named without the drop leg', async () => {
@@ -963,9 +1004,9 @@ describe('a waited send needs the native leg to lead the order', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    // The word adds `native`, which is no leg of the order in force, so the whole word is set
-    // aside — keeping its `typed` leg with it — and the refusal names the default order.
-    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg first, and its delivery order is mcp-inbox, drop, typed; nothing was sent\n');
+    // The entity's word adds `native` — the one leg a word may add — and names `typed` first, so
+    // the order in force is typed, native; the refusal names it.
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg first, and its delivery order is typed, native; nothing was sent\n');
   });
 
   test('a dry run of a waited send to a native-CLI seat reports that seat’s refusal, exit 1', async () => {
@@ -984,7 +1025,7 @@ describe('a waited send needs the native leg to lead the order', () => {
     expect(existsSync(dropDir(w.root, 'native'))).toBe(false);
   });
 
-  test('a word naming only the native leg is set aside, and the refusal names the order in force', async () => {
+  test('a word naming only the native leg leads the wait to that leg, which this build carries no frame for', async () => {
     const w = world();
     const host = walker(w, { seat: ['native'] });
     const io = owner(w.root);
@@ -992,7 +1033,9 @@ describe('a waited send needs the native leg to lead the order', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg first, and its delivery order is mcp-inbox, drop, typed; nothing was sent\n');
+    // The word is honoured and the order leads with native, so the wait is not refused over its
+    // order; the refusal is the build's own, which writes no frame yet.
+    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
     expect(host.dials()).toBe(0);
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });

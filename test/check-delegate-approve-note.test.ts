@@ -156,7 +156,7 @@ describe('a delegate entry naming approve', () => {
   test("a set-aside delivery_order in .agents/team.yaml is reported as the lead's difference (D4) and validates under --json", () => {
     const withSetAside = [
       ...HEAD.trimEnd().split('\n'),
-      '    delivery_order: [native, typed]',
+      '    delivery_order: [mcp-inbox, typed]',
       'delivery_order: [typed]',
       '',
     ].join('\n');
@@ -169,7 +169,7 @@ describe('a delegate entry naming approve', () => {
       now: () => NOW,
     });
     expect(code).toBe(1);
-    expect(io.out).toContain('difference: lead: delivery_order [native, typed] in .agents/team.yaml is set aside; [typed] stands\n');
+    expect(io.out).toContain('difference: lead: delivery_order [mcp-inbox, typed] in .agents/team.yaml is set aside; [typed] stands\n');
     expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in .agents/team.yaml\n');
     expect(io.out).toContain("  who: the team's lead\n");
     expect(io.out).toContain('1 difference\n');
@@ -219,6 +219,27 @@ describe('a delegate entry naming approve', () => {
     expect(doc.differences).toHaveLength(1);
     expect(doc.differences[0]?.who).toBe("the team's lead");
     expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
+  });
+
+  test('a seat word that adds only the native leg is no difference: the walk may declare it', () => {
+    // `native` is the one leg a delivery order may add — the sender choosing its own SendMessage
+    // and recording the delivery — so a seat word naming it is within the order in force.
+    const addingNative = [
+      ...HEAD.trimEnd().split('\n'),
+      '    delivery_order: [native, typed]',
+      'delivery_order: [typed]',
+      '',
+    ].join('\n');
+    const root = place(addingNative);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({}, io, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code).toBe(0);
+    expect(io.out).toContain('no differences\n');
   });
 
   test('--json invocation refusals (--json --nope, --nope --json, --json extra, --json=1) emit team.error on stdout', async () => {

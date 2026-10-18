@@ -1,8 +1,9 @@
-// A plain send by the owner, or by any sender that cannot make the native leg itself, is the
-// drop file for every seat, Claude Code included. A sender whose own file declares Claude Code
-// gets the handoff instead: one pending record, the exact SendMessage target, the body, and the
-// confirm line — and `team send --confirm <id>` writes the one history line. `--wait` to a
-// Claude Code seat is refused while the socket is not the channel. No live pane.
+// Every world here declares the native leg first — `delivery_order: [native, mcp-inbox, typed]`,
+// since a word naming native is what puts it in the walk. A sender whose own file declares Claude
+// Code gets the handoff: one pending record, the exact SendMessage target, the body, and the
+// confirm line — and `team send --confirm <id>` writes the one history line. A sender that cannot
+// make the leg walks on to the inbox and the typed trigger. `--wait` to a Claude Code seat is
+// refused while the socket is not the channel. No live pane.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,6 +32,12 @@ afterEach(() => {
   cleanup();
   cleanup = () => {};
 });
+
+/** Every world in this suite declares the native leg first: the handoff is the leg under test,
+ *  and a declared order is what puts it in the walk. */
+function nativeWorld(): World {
+  return world(['native', 'mcp-inbox', 'typed']);
+}
 
 /** The id the fake host mints, so the printed confirm line is exact. */
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -64,7 +71,7 @@ function pending(made: World): string {
 }
 
 test('a plain send to a claude-code seat writes the drop and types one trigger', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   const pane = scripted(['idle', 'working']);
   const host = fake(made, { native: pane });
@@ -83,7 +90,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
 });
 
 test('--wait to a claude-code seat is refused: no frame, no drop, nothing typed', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   writeFileSync(join(made.sockets, '222.sock'), '');
   const pane = scripted(['working']);
@@ -100,7 +107,7 @@ test('--wait to a claude-code seat is refused: no frame, no drop, nothing typed'
 });
 
 test('a claude-code seat gets the native handoff: a pending record, the exact target, the body and the confirm line', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -165,7 +172,7 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
 });
 
 test('the confirm with the nonce in the fake transcript records delivered and clears the record; a second confirm is refused', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -219,7 +226,7 @@ test('the confirm with the nonce in the fake transcript records delivered and cl
 });
 
 test('confirm without the nonce in the recipient transcript records sent (unconfirmed), never delivered', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -265,7 +272,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
 });
 
 test('a nonce from another handoff in the recipient transcript does not count as evidence for this confirm', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -295,7 +302,7 @@ test('a nonce from another handoff in the recipient transcript does not count as
 });
 
 test('only the sender that printed the handoff confirms it, and a dry run writes nothing', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -317,7 +324,7 @@ test('only the sender that printed the handoff confirms it, and a dry run writes
 });
 
 test('a handoff with no socket falls back to the typed drop and records the skip', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   const pane = scripted(['idle', 'working']);
@@ -352,7 +359,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
 });
 
 test('a registry-resolved spec keeps to_id, spec and resolved through the handoff and confirm', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -408,7 +415,7 @@ test('a registry-resolved spec keeps to_id, spec and resolved through the handof
 });
 
 test('a registered sender records from_id and confirm refuses a replaced agent or wrong registry pane', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -461,7 +468,7 @@ test('a registered sender records from_id and confirm refuses a replaced agent o
 });
 
 test('the 24h sweep keeps records younger than or at 24h, deletes records older than 24h, and recovers dead-PID .taken files', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -555,7 +562,7 @@ function watchScene(made: World, now: Date, pane = scripted(['idle', 'working'])
 }
 
 test('expiry after 10m falls through to drop for a human-pane seat ([native, drop]) with no pane write', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -604,7 +611,7 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
 });
 
 test('expiry writes the handoff into a live MCP inbox and leaves the retry a marker, zero pane writes', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -669,7 +676,7 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
 });
 
 test('confirm after expiry is refused and never causes a second delivery', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -703,7 +710,7 @@ test('confirm after expiry is refused and never causes a second delivery', async
 });
 
 test('confirm inside the 10m window leaves no fallback triggered', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -755,7 +762,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
 });
 
 test('expiry typed leg refuses a pane back at its shell with no drop file and no pane write', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -796,7 +803,7 @@ test('expiry typed leg refuses a pane back at its shell with no drop file and no
 });
 
 test('cross-team expiry binds typing and read-back to record.session and verifies pane process identity', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -863,7 +870,7 @@ test('cross-team expiry binds typing and read-back to record.session and verifie
 });
 
 test('expiry typed leg refuses to type when the recipient pane process identity was replaced', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
@@ -917,7 +924,7 @@ test('expiry typed leg refuses to type when the recipient pane process identity 
 });
 
 test('a [native, drop] fallback and a human-marked seat never type into the pane across send and watch expiry', async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   const pane = scripted(['idle', 'working']);
@@ -970,7 +977,7 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
 });
 
 test("a human seat's expired-native fallback goes to drop, never a live inbox, with zero pane writes", async () => {
-  const made = world();
+  const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
