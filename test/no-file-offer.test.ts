@@ -61,6 +61,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
  *  the set of nodes that printed it is pinned. */
 const REACHED = [
   'broker',
+  'bus',
   'delegate',
   'drops',
   'feed',

@@ -406,11 +406,8 @@ describe('team send history log & team feed', () => {
       ),
     ).toBe(1);
 
-    // 4. a --wait refusal writes nothing either. The waited outcomes are out of this build's
-    // reach while the socket is off, so the answered and timeout lines are seeded straight into
-    // the history — as the native leg's will be — and the feed renders the history, not the
-    // runs that made it.
-    expect(await runSend(['lead', 'msg-refused-wait', '--wait'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(1);
+    // 4. answered and timeout: a waited send that gets no reply within its window records timeout
+    // with the thread open; answered is seeded alongside it so the feed renders both waited outcomes.
     appendHistory('acme', root, home, {
       ts: NOW.toISOString(),
       from: 'owner',
@@ -421,16 +418,13 @@ describe('team send history log & team feed', () => {
       ms: 0,
       via: 'socket',
     });
-    appendHistory('acme', root, home, {
-      ts: NOW.toISOString(),
-      from: 'owner',
-      to: 'lead',
-      body: `${OWNER_HEADER}msg-timeout`,
-      id: 'seed-timeout',
-      outcome: 'timeout',
-      ms: 0,
-      via: 'socket',
-    });
+    expect(
+      await runSend(
+        ['lead', 'msg-timeout', '--wait', '--timeout', '1'],
+        testIo(root, { kind: 'owner' }),
+        hostFor(home, sockets, { waitMs: 0 }),
+      ),
+    ).toBe(1);
 
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);
