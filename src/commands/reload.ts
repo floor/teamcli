@@ -282,6 +282,17 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // exit: reload.absent
     return 1;
   }
+  // A pane the file marks as a human's is never closed and never launched over: this command is
+  // a close followed by a launch, so it refuses before the record is read or anything is typed.
+  if (seat.human) {
+    refuse(io, json, 'reload', {
+      id: 'reload.human',
+      message: `${seat.name} is a human's pane: nothing is typed into it or launched over it; left as it is`,
+      repair: null,
+    });
+    // exit: reload.human
+    return 1;
+  }
   if (placed.kind === 'seat' && seat.name === placed.name) {
     refuse(io, json, 'reload', {
       id: 'reload.self',
@@ -456,6 +467,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     const planned = {
       name: seat.name,
       cli: seat.cli,
+      // The mark rides the plan too: should a later path ever reach this object, `upPlan` skips
+      // the seat instead of closing or typing into a human's pane.
+      ...(seat.human ? { human: true as const } : {}),
       launch: seat.launch,
       cwd: seat.cwd,
       label: workspaceLabel(seat),

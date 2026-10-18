@@ -338,6 +338,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.grant-no-pane` | `reload` | 1 | no pane is recorded for the granted seat | `team reload worker` |
 | `reload.grant-omitted` | `reload` | 1 | the file grants nothing | `team reload worker` |
 | `reload.grant-scope` | `reload` | 1 | the grant does not list reload | `team reload worker` |
+| `reload.human` | `reload` | 1 | the seat is a human's pane; nothing is closed, typed into or launched over it | `team reload worker` |
 | `reload.launch` | `reload` | 1 | the close happened and the new launch did not reach ready | `team reload worker` |
 | `reload.not-idle` | `reload` | 1 | the seat is not at an idle prompt; nothing closed | `team reload worker` |
 | `reload.not-running` | `reload` | 1 | the seat has no ready pane to close | `team reload worker` |
