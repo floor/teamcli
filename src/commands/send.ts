@@ -764,10 +764,15 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, callerNative: bo
     return typed;
   };
   const walkable = order.filter((leg) => leg === 'drop' || leg === 'mcp-inbox' || leg === 'typed' || (leg === 'native' && nativeWalkable));
-  const [first, ...rest] = walkable;
+  const [first] = walkable;
   if (first === undefined) return 'no leg of its delivery order this build can walk';
-  if (rest.length === 0) return first === 'drop' ? 'a 0600 drop file with nothing typed into the pane' : words(first);
-  return `${first === 'drop' ? 'a 0600 drop file with nothing typed into the pane' : words(first)}, falling back to ${rest.map(words).join(', then ')}`;
+  // The drop leg is a file and no keystroke: it always takes the send, so nothing stands behind it.
+  if (first === 'drop') return 'a 0600 drop file with nothing typed into the pane';
+  // The typed leg is terminal: a leg after it is never reached, so it is not named.
+  const terminal = walkable.indexOf('typed');
+  const reached = terminal < 0 ? walkable : walkable.slice(0, terminal + 1);
+  if (reached.length === 1) return words(first);
+  return `${words(first)}, falling back to ${reached.slice(1).map(words).join(', then ')}`;
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
