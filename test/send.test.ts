@@ -65,6 +65,10 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# The scenes below exercise the typed leg: the inbox is tried first and skipped for want of a
+# listener, then the trigger line is typed. The team's word keeps the drop leg (the default's
+# second step) out, which is what these fixtures have always walked.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -561,7 +565,7 @@ const WRAPPED_REPLY = JSON.stringify({
 });
 
 describe('team send: --wait', () => {
-  test('--wait to a Claude Code seat is refused: the native leg carries it, and nothing dials', async () => {
+  test('--wait to a Claude Code seat is refused: its order never leads with the native leg', async () => {
     const { root, dir, sockets } = world();
     // A live listener at the pane's pid, and a sender deliver that would reach it: the refusal
     // must leave both untouched.
@@ -573,7 +577,7 @@ describe('team send: --wait', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg first, and its delivery order is mcp-inbox, typed; nothing was sent\n');
     expect(received).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
@@ -597,7 +601,7 @@ describe('team send: --wait', () => {
     expect(code).toBe(1);
     expect(io.err).toBe('');
     const doc = assertJsonErrorShape(io.out, { id: 'send.refused', repair: null });
-    expect(doc.error.message).toBe('refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent');
+    expect(doc.error.message).toBe('refused: lead: --wait needs the native leg first, and its delivery order is mcp-inbox, typed; nothing was sent');
     expect(host.frames).toEqual([]);
   });
 });
@@ -1040,7 +1044,7 @@ describe('team send: native drop', () => {
     expect(claude.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written\n');
     const waited = owner(root);
     expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
-    expect(waited.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(waited.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg first, and its delivery order is mcp-inbox, typed; nothing was sent\n');
     // No dry run above wrote a line: the log records writes, and a dry run writes nothing.
     expect(existsSync(join(dir, LOG_FILE))).toBe(false);
   });

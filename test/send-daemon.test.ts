@@ -88,6 +88,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# These scenes walk the typed leg: the inbox is tried and skipped for want of a listener, then
+# the trigger line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
