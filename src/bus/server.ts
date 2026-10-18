@@ -831,8 +831,11 @@ function dispatchBusRequest(
   );
 
   if (matching.length > bufferLimit) {
+    // The window names the records it covers: the oldest this subscriber still needs, and the
+    // newest one read — not merely the newest one it matched. The reset cursor has to step past
+    // the records of other kinds at the end of the window too.
     const oldest = matching[0]!.payload.seq;
-    const newest = matching[matching.length - 1]!.payload.seq;
+    const newest = fromCursor.events[fromCursor.events.length - 1]!.payload.seq;
     answerOnce(socket, {
       ok: true,
       kind: 'gap',
