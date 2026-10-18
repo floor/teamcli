@@ -315,6 +315,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.git/info/exclude` — never `.gitignore` — names the drop folder beside `.agents/messages/`, so
   the records a send leaves in a seat's folder never show up as untracked changes.
 
+- **`team init` keeps the bus's start files out of git.** The exclude list now also names
+  `.agents/bus.sock`, `.agents/bus.sock.lock`, the lock's takeover claim and the private temp an
+  atomic create keeps, beside the broker's own entries, so a running bus no longer leaves an
+  untracked socket and lock in the checkout. The bus's event log and its sealed segments live in
+  the project store, not in the checkout, so nothing else under `.agents` is missing.
+
 ### Known limits
 
 - The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
