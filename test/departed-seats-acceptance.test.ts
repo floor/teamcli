@@ -42,7 +42,7 @@ import type { NativePane } from '../src/send/native.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { CLAUDE_IDLE, liveAgentsOf, testIo, type TestIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, liveAgentsOf, testIo, type TestIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T13:00:00Z');
 const SESSION = 'alpha';
@@ -135,6 +135,10 @@ function seed(w: World, lead: 'ready' | 'absent'): void {
     const charlie = (state.sessions.charlie ??= emptySession());
     charlie.seats['former-b'] = { stage: 'ready', pane: 'w9:p2', workspace: 'w9' };
   });
+  // The launch delivered the general brief before it typed: the declared lead's record and entry.
+  if (lead === 'ready') {
+    deliverBriefs({ dir: w.dir, root: w.root, session: SESSION, seats: ['lead'], home: w.home, at: NOW.toISOString() });
+  }
 }
 
 /** Herdr's reading of the file's session: the declared lead, idle on its pane, and nothing on
@@ -220,6 +224,8 @@ describe('team check names the records the file no longer declares', () => {
       alpha.watch = { pid: 1, heartbeat: NOW.toISOString() };
       alpha.seats.lead = { stage: 'ready', pane: PANE, workspace: 'w1' };
     });
+    // The launch delivered the general brief before it typed: the seat's record and its state entry.
+    deliverBriefs({ dir: w.dir, root: w.root, session: SESSION, seats: ['lead'], home: w.home, at: NOW.toISOString() });
 
     const { code, out } = runCheck(w);
 

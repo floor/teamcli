@@ -22,7 +22,7 @@ import { getTeam, setRoster, teamIdOf, teamsFile, upsertTeam, type RosterEntry }
 import { emptySession, LOG_FILE, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 const PANE = 'w1:p1';
@@ -85,6 +85,8 @@ function ready(w: World, stage: 'launched' | 'named' | 'ready' = 'ready', pane =
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
     session.seats.lead = { stage, pane, workspace: 'w1' };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir: w.dir, root: w.root, session: 'acme', seats: ['lead'], home: w.home, at: NOW.toISOString() });
 }
 
 /** The registry's record of this team, with the roster the argument names (none: empty). */

@@ -36,7 +36,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
@@ -149,6 +149,15 @@ function makeFixture(yamlText: string = TEAM_YAML): {
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
     session.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
     session.seats.worker = { stage: 'ready', pane: 'w2:p1', workspace: 'w2' };
+  });
+  // The launch delivered the general brief before it typed: each seat's record and state entry.
+  deliverBriefs({
+    dir: join(root, '.agents'),
+    root,
+    session: validated.team.session,
+    seats: validated.team.seats.map((seat) => seat.name),
+    home,
+    at: NOW.toISOString(),
   });
 
   return {
