@@ -308,3 +308,56 @@ test('a registry-resolved spec keeps to_id, spec and resolved through the handof
     },
   ]);
 });
+
+test('a registered sender records from_id and confirm refuses a replaced agent or wrong registry pane', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const teamId = teamIdOf(made.root);
+  const helperAgent = registerAgent(made.home, {
+    name: 'helper',
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamId, seat: 'helper', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+
+  const host = fake(made, { native: scripted(['idle', 'working']), newId: () => ID });
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+
+  const record = JSON.parse(readFileSync(pending(made), 'utf8')) as Record<string, unknown>;
+  expect(record.from_id).toBe(helperAgent.id);
+
+  // A caller on another pane than the registry record holds is refused.
+  const wrongPane = testIo(made.root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+  expect(await runSend(['--confirm', ID], wrongPane, host)).toBe(1);
+  expect(wrongPane.err).toContain('a pane renamed to a seat\'s name is not that seat');
+  expect(existsSync(pending(made))).toBe(true);
+
+  // If a newer agent record replaces helper on the same seat name, the replacement cannot confirm
+  // the earlier agent's handoff.
+  const replacement = registerAgent(made.home, {
+    name: 'helper',
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamId, seat: 'helper', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  const replacedIo = helperCaller(made.root);
+  expect(await runSend(['--confirm', ID], replacedIo, host)).toBe(1);
+  expect(replacedIo.err).toContain(`it was printed for agent ${helperAgent.id} (seat helper), and this call has agent ${replacement.id}`);
+  expect(existsSync(pending(made))).toBe(true);
+});
