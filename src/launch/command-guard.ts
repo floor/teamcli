@@ -1,12 +1,17 @@
 // The command guard a claude-code seat carries: a PreToolUse hook its own per-launch settings
 // file installs (`cli-hook.ts`), run by this install's interpreter before every Bash tool call.
 //
+// It is a best-effort net that keeps an unattended seat out of the owner's user-wide permission
+// prompt for the common forms of a dangerous command. It is not a sandbox: a shell can always
+// reach a command another way. Deliberate evasions — `exec -a`, `eval`, a command hidden inside a
+// `sh -c` string, functions, aliases — are out of scope; the prompt escalation, which climbs an
+// unanswered prompt to the lead and the owner, is the backstop.
+//
 // The owner's guard asks — a Yes/No permission prompt — and a seat at an unattended pane cannot
 // answer it, so the seat freezes. A deny wins over an ask (`test/command-guard-live`'s scene was
 // measured on Claude Code 2.1.302), and this hook never asks: it allows a command or denies it
-// with one line of guidance back to the model. The set is deliberately small and conservative;
-// a shell can always find another way to run a command, and the guard is a stop against the
-// freeze, not a sandbox.
+// with one line of guidance back to the model. `command -v <name>` asks where a name is and runs
+// nothing, so it passes; `command <name>` runs it and is judged.
 //
 // The hook names the command class, never the command: a command line may hold a secret, and a
 // refusal is raised as `security.refused` with the class as its rule and the seat as its object.
@@ -181,9 +186,12 @@ function commandOf(words: readonly string[]): string[] {
           continue;
         }
         if (arg === '-S' || arg === '--split-string') {
-          return splitString(words.slice(at + 1));
+          // The string is a command line of its own: parse it the same way, prefixes included.
+          return commandOf(splitString(words.slice(at + 1)));
         }
-        if (arg.startsWith('--split-string=')) return splitString([arg.slice('--split-string='.length), ...words.slice(at + 1)]);
+        if (arg.startsWith('--split-string=')) {
+          return commandOf(splitString([arg.slice('--split-string='.length), ...words.slice(at + 1)]));
+        }
         if (arg.startsWith('-')) {
           at += 1;
           continue;
@@ -192,7 +200,19 @@ function commandOf(words: readonly string[]): string[] {
       }
       continue;
     }
-    if (name === 'command' || name === 'exec' || name === 'nohup') {
+    if (name === 'command') {
+      // `command -v <name>` asks where a name is and runs nothing; `command [-p] <name>` runs it.
+      let scan = at + 1;
+      let lookup = false;
+      while (scan < words.length && words[scan]!.startsWith('-')) {
+        if (/^-[pVv]+$/.test(words[scan]!) && /[Vv]/.test(words[scan]!)) lookup = true;
+        scan += 1;
+      }
+      if (lookup) return [];
+      at = scan;
+      continue;
+    }
+    if (name === 'exec' || name === 'nohup') {
       at += 1;
       while (at < words.length && (words[at]!.startsWith('-') || ASSIGNMENT.test(words[at]!))) at += 1;
       continue;
@@ -442,9 +462,19 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
     if (at !== -1) return matchSegment(args.slice(at));
   }
   if (word === 'find') {
-    // `find … -exec chmod …` / `-execdir`: the word after the action is the command it runs.
-    const action = args.findIndex((arg) => arg === '-exec' || arg === '-execdir');
-    if (action !== -1 && action + 1 < args.length) return matchSegment(args.slice(action + 1));
+    // Every `-exec`, `-execdir`, `-ok` and `-okdir` runs the words that follow it, up to the
+    // action's `;` or `+`.
+    const actions = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+    let scan = 0;
+    while (scan < args.length) {
+      const action = args.findIndex((arg, index) => index >= scan && actions.has(arg));
+      if (action === -1) break;
+      const command = args.slice(action + 1);
+      const end = command.findIndex((arg) => arg === ';' || arg === '+');
+      const match = matchSegment(end === -1 ? command : command.slice(0, end));
+      if (match !== null) return match;
+      scan = end === -1 ? args.length : action + end + 2;
+    }
   }
   return null;
 }
