@@ -205,11 +205,19 @@ describe('team worktree new', () => {
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 
-  test('refuses a file that was never approved, with the same line as before', async () => {
+  test('a team with no stored approval runs: the live file is the record', async () => {
     rmSync(home, { recursive: true, force: true });
     const missing = await run(['new', 'select-width', '--kind', 'fix']);
-    expect(missing.code).toBe(1);
-    expect(missing.err).toBe('team worktree: the file was never approved on this machine\n');
+    expect(missing.code).toBe(0);
+    expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(true);
+  });
+
+  test('a stored approval that cannot be verified still refuses, with its own line', async () => {
+    approve(teamText());
+    sources = { ...sources, standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }) };
+    const refused = await run(['new', 'select-width', '--kind', 'fix']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toBe('team worktree: the record cannot be verified\n');
     expect(existsSync(join(base, 'worktrees', 'acme', 'select-width'))).toBe(false);
   });
 

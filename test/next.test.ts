@@ -14,7 +14,7 @@ import { main } from '../src/cli.ts';
 import { runBroker } from '../src/commands/broker.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runNext, USAGE, type NextSources } from '../src/commands/next.ts';
-import { NOT_A_REPO } from '../src/file/load.ts';
+import { NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { NEXT_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import type { Fetch } from '../src/release/http.ts';
@@ -470,7 +470,7 @@ describe('team next', () => {
     });
     const io = testIo(base, lead);
     expect(await runNext([], io, { home, now: () => now })).toBe(2);
-    expect(io.err).toContain('not inside a git repository');
+    expect(io.err).toBe(`team next: ${NOT_A_REPO_NO_FILE}\n`);
   });
 
   test('a release of nothing, and of another seat, leaves that seat\'s file', async () => {
@@ -713,7 +713,8 @@ describe('team next --json', () => {
     const folder = await run(['--json'], lead, undefined, base);
     expect(folder.code).toBe(2);
     expect(folder.err).toBe('');
-    assertJsonErrorShape(folder.out, { id: 'next.not-a-repo', messageContains: NOT_A_REPO });
+    assertJsonErrorShape(folder.out, { id: 'next.not-a-repo', messageContains: NOT_A_REPO_NO_FILE });
+    expect(folder.out).not.toContain('--file');
   });
 });
 

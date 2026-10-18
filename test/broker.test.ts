@@ -2086,7 +2086,7 @@ describe('the credential never crosses to the seat', () => {
     expect(bare.err).toBe('team broker: the team file declares no task source\n');
     const stray = testIo(base, { kind: 'owner' });
     expect(await runBroker([], stray, { home })).toBe(2);
-    expect(stray.err).toContain('not inside a git repository');
+    expect(stray.err).toBe('team broker: not inside a git repository: run team from a project\n');
     const extra = testIo(root, { kind: 'owner' });
     expect(await runBroker(['extra'], extra, { home })).toBe(2);
     expect(extra.err.startsWith('team broker: unexpected "extra"\nUsage: team broker\n')).toBe(true);

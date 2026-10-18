@@ -111,6 +111,23 @@ describe('team proc add', () => {
     expect(procsOf(where)).toEqual({ 'flaky-job': { by: 'owner', at: new Date(AT).toISOString() } });
   });
 
+  test('outside a repository, the no-repository refusal offers no --file: proc takes none', async () => {
+    const where = place();
+    const bare = join(where.root, 'outside');
+    mkdirSync(bare);
+    const io = testIo(bare, { kind: 'owner' });
+    expect(await runProc(['add', 'build'], io, sources(where))).toBe(2);
+    expect(io.err).toBe('team proc: not inside a git repository: run team from a project\n');
+
+    const json = testIo(bare, { kind: 'owner' });
+    expect(await runProc(['add', 'build', '--json'], json, sources(where))).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'proc.file',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
+  });
+
   test('a pid that is not running is refused and nothing is written', async () => {
     const where = place();
     const io = seat(where, 'claude-keeper');

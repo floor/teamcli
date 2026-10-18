@@ -613,6 +613,19 @@ describe('route: the address the native channel answers', () => {
     expect(unrecordedIo.err).toBe('');
     assertJsonErrorShape(unrecordedIo.out, { id: 'route.unrecorded', messageContains: 'the route record could not be written' });
   });
+
+  test('outside any project the refusal names only the project: route takes no --file', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
+    const io = testIo(w.base, OWNER);
+    expect(await runRoute(['lead'], io, host(w))).toBe(2);
+    expect(io.err).toBe('team route: not inside a git repository: run team from a project\n');
+
+    const json = testIo(w.base, OWNER);
+    expect(await runRoute(['lead', '--json'], json, host(w))).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, { id: 'route.configuration', messageContains: 'not inside a git repository: run team from a project' });
+    expect(json.out).not.toContain('--file');
+  });
 });
 
 describe('send --record: the delivery the sender made itself', () => {

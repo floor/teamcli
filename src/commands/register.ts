@@ -22,7 +22,7 @@ import { callerLabel, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchS
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
@@ -371,8 +371,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
 
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {
+    // `team register` takes no `--file`, so the no-repository refusal must not offer one.
     const said = loaded.errors
-      .map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`)
+      .map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${withoutFileOffer(plainText(problem.message))}`)
       .join('\n');
     return configuration(io, json, said);
   }

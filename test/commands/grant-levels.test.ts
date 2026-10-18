@@ -364,7 +364,14 @@ describe('team revoke <name> appends the revocation record', () => {
     const ghost = owner(place);
     expect(await runRevoke(['ghost'], ghost, { home: place.home })).toBe(2);
     expect(ghost.err).toContain('Usage: team revoke');
-    expect(ghost.err).toContain('name grant, or delegate and its session/pane');
+    expect(ghost.err).toContain('no grant or delegate is named "ghost"');
+    expect(ghost.err).toContain(`\`ls ${grantsDir(place.home)}\` shows the standing grants`);
+
+    // A malformed file form keeps the general sentence: it names a form, not a word the
+    // records could hold.
+    const malformed = owner(place);
+    expect(await runRevoke(['grant', 'extra'], malformed, { home: place.home })).toBe(2);
+    expect(malformed.err).toContain('name grant, or delegate and its session/pane');
 
     // `team revoke grant` on a file with no grant section is the file form's no-op, not the
     // standing grant's revocation: the record still admits.

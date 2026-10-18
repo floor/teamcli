@@ -1,8 +1,8 @@
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describeCaller, isOwner, walkCaller } from './caller.ts';
-import { findRoot, loadTeamFile } from './file/load.ts';
+import { findRoot, loadTeamFile, withoutFileOffer } from './file/load.ts';
 import type { TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
 import { writeTeamFile } from './file/write.ts';
@@ -55,7 +55,7 @@ export async function runAuthorityEdit(
     requireRegularFile(join(root, '.agents', 'team.yaml'));
     loaded = loadTeamFile(io.cwd, { home });
   } catch (error) {
-    const msg = message(error);
+    const msg = withoutFileOffer(message(error));
     if (json) {
       writeJsonError(rawIo, `${command}.invalid`, plainText(msg), null);
     } else {
@@ -64,7 +64,7 @@ export async function runAuthorityEdit(
     return 'invalid';
   }
   if (!loaded.ok) {
-    const msg = loaded.errors[0]?.message ?? 'the team file cannot be read';
+    const msg = withoutFileOffer(loaded.errors[0]?.message ?? 'the team file cannot be read');
     if (json) {
       writeJsonError(rawIo, `${command}.invalid`, plainText(msg), null);
     } else {
@@ -183,12 +183,35 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Refuses a linked team file; a missing one is left to the loader's own no-team-file refusal.
+ * The sweep caught a raw `ENOENT ... lstat '<cwd>/.agents'` here, printed as `*.invalid`: this
+ * check runs before the loader, which is the one that knows how to say there is no file.
+ */
 function requireRegularFile(path: string): void {
-  const dir = lstatSync(dirname(path));
-  const file = lstatSync(path);
+  let dir: Stats;
+  try {
+    dir = lstatSync(dirname(path));
+  } catch (error) {
+    if (missing(error)) return;
+    throw error;
+  }
+  let file: Stats;
+  try {
+    file = lstatSync(path);
+  } catch (error) {
+    if (missing(error)) return;
+    throw error;
+  }
   if (!dir.isDirectory() || dir.isSymbolicLink() || !file.isFile() || file.isSymbolicLink()) {
     throw new Error('the team file and its .agents directory must not be symbolic links');
   }
+}
+
+/** Whether a failed lstat means nothing is there (`ENOENT`, or `ENOTDIR` when `.agents` is a file). */
+function missing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 /** The existing atomic writer must not follow an old temporary entry, even a dangling link. */

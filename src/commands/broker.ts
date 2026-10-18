@@ -11,7 +11,7 @@
 // not an authenticity one, and the page says so. Nothing starts or restarts the broker.
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
 import { keychainReader, realSecurityRun, type KeyReader } from '../release/keychain.ts';
@@ -78,7 +78,8 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   }
   const root = findRoot(io.cwd);
   if (!root) {
-    io.stderr(`team broker: ${NOT_A_REPO}\n`);
+    // `team broker` takes no `--file`, so the no-repository refusal must not offer one.
+    io.stderr(`team broker: ${NOT_A_REPO_NO_FILE}\n`);
     // exit: broker.not-a-repo
     return 2;
   }

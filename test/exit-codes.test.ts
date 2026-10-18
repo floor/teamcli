@@ -2131,7 +2131,10 @@ scene('worktree.default-session', async (place) => {
 });
 scene('worktree.never-approved', async (place) => {
   write(place, worktreeText());
-  return show(await worktree(place, ['new', 'task']), 'never approved');
+  return show(await worktree(place, ['new', 'task'], owner, {
+    ...worktreeSources(place),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
+  }), 'cannot be verified');
 });
 scene('worktree.task', async (place) => {
   approve(place, worktreeText());
@@ -2696,7 +2699,7 @@ scene('messages.signature', async (place) => {
   return show(await messaged(place), 'not the message key\'s');
 });
 scene('messages.invocation', async (place) => show(await messaged(place, ['extra']), 'unexpected'));
-scene('messages.not-a-repo', async (place) => show(await messaged(place), 'not inside a git repository'), false);
+scene('messages.not-a-repo', async (place) => show(await messaged(place), 'run team from a project\n'), false);
 
 const TASKS = `${TEAM}tasks:
   source: file
@@ -2736,7 +2739,7 @@ scene('issues.shape', async (place) => {
   return show(await issued(place), 'title is required');
 });
 scene('issues.invocation', async (place) => show(await issued(place, ['extra']), 'unexpected'));
-scene('issues.not-a-repo', async (place) => show(await issued(place), 'not inside a git repository'), false);
+scene('issues.not-a-repo', async (place) => show(await issued(place), 'run team from a project\n'), false);
 
 // A machine lock is a directory under the scene's own home. The holder and the clock are
 // injected, so these scenes never read a team file or the wall clock. The project refusals are
@@ -2894,7 +2897,7 @@ scene('tempo.not-owner', async (place) => {
 scene('tempo.detached', async (place) => show(await tempo(place, ['urgent'], detachedCaller), 'only the owner runs this, from a terminal outside herdr'));
 scene('tempo.invocation', async (place) => show(await tempo(place, []), 'a word is required'));
 scene('tempo.word', async (place) => show(await tempo(place, ['faster']), 'must be relaxed, normal or urgent'));
-scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'not inside a git repository'), false);
+scene('tempo.not-a-repo', async (place) => show(await tempo(place, ['urgent']), 'run team from a project\n'), false);
 scene('tempo.file', async (place) => show(await tempo(place, ['urgent']), 'no team file'));
 
 async function held(place: Place, argv: string[], caller: Caller = owner, now: Date = NOW): Promise<Ran> {
@@ -2937,7 +2940,14 @@ scene('hold.io', async (place) => {
   writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
   return show(await held(place, ['freeze deploys']), 'is not valid JSON');
 });
-scene('hold.file', async (place) => show(await held(place, ['freeze deploys']), 'no team file'));
+scene('hold.file', async (place) => {
+  const inRepo = show(await held(place, ['freeze deploys']), 'no team file');
+  // Outside any checkout the same failure names only the project: hold takes no `--file`.
+  const outside = await held({ ...place, root: place.base }, ['freeze deploys']);
+  show(outside, 'not inside a git repository: run team from a project\n');
+  expect(`${outside.out}${outside.err}`).not.toContain('--file');
+  return inRepo;
+});
 scene('hold.invocation', async (place) => {
   write(place, TEAM);
   return show(await held(place, []), 'a <reason> is required');
@@ -3009,7 +3019,7 @@ scene('next.shape', async (place) => {
   return show(await nexted(place), 'title is required');
 });
 scene('next.invocation', async (place) => show(await nexted(place, ['extra']), 'unexpected'));
-scene('next.not-a-repo', async (place) => show(await nexted(place), 'not inside a git repository'), false);
+scene('next.not-a-repo', async (place) => show(await nexted(place), 'run team from a project\n'), false);
 
 // The broker's own rows. One credential read is stood in everywhere: the shipped wiring reads
 // the owner's Keychain, which no scene may ever run. The socket is real — unix sockets under a
@@ -3023,7 +3033,7 @@ async function brokered(place: Place, argv: string[] = [], sources: BrokerSource
 }
 
 scene('broker.invocation', async (place) => show(await brokered(place, ['extra'], { keyReader: okKey }), 'unexpected'));
-scene('broker.not-a-repo', async (place) => show(await brokered(place, [], { keyReader: okKey }), 'not inside a git repository'), false);
+scene('broker.not-a-repo', async (place) => show(await brokered(place, [], { keyReader: okKey }), 'run team from a project\n'), false);
 scene('broker.file', async (place) => show(await brokered(place, [], { keyReader: okKey }), 'no team file'));
 scene('broker.not-owner', async (place) =>
   show(await brokered(place, [], { keyReader: okKey }, { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }), 'only the owner runs `broker`'));
@@ -3155,7 +3165,7 @@ scene('plan.shape', async (place) => {
   return show(await planned(place), 'title is required');
 });
 scene('plan.invocation', async (place) => show(await planned(place, ['extra']), 'unexpected'));
-scene('plan.not-a-repo', async (place) => show(await planned(place), 'not inside a git repository'), false);
+scene('plan.not-a-repo', async (place) => show(await planned(place), 'run team from a project\n'), false);
 scene('plan.broker', async (place) => {
   write(place, LINEAR);
   recordLead(place);
@@ -3376,7 +3386,14 @@ scene('route.unrecorded', async (place) => {
   writeFileSync(storePath('acme', place.root, place.home), '');
   return show(await routed(place, ['lead'], owner, sendHost(place)), 'the route record could not be written');
 });
-scene('route.configuration', async (place) => show(await routed(place, ['lead'], owner, sendHost(place)), 'no team file'));
+scene('route.configuration', async (place) => {
+  const inRepo = show(await routed(place, ['lead'], owner, sendHost(place)), 'no team file');
+  // Outside any checkout the same failure names only the project: route takes no `--file`.
+  const outside = await routed({ ...place, root: place.base }, ['lead'], owner, sendHost(place));
+  show(outside, 'not inside a git repository: run team from a project\n');
+  expect(`${outside.out}${outside.err}`).not.toContain('--file');
+  return inRepo;
+});
 scene('route.usage', async (place) => show(await routed(place, [], owner, sendHost(place)), 'a seat, a seat@team or an agent id is required'));
 
 scene('send.recorded', async (place) => {
@@ -3405,7 +3422,14 @@ scene('feed.unreadable', async (place) => {
   symlinkSync('/etc/passwd', log);
   return show(await fed(place, []), 'the history log cannot be read: a symbolic link was found and not followed');
 });
-scene('feed.configuration', async (place) => show(await fed(place, []), 'no team file'));
+scene('feed.configuration', async (place) => {
+  const inRepo = show(await fed(place, []), 'no team file');
+  // Outside any checkout the same failure names only the project: feed takes no `--file`.
+  const outside = await fed({ ...place, root: place.base }, []);
+  show(outside, 'not inside a git repository: run team from a project\n');
+  expect(`${outside.out}${outside.err}`).not.toContain('--file');
+  return inRepo;
+});
 scene('feed.usage', async (place) => show(await fed(place, ['extra']), 'unexpected "extra"'));
 
 // --- team mcp: a synthetic helper, bridge and front, under the scene's own temp base. The tree
@@ -3840,7 +3864,14 @@ const registerGate = (place: Place, over: DelegateSources = {}): Partial<Registe
 const REGISTER_GRANT = `${TEAM}grant:\n  session: acme\n  seat: lead\n  scope:\n    - up\n`;
 
 scene('register.usage', async (place) => show(await registered(place, []), 'a seat name is required'));
-scene('register.file', async (place) => show(await registered(place, ['lead']), 'no team file'));
+scene('register.file', async (place) => {
+  const inRepo = show(await registered(place, ['lead']), 'no team file');
+  // Outside any checkout the same failure names only the project: register takes no `--file`.
+  const outside = await registered({ ...place, root: place.base }, ['lead']);
+  show(outside, 'not inside a git repository: run team from a project\n');
+  expect(`${outside.out}${outside.err}`).not.toContain('--file');
+  return inRepo;
+});
 scene('register.detached', async (place) => {
   write(place, TEAM);
   return show(await registered(place, ['lead'], detachedCaller), OWN_TEAM);

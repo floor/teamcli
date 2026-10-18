@@ -311,6 +311,13 @@ function answerHost(): AnswerHost {
 
 const NEVER_APPROVED = 'the file was never approved on this machine';
 
+// This table judges the caller gate. The worktree commands now run a file with no stored
+// approval — the live file is the record — so they pin a record that cannot be verified: the
+// owner gets past the caller gate and meets that refusal, as this table read main doing. The
+// no-record run has its own tests in test/commands/worktree.test.ts.
+const worktreeRefused = (): WorktreeSources =>
+  worktreeSources({ standing: () => ({ kind: 'refused', why: NEVER_APPROVED }) });
+
 // The two refusal tails the commands share, each with the command's own name in front.
 const NO_PANE = (name: string) =>
   `no pane is recorded for seat ${name} in this session: a lead stops that seat and runs \`team up\``;
@@ -380,7 +387,7 @@ const COMMANDS: Case[] = [
   {
     name: 'worktree list',
     run: (caller, argv = [], options) =>
-      call((io) => runWorktree(['list', ...argv], io, worktreeSources()), caller, options),
+      call((io) => runWorktree(['list', ...argv], io, worktreeRefused()), caller, options),
     refusal: (who) => `team worktree: only the owner, the orchestrator or the operator runs it; this call is ${who}\n`,
     noPane: (name) => `team worktree: ${NO_PANE(name)}\n`,
     anotherPane: (name, pane) => `team worktree: ${ANOTHER_PANE(name, pane)}\n`,
@@ -391,7 +398,7 @@ const COMMANDS: Case[] = [
   {
     name: 'worktree new',
     run: (caller, argv = [], options) =>
-      call((io) => runWorktree(['new', 'probe-task', ...argv], io, worktreeSources()), caller, options),
+      call((io) => runWorktree(['new', 'probe-task', ...argv], io, worktreeRefused()), caller, options),
     refusal: (who) => `team worktree: only the owner, the orchestrator or the operator runs it; this call is ${who}\n`,
     noPane: (name) => `team worktree: ${NO_PANE(name)}\n`,
     anotherPane: (name, pane) => `team worktree: ${ANOTHER_PANE(name, pane)}\n`,
@@ -402,7 +409,7 @@ const COMMANDS: Case[] = [
   {
     name: 'worktree remove',
     run: (caller, argv = [], options) =>
-      call((io) => runWorktree(['remove', 'probe-task', ...argv], io, worktreeSources()), caller, options),
+      call((io) => runWorktree(['remove', 'probe-task', ...argv], io, worktreeRefused()), caller, options),
     refusal: (who) => `team worktree: only the owner, the orchestrator or the operator runs it; this call is ${who}\n`,
     noPane: (name) => `team worktree: ${NO_PANE(name)}\n`,
     anotherPane: (name, pane) => `team worktree: ${ANOTHER_PANE(name, pane)}\n`,

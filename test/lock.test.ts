@@ -230,6 +230,21 @@ seats:
       at: '2026-10-04T09:00:00Z',
     });
   });
+
+  test('outside a repository, the refusal offers no --file: lock takes none', async () => {
+    const home = homeOf();
+    const io = testIo(base, { kind: 'owner' });
+    expect(await runLock(['heavy-run'], io, { home, now: () => new Date(AT), sleep: () => {} })).toBe(2);
+    expect(io.err).toBe('team lock: not inside a git repository: run team from a project\n');
+
+    const json = testIo(base, { kind: 'owner' });
+    expect(await runLock(['heavy-run', '--json'], json, { home, now: () => new Date(AT), sleep: () => {} })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'lock.project',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
+  });
 });
 
 describe('team unlock', () => {
@@ -243,6 +258,21 @@ describe('team unlock', () => {
     const again = testIo(base, { kind: 'owner' });
     expect(await runUnlock(['heavy-run'], again, sources(home, OWNER))).toBe(1);
     expect(again.err).toBe('heavy-run: not held\n');
+  });
+
+  test('outside a repository, the refusal offers no --file: unlock takes none', async () => {
+    const home = homeOf();
+    const io = testIo(base, { kind: 'owner' });
+    expect(await runUnlock(['heavy-run'], io, { home })).toBe(2);
+    expect(io.err).toBe('team unlock: not inside a git repository: run team from a project\n');
+
+    const json = testIo(base, { kind: 'owner' });
+    expect(await runUnlock(['heavy-run', '--json'], json, { home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, {
+      id: 'unlock.project',
+      messageContains: 'not inside a git repository: run team from a project',
+    });
   });
 
   test('someone else is refused and the holder file is left as it was', async () => {

@@ -19,7 +19,7 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
@@ -97,8 +97,9 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
   }
   const root = findRoot(io.cwd);
   if (!root) {
-    if (json) writeJsonError(io, 'next.not-a-repo', NOT_A_REPO, 'run team next from inside the git checkout');
-    else io.stderr(`team next: ${NOT_A_REPO}\n`);
+    // `team next` takes no `--file`, so the no-repository refusal must not offer one.
+    if (json) writeJsonError(io, 'next.not-a-repo', NOT_A_REPO_NO_FILE, 'run team next from inside the git checkout');
+    else io.stderr(`team next: ${NOT_A_REPO_NO_FILE}\n`);
     // exit: next.not-a-repo
     return 2;
   }

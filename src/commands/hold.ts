@@ -1,6 +1,7 @@
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerVerdict } from '../caller.ts';
 import { currentTeam } from '../file/current.ts';
+import { withoutFileOffer } from '../file/load.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
@@ -81,8 +82,9 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   }
   const current = currentTeam(io.cwd, undefined, now, sources.home, isOwner(walked));
   if (!current.ok) {
+    // `team hold` takes no `--file`, so the no-repository refusal must not offer one.
     const messages = current.errors.map(
-      (problem) => `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${plainText(problem.message)}`,
+      (problem) => `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${withoutFileOffer(plainText(problem.message))}`,
     );
     if (json) {
       writeJsonError(out, 'hold.file', messages.join('; '), null);

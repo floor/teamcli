@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import { TEMPOS, type Tempo } from '../file/sections/tempo.ts';
 import { writeTeamFile } from '../file/write.ts';
 import type { Command, Io } from '../io.ts';
@@ -84,7 +84,8 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
   }
   refuse(io, json, 'tempo', {
     id: failed === NOT_A_REPO ? 'tempo.not-a-repo' : 'tempo.file',
-    message: failed,
+    // `team tempo` takes no `--file`, so the no-repository refusal must not offer one.
+    message: withoutFileOffer(failed),
     repair: null,
   });
   // exit: tempo.not-a-repo
