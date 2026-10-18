@@ -18,11 +18,13 @@ import {
 import {
   appendEvent,
   createSequenceTracker,
+  EVENT_DOMAIN,
   eventLogPath,
   readEvents,
   readEventsFromCursor,
   verifySignedEvent,
 } from '../src/bus/log.ts';
+import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { seatResolverOf } from '../src/bus/seats.ts';
 import type { Agent, AgentLifecycle } from '../src/registry/agents.ts';
 
@@ -316,6 +318,67 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
     expect(read.events.length).toBe(1);
     expect(read.events[0]!.payload.seq).toBe(1);
     expect(read.unverified).toBe(2);
+  });
+
+  test('a record another writer appended is seen by the next append, and an unverified line in the tail is never a duplicate', () => {
+    const { root, home } = makeScratch();
+    const ts = '2026-10-18T12:00:00.000Z';
+    const path = eventLogPath('acme', root, home);
+
+    const first = appendEvent('acme', root, home, {
+      ts,
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'a-1',
+    });
+    expect(first.ok).toBe(true);
+
+    // Another process writes a signed record without touching this process's index, and an
+    // unverified line right after it.
+    const foreign = {
+      v: 1,
+      seq: 2,
+      ts,
+      kind: 'message.delivered',
+      session: 'acme',
+      record_id: 'a-2',
+      from: 'clerk',
+    };
+    const signature = signDomain(EVENT_DOMAIN, foreign as unknown as Json, messageKeyOf(home));
+    appendFileSync(path, `${JSON.stringify({ payload: foreign, signature })}\n`);
+    appendFileSync(
+      path,
+      `${JSON.stringify({ payload: { ...foreign, seq: 3, record_id: 'forged-2' }, signature: '00'.repeat(64) })}\n`,
+    );
+
+    // The next append follows the verified foreign record, not the forged line.
+    const next = appendEvent('acme', root, home, { ts, kind: 'seat.idle', session: 'acme', record_id: 'a-3' });
+    expect(next.ok).toBe(true);
+    if (!next.ok) return;
+    expect(next.record.payload.seq).toBe(3);
+
+    // The foreign record is a duplicate by (kind, record_id, session); the forged one never is.
+    const dup = appendEvent('acme', root, home, {
+      ts,
+      kind: 'message.delivered',
+      session: 'acme',
+      record_id: 'a-2',
+    });
+    expect(dup.ok).toBe(true);
+    if (!dup.ok) return;
+    expect(dup.duplicate).toBe(true);
+    expect(dup.record.payload.seq).toBe(2);
+
+    const notForged = appendEvent('acme', root, home, {
+      ts,
+      kind: 'message.delivered',
+      session: 'acme',
+      record_id: 'forged-2',
+    });
+    expect(notForged.ok).toBe(true);
+    if (!notForged.ok) return;
+    expect(notForged.duplicate).toBe(false);
+    expect(notForged.record.payload.seq).toBe(4);
   });
 
   test('rotates events.jsonl at maxBytes keeping mode 0600 and answers gap when cursor is older than oldest retained sequence', () => {
