@@ -21,7 +21,9 @@ declares, whose rules file (when it takes its rules in one) holds the live text,
 in place with no close. The next launch that reaches an idle prompt writes the record, and a
 later reload can read it.
 
-A matching seat exits without closing anything and without a log line. A close that passes
+A matching seat exits without closing anything and, as every path this command takes to a
+seat, is handed the general seat brief first when it has no delivery record for it; the run
+writes no log line unless that delivery fails. A close that passes
 is logged at that moment, before the workspace is closed. The owner's line names the seat
 and `model`, `effort`, `rules`, or the words joined with `; ` — `model; effort`, `model;
 rules`, `effort; rules`. A granted run names the granted seat, then the seat that was
@@ -40,7 +42,14 @@ launch line. A relaunched message seat also has its rules file written again and
 pointing at it typed, as a fresh `up` does; an option seat's rules ride its launch line. A
 seat that already matches is not written. A refusal is not written.
 
-The log gains one line when the close happens, and no line when it does not.
+Before anything is typed into the seat, the run writes the general seat brief to it as a
+signed drop — the same first message `team up` gives every seat — and records the delivery in
+the session's `briefs`. A seat that already holds this brief's record is left as it is, and a
+delivery that cannot be written is said and logged without stopping the reload: `team check`
+names the seat with no record, and this command is its repair.
+
+The log gains one line when the close happens; a run that does not close adds none, unless it
+has a failed delivery to report.
 
 ## Who may run it
 
@@ -70,6 +79,7 @@ not a refusal. `--file` is the owner's. A delegate is not offered this command.
 | it can't run: a bad option, or the team file can't be read | `team reload: <problem>`, with the usage for a bad option | 2 |
 
 `--json` prints one `team.reload` document instead: `seat`, the new `pane`, the outcome as
-`status` (`reloaded` or `same`), and the same closing line as `action_summary`. A refusal under
+`status` (`reloaded` or `same`), and the same closing line as `action_summary`. `notes` carries
+the general-brief failure line when the delivery could not be written. A refusal under
 `--json` prints the `team.error` document on stdout — its `id` is the contract row for that
 refusal (`reload.absent`, `reload.working`, …) — and nothing on stderr.

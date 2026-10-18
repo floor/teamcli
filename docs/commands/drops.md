@@ -8,11 +8,13 @@ moves, deletes, or marks a drop. `team drops --follow` prints each drop that app
 runs, one line per file, so a Claude Code Monitor in the receiving seat can turn each arrival
 into a notification.
 
-A drop is not only a send's. Before a launch types anything into a seat, `team up` (and `add`,
-`restart`, `reload`) writes the general seat brief — TeamCLI's built-in default, the first text
-every seat gets — into each declared seat's folder as the same signed message record, human seats
-included. It is read here like any other drop: `team drops --read` verifies it, writes its
-receipt and prints the brief, and nothing is ever typed for it.
+A drop is not only a send's. Before a launch types anything into a seat, the launch writes the
+general seat brief — TeamCLI's built-in default, the first text every seat gets — into that
+seat's folder as the same signed message record, and nothing is ever typed for it. `team up`
+writes it to every declared seat, human seats included; `team add`, `team restart` and
+`team reload` write it to the one seat they act on and refuse a human seat's pane before any
+launch. It is read here like any other drop: `team drops --read` verifies it, writes its
+receipt and prints the brief.
 
 `team drops --read` is the same folder served to the launch's own turn-start hook: the launch
 line names the seat and session, each waiting record is verified with the checkout's message

@@ -251,7 +251,8 @@ one locked state write, which is what [`team check`](check.md) reads to name a s
 launched without one. A drop that cannot be written is a line on stderr and in the log for that
 seat alone, and the launch carries on: the record on disk is the message, and the check names the
 seat. Nothing is typed for the brief, and `add`, `restart` and `reload` deliver through the same
-function, for the one seat each starts.
+function, for the one seat each acts on — `reload` on its matching path included, so the repair
+`team check` names is a real one.
 
 A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file:
 `up` writes the approved rules text to `<project state folder>/rules/<seat>.md` — owner-only,
