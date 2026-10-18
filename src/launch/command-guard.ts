@@ -155,8 +155,9 @@ function splitString(words: readonly string[]): string[] {
 
 /**
  * The command word and arguments of a segment, after the prefixes that run another command:
- * `VAR=value`, `env`, `command`, `exec` and `nohup` — each recognised by its base name, so
- * `/usr/bin/env` is a prefix too. `env`'s own options are read properly: `-u NAME` and `-C DIR`
+ * `VAR=value`, `env`, `command`, `exec`, `nohup`, `nice`, `time`, `timeout` and `stdbuf` — each
+ * recognised by its base name, so `/usr/bin/env` is a prefix too. `env`'s own options are read
+ * properly: `-u NAME` and `-C DIR`
  * take a value, `-S STRING` is split and judged as the command it holds, `--` ends the options,
  * and anything else starting with `-` is a flag.
  */
@@ -212,7 +213,57 @@ function commandOf(words: readonly string[]): string[] {
       at = scan;
       continue;
     }
-    if (name === 'exec' || name === 'nohup') {
+    if (name === 'nice') {
+      at += 1;
+      while (at < words.length) {
+        const arg = words[at]!;
+        if (arg === '-n' || arg === '--adjustment') {
+          at += 2;
+          continue;
+        }
+        if (arg.startsWith('-')) {
+          at += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    if (name === 'timeout') {
+      at += 1;
+      while (at < words.length) {
+        const arg = words[at]!;
+        if (arg === '-s' || arg === '--signal' || arg === '-k' || arg === '--kill-after') {
+          at += 2;
+          continue;
+        }
+        if (arg.startsWith('-')) {
+          at += 1;
+          continue;
+        }
+        at += 1; // the duration
+        break;
+      }
+      continue;
+    }
+    if (name === 'stdbuf') {
+      // `-i`, `-o` and `-e` take a mode, attached (`-oL`) or as the next word.
+      at += 1;
+      while (at < words.length) {
+        const arg = words[at]!;
+        if (arg === '-i' || arg === '-o' || arg === '-e') {
+          at += 2;
+          continue;
+        }
+        if (arg.startsWith('-') || ASSIGNMENT.test(arg)) {
+          at += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    if (name === 'exec' || name === 'nohup' || name === 'time') {
       at += 1;
       while (at < words.length && (words[at]!.startsWith('-') || ASSIGNMENT.test(words[at]!))) at += 1;
       continue;
@@ -320,11 +371,12 @@ function signalName(value: string): string {
   return value.replace(/^SIG/i, '').toUpperCase();
 }
 
-/** True when a signal value asks for SIGKILL: `9` or `KILL`, in any spelling `kill` accepts. */
+/** True when a signal value asks for SIGKILL: `9` (leading zeros included) or `KILL`, in any
+ *  spelling `kill` accepts. */
 function hardSignal(value: string | undefined): boolean {
   if (value === undefined || value === '') return false;
-  const name = signalName(value);
-  return name === '9' || name === 'KILL';
+  if (/^[0-9]+$/.test(value)) return Number(value) === 9;
+  return signalName(value) === 'KILL';
 }
 
 /**
@@ -363,8 +415,8 @@ function cleanFlags(args: readonly string[]): Set<string> {
   return flags;
 }
 
-/** True when `git branch` deletes with force in any spelling: `-D`, `-d -f`, `-df`,
- *  `--delete --force`, or either long option on its own. */
+/** True when `git branch` both deletes and forces in any spelling: `-d -f`, `-df`,
+ *  `--delete --force`; `-D` carries both on its own. */
 function branchForceDelete(args: readonly string[]): boolean {
   const shorts = new Set<string>();
   const longs = new Set<string>();
@@ -378,26 +430,13 @@ function branchForceDelete(args: readonly string[]): boolean {
   return deletes && forces;
 }
 
-/** The npm options whose value is a separate word, so the subcommand comes after it. */
-const NPM_VALUE_OPTIONS = new Set([
-  '--prefix', '--loglevel', '--registry', '--userconfig', '--globalconfig', '--cache', '--ca',
-  '--cafile', '--cert', '--key', '--proxy', '--https-proxy', '--scope', '--tag', '--otp',
-  '--workspace', '--include', '--omit', '--before', '--access', '--location', '--script-shell',
-  '--install-strategy', '--fetch-retries', '--fetch-timeout', '--call', '--jobs', '-w', '-C',
-]);
-
-/** The npm subcommand, after its global options (their values included) and flags. */
-function npmSubcommand(args: readonly string[]): string | null {
-  for (let at = 0; at < args.length; at += 1) {
-    const arg = args[at]!;
-    if (arg === '--') continue;
-    if (arg.startsWith('-')) {
-      if (NPM_VALUE_OPTIONS.has(arg)) at += 1;
-      continue;
-    }
-    return arg;
-  }
-  return null;
+/**
+ * True when any bare argument of `npm` is `publish`: no table of options that take a value, so
+ * `npm --depth 0 publish` and `npm --umask 0022 publish` both deny. A value that happens to
+ * spell `publish` denies too — the guard errs towards refusing.
+ */
+function npmPublishes(args: readonly string[]): boolean {
+  return args.includes('publish');
 }
 
 /** `git -C <dir> push --force`: the subcommand, after the global options that take a value. */
@@ -453,7 +492,7 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
       return { rule: 'git-branch-force-delete', guidance: GUIDANCE['git-branch-force-delete'] };
     }
   }
-  if (word === 'npm' && npmSubcommand(args) === 'publish') {
+  if (word === 'npm' && npmPublishes(args)) {
     return { rule: 'npm-publish', guidance: GUIDANCE['npm-publish'] };
   }
   if (word === 'xargs') {
