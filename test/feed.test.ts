@@ -297,6 +297,88 @@ describe('team send history log & team feed', () => {
     expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts', 'via']);
   });
 
+  test('one message is one row: a later receipt replaces the unconfirmed line it updates', async () => {
+    const { root, home } = world();
+    const body = `${OWNER_HEADER}sweep the pane`;
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      spec: 'lead@acme',
+      resolved: 'agt_0123456789ab',
+      body,
+      id: 'seed-inbox',
+      outcome: 'sent (unconfirmed)',
+      ms: 8,
+      via: 'mcp-inbox',
+    });
+    appendHistory('acme', root, home, {
+      ts: new Date(NOW.getTime() + 60_000).toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body,
+      id: 'seed-inbox',
+      outcome: 'delivered (read)',
+      via: 'mcp-inbox',
+    });
+
+    // The batch shows the later outcome once, and the address the send recorded stays on it.
+    const io = testIo(root);
+    expect(await runFeed([], io, { home })).toBe(0);
+    expect(io.out).toContain('1 event\n');
+    expect(io.out).not.toContain('sent (unconfirmed)');
+    expect((io.out.match(/owner -> lead/g) ?? []).length).toBe(1);
+    expect((io.out.match(/delivered \(read\) \(via mcp-inbox\)/g) ?? []).length).toBe(1);
+    // The milliseconds timed the send, not the receipt, so the row does not claim them.
+    expect(io.out).not.toContain('in 8 ms');
+
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const jsonDoc = JSON.parse(jsonIo.out) as { events: Record<string, unknown>[] };
+    expect(jsonDoc.events).toHaveLength(1);
+    expect(jsonDoc.events[0]).toMatchObject({ id: 'seed-inbox', outcome: 'delivered (read)', via: 'mcp-inbox' });
+    expect(jsonDoc.events[0]?.spec).toBe('lead@acme');
+    expect(jsonDoc.events[0]?.resolved).toBe('agt_0123456789ab');
+    expect(jsonDoc.events[0]?.ms).toBeUndefined();
+  });
+
+  test('--follow prints an outcome update for an id it has already shown', async () => {
+    const { root, home } = world();
+    const body = `${OWNER_HEADER}follow the pane`;
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body,
+      id: 'seed-follow',
+      outcome: 'sent (unconfirmed)',
+      via: 'mcp-inbox',
+    });
+
+    const io = testIo(root);
+    const code = await runFeed(['--follow'], io, {
+      home,
+      poll: async (tick) => {
+        if (tick === 0) {
+          appendHistory('acme', root, home, {
+            ts: new Date(NOW.getTime() + 60_000).toISOString(),
+            from: 'owner',
+            to: 'lead',
+            body,
+            id: 'seed-follow',
+            outcome: 'delivered (read)',
+            via: 'mcp-inbox',
+          });
+          return true;
+        }
+        return false;
+      },
+    });
+    expect(code).toBe(0);
+    expect((io.out.match(/sent \(unconfirmed\)/g) ?? []).length).toBe(1);
+    expect((io.out.match(/delivered \(read\)/g) ?? []).length).toBe(1);
+  });
+
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
     const { root, home, sockets } = world();
     // A file at the measured socket name stands while every send below runs: no path consults it.
