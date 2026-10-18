@@ -1,0 +1,23 @@
+                                                    
+  Run sleep 15 now, then reply with only            
+  SLEEP_DONE.                                       
+                                                    
+
+  I'll run sleep 15 and reply once it finishes.
+
+  $ sleep 15 18s
+
+  SLEEP_DONE
+
+
+
+                                                    
+  → Add a follow-up                                 
+                                                    
+
+  Grok 4.7 256K High · 6.2%          Run Everything
+  <workspace>                      · main
+
+  To resume this session: agent --resume=<session-id>
+
+                                                     

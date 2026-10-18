@@ -1,0 +1,22 @@
+
+
+  Cursor Agent
+  v2026.10.16-e3cb207
+  Tip: Use /plan to iterate on an implementation 
+  plan before code changes.
+
+                                                    
+  Run sleep 15 now, then reply with only            
+  SLEEP_DONE.                                       
+                                                    
+
+ ⠠⠜ Working
+    Tip: Use /skills to give Cursor specialized 
+  knowledge for tasks.
+
+                                                    
+  → Add a follow-up                  ctrl+c to stop 
+                                                    
+
+  Grok 4.7 256K High                 Run Everything
+  <workspace>                      · main
