@@ -139,6 +139,22 @@ export const EVENT_THRESHOLDS = {
 export type EventThreshold = keyof typeof EVENT_THRESHOLDS;
 
 /**
+ * The threshold set's descriptor, in the shape the other two settings carry: the name a policy
+ * surface writes, the levels that may declare a word, and owner sovereignty over the numbers
+ * shipped here. It is a set, not one scalar: each field resolves on its own, and a level's word
+ * on a delay threshold may only shorten it (answer 8). The setter enforces that direction; the
+ * constants above are where it starts.
+ */
+export const EVENT_THRESHOLDS_SETTING = {
+  name: 'event-thresholds',
+  levels: EVENT_ROUTING_LEVELS,
+  ownerSovereign: true,
+  defaults: EVENT_THRESHOLDS,
+  /** The delay thresholds, the fields bound to move in one direction only: shorter. */
+  shortenOnly: ['held_threshold_seconds', 'unreachable_threshold_seconds', 'idle_threshold_seconds'],
+} as const;
+
+/**
  * Whether a kind is privileged under a list of patterns. A pattern is an exact kind or a prefix
  * ending in `*` (`team.grant-*`); the release kinds use the two forms the draft names. The list
  * in force is the release defaults grown by the owner's additions (`growPrivilegedKinds`).
@@ -154,7 +170,7 @@ export function isPrivilegedKind(kind: string, patterns: readonly string[] = PRI
  * The privileged list after the owner's own word: his additions join the defaults, and a kind
  * already covered — exactly, or by a pattern standing in the list — is no change. This is the
  * only write the list takes: no level removes a kind, and no caller other than the owner reaches
- * it (`src/bus/routing.ts` refuses the rest).
+ * it (`checkPrivilegedKindsWrite` in `src/bus/routing.ts` refuses the rest).
  */
 export function growPrivilegedKinds(current: readonly string[], additions: readonly string[]): readonly string[] {
   const out = [...current];
