@@ -223,12 +223,17 @@ describe('team status', () => {
     expect(code).toBe(1);
     expect(out).toContain(
       'difference: claude-coordinator-acme: running Claude Fable 5.1, file says Claude Opus 5.5\n' +
-        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n',
+        '  repair: restart the seat on the file\'s model (team down, then team up (to restart the whole team)), or correct the file\n' +
+        "  who: the team's lead\n",
     );
     expect(out).toContain(
       'difference: codex-acme: running GPT Terra 5.6 medium, file says GPT-6 Sol\n' +
-        '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file\n',
+        '  repair: restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file\n' +
+        '  who: the owner\n',
     );
+    // The chain's second leg is `team add`, the owner's alone: the line belongs to the owner,
+    // and the closing count follows the who the row prints.
+    expect(out).toContain('2 differences, 1 for the owner\n');
     expect(out).not.toContain('team remove claude-coordinator-acme --keep');
   });
 
@@ -345,11 +350,17 @@ describe('team status', () => {
     live = { ...built(), agents: [...built().agents, agent('codex-acme-tmp-1', 'w6', 'working', 'codex')] };
     const { out } = await status();
     expect(out).toContain('codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
-    expect(out).toContain('deepseek-acme: its rules were not delivered');
+    // `team remove --keep, then team add` has an owner-only leg: the line is the owner's, and
+    // the count says so; the other three rows are the lead's or the owner's in their own right.
+    expect(out).toContain(
+      "difference: deepseek-acme: its rules were not delivered\n" +
+        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme\n' +
+        '  who: the owner\n',
+    );
     expect(out).toContain('note: codex-acme-tmp-1 is temporary, until merged:fix/select-width');
     expect(out).toContain('codex-acme-tmp-2: a temporary seat is recorded and is not running');
     expect(out).toContain('worktree select-width: its setup failed\n  repair: team worktree remove select-width');
-    expect(out).toContain('4 differences');
+    expect(out).toContain('4 differences, 1 for the owner\n');
   });
 
   test('a watch whose last pass is older than two intervals, and no watch at all', async () => {

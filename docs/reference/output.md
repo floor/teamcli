@@ -155,12 +155,14 @@ The `who` value comes from the closed four-value vocabulary `DIFFERENCE_WHO_VALU
 The repair names the **first** authority tier that applies:
 1. If `diff.who` is explicitly set on `OutputDifference`, return `diff.who`.
 2. If `diff.owner === true`, `diff.approval === true`, `diff.repair.startsWith('the owner ')`, or `diff.repair === 'the live file is what the commands read'`, return `'the owner'`.
-3. Strip any trailing ` (after: …)` annotation (which `orderAndAnnotateDifferences` appends when `diff.needs === 'approve'`, so `needs: 'approve'` never masks the repair's own command), extract the first `team <command>` token in `diff.repair`, and map `command` against `COMMAND_GATES` (`src/permissions/map.ts`) and `GRANT_SCOPES` (`src/file/types.ts`):
+3. Strip any trailing ` (after: …)` annotation (which `orderAndAnnotateDifferences` appends when `diff.needs === 'approve'`, so `needs: 'approve'` never masks the repair's own command), take the repair's **chain** — its text before any `, or ` / `(or ` alternative; a verb phrase's own "or" ("clear or send it in the pane") stays on the chain — and extract **every** `team <command>` token on it. Map each command against `COMMAND_GATES` (`src/permissions/map.ts`) and `GRANT_SCOPES` (`src/file/types.ts`):
    - `COMMAND_GATES[command].kind === 'owner-only'` → `'the owner'`
    - `COMMAND_GATES[command].kind === 'owner-or-leads'` or `'pane-authority'` → `"the team's lead"`
    - `COMMAND_GATES[command].kind === 'capability'` or `GRANT_SCOPES.includes(command)` → `'a grant holder'`
    - `COMMAND_GATES[command].kind === 'seat-record'`, `'owner-or-own-team'`, or `'admission'` → `'any seat'`
-   - Any other repair (session-level `watch`, `worktree`, `herdr`, or operator pane actions) → `"the team's lead"`.
+   - A `team <word>` the map does not carry — prose like `team file` ("update the team file's model"), or a session-level `watch` / `worktree` — → `"the team's lead"`, the fallback those words took before the chain rule.
+
+   The chain runs its legs in order, so the repair's `who` is the actor **every leg admits** — the narrowest of the four. An owner-only leg narrows the chain to `'the owner'`: `team remove <seat> --keep, then team add <seat>` is the owner's, because a lead runs the first leg and is refused at the second, leaving the repair half done. `'a grant holder'` and `"the team's lead"` are not comparable — the same seat need not hold both — so a chain mixing either with anything else is the owner's too. An "or" alternative is another way into the repair, not a leg: it does not narrow the chain. Where a repair has a lead-runnable alternative, print that alternative instead of the narrow chain, so the line names a command the lead can finish.
 
 ### 1.6 Closing Summary Line and Real Plurals (`pluralCount`)
 
@@ -171,7 +173,7 @@ Every command ends its plain-text reading or action with **one summary line** us
   - When `differences === 1` and `owner_differences === 0`: `1 difference`
   - When `differences > 1` and `owner_differences === 0`: `<n> differences`
   - When `differences > 0` and `owner_differences > 0`: `<n> difference, <m> for the owner` / `<n> differences, <m> for the owner`
-  - Here `owner_differences` counts differences where `diff.owner === true`, `diff.approval === true`, `diff.who === 'the owner'` (when explicitly set), `diff.repair.startsWith('the owner ')`, or `diff.repair === 'the live file is what the commands read'`.
+  - Here `owner_differences` counts the differences whose resolved `who` is `'the owner'` — the same rule the rows print, chain narrowing included (`diff.owner === true`, `diff.approval === true`, an explicit `diff.who === 'the owner'`, a repair that starts `the owner `, the approval precondition, or a chain whose every leg admits the owner only).
 - **`team doctor`**:
   - When `missing === 0`: `team doctor: nothing missing, <w> warning` / `<w> warnings`
   - When `missing > 0`: `team doctor: <n> missing, <w> warning` / `<w> warnings` (plus `: <b> of them block \`up\` and \`add\`` when `b > 0`), followed on full runs (not `--login`) by the `what 0.5.0 must not pretend:` block.
