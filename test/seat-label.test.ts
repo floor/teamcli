@@ -171,9 +171,9 @@ describe('the workspace title of a seat', () => {
     }
   });
 
-  test('the readme example titles every seat from its name and role', () => {
-    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
-    const fence = readme.split('```yaml\n')[1]?.split('\n```')[0] ?? '';
+  test('the team-file page example titles every seat from its name and role', () => {
+    const page = readFileSync(new URL('../docs/team-file.md', import.meta.url), 'utf8');
+    const fence = page.split('```yaml\n')[1]?.split('\n```')[0] ?? '';
     const team = valid(fence);
     expect(team.seats.map((seat) => [seat.name, workspaceLabel(seat)])).toEqual([
       ['coordinator', 'coordinator · coordinator'],

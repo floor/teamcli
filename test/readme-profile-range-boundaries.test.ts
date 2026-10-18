@@ -2,9 +2,9 @@
 // checker's own words put these sentences outside its checks — "a CLI version a profile is
 // tested with" is not a claim (scripts/check-readmes.ts) — so a range can drift under a green
 // readmes:check, and the Antigravity ceiling once did. Every "The X profile is tested with
-// CLI ..." sentence in the shipped READMEs is swept here against the profile the loader really
-// loads: it names a shipped profile, it claims exactly that profile's floor and ceiling, and a
-// binary named in its parenthetical is the binary the profile runs.
+// CLI ..." sentence in the shipped READMEs and the team-file page is swept here against the
+// profile the loader really loads: it names a shipped profile, it claims exactly that profile's
+// floor and ceiling, and a binary named in its parenthetical is the binary the profile runs.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -42,13 +42,13 @@ function sentences(file: string): { file: string; name: string; from: string; to
 
 describe('the tested-range sentence against the profile that declares it', () => {
   const profiles = shipped();
-  // README.md carries the sentences today; npm-readme.md is swept too, so a sentence that
-  // appears there later answers the same rule from its first day.
-  const found = [...sentences('README.md'), ...sentences('npm-readme.md')];
+  // docs/team-file.md carries the sentences now; README.md and npm-readme.md are swept too,
+  // so a sentence that appears there later answers the same rule from its first day.
+  const found = [...sentences('docs/team-file.md'), ...sentences('README.md'), ...sentences('npm-readme.md')];
 
   test('the sweep has sentences to sweep', () => {
     // A wholesale rephrasing must not turn this file green by finding nothing.
-    expect(found.filter((sentence) => sentence.file === 'README.md').length).toBeGreaterThan(0);
+    expect(found.filter((sentence) => sentence.file === 'docs/team-file.md').length).toBeGreaterThan(0);
   });
 
   test('every sentence names a shipped profile', () => {

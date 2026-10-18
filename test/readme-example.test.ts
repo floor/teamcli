@@ -1,12 +1,12 @@
-// The README's "By example" file is a shipped example like examples/team.yaml, but no docs page
-// runs it — test/docs.test.ts covers docs/commands only — so it is loaded here: every CLI it
-// names must ship a profile, and its lead must not be the CLI the other examples lead with.
+// The team-file page's "By example" file is a shipped example like examples/team.yaml, but no
+// docs page runs it — test/docs.test.ts covers docs/commands only — so it is loaded here: every
+// CLI it names must ship a profile, and its lead must not be the CLI the other examples lead with.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { profileFor } from '../src/profiles/index.ts';
 
-/** The file under `By example:` in README.md: the first yaml fence after that line. */
+/** The file under `By example:` in docs/team-file.md: the first yaml fence after that line. */
 function byExample(markdown: string): string {
   const lines = markdown.split('\n');
   const start = lines.findIndex((line) => line.trim() === 'By example:');
@@ -21,9 +21,9 @@ function byExample(markdown: string): string {
   return `${body.join('\n')}\n`;
 }
 
-const readme = validateTeamFile(byExample(readFileSync(new URL('../README.md', import.meta.url), 'utf8')));
-if (!readme.ok) throw new Error(`the README's by-example file is refused: ${JSON.stringify(readme.errors)}`);
-const { team, warnings } = readme;
+const page = validateTeamFile(byExample(readFileSync(new URL('../docs/team-file.md', import.meta.url), 'utf8')));
+if (!page.ok) throw new Error(`the team-file page's by-example file is refused: ${JSON.stringify(page.errors)}`);
+const { team, warnings } = page;
 
 const example = validateTeamFile(readFileSync(new URL('../examples/team.yaml', import.meta.url), 'utf8'));
 if (!example.ok) throw new Error(`examples/team.yaml is refused: ${JSON.stringify(example.errors)}`);
@@ -31,7 +31,7 @@ const exampleTeam = example.team;
 
 const leadOf = (source: typeof team) => source.seats.find((seat) => seat.name === source.orchestrator);
 
-describe("the README's by-example file", () => {
+describe("the team-file page's by-example file", () => {
   test('is accepted, carrying only the legacy key\'s notice', () => {
     // The fence keeps the old spelling until the rewrite release (P3.6): it loads, and says
     // out loud that the spelling moved.
