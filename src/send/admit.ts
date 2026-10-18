@@ -310,8 +310,9 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
 }
 
 /**
- * The drop file's first line: who wrote it, and the rule or grant that admitted the write. The
- * body follows one empty line under it, so a reader sees the sender before the message.
+ * The line a message's body opens with: who wrote it, and the rule or grant that admitted the
+ * write. The body follows one empty line under it, so a reader sees the sender before the message;
+ * the signed record carries the same facts in its payload, which is what a reader verifies.
  */
 export function senderHeader(caller: SendSide | 'owner', rule: string): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;

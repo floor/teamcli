@@ -1127,7 +1127,8 @@ export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
         additionalProperties: false,
         required: ['from', 'received', 'path'],
         properties: {
-          // The sender the file's first line names, or null when that line is no sender header.
+          // The sender the record's payload names — or, in a raw file an earlier build wrote, its
+          // first line; null when neither names one.
           from: { type: ['string', 'null'] },
           received: { type: 'string', minLength: 1 },
           path: { type: 'string', minLength: 1 },

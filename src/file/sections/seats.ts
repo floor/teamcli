@@ -70,7 +70,7 @@ export const seats: Section = {
           minItems: 1,
           uniqueItems: true,
           items: { enum: DELIVERY_LEGS },
-          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and never adds a leg, which the walk settles',
+          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame',
         },
         liveness: {
           type: 'object',

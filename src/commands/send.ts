@@ -60,8 +60,8 @@ is one of those is not reached: the kind and the drop path are named, and nothin
 further is pressed. Who may call it is the registry's decision, default deny: the
 owner; an orchestrator to an orchestrator of its own team or entity; an assistant
 seat to its entity's coordinator; any seat to its own team's orchestrator; or an
-owner-signed grant naming send. The drop file's first line
-names the sender and the rule that admitted it. --list sends nothing: it prints
+owner-signed grant naming send. The record is signed with the checkout's
+message key, and its payload names the sender and the rule that admitted it. --list sends nothing: it prints
 the file's seats and the seats of the other teams of the same entity, each
 with the project its team sits in — another team's seat reads <seat>@<team> —
 and needs no caller check. --dry-run resolves the seat and the
@@ -96,13 +96,13 @@ The outcome is one of eight, and none of them is silent:
   delivered    the drop path (exit 0): herdr reported the seat working — or done or
                blocked, changed from the status read before Enter — or the transcript
                showed the drop read, the line had left the input box, and the pane
-               was not one of the dialogs listed above; on the drop leg, the drop
-               file is in place and nothing was typed; \`delivered (read)\` when the
+               was not one of the dialogs listed above; \`delivered (read)\` when the
                mcp-inbox leg's receipt came back inside its grace — the seat read the
                message, which is not a claim that it acted on it
-  sent         the mcp-inbox leg's own success (exit 0): the message is the 0600 drop
-               file in the seat's inbox, no receipt came back inside the grace, and
-               the line says \`sent (unconfirmed)\`. Nothing was typed
+  sent         the mcp-inbox or drop leg's own success (exit 0): the message is the
+               0600 record in the seat's inbox or drop folder, no receipt came back
+               inside the grace, and the line says \`sent (unconfirmed)\`. Nothing was
+               typed
   answered     --wait to a Claude Code seat: the reply came back; the reply follows
                on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
@@ -2308,11 +2308,11 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** Herdr reported the seat took the trigger — or, on the drop leg, the file is in place — and the
- *  pane was not a known dialog, or the seat's inbox server returned the message. Exit 0, always.
- *  The note names the path the send went by — `socket`, or `typed, socket <reason>` after the
- *  frame was not taken — and `read` for the mcp-inbox leg's receipt, whose own words are
- *  `delivered (read)`: the seat read the message, which is not a claim that it acted on it. */
+/** Herdr reported the seat took the trigger, and the pane was not a known dialog, or the seat's
+ *  inbox server returned the message. Exit 0, always. The note names the path the send went by —
+ *  `socket`, or `typed, socket <reason>` after the frame was not taken — and `read` for the
+ *  mcp-inbox leg's receipt, whose own words are `delivered (read)`: the seat read the message,
+ *  which is not a claim that it acted on it. The drop leg has its own word, `sent (unconfirmed)`. */
 function delivered(io: Io, seat: string, report: Report, note?: string): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   const read = note === 'read';
