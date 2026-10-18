@@ -205,6 +205,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged and its model row under the footer is gone again, and the launch test's boundary moves
   to 1.4.3.
 
+- The Cursor profile is tested with CLI 2026.10.01 to 2026.10.16: the 2026.10.16 screens — trust,
+  idle, unsent, working, question, permission and exit — are captured as fixtures, the trust
+  dialog still marks `[a] Trust this workspace` with the same key, so that build gets its own
+  trust record beside the two earlier ones, and the launch test's boundary moves to 2026.10.17.
+
 ### Fixed
 
 - **A receipt file that proves nothing is replaced, not trusted.** The signed read receipt is
