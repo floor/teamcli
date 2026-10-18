@@ -149,8 +149,8 @@ same as without `--json`.
 | `team remove: --<flag> is the owner's; the approved delegate cannot use it` — `--keep`, `--abandon`, `--session` or `--file` | 1 |
 | `team remove: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team remove: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
-| ``team remove: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
-| ``team remove: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
+| ``team remove: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up` `` | 1 |
+| ``team remove: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team remove: only the owner abandons a seat, from a terminal outside herdr` | 1 |
 | `team remove: only the owner removes the orchestrator's or the operator's seat; this call is <caller>` | 1 |
 | `team remove: session can't be "default", herdr's own session` | 1 |

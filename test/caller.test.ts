@@ -212,7 +212,7 @@ describe('a caller is judged against the session and the pane it was placed in',
     const verdict = callerVerdict({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'a' }, 'codex-acme', none);
     expect(verdict).toEqual({ kind: 'no-pane', name: 'codex-acme' });
     expect(noPaneRefusal('codex-acme')).toBe(
-      'no pane is recorded for seat codex-acme in this session: the owner stops that seat and runs `team up`',
+      'no pane is recorded for seat codex-acme in this session: a lead stops that seat and runs `team up`',
     );
     // Another session is refused before the missing pane is even consulted.
     expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w9:p1', session: 'b' }, team, none)).toBe(false);

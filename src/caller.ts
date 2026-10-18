@@ -219,17 +219,17 @@ export function callerStanding(caller: Caller, name: string, at: SeatStanding): 
  * records one. Nothing records a running seat's pane — `team up` skips a ready seat without a
  * write, refuses a seat the state doesn't record while its agent runs (`up never touches a
  * running team`), and launches a fresh workspace for a record without a pane — so the seat has
- * to be stopped before the owner's `team up` can launch it and record the pane. (Runs on a fake
+ * to be stopped before `team up` can launch it and record the pane. (Runs on a fake
  * host through the real commands, round 4: with the seat live, `team up` exits 1 with that
  * line; with the seat stopped, `team up` exits 0 and records the pane it started it on.)
  */
 export function noPaneRefusal(name: string): string {
-  return `no pane is recorded for seat ${name} in this session: the owner stops that seat and runs \`team up\``;
+  return `no pane is recorded for seat ${name} in this session: a lead stops that seat and runs \`team up\``;
 }
 
 /**
  * The refusal for a seat the state records on another pane: the name is in the session judged,
- * but not on the pane the state holds for it. No single owner command re-records that pane while
+ * but not on the pane the state holds for it. No single command re-records that pane while
  * the seat runs, and which one works depends on reads a caller cannot make, so the refusal names
  * the sequence that repairs every case. (Runs on a fake host through the real commands, round 4,
  * for the seat live on a new pane, the seat gone, and the recorded pane gone:) `team up` alone
@@ -247,7 +247,7 @@ export function noPaneRefusal(name: string): string {
  * `down`, the launched pane after `up`.)
  */
 export function anotherPaneRefusal(name: string, recordedPane: string): string {
-  return `the state records pane ${recordedPane} for seat ${name} in this session, not the pane this call is on: the owner stops the team and starts it again (\`team down\`, then \`team up\`)`;
+  return `the state records pane ${recordedPane} for seat ${name} in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)`;
 }
 
 /**

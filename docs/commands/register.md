@@ -120,14 +120,14 @@ its `id` is the contract row for that refusal (`register.caller`, `register.no-s
 | ``team register: only the owner or the approved delegate runs `up`; this call is <caller>`` — the file's `delegates` section decided, and refused | 1 |
 | `team register: only the seat the grant names runs this: this call is <caller>` / ``team register: the grant does not list `up` `` / `team register: a grant needs a verified approval: <why>` — the file's `grant` decided, and refused | 1 |
 | `team register: the file has no seat "<name>"` | 1 |
-| `team register: <name> is stopped in this file; the owner clears \`stopped\` and starts the team` | 1 |
+| `team register: <name> is stopped in this file; a lead clears \`stopped\` and starts the team` | 1 |
 | `team register: session can't be "default", herdr's own session` | 1 |
 | `team register: herdr doesn't answer` | 1 |
 | `team register: session "<session>" is not running; run team up first` | 1 |
 | `team register: session "<session>" was launched from <file>; a seat is registered into its own team's session` | 1 |
 | `team register: no agent named <name> is running in session "<session>"; nothing was registered` | 1 |
 | `team register: session "<session>" has <n> agents named <name>; registering one would guess` | 1 |
-| ``team register: <name> is already recorded on pane <pane>, not on <pane>; the owner stops the team and starts it again (`team down`, then `team up`)`` | 1 |
+| ``team register: <name> is already recorded on pane <pane>, not on <pane>; a lead stops the team and starts it again (`team down`, then `team up`); the seat's own team registers it`` | 1 |
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |

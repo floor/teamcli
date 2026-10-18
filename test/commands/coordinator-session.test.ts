@@ -313,7 +313,7 @@ const NEVER_APPROVED = 'the file was never approved on this machine';
 
 // The two refusal tails the commands share, each with the command's own name in front.
 const NO_PANE = (name: string) =>
-  `no pane is recorded for seat ${name} in this session: the owner stops that seat and runs \`team up\``;
+  `no pane is recorded for seat ${name} in this session: a lead stops that seat and runs \`team up\``;
 const OWNER_ONLY = (who: string) => `--session is the owner's, from a terminal outside herdr; this call is ${who}`;
 // The refusal for the right name, in the right session, on the wrong pane: the state records
 // another pane for the seat, so that record is not this call's. No single owner command
@@ -321,7 +321,7 @@ const OWNER_ONLY = (who: string) => `--session is the owner's, from a terminal o
 // file's validation for the two names this can carry), so the repair named is the sequence that
 // repairs every case: `team down`, then `team up` — see `the another-pane repair` below.
 const ANOTHER_PANE = (name: string, pane: string) =>
-  `the state records pane ${pane} for seat ${name} in this session, not the pane this call is on: the owner stops the team and starts it again (\`team down\`, then \`team up\`)`;
+  `the state records pane ${pane} for seat ${name} in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)`;
 
 type Case = {
   name: string;

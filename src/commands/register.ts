@@ -189,7 +189,7 @@ function unknownRefused(out: Io, json: boolean, name: string): number {
 function stoppedRefused(out: Io, json: boolean, name: string): number {
   refuse(out, json, 'register', {
     id: 'register.stopped',
-    message: `${plainLine(name)} is stopped in this file; the owner clears \`stopped\` and starts the team`,
+    message: `${plainLine(name)} is stopped in this file; a lead clears \`stopped\` and starts the team`,
     repair: null,
   });
   // exit: register.stopped
@@ -252,8 +252,8 @@ function recordedRefused(out: Io, json: boolean, name: string, pane: string, rec
   const on = recordedPane === undefined ? 'no pane' : `pane ${plainLine(recordedPane)}`;
   refuse(out, json, 'register', {
     id: 'register.recorded',
-    message: `${plainLine(name)} is already recorded on ${on}, not on ${plainLine(pane)}; the owner stops the team and starts it again (\`team down\`, then \`team up\`)`,
-    repair: 'the owner runs `team down`, then `team up`',
+    message: `${plainLine(name)} is already recorded on ${on}, not on ${plainLine(pane)}; a lead stops the team and starts it again (\`team down\`, then \`team up\`); the seat's own team registers it`,
+    repair: 'a lead runs `team down`, then `team up`',
   });
   // exit: register.recorded
   return 1;

@@ -174,8 +174,8 @@ a `team.error` v1 document on stdout instead — the refusal's own `id`, its `me
 | `team down: only the owner abandons a team, from a terminal outside herdr` | 1 |
 | `team down: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team down: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
-| ``team down: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up` `` | 1 |
-| ``team down: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`) `` | 1 |
+| ``team down: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up` `` | 1 |
+| ``team down: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team down: <the delegate gate's text>` — the file has a `delegates` section and a delegate's call was refused: one of `down.delegate`, `down.delegate-approval`, `down.delegate-approved-copy`, `down.delegate-drift`, `down.delegate-evidence`, `down.delegate-placement`, `down.delegate-command`, `down.delegate-flag` | 1 |
 | ``team down: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; `--dry-run` and a session with nothing left to stop take no lock and never show it | 1 |
 | ``team down: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |

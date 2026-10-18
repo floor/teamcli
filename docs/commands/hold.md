@@ -46,8 +46,8 @@ its own seat.
 | the orchestrator's or the operator's seat, on the pane the state records for it | place and release |
 | a run with no terminal | nothing: `team hold: only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat` |
 | any other seat, or an agent-run CLI | nothing: `team hold: only the owner, the orchestrator or the operator holds the team; this call is <caller>` |
-| the orchestrator's or the operator's seat, when the state records no pane for it | nothing: `team hold: no pane is recorded for seat <name> in this session: the owner stops that seat and runs \`team up\`` |
-| the same seat on a pane the state doesn't record for it | nothing: `team hold: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (\`team down\`, then \`team up\`)` |
+| the orchestrator's or the operator's seat, when the state records no pane for it | nothing: `team hold: no pane is recorded for seat <name> in this session: a lead stops that seat and runs \`team up\`` |
+| the same seat on a pane the state doesn't record for it | nothing: `team hold: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)` |
 
 ## Flags
 
@@ -72,8 +72,8 @@ its own seat.
 | `team hold: not held` | 1 |
 | `team hold: only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat` | 1 |
 | `team hold: only the owner, the orchestrator or the operator holds the team; this call is <caller>` | 1 |
-| `team hold: no pane is recorded for seat <name> in this session: the owner stops that seat and runs \`team up\`` | 1 |
-| `team hold: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (\`team down\`, then \`team up\`)` | 1 |
+| `team hold: no pane is recorded for seat <name> in this session: a lead stops that seat and runs \`team up\`` | 1 |
+| `team hold: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)` | 1 |
 | `team hold: <why the state could not be read or written>` | 1 |
 
 ## Exit codes
@@ -158,6 +158,6 @@ exit 1
 
 ```console caller=claude-keeper
 $ team hold "freeze deploys" ; echo "exit $?"
-team hold: no pane is recorded for seat claude-keeper in this session: the owner stops that seat and runs `team up`
+team hold: no pane is recorded for seat claude-keeper in this session: a lead stops that seat and runs `team up`
 exit 1
 ```

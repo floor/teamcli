@@ -49,8 +49,8 @@ may plan, not only the orchestrator. The owner is refused. A name that is not a 
 refused the same way. The refusals are `team next`'s, with this command's prefix:
 
 ```text
-team plan: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up`
-team plan: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`)
+team plan: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
+team plan: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`)
 ```
 
 ## What it prints

@@ -59,13 +59,13 @@ A team that has never been started has no recorded pane, so a seat cannot pull u
 has recorded one:
 
 ```text
-team next: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up`
+team next: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
 ```
 
 The wrong pane is refused with the pane the state records:
 
 ```text
-team next: the state records pane <pane> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`)
+team next: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`)
 ```
 
 ## What it prints
@@ -108,7 +108,7 @@ take proceeds with the notice, never with a silent truncation.
 
 ```text
 team next: only a seat of this team pulls a task; this call is owner
-team next: no pane is recorded for seat <name> in this session: the owner stops that seat and runs `team up`
+team next: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
 team next: the team file declares no task source
 team next: tasks.source must be file
 team next: tasks.path must stay inside the checkout

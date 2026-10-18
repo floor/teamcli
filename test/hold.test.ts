@@ -305,7 +305,7 @@ describe('team hold', () => {
     const { code, err } = await hold(['freeze deploys'], where, ORCHESTRATOR);
     expect(code).toBe(1);
     expect(err).toBe(
-      'team hold: no pane is recorded for seat lead in this session: the owner stops that seat and runs `team up`\n',
+      'team hold: no pane is recorded for seat lead in this session: a lead stops that seat and runs `team up`\n',
     );
   });
 
@@ -316,7 +316,7 @@ describe('team hold', () => {
     const { code, err } = await hold(['freeze deploys'], where, moved);
     expect(code).toBe(1);
     expect(err).toBe(
-      'team hold: the state records pane w1:p1 for seat lead in this session, not the pane this call is on: the owner stops the team and starts it again (`team down`, then `team up`)\n',
+      'team hold: the state records pane w1:p1 for seat lead in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`)\n',
     );
   });
 
