@@ -35,6 +35,35 @@ describe('Codex launch and captured screens', () => {
     // A working screen never permits input, even if herdr's status has not caught up.
     expect(readScreen('codex', fixture(file)).kind).toBe(kind);
   });
+  test('every 0.161.0 capture reads its state, one chrome row under the status line and all', () => {
+    // The 0.161.0 captures (see that folder's README). A plain launch draws one chrome row
+    // under the status row — `← for agents · ? for shortcuts` — on idle, working and the
+    // post-turn empty box. Read as `status-last`, every one of those frames came back
+    // `unknown`, so `up` left the seat out: "rules not typed: the screen read unknown".
+    const latest = (name: string) => readFileSync(new URL(`../fixtures/codex/0.161.0/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('codex', latest('idle-hint')).kind).toBe('idle');
+    expect(classifyComposer('codex', latest('idle-hint').split('\n')).kind).toBe('idle');
+    // Typing hides the chrome row; the status row is the last line again.
+    expect(readScreen('codex', latest('unsent')).kind).toBe('unsent');
+    expect(classifyComposer('codex', latest('unsent').split('\n')).kind).toBe('unsent');
+    expect(readScreen('codex', latest('working')).kind).toBe('working');
+    expect(classifyComposer('codex', latest('working').split('\n')).kind).toBe('idle');
+    // The three-choice approval dialog and the renamed trust way-out are 0.161.0's own.
+    expect(readScreen('codex', latest('permission')).kind).toBe('permission');
+    expect(readScreen('codex', latest('trust')).kind).toBe('trust');
+    expect(readScreen('codex', latest('exit-typed')).kind).toBe('unsent');
+    expect(readScreen('codex', latest('exit')).kind).toBe('unknown');
+  });
+  test('a dialog above the status row and its chrome row is still the dialog', () => {
+    // Constructed from the captures: permission.txt's dialog with idle-hint.txt's last two
+    // lines (the status row and its chrome row) under it. Read before the mode changed:
+    // `unknown` — the footer was no longer the pane's last non-blank line.
+    const latest = (name: string) => readFileSync(new URL(`../fixtures/codex/0.161.0/${name}.txt`, import.meta.url), 'utf8');
+    const chrome = latest('idle-hint').trimEnd().split('\n').slice(-2);
+    const pinned = [latest('permission').trimEnd(), '', ...chrome, ''].join('\n');
+    expect(classify('codex', pinned.split('\n')).kind).toBe('permission');
+    expect(classifyComposer('codex', pinned.split('\n')).kind).toBe('unknown');
+  });
   test('a permission dialog above the pinned status line is the dialog, not unsent text', () => {
     // `permission-pinned` is constructed, not captured: the captured dialog with the captured
     // status line below it (see the fixtures README). Read before the fix: `unsent` — the

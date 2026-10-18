@@ -91,11 +91,26 @@ screen:
         - 'Trust this folder\?'
         - '^\s*›?\s*1\. Trust and continue\s*$'
       footer: 'enter continue · esc quit'
+    # 0.161.0 renamed the way out: `2. Back to Agent Command Center` and the footer's
+    # `esc back` (0.161.0/trust.txt). The question above it is the same, so it is still trust.
+    - all:
+        - 'Trust this folder\?'
+        - '^\s*›?\s*1\. Trust and continue\s*$'
+      footer: 'enter continue · esc back'
   permission:
     - all:
         - '^\s*Would you like to run the following command\?\s*$'
         - '^\s*›?\s*1\. Yes, proceed \(y\)\s*$'
         - '^\s*›?\s*2\. No, and tell Codex what to do differently \(esc\)\s*$'
+      footer: 'Press enter to confirm or esc to cancel'
+    # 0.161.0 adds a "Yes, and don't ask again" row, which moves the No row to 3
+    # (0.161.0/permission.txt). The command it names wraps, so only the row's fixed words are
+    # pinned; the footer and the first two rows are the older dialog's own.
+    - all:
+        - '^\s*Would you like to run the following command\?\s*$'
+        - '^\s*›?\s*1\. Yes, proceed \(y\)\s*$'
+        - '^\s*›?\s*2\. Yes, and don''t ask again for commands that start'
+        - '^\s*›?\s*3\. No, and tell Codex what to do differently \(esc\)\s*$'
       footer: 'Press enter to confirm or esc to cancel'
   # Codex's own update screen, drawn at startup before any composer (startup.txt, 0.157.0).
   # A vendor notice, not a question the agent asked: never answered, and the `tested` range
@@ -113,7 +128,12 @@ screen:
   working:
     - any: ['esc to interrupt']
   composer:
-    mode: status-last
+    # 0.161.0 draws one chrome row under the status row — `← for agents · ? for shortcuts`,
+    # or the same with the warning count (`? for shortcuts … ⚠ 1 warning · f2 to view`) —
+    # outside the YOLO launch a seat gets, and the row is hidden again while text is typed
+    # (0.161.0/idle-hint.txt, unsent.txt, working.txt). A `status-last` read called every
+    # such screen unknown and the seat's rules were never typed; the one-row mode reads it.
+    mode: status-then-one
     status_line: '^\s+GPT-[0-9][\w.-]*\s+[^·]*·'
     # 0.161.0 at 54 columns wraps the status row: `weekly 9` stays on the status line and
     # the next line is the ellipsis alone. A status line that already holds `…`, an `L:`
@@ -128,6 +148,10 @@ screen:
     # input row. The read scans up from the status line and anchors this pattern to the
     # captured column.
     prompt: '^›(?:\s|$)'
+    # No captured Codex frame draws its box without a status row, so there is nothing the
+    # fallback may call idle or unsent. An empty list is a declared one: a screen with no
+    # status row stays unknown.
+    fallback: []
     placeholders:
       - equals: ''
       - equals: Ask Codex to do anything
