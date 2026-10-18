@@ -3,6 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, s
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { validLockName } from './lock/name.ts';
+import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
 
@@ -31,6 +32,12 @@ export type SeatState = {
   stage: 'launched' | 'named' | 'ready';
   /** The CLI the seat was launched with: `down` stops it under it when the file renamed it. */
   cli?: string;
+  /**
+   * How the seat's CLI learns a drop is waiting: the turn-start hook the launch installed, the
+   * MCP inbox its profile registers, or nothing. Written by the launch; absent on a seat
+   * launched before it was recorded.
+   */
+  watcher?: CliWatcher;
   /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
   last_active?: string;
   pane?: string;
