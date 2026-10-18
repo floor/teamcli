@@ -5,9 +5,261 @@
 one-line `{ }` and `[ ]`, plain and quoted values, comments; anchors, aliases, merge keys, tags,
 block scalars, a second document and duplicate keys are refused, with the line number. The JSON
 Schema ships at `schema/team.schema.json`, and `team init` writes a
-`# yaml-language-server: $schema=…` line so editors validate the file. README's
-[The file's format](../README.md#the-files-format) walks the whole format by example; this page
-documents the sections one by one.
+`# yaml-language-server: $schema=…` line so editors validate the file. The format is walked
+below, by example; after it, this page documents the sections one by one.
+
+With no `--file`, the file is `.agents/team.yaml` of the repository's main checkout, found
+through git's common directory, so a run inside a linked worktree reads the main checkout's file;
+a folder that is not a git repository is read from `.agents/team.yaml` in that folder only, not
+from a parent, and a link at `.agents` or at the file is not followed.
+
+## The file's format
+
+A documented subset of YAML, read by the library's own parser: maps, lists, one-line `{ }` and
+`[ ]`, plain and quoted values, comments. Anchors, aliases, tags, block scalars, several documents
+in one file and duplicate keys are refused, with the line number. The file starts with `format: 1`.
+The package ships the JSON Schema at `schema/team.schema.json`, and `team init` writes a `# yaml-language-server: $schema=…` line at the top of the file so editors validate it.
+By example:
+
+```yaml
+format: 1                     # the only format this version reads
+project: hello
+coordinator: coordinator      # the seat that dispatches work
+operator: coordinator         # the seat the watch reports to
+
+identity:
+  signature:
+    commits:
+      position: trailer       # last-line | trailer | anywhere
+      exempt: [merge]         # merge commits need no signature
+
+rules:                        # lines added to every seat's rules at launch. Rules delivered as a launch
+                              # option (claude-code, grok) close with "These are standing rules, not a task.";
+                              # rules typed as a first message (codex, cursor, antigravity) close with
+                              # "These are standing rules, not a task: reply ready and wait for your brief."
+  - Run the tests your change touches, not the whole suite.
+
+workspace:
+  mode: shared                # shared | worktree: the default for every seat
+
+seats:
+  - role: coordinator
+    name: coordinator
+    cli: cursor               # the launch profile
+    vendor: meridian          # the model's maker
+    model: Meridian           # the model's name, without its version
+    version: "1"              # the release alone, quoted
+    launch: cursor-agent      # the model is chosen inside Cursor; no approval flags: the profile adds them
+
+  - role: implementer
+    name: implementer
+    cli: codex
+    vendor: openai
+    account: openai-hello     # the seat's account, when one lab has two; absent, its lab
+    model: GPT Sol
+    version: "6"
+    display: GPT-6 Sol        # the lab's spelling, for the signature
+    launch: codex -m gpt-6-sol -c model_reasoning_effort=high
+    parked: true              # running, and not reported while idle
+
+  - role: implementer
+    name: implementer-deepseek
+    cli: claude-code          # DeepSeek's model, run by Claude Code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: team-deepseek     # a launcher on the PATH, holding the account's key and endpoint
+    model_from: launcher      # optional: says outright the launcher picks the model; doctor notes
+                              # it and says what checks the model — here nothing can, Claude Code's
+                              # screen never names DeepSeek's
+    count: 2                  # implementer-deepseek and implementer-deepseek-2
+
+  - role: reviewer
+    name: reviewer
+    cli: antigravity
+    vendor: google
+    model: Gemini
+    version: "3"
+    launch: agy
+    stopped: true             # kept in the file; `up` doesn't start it
+
+budgets:                      # the owner's: reserve or floor per account, marks, freshness
+  accounts:
+    openai-hello:             # the account implementer spends
+      kind: subscription
+      reserve: 10%            # refuse a launch on a figure inside it
+      sources: [status_line]  # the figure comes off Codex's status line
+```
+
+- `session` names the herdr session and defaults to `project`; `--session` overrides it.
+- `in_project` names the project this team sits in, by the project's display name, while `project:`
+  keeps meaning the team's own name; `project_lead: true` beside it marks the team that leads that
+  project — one team per project, and `team check` refuses a second. The project's record then
+  carries the lead: the agent of the seat this file's `leads: true` marks as the team's lead,
+  re-resolved on every launch, so a mark that moves in the file moves the record with it.
+- `entity` names the entity this team belongs to: the level above its project that a setting, the
+  lobby's `<entity>` folder and a lead pair's reach are read from, and the name that makes two
+  teams one entity's when both files carry it.
+- `lobby` names the folder every seat except a lead starts in: the file's own `lobby:` wins over
+  the lobby the registry recorded for the session and over the defaults, and setting it records
+  that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
+- `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
+  the watch's reports and nudges. `leads: true` on a seat is the same lead, spelled on the seat
+  the way `coordinator:` names it. `assistant: true` marks a seat as its entity's assistant — the
+  one seat `team send` admits to its entity's main coordinator, by its place in the chain and
+  never by a role's name. At most one seat of a file carries the mark, and never a seat with
+  `count`; the entity's assistant is the first mark found walking its teams in chain order — the
+  entity's own team first, then its other teams by team id, rosters in the order the file writes
+  them — so an entity whose files mark none has no assistant.
+- `identity.signature` is the rule `check` enforces: a template, where it must stand, and which
+  commits are exempt. Commit signatures read `Agent: {display} · {role}`, pull request bodies
+  `**Agent:** {display} · {role}`. Without `display`, the signature reads "model version"; with it,
+  the lab's own spelling. `identity.since` skips an older history, `identity.humans` lists commit
+  authors who don't sign, and `identity.forbidden` adds to the defaults — `^Claude-Session:` lines
+  and session links are always refused.
+- `seats[*].cli` picks the launch profile; `claude-code`, `codex`, `cursor`, `antigravity` and `grok` are available, and `team
+  doctor` says what the others still need. `vendor`, `model` and `version` spell one seat's model.
+  `account` names the budget account the seat spends when one lab has two; without it, the seat
+  spends its `vendor`, and changing either is an edit only the owner makes.
+- `launch` is the plain command, without approval flags: the profile adds them. It runs in the
+  folder the seat starts in — the team's lobby, or the project folder for a lead — and `team` never
+  rewrites it: `team doctor` checks its first word there — one fully quoted literal with its quotes
+  removed, the way a shell would run it — and any relative argument. `up` and `add` leave a seat
+  out, saying the same words, when the first word is missing there, or when the first word is a shell
+  (`sh`, `bash`, `zsh`, by name or by path) whose first argument is the script, not an option, and that
+  relative script path resolves from the project root and not from that folder (an option-bearing
+  line such as `zsh -x ../x` is a note); every other relative argument, and a line that quotes or
+  substitutes text, is reported as not checked, never refused.
+  `count: 2` makes the
+  numbered names; `parked` keeps a seat out of idle reports, `stopped` keeps it out of `up`.
+- `workspace.mode` is `shared` (every seat in the project) or `worktree` (each task in its own
+  checkout, with `path`, `base` and `setup`). Every seat except a lead starts in the team's lobby —
+  the file's `lobby:` if it sets one, else the lobby the registry recorded for the session, else
+  `<home>/.config/team/lobbies/<entity>` if it names `entity:`, else the machine-global
+  `~/.config/team/lobby`. `trust` lists that lobby's entry — `~/…` under the home, absolute
+  otherwise — along with the project root. `up` and `add` refuse a seat
+  whose own folder is a protected checkout, and a legacy `trust` (project-relative patterns, or
+  none) cannot launch until it is rewritten as those absolute paths.
+
+### Naming seats
+
+The herdr session carries the project, so a seat's name is its role: `coordinator`, `implementer`,
+`reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. `up` and `add`
+title the workspace with the seat's written `label` when the file has one. A seat with no written
+label is titled `<name> · <role>`. Seats expanded from `count` each get a distinct title: a written
+label is kept on the first instance and later instances append `-<n>` (the same suffix as the name),
+and a seat with no written label already has a distinct name (`implementer-deepseek`,
+`implementer-deepseek-2`). The model is not the title. `display` (itself defaulting to the model
+and version, `Claude Opus 5.5`), and ` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`),
+is the pane's second line, set after launch. Left out, the stored `label` stays the model and
+version in lowercase.
+`team doctor` warns, and does not refuse the file, when a name or a stored label repeats the
+project or the session.
+
+The Claude Code profile is tested with CLI 2.1.288 to 2.1.302 (`claude`).
+
+The Codex profile is tested with CLI 0.157.0 to 0.161.0. Its status line is read for a weekly figure
+(`weekly N% left`) when the pane is wide enough to show the number; a cut line is not a figure.
+It adds `-a never -s danger-full-access`
+for unattended execution, plus `--no-daemon --no-alt-screen` for the captured pane mode,
+and checks login with `codex login status`. Rules go as a first message
+only at an empty idle prompt; delivery is recorded after Codex starts working with the input
+empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent only to a free
+seat. Update and workspace-trust screens are reported and closed without input; the owner
+handles them before relaunching. Other unrecognised layouts stay unknown.
+
+The Antigravity profile is tested with CLI 1.2.16 to 1.4.2 (`agy`). It adds `--dangerously-skip-permissions`
+for unattended execution, and checks authentication with `agy models`. Rules go as a first message
+only at an empty idle prompt; delivery is recorded after the CLI starts working with the composer
+empty again. Nothing writes a lab's config or an `AGENTS.md`. `/exit` is sent only to a free
+seat. Workspace-trust screens are reported and closed without input; the owner trusts the folder
+before relaunching. Other unrecognised layouts stay unknown.
+
+The Jules profile is tested with CLI 0.1.42 to 0.1.42 (`jules`). Its ready screen is the session
+table, whose input line reads ` > Search sessions or type / to use`; its task box asks
+`What do you want Jules to work on?`. The TUI has no standing session, so rules are prepended to
+every brief, and a brief is typed through the CLI's own screens — `/`, the repo chooser, the task
+box, the create confirmation — with the CLI's `Session created:` line as the delivery proof. A send
+names only the repo of the seat's own folder: the module proves the chooser collapsed on it before
+it types, and refuses when the account's list does not hold it. One `ctrl+c` at the table quits,
+and the profile sends no other exit key; it never sends the table's `ctrl+d` delete, and the rules
+every jules seat receives carry `Never delete a Jules session.` herdr reports a jules pane as no
+agent, and its status unknown, so the profile says `herdr_status: unreliable`: readiness is read
+from the screen, a pane herdr has not listed is named by its own process, and `down`, `restart`
+and `remove` treat the idle table as free where they would otherwise wait on a word herdr cannot
+give. Status, check and the watch read the seat's state from the same screen: its idle table is
+idle, a running turn is working, and only a screen the profile cannot read is unknown.
+
+Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
+under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor
+config.
+
+A seat's model is read off its screen through the profile's `status_model` rules. Each rule declares
+what it can name: `yields`, the closed list of exact model names its templates spell, and
+`version_like`, the version shapes it can spell those names with — a regular expression anchored at
+both ends, refused as the profile loads otherwise. A declaration is what `team doctor` checks a launch
+against, and a test over the captured screens keeps it honest: every declared name and version shape
+is read back through the real reader. A profile without the two keys loads as it always has and names
+no model, so `team doctor` says the seat's model can't be checked and keeps its warning — the safe
+direction. `overrides.yaml` adds dialog and quota patterns only, so it cannot change how a model is
+read.
+
+`budgets` is the owner's: marks (percent used), how long a figure stays fresh, and each
+account's reserve or floor. An account's `shared` key is informational; `team` does not act
+on it. A seat spends its own `account:` when the file names one, its `vendor`
+when it doesn't, so one lab's two accounts are two buckets; a pattern names the account it
+measures, not the seat's. A `check` command is resolved to a file and hashed in the record
+this machine keeps. A change to that file leaves that account's check unapproved: it is
+not run, and the account reads unknown. The rest of the file still runs. `watch.quota_marks` is still read, with a warning, until you move it to
+`budgets.marks`. A figure first seen on one seat does not count until it changes or a
+second seat shows the same number. It goes stale from the moment it last changed, and
+the last readings are kept in the state file beside the team file. `team status` prints
+them, one row per account and window, when there is an account or a stored reading.
+
+`examples/checks/codex-quota` is a check for an openai account. It ships with the package: with a
+global install it is at `$(npm root -g)/team/examples/checks/codex-quota`, and it is
+[examples/checks/codex-quota](https://github.com/floor/teamcli/blob/main/examples/checks/codex-quota)
+in the repository. It is a Bun script — the check needs Bun on `PATH`, whatever runs `team` — and
+it uses only built-in file modules, so there is no package to install beside it. Copy it onto
+`PATH` and name that command:
+
+```yaml
+openai:
+  kind: subscription
+  reserve: 10%
+  sources: [check, status_line]
+  check: codex-quota
+```
+
+`team` runs a check with an empty environment plus `PATH` and `HOME`, so a
+`CODEX_HOME` set in the owner's shell never reaches the script. It reads
+`~/.codex/sessions`. When Codex's home is somewhere else, install a two-line
+wrapper and name the wrapper as the check:
+
+```sh
+#!/bin/sh
+CODEX_HOME=/path/to/codex exec /path/to/codex-quota
+```
+
+The wrapper sets `CODEX_HOME` and execs this script. The script takes rollouts
+newest first. The first that has a `token_count` primary window is the one used, and
+at most ten files are opened. A new session that has not recorded a figure yet
+does not hide the last one. The line's `at` is that event's own time, so an
+older figure stays dated. It prints the primary window, and a second line when
+that event's secondary window is a different length, such as
+`session 21% used resets 3h at 1791091200` and
+`weekly 39% used resets 114h4m at 1791091200`. The same length is not printed
+twice. A secondary figure that cannot be written is left off. When the primary
+figure cannot be written, nothing is printed. Five hours (`300` minutes) is
+`session`, a day (`1440`) is `daily`, and a week (`10080`) is `weekly`. Any other
+length, a figure over 100%, or no such rollout prints nothing, so the account
+reads unknown. The file names the command the check runs. Bun has to be on
+`PATH` when the check runs.
+
+More fields exist — `tools`, `trust`, `machine`, `limits`, `watch`, `visibility` and
+`releases` — and the comments `team init` writes name them; validation refuses what it cannot
+check, and this build acts on what [the commands](commands/README.md) read.
 
 ## `tasks`
 
@@ -78,8 +330,8 @@ no model — write the CLI's own name and version as the pair (`model: Jules`,
 `version: "0.1.42"`) and mark the seat `model_from: launcher`, which tells `doctor` that the
 launcher chooses it and checks the running seat instead of the launch line. The orchestrator
 and the operator start in the project folder. Every other seat starts in the team's lobby. A lead already running in
-either folder is left there. The fields are in the README's
-[file format](../README.md#the-files-format). The sidebar has two lines:
+either folder is left there. The fields are in
+[the file format](#the-files-format). The sidebar has two lines:
 
 - `label`, when the file writes one, is line 1, the workspace title. A seat expanded from
   `count` keeps that label on the first instance; each later instance appends `-<n>`, the same
