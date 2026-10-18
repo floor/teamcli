@@ -211,9 +211,9 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   try {
     const state = readState(dir).sessions[session] ?? emptySession();
     const recorded = state.seats[seatName];
-    // The seat is the file's, and the pane is herdr's one agent of that name.
-    // A recorded pane selects nothing: the state can name another pane, and a name the
-    // file does not carry is left for the owner.
+    // The seat is the file's, and the pane is herdr's one agent of that name — or, when a new
+    // seat paused at trust before the rename step named it, the unnamed agent on the pane its
+    // waiting-for-trust record holds. A name the file does not carry is left for the owner.
     const configured = team.seats.find((seat) => seat.name === seatName);
     if (!configured) {
       if (!recorded) return refused({ id: 'answer.unverified', class: 'state', message: `${seatName}: it is not a live seat` });
@@ -225,7 +225,13 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     }
     const agents = host.agents(session);
     const named = agents?.filter((item) => item.name === seatName) ?? [];
-    const agent = named.length === 1 ? named[0] : undefined;
+    const onRecorded =
+      named.length === 0 &&
+      recorded?.waiting?.classification === 'trust' &&
+      recorded.pane !== undefined
+        ? agents?.find((item) => item.pane === recorded.pane && !item.name)
+        : undefined;
+    const agent = named.length === 1 ? named[0] : onRecorded;
     if (!agent) {
       if (named.length > 1) {
         return refused({ id: 'answer.ambiguous', class: 'state', message: `${seatName}: herdr lists more than one agent of this name; left as it is` });

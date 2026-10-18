@@ -86,13 +86,19 @@ function waitingView(
     };
   }
   const phrase = `waiting for owner (${waiting.classification})`;
-  const answer = trust && waiting.classification === 'trust';
+  const isTrust = waiting.classification === 'trust';
+  const answer = trust && isTrust;
+  const repair = answer
+    ? `team answer ${name} trust, or the owner answers the dialog in the pane, then team up`
+    : isTrust
+      ? 'the owner answers the dialog in the pane, then team up'
+      : 'the owner runs team up';
   return {
     state: phrase,
     stored: 'waiting-owner',
     difference: {
       what: `${name}: ${phrase}`,
-      repair: answer ? `team answer ${name} trust` : 'team up',
+      repair,
       needs: 'approve',
     },
   };

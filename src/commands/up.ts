@@ -57,6 +57,7 @@ import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts'
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import { unreadIdle } from '../launch/unread.ts';
 import { recordWhat, progressWriter, classificationOf } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -431,13 +432,17 @@ function seatPlan(
         : undefined;
       return { ...planned, replacedPane: recorded.pane, ...(leftWorkspace ? { leftWorkspace } : {}) };
     }
-    // The pane is herdr's one agent of this seat's name. No such agent, or two, is left out
-    // and not launched: the recorded pane is still listed, or the name is ambiguous.
-    const live = named.length === 1 ? named[0] : undefined;
+    // A seat waiting for trust is found by its recorded pane even before herdr names it; the
+    // pause verifies the pane, workspace label and process before finishing it.
+    const onRecorded =
+      recorded.waiting.classification === 'trust' && recorded.pane !== undefined && named.length <= 1
+        ? known.find((agent) => agent.pane === recorded.pane && (agent.name === null || agent.name === seat.name))
+        : undefined;
+    const live = onRecorded ?? (named.length === 1 ? named[0] : undefined);
     return {
       ...planned,
       ...(recorded.stage ? { stage: recorded.stage } : {}),
-      ...(live ? { pane: live.pane, workspace: live.workspace } : {}),
+      ...(live ? { pane: live.pane, workspace: live.workspace ?? recorded.workspace } : {}),
       waiting: recorded.waiting,
       ...(recorded.launched ? { waitingLaunched: recorded.launched } : {}),
       ...(live ? {} : { resumeGap: named.length === 0 ? 'none' as const : 'many' as const }),
@@ -1781,7 +1786,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       drop: () => host.drop(input.seat),
       screen: () => {
         const kind = readScreen(seatCli(input.seat), launch.paneText(session, input.pane) ?? undefined).kind;
-        return kind === 'idle' || kind === 'working' ? kind : classificationOf(kind);
+        if (kind === 'idle' || kind === 'working') return kind;
+        if (
+          kind === 'unknown'
+          && (launch.shellBack?.(session, input.pane) ?? null) !== true
+          && unreadIdle(launch.agentStatus?.(session, input.pane) ?? null)
+        ) {
+          return 'idle';
+        }
+        return classificationOf(kind);
       },
       process: () => launch.processInfo?.(session, input.pane) ?? null,
       agents: () => launch.agents(session),

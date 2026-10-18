@@ -26,12 +26,15 @@ import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
-import { agentList, agentRename, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, sessionState, typeText, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
+import { deliverRules } from '../launch/deliver.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '../launch/rules-file.ts';
+import { unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict, rosterOf } from '../permissions/who.ts';
@@ -40,6 +43,7 @@ import { shellQuote } from '../profiles/profile.ts';
 import { registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
+import { approvalStanding, type Standing } from '../store/store.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
 export const USAGE = `Usage: team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]
@@ -79,8 +83,15 @@ export type RegisterSources = {
    *  call `add` reports it with. Left out, the real write runs over herdr. */
   reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
   /** Names the pane as the seat — the herdr rename a launch runs at its `rename` step. Left out,
-   *  the real `herdr agent rename` runs. Read by `--pane` only. */
+   *  the real `herdr agent rename` runs. */
   renameAgent?: (session: string, pane: string, name: string) => boolean;
+  /** Optional rules delivery channels used when finishing a waiting-for-trust seat. */
+  standing?: (root: string) => Standing;
+  typeText?: (session: string, pane: string, text: string) => boolean;
+  pressEnter?: (session: string, pane: string) => boolean;
+  sendKey?: (session: string, pane: string, key: string) => boolean;
+  agentStatus?: (session: string, pane: string) => string | null;
+  sleep?: (ms: number) => Promise<void>;
   now: () => Date;
 };
 
@@ -95,6 +106,12 @@ const realSources: RegisterSources = {
   foreground: (session, pane) => paneForeground(pane, session),
   paneText: (session, pane) => paneRead(pane, 200, session),
   renameAgent: realRename,
+  standing: (root) => approvalStanding(root, homedir()),
+  typeText: (session, pane, text) => typeText(pane, text, session),
+  pressEnter: (session, pane) => pressEnter(pane, session),
+  sendKey: (session, pane, key) => herdrSendKey(pane, key, session),
+  agentStatus: (session, pane) => agentStatus(pane, session),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
 };
 
@@ -516,10 +533,17 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       return paneNamedRefused(io, json, pane, listed.name, session);
     }
   } else {
-    listed = agents.find((agent) => agent.name === name);
-    const namedCount = agents.filter((agent) => agent.name === name).length;
+    const named = agents.filter((agent) => agent.name === name);
+    const waitingOnRecorded =
+      held?.waiting?.classification === 'trust' && held.pane !== undefined
+        ? agents.find((agent) => agent.pane === held.pane)
+        : undefined;
+    if (waitingOnRecorded !== undefined && waitingOnRecorded.name !== null && waitingOnRecorded.name !== name) {
+      return paneNamedRefused(io, json, waitingOnRecorded.pane, waitingOnRecorded.name, session);
+    }
+    listed = waitingOnRecorded ?? named[0];
     if (listed === undefined) return noAgentRefused(io, json, name, session);
-    if (namedCount > 1) return ambiguousRefused(io, json, name, session, namedCount);
+    if (!waitingOnRecorded && named.length > 1) return ambiguousRefused(io, json, name, session, named.length);
     pane = listed.pane;
   }
   // A pane is one seat's: the pane this run records — named by `--pane`, or the one herdr names
@@ -566,7 +590,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // check` names lands where the seat stands, and a file that gained `in_project` or a new
   // signing since the launch reaches the registry. The session's own record is left exactly as
   // it is, save for a launch's id and process identity it is missing, which this run completes.
-  if (held !== undefined && held.pane === pane && held.stage === 'ready') {
+  if (held !== undefined && held.pane === pane && held.stage === 'ready' && held.waiting === undefined) {
     // One more repair from the same run, and a dry run paints nothing for it either: the seat's
     // two sidebar lines are re-applied from the file, so a label or display that drifted is put
     // back where the seat stands.
@@ -675,7 +699,10 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // is not a seat to record; the already path above does not read it.
   const text = sources.paneText(session, pane) ?? undefined;
   const screen = sources.screen ? sources.screen(seat.cli, text) : readScreen(seat.cli, text);
-  if (screen.kind !== 'idle' && screen.kind !== 'working') {
+  const waitingTrust = held?.waiting?.classification === 'trust';
+  const status = sources.agentStatus ? sources.agentStatus(session, pane) : listed?.status ?? null;
+  const waitingIdle = waitingTrust && screen.kind === 'unknown' && unreadIdle(status);
+  if (screen.kind !== 'idle' && screen.kind !== 'working' && !waitingIdle) {
     return screenRefused(io, json, name, screen.kind);
   }
 
@@ -711,14 +738,51 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   }
 
   const now = sources.now();
-  // The pane `--pane` named carries no name of the seat's yet: herdr is told it — the rename a
-  // launch runs after its idle wait — before anything is recorded. A rename herdr did not take
-  // is a note, never a refusal: the record is what this command exists to write, and the next
+  // The pane `--pane` named, or a waiting-for-trust pane that left out before rename, carries no
+  // name of the seat's yet: herdr is told it before anything is recorded. A rename herdr did not
+  // take is a note, never a refusal: the record is what this command exists to write, and the next
   // `--pane` run names the pane again.
-  const renamed = paneArg === undefined || (sources.renameAgent ?? realRename)(session, pane, name);
+  const needsRename = paneArg !== undefined || waitingTrust || listed?.name !== name;
+  const renamed = !needsRename || (sources.renameAgent ?? realRename)(session, pane, name);
   if (!renamed) {
     logLine(dir, 'register', callerLabel(walked), `the pane was not named ${name}: herdr did not take the rename`, now);
   }
+
+  let finishedRules: 'option' | 'message' | undefined;
+  if (waitingTrust) {
+    if (profile.rulesOption !== null) {
+      finishedRules = 'option';
+    } else {
+      const standing = (sources.standing ?? ((r: string) => approvalStanding(r, sources.home)))(root);
+      const delivery = rulesDeliveryOf(standing, team, seat, root, sources.home);
+      if ('refusal' in delivery) {
+        return screenRefused(io, json, name, screen.kind);
+      }
+      const written = writeRulesFile(standing, seat.name, root, sources.home, delivery.text, rulesFileHash(delivery.text), undefined, team.project);
+      if (!written.ok) {
+        return screenRefused(io, json, name, screen.kind);
+      }
+      if (sources.typeText && sources.pressEnter) {
+        const delivered = await deliverRules(seat.cli, delivery.line, profile.idleTimeout, {
+          screen: () => sources.paneText(session, pane) ?? undefined,
+          status: () => (sources.agentStatus ? sources.agentStatus(session, pane) : listed?.status ?? null),
+          type: (value) => sources.typeText!(session, pane, value),
+          enter: () => sources.pressEnter!(session, pane),
+          ...(sources.sendKey ? { key: (key: string) => sources.sendKey!(session, pane, key) } : {}),
+          file: () => rulesFileHolds(delivery.path, rulesFileHash(delivery.text)),
+          foreground: () => (sources.foreground ? sources.foreground(session, pane) : listed?.agent ? [listed.agent] : null),
+          now: () => sources.now().getTime(),
+          sleep: (ms) => (sources.sleep ? sources.sleep(ms) : Promise.resolve()),
+        });
+        if (delivered !== true) {
+          return screenRefused(io, json, name, screen.kind);
+        }
+      }
+      finishedRules = 'message';
+    }
+  }
+
+  const workspace = listed?.workspace ?? held?.workspace;
   // The id the seat keeps: the one a launch recorded for it — a record short of ready is
   // completed, never replaced — the one a stopped session retained, or a fresh one.
   const id = held?.id ?? recorded.retained_seats?.[name]?.id ?? mintSeatId();
@@ -735,7 +799,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       stage: 'ready',
       cli: seat.cli,
       pane,
-      ...(listed?.workspace !== undefined ? { workspace: listed.workspace } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
+      ...(finishedRules !== undefined ? { rules: finishedRules } : {}),
       last_active: now.toISOString(),
       launched: identity,
       ...(listed?.session ? { agent_session: listed.session } : {}),
@@ -762,7 +827,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   }
   // The seat's sidebar, painted from the file the way `up` and `add` paint it: the record above
   // makes the seat reachable; these two writes make its own lines say what the file says.
-  relabel(out, sources, session, seat, pane, listed?.workspace, name);
+  relabel(out, sources, session, seat, pane, workspace, name);
   noteLaunchedPane(sources.home, path, pane, session);
   // The audit line a delegated act writes, naming the authority (`up`) it was run under; a
   // granted seat writes the grant's own line.
