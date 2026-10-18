@@ -5,6 +5,12 @@
 // are keyed by session as well as seat: two sessions may each hold a seat of the same name, and
 // neither session's file may answer for the other's seat.
 //
+// The turn-start hook is also the seat's watcher for the drop leg: it reads the seat's own drop
+// folder (`.agents/send-drops/<session>/<seat>`) before the turn begins and prints each waiting
+// message, writing `<id>.read` first (tool `drop_read`) so the sender's side has proof beside the
+// message. A CLI whose launch installs this hook takes the drop leg; one whose launch installs
+// neither this hook nor an MCP inbox is a CLI that watches nothing (`cliWatcher`).
+//
 // Only a CLI whose own per-launch settings file reaches command hooks is served here
 // (`supportsCliHook`). Nothing under the owner's CLI home is read or written: the settings file
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
@@ -100,13 +106,124 @@ function hookCommand(statePath: string, state: 'working' | 'idle'): string {
   return `umask 077; f=$(mktemp ${shellQuote(`${statePath}.new.XXXXXX`)}) && printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f" && mv -f "$f" ${shellQuote(statePath)}`;
 }
 
-/** The settings text one seat's launch loads: `working` at turn start, `idle` at turn end. */
-export function cliHookSettings(statePath: string): string {
+/** The drop folder one seat is sent to: `<dir>/send-drops/<session>/<seat>`, the tree
+ *  `team send` writes and `team drops` reads. The session is the file's own word, not the
+ *  encoded folder the hooks live under: the sender knows only that spelling. */
+export function dropFolder(dir: string, session: string, seat: string): string {
+  return join(dir, 'send-drops', session, seat);
+}
+
+/** The only names the read serves: the ids `team send` writes (`randomUUID`, lowercase). The
+ *  MCP inbox serves the same set (`MESSAGE_ID` in `src/mcp/inbox.ts`); the rule is restated here
+ *  as a shell glob because this command cannot import it. */
+const DROP_GLOB = `${'[0-9a-f]'.repeat(8)}-${'[0-9a-f]'.repeat(4)}-${'[0-9a-f]'.repeat(4)}-${'[0-9a-f]'.repeat(4)}-${'[0-9a-f]'.repeat(12)}`;
+
+/** How many messages one turn-start read prints. A bounded batch keeps a turn from carrying an
+ *  unbounded folder; whatever is left waits for the next turn, in name order. */
+export const DROP_READ_BATCH = 10;
+
+/**
+ * The awk program that makes one body safe inside `additionalContext`: a JSON string may hold any
+ * byte only when the quote, the backslash and every control character are escaped. Each character
+ * is written as itself or as its exact JSON escape (`\n` is the record separator the program
+ * inserts between lines); the escaping is pinned by `test/cli-hook.test.ts` against bodies
+ * holding quotes, backslashes, tabs and control bytes.
+ */
+const LANDING_ESCAPER = (() => {
+  // The escape this byte writes, as the exact text JSON needs. JSON.stringify is also the awk
+  // literal for it: JSON and awk agree on `\\` and `\"`, and none of these texts holds a control
+  // byte of its own.
+  const written = (byte: number, text: string): [number, string] => [byte, text];
+  const entries: Array<[number, string]> = [
+    written(0x5c, '\\\\'),
+    written(0x22, '\\"'),
+    written(0x09, '\\t'),
+    written(0x0d, '\\r'),
+    written(0x08, '\\b'),
+    written(0x0c, '\\f'),
+  ];
+  const named = new Set(entries.map(([byte]) => byte));
+  for (let byte = 0x01; byte <= 0x1f; byte++) {
+    if (byte === 0x0a || named.has(byte)) continue;
+    entries.push(written(byte, `\\u${byte.toString(16).padStart(4, '0')}`));
+  }
+  const compare = (byte: number): string => {
+    if (byte === 0x5c) return '"\\\\"';
+    if (byte === 0x22) return '"\\""';
+    // Not a literal control byte: the awk macOS ships reads a raw CR as a line end, which splits
+    // the program. `sprintf("%c", n)` names the same byte without putting it in the source.
+    return `sprintf("%c", ${String(byte)})`;
+  };
+  // A character loop, not `gsub`: measured on this machine's awk (20200816), a replacement's
+  // `\\` came out as two backslashes rather than one, so a `gsub` table would depend on the awk
+  // reading it. Concatenation has no replacement escapes; the text each branch writes is exactly
+  // the JSON escape.
+  const branches = entries
+    .map(([byte, text], index) => `${index === 0 ? 'if' : 'else if'} (c == ${compare(byte)}) out = out ${JSON.stringify(text)}`)
+    .join('; ');
+  return `function esc(s,   out, i, c) { out = ""; for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); ${branches}; else out = out c } return out } { printf "%s%s", (NR > 1 ? "\\\\n" : ""), esc($0) }`;
+})();
+
+/**
+ * The turn-start command that reads the seat's drop folder. It hands each waiting message to the
+ * turn in name order, at most `DROP_READ_BATCH` a turn, with the same path rules the MCP inbox
+ * keeps: only a lowercase-UUID name, never a link, never a directory, and never a message that
+ * already has its `<id>.read` receipt. The body is read and escaped first, the receipt is written
+ * whole by `mktemp` + `mv -f` at the hook's own umask (0600 under `umask 077`), and only then does
+ * the message join the one `additionalContext` object the command prints: a read that cannot
+ * leave proof says nothing, exactly as `inbox_read` refuses a body whose receipt did not land. A
+ * receipt is never removed, and a message beside one is never handed over twice. The seat and
+ * session reach the receipt JSON encoded at install time, so a session name holding quotes or a
+ * newline cannot break the command or the record.
+ */
+function dropReadCommand(dropDir: string, seat: string, session: string): string {
+  // `$$` is the hook shell's own pid and must expand, so it stands outside the quoted format.
+  const head = shellQuote(
+    `{"v":1,"id":"%s","seat":${JSON.stringify(seat)},"session":${JSON.stringify(session)},"tool":"drop_read","ts":"%s","pid":`,
+  );
+  const receipt = `${head}$$${shellQuote('}\\n')}`;
+  const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
+  return [
+    'umask 077',
+    `d=${shellQuote(dropDir)}`,
+    'if [ -L "$d" ] || [ ! -d "$d" ]; then exit 0; fi',
+    'n=0',
+    'got=0',
+    'ctx=',
+    'for p in "$d"/*; do',
+    `[ "$n" -ge ${String(DROP_READ_BATCH)} ] && break`,
+    'b=${p##*/}',
+    `case "$b" in ${DROP_GLOB}) ;; *) continue ;; esac`,
+    '[ -L "$p" ] && continue',
+    '[ -f "$p" ] || continue',
+    'if [ -e "${p}.read" ] || [ -L "${p}.read" ]; then continue; fi',
+    `e=$(awk ${shellQuote(LANDING_ESCAPER)} "$p" 2>/dev/null) || continue`,
+    'r=$(mktemp "$d/.receipt.XXXXXX" 2>/dev/null) || continue',
+    `if ! printf ${receipt} "$b" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$r" 2>/dev/null; then rm -f "$r"; continue; fi`,
+    'if ! mv -f "$r" "${p}.read" 2>/dev/null; then rm -f "$r"; continue; fi',
+    'if [ "$got" = 1 ]; then ctx="$ctx\\n\\n"; fi',
+    'ctx="$ctx$e"',
+    'got=1',
+    'n=$((n+1))',
+    'done',
+    `if [ "$got" = 1 ]; then printf ${envelope} "$ctx"; fi`,
+  ].join('\n');
+}
+
+/** The settings text one seat's launch loads: `working` at turn start, `idle` at turn end, and,
+ *  when the seat has a drop folder, the turn-start read of it. Two commands share
+ *  `UserPromptSubmit`: the state word first, so a read that takes a moment still leaves the seat
+ *  reading `working`, then the folder read whose stdout the CLI adds to the turn. */
+export function cliHookSettings(statePath: string, drops?: { dropDir: string; seat: string; session: string }): string {
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
+  const start: unknown[] = [hook('working')];
+  if (drops) {
+    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.dropDir, drops.seat, drops.session) }] });
+  }
   return `${JSON.stringify({
-    hooks: { UserPromptSubmit: [hook('working')], Stop: [hook('idle')] },
+    hooks: { UserPromptSubmit: start, Stop: [hook('idle')] },
   }, null, 2)}\n`;
 }
 
@@ -193,7 +310,8 @@ export function installCliHooks(dir: string, session: string, seats: readonly Cl
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
     if (statePath === null) continue;
-    if (!writeSettings(settingsPath, cliHookSettings(statePath))) continue;
+    const drops = { dropDir: dropFolder(dir, session, seat), seat, session };
+    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops))) continue;
     landed[seat] = settingsPath;
   }
   return landed;

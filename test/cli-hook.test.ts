@@ -137,6 +137,158 @@ describe('what a run plans and what it installs', () => {
   });
 });
 
+describe('the turn-start folder read', () => {
+  const SESSION = 'teamcli';
+  const SEAT = 'worker';
+  const ID1 = '11111111-2222-3333-4444-555555555555';
+  const ID2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const ID3 = '01234567-89ab-cdef-0123-456789abcdef';
+
+  const seat = (session = SESSION, name = SEAT) => ({ name, cli: 'claude-code', launch: CLAUDE });
+
+  /** The drop-read command the settings file installs, as the CLI would run it. */
+  function dropCommand(landed: Record<string, string>, name = SEAT): string {
+    const settings = JSON.parse(readFileSync(landed[name]!, 'utf8')) as {
+      hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
+    };
+    const commands = (settings.hooks.UserPromptSubmit ?? []).flatMap((entry) => entry.hooks.map((one) => one.command));
+    const read = commands.find((one) => one.includes('drop_read'));
+    if (read === undefined) throw new Error('no drop read in the settings file');
+    return read;
+  }
+
+  /** The seat's drop folder, made the way a launch would find it. */
+  function drops(session = SESSION, name = SEAT): string {
+    const at = join(dir, 'send-drops', session, name);
+    mkdirSync(at, { recursive: true, mode: 0o700 });
+    return at;
+  }
+
+  function run(command: string): string {
+    return execFileSync('sh', ['-c', command], { encoding: 'utf8' });
+  }
+
+  /** The `additionalContext` the hook's stdout carries. Claude Code reads a UserPromptSubmit
+   *  hook's stdout as that JSON object (measured on 2.1.296, quoted in the commit); anything else
+   *  is not context, so every scene below goes through this door. */
+  function landing(out: string): string {
+    const parsed = JSON.parse(out) as { hookSpecificOutput?: { hookEventName?: string; additionalContext?: string } };
+    expect(parsed.hookSpecificOutput?.hookEventName).toBe('UserPromptSubmit');
+    return parsed.hookSpecificOutput?.additionalContext ?? '';
+  }
+
+  function receiptOf(at: string, id: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(at, `${id}.read`), 'utf8')) as Record<string, unknown>;
+  }
+
+  test('the install adds the read to the same turn start, aimed at the seat’s own drop folder', () => {
+    const landed = installCliHooks(dir, SESSION, [seat()]);
+    const command = dropCommand(landed);
+    expect(command).toContain(join(dir, 'send-drops', SESSION, SEAT));
+    expect(command).toContain('drop_read');
+    expect(command).toContain('umask 077');
+    // The read is the second command of the same turn start; the state word still comes first.
+    const settings = JSON.parse(readFileSync(landed[SEAT]!, 'utf8')) as {
+      hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
+    };
+    expect(settings.hooks.UserPromptSubmit).toHaveLength(2);
+    expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toContain('"state":"working"');
+  });
+
+  test('a waiting message is handed to the turn once, and its receipt is written beside it at 0600', () => {
+    const at = drops();
+    writeFileSync(join(at, ID1), 'from the owner — admitted by: rule\nhello\n');
+    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    expect(landing(run(command))).toBe('from the owner — admitted by: rule\nhello');
+    expect(receiptOf(at, ID1)).toMatchObject({ v: 1, id: ID1, seat: SEAT, session: SESSION, tool: 'drop_read' });
+    expect(typeof receiptOf(at, ID1).ts).toBe('string');
+    expect(Number.isInteger(receiptOf(at, ID1).pid)).toBe(true);
+    expect(statSync(join(at, `${ID1}.read`)).mode & 0o777).toBe(0o600);
+    // The second turn reads nothing: the receipt is what says the message was handed over.
+    expect(run(command)).toBe('');
+  });
+
+  test('a body the read cannot leave a receipt for is not printed', () => {
+    const at = drops();
+    writeFileSync(join(at, ID1), 'a message that must not be shown unproven\n');
+    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    chmodSync(at, 0o555);
+    try {
+      expect(run(command)).toBe('');
+    } finally {
+      chmodSync(at, 0o700);
+    }
+    expect(existsSync(join(at, `${ID1}.read`))).toBe(false);
+    // With the folder writable again the same turn-start reads it and leaves the receipt.
+    expect(landing(run(command))).toBe('a message that must not be shown unproven');
+    expect(existsSync(join(at, `${ID1}.read`))).toBe(true);
+  });
+
+  test('only a lowercase UUID is a message: links, other names and receipts are skipped', () => {
+    const at = drops();
+    const outside = join(base, 'outside-body');
+    writeFileSync(outside, 'a link target, never a message\n');
+    symlinkSync(outside, join(at, ID2));
+    writeFileSync(join(at, 'notes.txt'), 'not a message\n');
+    writeFileSync(join(at, ID3), 'already read\n');
+    writeFileSync(join(at, `${ID3}.read`), '{"v":1}\n');
+    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    expect(run(command)).toBe('');
+    expect(existsSync(join(at, `${ID2}.read`))).toBe(false);
+    expect(existsSync(join(at, `${ID3}.read`))).toBe(true);
+    expect(readFileSync(join(at, `${ID3}.read`), 'utf8')).toBe('{"v":1}\n');
+  });
+
+  test('one turn reads ten messages at most, and the rest wait for the next', () => {
+    const at = drops();
+    const ids = Array.from({ length: 12 }, (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    for (const [index, id] of ids.entries()) writeFileSync(join(at, id), `message ${String(index)}\n`);
+    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    const first = landing(run(command));
+    expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(10);
+    expect(readdirSync(at).filter((name) => name.endsWith('.read'))).toHaveLength(10);
+    const second = landing(run(command));
+    expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
+    expect(readdirSync(at).filter((name) => name.endsWith('.read'))).toHaveLength(12);
+  });
+
+  test('the body is handed over literally, shell words and all', () => {
+    const at = drops();
+    const body = 'from the owner — admitted by: rule\n$(touch ' + join(base, 'surprise') + ') `whoami` "quoted"';
+    writeFileSync(join(at, ID1), `${body}\n`);
+    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    expect(landing(run(command))).toBe(body);
+    expect(existsSync(join(base, 'surprise'))).toBe(false);
+  });
+
+  test('a body with quotes, backslashes and control bytes still arrives whole', () => {
+    const at = drops();
+    // A quote, a backslash, a tab, a control byte and a comma all have to survive the JSON the
+    // hook writes: the client parses that string, so one unescaped byte would drop the message.
+    const body = 'a "quoted" line \\ with a backslash\tand a tab\x01 and \x1f\x08\x0c';
+    writeFileSync(join(at, ID1), `${body}\nsecond line\n`);
+    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    expect(landing(run(command))).toBe(`${body}\nsecond line`);
+  });
+
+  test('two messages land as two paragraphs, oldest name first', () => {
+    const at = drops();
+    writeFileSync(join(at, ID1), 'first\n');
+    writeFileSync(join(at, ID2), 'second\n');
+    const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
+    expect(landing(run(command))).toBe('first\n\nsecond');
+  });
+
+  test('a session name with quotes and spaces still names a folder and a receipt', () => {
+    const session = `it's a team`;
+    const at = drops(session);
+    writeFileSync(join(at, ID1), 'hello across a quoted session\n');
+    const landed = installCliHooks(dir, session, [seat(session)]);
+    expect(landing(run(dropCommand(landed)))).toBe('hello across a quoted session');
+    expect(receiptOf(at, ID1)).toMatchObject({ v: 1, id: ID1, seat: SEAT, session, tool: 'drop_read' });
+  });
+});
+
 describe('the state file a hook writes', () => {
   const SESSION = 'teamcli';
   const statePath = (session: string, seat: string): string => join(dir, 'seat-state', session, `${seat}.json`);
