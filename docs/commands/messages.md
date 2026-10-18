@@ -5,8 +5,11 @@ the checkout may run it. A send writes the message as one signed record into the
 folder, `<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still
 waiting there, verifies its signature with this checkout's message key, prints the body, and writes
 the signed read receipt (`<id>.read.json`) in that one step. A record that does not verify prints
-no body and writes nothing. A message a previous build left in `.agents/messages/` is read the same
-way; nothing writes there any more.
+no body and writes nothing. A message a previous build left in `.agents/messages/<seat>/` is read
+the same way. The owner's mailbox, `.agents/messages/owner/`, is read with the rest: the Runtime
+writes a signed record there for each event it delivers to the owner (see [the event log and the
+bus](../internal/events.md)), its `FROM` is `runtime`, and the run shows it and writes its receipt
+like any other waiting record.
 
 ## Synopsis
 

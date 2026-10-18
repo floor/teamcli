@@ -2,8 +2,8 @@
 
 This page states the internal contract for the project event log (`events.jsonl`), the
 reconciliation pass (`src/bus/reconcile.ts`), the event kinds and routing table (`src/bus/kinds.ts`),
-and the Unix domain socket service at `.agents/bus.sock` (`src/bus/server.ts`, `src/commands/bus.ts`),
-implementing RFC 002 Amendment 01 §4.1–§4.4 and §7.
+owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.agents/bus.sock`
+(`src/bus/server.ts`, `src/commands/bus.ts`), implementing RFC 002 Amendment 01 §4.1–§4.5 and §7.
 
 ## 1. The event log (`src/bus/log.ts`)
 
@@ -49,27 +49,92 @@ implementing RFC 002 Amendment 01 §4.1–§4.4 and §7.
   `.at-prompt`, `.unreachable`, `.done`), work lifecycle (`work.claimed`, `.done`, `.released`,
   `.gate`, `.suite`), and team/governance (`team.seat-added`, `.seat-removed`, `.seat-reloaded`,
   `.grant-issued`, `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`).
-- **Privileged self-subscription ban**: `team.grant-*`, `team.policy-*`, `seat.at-prompt`, and any
-  kind in the owner's `privileged-kinds` list are privileged. A seat that is not a default recipient
-  (`lead`/`operator`) may never subscribe itself to a privileged kind. When a seat attempts to do
-  so, the bus refuses the subscription with rule `privileged-self-subscription`, logs the refusal to
-  `.agents/team.log`, and appends a `team.policy-refused` event routed to the owner.
-- **Owner-at-once set (OD-20261018-05)**: `DEFAULT_OWNER_AT_ONCE_KINDS` names the urgent kinds
-  delivered to the owner immediately rather than batched.
+- **Recipients and how a seat is named**: a kind's recipients are positions — `lead` (the
+  orchestrator's seat and every seat marked `leads`), `operator`, `sender` and `subject` (the
+  record's own fields), and `owner` (the owner's runtime, never a seat) — or seats.
+  `EVENT_ROUTING_DEFAULTS` is the release table; a position the event does not carry resolves to
+  nobody. A seat is written by
+  its plain name or by the registry agent id (`agt_…`) that holds it: an id resolves to a seat only
+  while a live, non-retired agent of this team holds it, and an id the registry does not know, one
+  that is retired, or one reached through another team is left as written and names nobody
+  (`src/bus/seats.ts`). Delivery resolves an id through the registry to the seat that holds it; a
+  plain name stands as written. The seat that asks for a write is recorded by its registry id when
+  the registry holds one, and by its name only when it has none. No identity comes from a seat
+  name: `owner` is not a seat called `owner` but the position the Runtime fills, and a watch takes
+  the owner's identity only as the owner's own delivery path (§4).
+- **The additive chain**: `resolveRouting` folds `EVENT_ROUTING_DEFAULTS` through the levels' words
+  in `POLICY_LEVELS` order. A level adds recipients among its own seats and removes only what its
+  own word added; a removal naming a recipient standing above it is refused
+  (`routing-removes-inherited`). A kind a level does not name keeps the recipients it has. A
+  privileged kind's default recipients are added back at the end of every fold, so the invariant
+  stands even when a hand-built chain skipped the check.
+- **Privileged kinds**: `team.grant-*`, `team.policy-*`, and `seat.at-prompt` are privileged, and
+  the owner's `privileged-kinds` list grows the set (`growPrivilegedKinds`); the list itself is the
+  owner's alone (`privileged-kinds-owner-only`). A seat may never add itself as a recipient of a
+  privileged kind (`privileged-self-subscription`), and only the owner, or a holder whose grant
+  names the kind (`privileged-owner-only`), routes one. An ordinary kind is a seat's to add itself
+  to, at its own level only (`seat-adds-itself-only`); a grant holder's word on an ordinary kind
+  sits at project or team (`grant-holder-scope`). A refusal is a value, never a silence: the bus
+  appends the record to `.agents/team.log`, raises `team.policy-refused` to its default audience
+  `owner`, and says the rule out loud.
 
-## 4. The bus socket (`src/bus/server.ts`) and `team watch`
+## 4. Owner delivery (`src/bus/owner.ts`)
+
+- **The Runtime delivers, not a seat**: an event the routing table sends to `owner`, or one the
+  raising side addresses to `owner`, is delivered by the Runtime itself — the machine notification
+  the watch raises, and one signed record in the owner's own mailbox. No seat is in the path, so a
+  held, unreachable or absent seat silences neither the notification nor the record. Without a home
+  to sign with, the notification still goes and the record is not written.
+- **The mailbox `team messages` lists**: the record lands in `.agents/messages/owner/`, the
+  mailbox the owner's `team messages` run already reads, so his list is one list. Its payload is a
+  message addressed to `owner` whose writer is `runtime`; it is written at mode `0600` by renaming
+  a temporary file into place, and the run lists it, shows it and writes its receipt with the
+  rest.
+- **The watch is the owner's delivery path only as itself**: the process delivers when the owner
+  check that admits owner-only actions admits it, when it runs in the agentless pane `up` starts
+  it in, or when it is the watch this session recorded. A watch a seat starts in its own pane runs
+  its passes, publishes its reports and polls, but never subscribes with the owner's identity.
+- **At once, or in the pass's digest**: the `owner-at-once` setting (`OWNER_AT_ONCE_SETTING`, the
+  owner's alone) names the kinds notified on the pass that reads them, each with its own record:
+  `DEFAULT_OWNER_AT_ONCE_KINDS` holds `seat.at-prompt` of a permission, trust, login, vendor or
+  rate-limit prompt, `seat.unreachable` and a lead's `seat.done`, and every `team.seat-*`,
+  `team.grant-*` and `team.policy-*` kind. Every
+  other owner-routed event waits in the pass and lands at its end as one digest record whose body
+  is the count (`1 event:` or `<n> events:`), then the pass's lines joined by `; `, each folded to
+  one line and clipped to `MAX_OWNER_LINE`.
+- **A record is the delivery's own memory**: ids are deterministic — `evt-<seq>-<…>` from the
+  kind, the record id and the sequence, `digest-<…>` from the batch's events — so an event
+  re-delivered after a restart finds its record and is neither rung nor written again. A watch
+  report it already notified is not rung a second time when the report's published event comes
+  back on the bus; that event's record is the one in the mailbox.
+
+## 5. The bus socket (`src/bus/server.ts`) and `team watch`
 
 - Binds `.agents/bus.sock` at mode `0600` under `.agents/bus.sock.lock`, using the same `lstat`
   gate and two-sighting stale-socket recovery as `.agents/broker.sock`.
 - Each live subscriber has a bounded outbound queue (`DEFAULT_SUBSCRIBER_BUFFER_LIMIT = 256`); if a
   slow subscriber's queue overflows, the bus sends `{ ok: true, kind: 'gap', oldest_seq, newest_seq }`
   and closes the stream so the subscriber resyncs from durable records.
-- `team watch` subscribes to `.agents/bus.sock` at the start of each pass (`syncWatchBus`), applies
-  events in sequence order, resyncs on `gap`, publishes `seat.unreachable`, `seat.at-prompt`, and
-  `seat.blocked` when its poll detects a missing, prompted, or blocked seat, and falls back cleanly
-  to polling when no bus is running.
+- **Subscription identity**: a subscribe names a seat. A registry agent id resolves to the seat
+  that agent holds in this team; an id no live agent of this team holds is refused with `no agent
+  of this team holds that id; subscribe with the agent id the registry holds or with the seat
+  name`. A claimed pane must be the pane the registry holds for that agent (`the registry holds
+  pane X for Y, not Z`); an agent with no pane on record does not contradict a claim. A plain seat
+  name stands as written.
+- **What a subscription reads**: a kind filter narrows what a subscriber is sent, never who
+  receives a record. An event addressed by the raising side to a seat (`to`) reaches that seat, and
+  the watch addresses its owner reports to `owner` this way; otherwise the routing table's
+  recipients decide.
+- **`team watch`**: the owner's delivery path subscribes at the start of each pass
+  (`syncWatchBus`), applies events in sequence order, resyncs on `gap`, and hands owner-addressed
+  events to `OwnerDelivery` (§4). Any watch publishes its check reports as events
+  (`publishWatchReportsToBus`), merging an operator line and an owner line for one record id into
+  one event addressed to `owner`; a watch a seat starts polls and publishes but never subscribes
+  with the owner's identity. It publishes `seat.unreachable`, `seat.at-prompt`, and
+  `seat.blocked` when its poll detects a missing, prompted, or blocked seat, and falls back
+  cleanly to polling when no bus is running.
 
-## 5. Same-user (`M`-not-`A`) boundary
+## 6. Same-user (`M`-not-`A`) boundary
 
 Every seat runs as the same OS user (`owner-user`), and the checkout's message key sits on disk
 where every seat can read it. As stated in `SECURITY.md` (OD-20261018-03) and RFC 002 Amendment 01
