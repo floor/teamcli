@@ -575,7 +575,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // A human's pane never takes typing, whatever its order says: the typing legs are kept out of
   // the walk — each one's reason is recorded on the history line — and the walk falls to the drop
   // leg, added when the order in force leaves it out, since a file can wait where a keystroke
-  // cannot be taken back. A walk with no drop leg left refuses on that leg's own terms.
+  // cannot be taken back.
   const human = declared?.human === true;
   const walk: readonly DeliveryLeg[] = human
     ? [...order.filter((leg) => leg !== 'typed' && leg !== 'native'), ...(order.includes('drop') ? [] : (['drop'] as const))]

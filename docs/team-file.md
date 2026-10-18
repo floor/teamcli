@@ -141,7 +141,7 @@ because they load the file first.
 `human` is optional on a seat: `human: true` marks its pane as a person's. A send to it walks no
 typing leg — the typed trigger and the native frame are skipped, each one's reason recorded on the
 history line the send writes — and falls to the `drop` leg, which is added to the walk when the
-order in force leaves it out; with no leg left the send refuses, naming why. The watch types no
+order in force leaves it out. The watch types no
 retry there and no nudge: a held send's marker is given up on with the reason, and its message
 waits in the drop file. `team send --wait` is refused for such a seat, since the wait rides the
 native leg. The key is part of the seat's digest, and a file that marks no seat keeps every digest
