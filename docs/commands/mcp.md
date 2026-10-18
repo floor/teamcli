@@ -15,9 +15,10 @@ it runs, and writes one receipt per message it returns; it never writes the mess
 
 A seat's launch registers the server with its CLI where a run measured a route. A codex seat's
 launch line carries the registration itself — two `-c` values naming the server and this
-install's runner, and no file written into the seat's folder. A gemini seat's launch runs
-`gemini mcp add -s project` in the seat's folder, naming the same runner, and the file the
-command writes is the CLI's own project settings. The server names the seat it launched for;
+install's runner, and no file written into the seat's folder. A gemini or grok seat's launch
+runs that CLI's own `mcp add -s project` in the seat's folder, naming the same runner, and the
+file the command writes is the CLI's own project settings (`.gemini/settings.json`,
+`.grok/config.toml`). The server names the seat it launched for;
 the session it serves is the team file's in the seat's folder, read the way a sender reads it.
 Where the seat's folder is a git work tree that does not ignore a file the registration would
 write, team refuses to register: the seat stays on its drop and typed legs, and its line

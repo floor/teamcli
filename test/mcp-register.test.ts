@@ -53,6 +53,16 @@ describe('registerInbox', () => {
     });
   });
 
+  test('grok carries the same measured add, to its own project config', () => {
+    const grok = profileFor('grok');
+    expect(grok?.mcpInbox).toEqual({
+      launchArgs: [],
+      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}'],
+      target: '.grok/config.toml',
+      file: null,
+    });
+  });
+
   test('a folder outside a repository registers: the CLI add runs with the runner and the seat', () => {
     const dir = folder();
     const { run, calls } = fakeAdd();
@@ -94,6 +104,14 @@ describe('registerInbox', () => {
       reason: 'its project does not ignore .gemini/settings.json',
     });
     expect(calls).toEqual([]);
+  });
+
+  test('the refusal names the target the profile declares', () => {
+    const dir = folder({ repo: 'plain' });
+    expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: dir, run: () => ({ code: 0 }) })).toEqual({
+      ok: false,
+      reason: 'its project does not ignore .grok/config.toml',
+    });
   });
 
   test('a refused add names the command and its exit', () => {
