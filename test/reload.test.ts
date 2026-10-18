@@ -244,6 +244,20 @@ describe('team reload', () => {
     expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
   });
 
+  test("a human seat is refused before anything is read, closed or launched", async () => {
+    remember('worker', 'low');
+    approve(teamYaml(['reload']).replace('    name: worker\n', '    name: worker\n    human: true\n'));
+    const { sources, closed, commands } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code).toBe(1);
+    expect(io.err).toContain("worker is a human's pane: nothing is typed into it or launched over it; left as it is");
+    expect(closed).toEqual([]);
+    expect(commands).toEqual([]);
+    // The record is untouched: no close, no relaunch, and the file's drift stays unread.
+    expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
+  });
+
   test('an installed version outside the tested range closes nothing', async () => {
     remember('worker', 'low');
     const { sources, closed, commands } = harness();

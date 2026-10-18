@@ -3724,6 +3724,10 @@ scene('reload.absent', async (place) => {
   write(place, TEAM);
   return show(await reloaded(place, ['missing']), 'no seat of that name');
 });
+scene('reload.human', async (place) => {
+  write(place, TWO.replace('    stopped: true\n', '    human: true\n'));
+  return show(await reloaded(place, ['worker']), "worker is a human's pane");
+});
 scene('reload.changed', async (place) => {
   write(place, RELOAD_FILE);
   recordReload(place, 'lead');

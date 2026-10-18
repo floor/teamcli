@@ -2328,6 +2328,13 @@
     {
       "code": 1,
       "command": "reload",
+      "id": "reload.human",
+      "meaning": "the seat is a human's pane; nothing is closed, typed into or launched over it",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
       "id": "reload.launch",
       "meaning": "the close happened and the new launch did not reach ready",
       "trigger": "team reload worker"
