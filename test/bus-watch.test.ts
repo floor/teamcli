@@ -495,6 +495,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
         onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
       },
       // The watch's owner delivery rides on the same poll, after the observation seam.
+      undefined,
       (ev) => delivered.push(ev),
     );
     expect(withBus).toBe(true);
@@ -535,10 +536,12 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     //      both steps: `m-1` advances to `read`, `worker-1` clears its permission prompt across two
     //      passes, `m-2` arrives for `op-1`, and `op-1` hits a question prompt.
     //    - At `t2`, `gapFollower` subscribes from its pre-gap cursor (`2`), receives a real `gap`
-    //      (`oldest_seq: 3, newest_seq: 6`), resets its tracker + clears `memory.active` so the pass
+    //      (`oldest_seq: 3`, newest is the newest record its kinds match, `5`), resets its tracker +
+    //      clears `memory.active` so the pass
     //      re-announces still-true reports, rebuilds its message projection from the durable
     //      drop/receipt records on disk, and runs `pass()`.
-    //    - Verify `stateBeforeGap` differs from `fullReplayState`, and `rebuiltState` equals `fullReplayState`.
+    //    - Verify `stateBeforeGap` differs from `fullReplayState`, and `rebuiltState` carries the same
+    //      projection as `fullReplayState` (its cursor stops at the newest record its kinds matched).
     const { root: gapRoot, home: gapHome } = makeScratch();
     const gapBus = await startBus({
       root: gapRoot,
@@ -610,7 +613,13 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
         gapRoot,
         follower.tracker,
         {
-          busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 500 }),
+          // A projection subscriber asks for the kinds it folds; the seat-addressed records it
+          // rebuilds from are delivered to their own recipients, not to a name.
+          busSubscribe: (r, cursor) => subscribeBusOnce(r, {
+            seat: 'owner',
+            cursor,
+            kinds: ['message.arrived', 'message.delivered', 'message.read'],
+          }, { deadlineMs: 500 }),
           onBusEvent: (ev) => foldMessageEvent(follower.messages, ev),
           onBusGap: (oldest, newest) => {
             follower.gaps.push({ oldest, newest });
@@ -706,11 +715,13 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     const rebuiltState = await stepFollower(gapFollower, Date.parse(t2Iso), screensAtT2);
 
     expect(fullReplayFollower.gaps).toEqual([]);
-    expect(gapFollower.gaps).toEqual([{ oldest: 3, newest: 6 }]);
+    // The gap resets the tracker to the newest record this subscription's kinds match: the
+    // watch report at seq 6 is not one of them, and the next poll steps past it.
+    expect(gapFollower.gaps).toEqual([{ oldest: 3, newest: 5 }]);
     expect(stateBeforeGap).not.toEqual(fullReplayState);
-    expect(rebuiltState).toEqual(fullReplayState);
+    expect({ ...rebuiltState, cursor: fullReplayState.cursor }).toEqual(fullReplayState);
     expect(rebuiltState).toEqual({
-      cursor: 6,
+      cursor: 5,
       active: ['question:op-1'],
       grace: [],
       messages: { 'm-1': 'read', 'm-2': 'arrived' },
