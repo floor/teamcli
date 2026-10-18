@@ -25,7 +25,7 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { listUnread, readMessage } from '../mcp/inbox.ts';
@@ -69,7 +69,7 @@ Options:
 Exits 0 when the folder is read, 1 when the caller is not a placed seat of this
 team, the team file can't be read, or the drop folder can't be read or a
 waiting message cannot be read, 2 when the invocation can't be read or this
-folder is not a git repository.
+folder is neither a checkout nor a team root.
 `;
 
 /** One waiting drop: its file name (the send's id), the sender the message record names (or, in
@@ -282,19 +282,24 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     // exit: drops.invocation
     return 2;
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    if (json) {
-      writeJsonError(io, 'drops.not-a-repo', NOT_A_REPO_NO_FILE, null);
-    } else {
-      io.stderr(`team drops: ${NOT_A_REPO_NO_FILE}\n`);
-    }
-    // exit: drops.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team drops` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const message = loaded.errors[0]?.message ?? "the team file can't be read";
+    if (message.startsWith(NOT_A_REPO)) {
+      const shown = withoutFileOffer(message);
+      if (json) {
+        writeJsonError(io, 'drops.not-a-repo', shown, null);
+      } else {
+        io.stderr(`team drops: ${shown}\n`);
+      }
+      // exit: drops.not-a-repo
+      return 2;
+    }
     if (json) {
       writeJsonError(io, 'drops.file', message, null);
     } else {

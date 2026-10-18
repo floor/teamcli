@@ -44,7 +44,9 @@ stream. `--seat` or `--session` without `--read` is an invocation error, not a s
 ## What it reads and writes
 
 Reads `.agents/team.yaml` to resolve the project, the session, and the calling seat, then reads
-`.agents/send-drops/<session>/<seat>/`. A drop's file name is the send's id. A record's payload
+`.agents/send-drops/<session>/<seat>/`. The file is the one the checkout git names, or, in a
+folder that is not a repository, this folder's own team root — a team whose file lives outside
+any checkout reads exactly the same way. A drop's file name is the send's id. A record's payload
 names its sender; a raw body file an earlier build wrote still names one on its first line.
 Names with a dot in them — `<id>.pending`, `<id>.taken`, `<id>.read.json`,
 `<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. Nothing is written
@@ -83,7 +85,7 @@ one line, `from <sender> — <path>`, for each drop that appears, and Ctrl-C sto
 | the team file can't be read, or the drop folder can't be read | `team drops: <problem>` | 1 |
 | `--read` could not verify or receipt a waiting record | `team drops: <reason>`, and the unproven body is not printed | 1 |
 | `--read` named another session, or a seat the file does not declare | `team drops: the team's session is "…", not "…"`, or `team drops: the team file declares no seat "…"` | 1 |
-| the invocation can't be read, `--follow` and `--json` are both given, `--read` is given without `--seat` or with `--follow` or `--json`, or this folder is not a git repository | `team drops: <problem>`, with the usage for the invocation | 2 |
+| the invocation can't be read, `--follow` and `--json` are both given, `--read` is given without `--seat` or with `--follow` or `--json`, or this folder is neither a checkout nor a team root | `team drops: <problem>`, with the usage for the invocation | 2 |
 
 The `--json` document is `{"schema": {"name": "team.drops", "version": 1}, "format": 1, "project": …, "session": …, "seat": …, "drops": [{"from": …, "received": …, "path": …}], "counts": {"drops": …}}`.
 `received` is the file's modification time, ISO 8601.
