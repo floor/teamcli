@@ -558,6 +558,24 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--read",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -569,7 +587,8 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team drops [--follow] [--json]"
+        "team drops [--follow] [--json]",
+        "team drops --read --seat <seat> [--session <session>]"
       ]
     },
     {
