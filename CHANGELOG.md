@@ -120,8 +120,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another start holds the socket lock, or when the socket cannot be bound, and exits 2 on a bad
   invocation or a team file it cannot read. With a bus answering, `team watch` reads new events
   in sequence order and publishes the events its reports imply — `seat.unreachable`,
-  `seat.at-prompt` and `seat.blocked` — to the log; with no bus running it polls exactly as
-  before. The reconciliation pass appends only the events the on-disk records imply and the log
+  `seat.at-prompt` and `seat.blocked` — to the log, and after a sequence gap re-announces the
+  reports that are still true; with no bus running it polls exactly as before. The reconciliation
+  pass appends only the events the on-disk records imply and the log
   is missing, keyed by kind, record and session, so a pass over unchanged records adds no second
   event. A seat that is not a default recipient may not subscribe itself to a privileged kind —
   a grant, a policy, `seat.at-prompt`, or one the owner has named — and the bus refuses it with
