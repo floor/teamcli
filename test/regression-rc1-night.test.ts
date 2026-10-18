@@ -267,18 +267,18 @@ describe('no send path dials a session socket', () => {
     expect(host.enters).toEqual(['w1:p1']);
   });
 
-  test('--wait is refused before a frame can exist, dialing nothing', async () => {
+  test('--wait walks the delivery order and waits on the thread, dialing nothing', async () => {
     const w = world();
-    const host = fake(w, { idle: QUIET });
+    const host = { ...fake(w, { idle: QUIET, typed: (line) => claudeBox(line), after: 'working' }), waitMs: 0 };
     const io = owner(w.root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('--wait needs the native leg');
+    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    expect(host.typed).toEqual([]);
+    expect(host.typed).toHaveLength(1);
   });
 });
 

@@ -397,8 +397,8 @@ drop file and the pane is never touched. A human seat needs no `delivery_order`:
 order whatever the seat's key says, and `team check` reports no difference for a word it writes.
 The watch types no
 retry there and no nudge: a held send's marker is given up on with the reason, and its message
-waits in the drop file. `team send --wait` is refused for such a seat, since the wait rides the
-native leg. The key is part of the seat's digest, and a file that marks no seat keeps every digest
+waits in the drop file. `team send --wait` to such a seat writes the record on the `drop` leg with
+nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a file that marks no seat keeps every digest
 it had.
 
 `liveness` is optional on a seat: its own word on the three liveness windows —
@@ -461,8 +461,8 @@ delivery_order: [typed]
   ```
 
 - What a walk does with each leg — a leg takes the send or is recorded as a failure and the next
-  one is tried — is [team send](commands/send.md)'s. A `--wait` send needs the native leg first,
-  so an order that leads elsewhere refuses the wait.
+  one is tried — is [team send](commands/send.md)'s. A `--wait` send walks the same order and
+  then awaits a reply record on the thread.
 
 ## `grant`
 

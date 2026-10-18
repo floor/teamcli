@@ -89,21 +89,23 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
 
-test('--wait to a claude-code seat is refused: no frame, no drop, nothing typed', async () => {
+test('--wait to a claude-code seat walks the typed leg without dialing the socket and waits on the thread', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   writeFileSync(join(made.sockets, '222.sock'), '');
-  const pane = scripted(['working']);
-  const host = fake(made, { native: pane });
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane, waitMs: 0 });
 
   const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], owner(made.root), host);
 
   expect(code).toBe(1);
   expect(host.frames).toEqual([]);
-  expect(pane.typed).toEqual([]);
-  expect(pane.enters).toBe(0);
-  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
-  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  expect(pane.typed.length).toBe(1);
+  expect(pane.enters).toBe(1);
+  const drops = dropDir(made.dir, 'lead');
+  const files = readdirSync(drops);
+  expect(files.length).toBe(1);
+  expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
 
 test('a claude-code seat gets the native handoff: a pending record, the exact target, the body and the confirm line', async () => {

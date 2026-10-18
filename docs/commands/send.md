@@ -67,8 +67,7 @@ records it `unavailable`. The native leg is a call the sender's own process make
 from the owner, or from a sender whose own file does not declare `cli: claude-code`, records it
 `unavailable` too; a sender whose own file does declare it gets [the native
 handoff](#the-native-channel) instead — one pending record, the exact target, the body and the
-`--confirm` line — and makes the call itself. `--wait`, which rides the socket frame, is refused
-until the socket write ships. `delivered` means the
+`--confirm` line — and makes the call itself. `delivered` means the
 line had left the seat's input box after that one line and Enter — either herdr reported the seat
 `working` (or `done` or `blocked`, and not the status read before Enter), or the transcript shows
 the drop being read (a CLI's status can lag while it works) — and the pane was not a dialog this
@@ -88,38 +87,31 @@ A seat the team file marks `human: true` walks the drop leg alone, whatever its 
 the default says: every other leg — the typed trigger, the native frame, the seat's own inbox — is
 skipped, each one's reason recorded on the history line, and the message arrives in the record
 with the pane never touched and no frame sent.
-`--wait` is refused for such a seat, since it rides the native leg. The watch types no retry or
+`--wait` is allowed for such a seat: the record is written on its `drop` leg, nothing is typed,
+and the run awaits a reply record on the thread. The watch types no retry or
 nudge into a human's pane either: a held send's marker is given up on with the reason, and its
 message waits in the record. A caller that reaches the send daemon directly is refused at its
 queue for such a seat: no trigger is typed, no frame is sent, and no worker is started.
 
-`team send --wait` needs the native leg's socket frame — the reply comes back on the caller's
-own `SendMessage` — and this build does not ship it. A waited send is
-refused before anything is written: no frame, no reply listener, no record, nothing typed
-into the pane. A waited send also needs the native leg first in the seat's delivery order — the
-frame the reply listener stands beside is that leg — so a `--wait` whose order leads elsewhere
-is refused first, naming the order in force, and the sentence is the same wherever the wait was
-asked from — the CLI, or an older caller asking the send daemon for one:
+`team send --wait` writes the signed message record through the receiving seat's delivery walk —
+its `mcp-inbox`, `drop` or `typed` leg, or `drop` alone when the seat is marked `human: true` —
+and then awaits the first verified reply record on the thread ([team reply](reply.md)) until the
+`--timeout` window (120 seconds by default, 1 to 86,400) closes. A reply record that arrives on
+the thread inside the window ends the run `answered` (exit 0), printing `<seat>: answered` and
+the reply's body on stdout, and writes the `replied` receipt beside the sent record. When the
+window closes with no reply on the thread, the run ends `timeout` (exit 1):
 
-    claude-keeper: --wait needs the native leg first, and its delivery order is mcp-inbox, drop, typed; nothing was sent
+    team send: claude-keeper: timeout: sent, no reply on the thread within 120s; the thread stays open
 
-A seat whose order does lead with the native leg is refused for the leg itself, which this build
-does not carry:
-
-    claude-keeper: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent
-
-`--wait` to any other seat is refused as well, with that seat's own reason, and nothing is
-written; a waited Claude Code send's dry run prints its refusal as a `dry-run:` line, and a
-native-CLI seat's `--wait --dry-run` is the real run's refusal itself — the same sentence and
-exit 1 — since neither run writes anything.
+The thread stays open on a timeout, so a late `team reply <id> <text>` after the window still
+lands on the thread and moves the record's status once to `replied`.
 
 The socket frame — the channel the native leg will carry — is a measured observation of Claude Code 2.1.295, not a stable API: JSON
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
 characters. A frame over that limit is refused, never truncated. The message's body is written
 down: a run that ends `delivered`, `delivered (read)`, `sent (unconfirmed)`, `answered`, `held`,
 `not-submitted`, `timeout` or `unreachable` appends one line
-to the project's message history, which [team feed](feed.md) reads. A reply's text is not written
-down — it reaches this terminal and no file. The daily log keeps the seat and the sizes.
+to the project's message history, which [team feed](feed.md) reads. The daily log keeps the seat and the sizes.
 
 The outcome is always one of `delivered` (or `delivered (read)`), `sent (unconfirmed)`,
 `answered`, `held`, `not-submitted`, `timeout`,
@@ -159,11 +151,10 @@ under `Addressing` below. The message
 is every remaining word, joined with single spaces; `--file` reads the whole body from a file
 instead (and then takes no message words). A seat that has both a message and `--file` is a
 usage error. `--timeout` is a whole number of seconds, 1 to 86,400, and is only meaningful with
-`--wait`; without it a wait would run 120 seconds — a waited send is refused, so the window is
-never read. `--json` prints one document instead of the lines: the action surface and the outcome in one —
-`{format, dry_run, status, action_summary, project, session, seat, channel, ids, reply?, plan?}` —
+`--wait`; without it a wait runs 120 seconds. `--json` prints one document instead of the lines: the action surface and the outcome in one —
+`{format, dry_run, status, action_summary, project, session, seat, channel, ids, thread?, reply?, plan?}` —
 where `ids.sent` is the id of the message this command composed and `ids.reply` the reply
-frame's own, when there is one; `channel` is the leg that took it, `null` on a dry run, and
+record's own, when there is one (`thread` is the thread id on an answered wait); `channel` is the leg that took it, `null` on a dry run, and
 `plan` is the dry run's own step; a handoff's document also carries the exact `to:` target, the
 `confirm` line and the body the sender's own call carries. `--list` prints its own document —
 `{format, project, session, seats, summary}`. A run that exits 1 or 2 writes the structured
@@ -174,9 +165,7 @@ made: `the seat's own MCP inbox, falling back to a 0600 drop file, with nothing 
 pane, then a 0600 drop file and one trigger line` for a plain send today, the native handoff
 then that chain for a sender whose own file declares Claude Code and a receiver whose order
 adds `native`, and only an order that keeps no leg this build can walk prints `no leg of its
-delivery order this build can walk`; a waited send is named as the refusal it is — the native
-leg's absence, or an order that does not lead with it. A `--wait` to a
-native-CLI seat is refused as the real run is, with the same sentence and exit 1. It
+delivery order this build can walk`. It
 writes no record, types nothing and appends no line to `.agents/team.log`: a dry run
 writes nothing, and the log records writes.
 
@@ -246,14 +235,12 @@ those messages are no longer needed. A native handoff types nothing and writes n
 writes the same signed record into the seat's folder and one pending record to the caller's own
 project state (`<config dir>/team/<project>-<hash>/pending/<id>.json`, mode 0600, a temporary
 file renamed into place), and `--confirm` takes that record before it writes the one history
-line and then clears it. A waited send
-is refused before any of this: while the socket is not the channel, no run reads the registry's
-recorded address, looks for a socket file at `<sockets dir>/<pid>.sock`, or stands a reply
-listener at this process's own — the refusal returns before the seat's pane, drop folder or
-socket is touched.
-The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) around a plain
+line and then clears it. A waited send writes the signed record through the receiving seat's
+delivery walk, releases the seat lock, and watches `<root>/.agents/send-drops/<session>/*/` for
+the first verified reply record on the thread (`payload.thread === record.thread`).
+The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) around a
 send's write, so a launch of the same seat cannot act beside it and two sends cannot type into
-one pane at once; a refused waited send holds nothing, because it returns before the lock. It
+one pane at once. It
 writes one line to `.agents/team.log` — a refusal writes its own line there — and appends the
 message's body to the project's message history
 ([team feed](feed.md)) when a send completes. The history line names the channel the send went by,
@@ -394,7 +381,7 @@ line on stderr and has none.
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | native | 0 | `<seat>: native: nothing was sent; make the call with your own SendMessage, then record it`, then the `to:` target, the body and the `team send --confirm <id>` line, on stdout, for a handoff |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (native, <n> ms)` on stdout, when `--confirm` runs before the recipient's transcript shows the handoff's nonce |
-| timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
+| timeout | 1 | `team send: <seat>: timeout: sent, no reply on the thread within <s>s; the thread stays open` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
 | refused | 1 | `team send: refused: <reason>` on stderr |
 | usage | 2 | `team send: <message>` and the usage on stderr |
@@ -427,9 +414,10 @@ listed, recorded, or resolved by
 `--dry-run`, 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when the
 invocation or team file can't be read.
 
-The socket frame's rows — `answered`, `held (socket)` and `timeout` — belong to the frame a
-waited send needs, and a waited send is refused before one exists, so no run of this build
-reaches them. The rows and their vocabulary stay for the socket write's return.
+`answered` and `timeout` belong to `--wait` on the thread: `answered` when a verified reply
+record on the thread arrives within the window, and `timeout` when the window closes with no
+reply on the thread (leaving the thread open). `held (socket)` stays for the socket write's
+return.
 
 `held` is nothing sent: the message is safely on disk — or, on the socket's path, in the frame the
 receiving session's held-message dialog keeps for a person to let through — the run exits 1, and
@@ -464,17 +452,13 @@ for the orchestrator.
 
 `unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
 dialogs listed above, the held-message dialog — the sentence on a screen with no live composer to
-read — no socket file for a waited Claude Code seat, a connection that would not
-take that frame, or a pane that would not take the trigger — the socket reasons return with the
-leg — and a walk that ran out of legs is unreachable too, printing `no leg of its delivery order
-took the send` with the legs that failed. `timeout`
-is a waited frame written on the socket and no reply inside the window. `refused` is nothing
-being sent on purpose: an unknown seat (the file's seats are named), any `--wait` — the native
-leg's absence for a Claude Code seat, the same absence, with that seat's own reason, for
-every other, and a delivery order that does not lead with the native leg — a frame over the
-socket limit, a trigger longer than the measured line, a
-reply listener that could not be opened, a lock another command holds, or a caller that may not
-send.
+read — or a pane that would not take the trigger, and a walk that ran out of legs is unreachable
+too, printing `no leg of its delivery order took the send` with the legs that failed. `timeout`
+is a waited send whose record was written and whose window closed with no reply record on the
+thread; the thread stays open. `refused` is nothing
+being sent on purpose: an unknown seat (the file's seats are named), a frame over the
+socket limit, a trigger longer than the measured line, a lock another command holds, or a caller
+that may not send.
 
 ## Examples
 
@@ -567,20 +551,23 @@ team send: refused: 22222222-2222-4222-8222-222222222222: no pending native reco
 exit 1
 ```
 
-`--wait` is refused until the socket frame ships, and nothing is written:
+`--wait` writes the record on the seat's delivery walk and waits on the thread for the first
+verified reply record:
 
-```console
+```console reply="the gate is green"
 $ team send claude-keeper "is the gate green?" --wait ; echo "exit $?"
-team send: refused: claude-keeper: --wait needs the native leg first, and its delivery order is mcp-inbox, drop, typed; nothing was sent
-exit 1
+team beacon, session "beacon"
+claude-keeper: answered
+the gate is green
+exit 0
 ```
 
-A dry run of the same send prints that refusal and writes nothing either:
+A dry run of the same send names the walk and writes nothing:
 
 ```console
 $ team send claude-keeper "is the gate green?" --wait --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-claude-keeper: dry-run: claude-code --wait needs the native leg first, and its delivery order is mcp-inbox, drop, typed; nothing was sent
+claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane, then a 0600 drop file and one trigger line; nothing was written
 exit 0
 ```
 
@@ -659,7 +646,7 @@ A refused send's document carries the structured error, no ids and no reply:
   },
   "error": {
     "id": "send.refused",
-    "message": "refused: claude-keeper: --wait needs the native leg first, and its delivery order is mcp-inbox, drop, typed; nothing was sent",
+    "message": "refused: nobody: it is not a declared seat; the file's seats are claude-keeper, gpt-reviewer, claude-scribe",
     "repair": null
   }
 }
@@ -684,11 +671,12 @@ gpt-reviewer: sent (unconfirmed) (drop, 0 ms)
 exit 0
 ```
 
-`--wait` on that seat is refused, and nothing is written. This build does not carry the reply.
+`--wait` on any seat waits on the thread for a reply record; when the window closes with no reply,
+it exits 1 and leaves the thread open:
 
 ```console
-$ team send gpt-reviewer "hello" --wait ; echo "exit $?"
-team send: refused: gpt-reviewer runs codex: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent
+$ team send gpt-reviewer "hello" --wait --timeout 5 ; echo "exit $?"
+team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open
 exit 1
 ```
 

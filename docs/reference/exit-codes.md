@@ -440,7 +440,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `seats.invocation` | `seats` | 2 | the invocation can't be read | `team seats extra` |
 | `seats.not-a-repo` | `seats` | 2 | not inside a git repository | `team seats` |
 | `seats.not-yours` | `seats` | 2 | the caller may not read this team | `team seats` |
-| `send.answered` | `send` | 0 | the seat's reply came back within the window | `team send worker hello --wait` |
+| `send.answered` | `send` | 0 | a reply record on the thread arrived within the window | `team send worker hello --wait` |
 | `send.confirmed` | `send` | 0 | a native handoff was recorded to the history and its pending record cleared | `team send --confirm 11111111-1111-4111-8111-111111111111` |
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
@@ -454,7 +454,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
-| `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
+| `send.timeout` | `send` | 1 | the record was sent, and the wait window closed with no reply on the thread (the thread stays open) | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |

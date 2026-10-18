@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
@@ -23,19 +23,19 @@ import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type Admit
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrants } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
-import { ensureRecord, signRecord, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
-import { awaitReceipt, inboxLive, INBOX_GRACE_MS } from '../mcp/inbox.ts';
+import { awaitReceipt, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { markTaken } from '../send/taken.ts';
-import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
+import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -79,9 +79,8 @@ terminal, taking the send or ending the walk unreachable. The drop
 leg writes the same 0600 drop file and types nothing at all. A seat the file marks
 human: true walks the drop leg alone, whatever its delivery order or the default
 says: every other leg is kept out — each one's reason is recorded — and the walk
-writes the drop file, with nothing typed and no frame sent; a waited send is
-refused. The history line names the channel the send went by and the legs that
-failed before it.
+writes the drop file, with nothing typed and no frame sent. The history line names
+the channel the send went by and the legs that failed before it.
 
 The mcp-inbox leg writes the same 0600 drop file and types nothing: it takes the
 send only when the seat's own inbox server is running (\`.inbox-listener\` beside
@@ -103,8 +102,8 @@ The outcome is one of eight, and none of them is silent:
                0600 record in the seat's inbox or drop folder, no receipt came back
                inside the grace, and the line says \`sent (unconfirmed)\`. Nothing was
                typed
-  answered     --wait to a Claude Code seat: the reply came back; the reply follows
-               on stdout (exit 0)
+  answered     --wait: a reply record on the thread arrived within the window; the
+               reply follows on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
                held-message dialog keeps, printed held (socket) — and the pane was
                left untouched because the seat remained busy, locked, in a dialog,
@@ -115,33 +114,25 @@ The outcome is one of eight, and none of them is silent:
                counted, and the drop path. A compose seat's brief that was typed and
                never confirmed is also not-submitted: its message names the screen
                that never came and the one line that repairs it
-  timeout      --wait to a Claude Code seat: the frame was sent on the socket, and no
-               reply came within the window (exit 1). A seat which does not accept
-               messages from other sessions holds the frame until a person lets it
-               through
+  timeout      --wait: the record was sent, and no reply record on the thread arrived
+               within the window (exit 1); the thread stays open
   unreachable  the channel did not confirm (exit 1): the session is not running, no
                live agent carries the seat's name, the pane is one of those dialogs,
-               no socket took a waited frame, or the pane would not take the trigger.
-               A compose seat refuses here, naming the repair, when the module
-               stopped before typing anything
-  refused      nothing was sent (exit 1): not a declared seat, --wait (the frame
-               needs the native leg — the team route and the caller's own
-               SendMessage — which this build does not carry), a --wait whose
-               delivery order does not lead with the native leg, a socket frame over
-               the measured limit, a trigger that would exceed the measured line
-               length, a reply listener that could not be opened, or a caller that
-               may not send
+               or the pane would not take the trigger. A compose seat refuses here,
+               naming the repair, when the module stopped before typing anything
+  refused      nothing was sent (exit 1): not a declared seat, a trigger that would
+               exceed the measured line length, or a caller that may not send
 
---wait needs the frame the reply listener reads, and that frame is a socket write
-this build does not make: a --wait to a Claude Code seat is refused, naming the
-native leg (the team route and the caller's own SendMessage) that carries a waited
-send once it ships; --wait to any other seat is refused too, and so is a --wait
-whose delivery order does not lead with the native leg — the frame the reply
-listener needs is that leg. Nothing is written in any of these.
+--wait writes the signed message record through the receiving seat's delivery walk
+and waits up to --timeout seconds (default 120, up to 86400) for the first verified
+reply record on the thread (written by \`team reply <id> <text>\`). A seat the file
+marks human: true walks the drop leg alone and types nothing. When the window
+closes with no reply on the thread, the run exits 1 (timeout) and the thread stays
+open; a reply after the window still arrives on the thread.
 
 --json prints one document instead of the lines: the action surface and the
 outcome in one — {format, dry_run, status, action_summary, project, session, seat,
-channel, ids, reply?, plan?} — and --list prints its own: {format, project,
+channel, ids, thread?, reply?, plan?} — and --list prints its own: {format, project,
 session, seats, summary}. A run that exits 1 or 2 writes the structured error
 document instead — {error: {id, message, repair}} — and stderr stays empty.
 --file reads the body from a file instead of the one <message> argument.
@@ -170,8 +161,7 @@ delivery is never a way around the rules — and the body is optional: given, it
 recorded verbatim, and without it the line says the text did not pass through this
 CLI. \`team route <seat>\` answers the address such a delivery uses.
 
-Not in this build: broadcast, a reply from a seat that is not Claude Code, and a
-waited send — the native leg carries it.
+Not in this build: broadcast.
 
 Exits 0 when delivered, answered, listed, recorded, or resolved by --dry-run,
 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when
@@ -198,6 +188,8 @@ export type SendHost = {
   /** The id a native handoff prints and records under; the real host mints a UUID, and a test or
    *  the docs runner pins one so the printed confirm line is exact. */
   newId?: () => string;
+  /** The id a send record is written under when a test pins it; the real host mints a UUID. */
+  sendId?: () => string;
   home: string;
   /** The project registry, for the project each seat's team sits in. The real one when absent;
    *  a test stands in for it. */
@@ -213,6 +205,10 @@ export type SendHost = {
    *  at `INBOX_GRACE_MS`; a test sets 0 (beside a listener it also writes) to see the
    *  unconfirmed ending without waiting, or a small number to watch the receipt land. */
   inboxGraceMs?: number;
+  /** How long `--wait` polls for a reply record on the thread, in milliseconds. Left out on the
+   *  real host so `--timeout <s>` (default 120s) sets the window; a test sets a small number or 0
+   *  to exercise the thread wait without sleeping. */
+  waitMs?: number;
 };
 
 export const realHost: SendHost = {
@@ -581,44 +577,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // back.
   const human = declared?.human === true;
   const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
-  // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
-  // seat is refused before a write, a dry run included: the refusal is unconditional and stands
-  // whether or not anything would be written, so the dry run reports the real run's refusal and
-  // its exit rather than a channel the run could never walk. A Claude Code --wait run is refused
-  // as well when the order does not lead with the native leg — the frame the reply listener
-  // stands beside is that leg — and while SOCKET_SEND is off (deliverSocket names that refusal);
-  // those print a `dry-run:` line in a dry run, since nothing is written either way.
-  // A human's pane never takes the native leg either, so a waited send has no frame to ride: the
-  // refusal is unconditional, and a dry run reports the real run's refusal, as the non-native
-  // seat's does.
-  if (wait && human) {
-    return refuse(io, dir, who, `${to.seat}: the pane is a human's; the native leg is never walked for it, and --wait rides that leg; nothing was sent`, host, report);
-  }
-  if (wait && to.cli !== 'claude-code') {
-    return refuse(io, dir, who, `${to.seat} runs ${to.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
-  }
-  if (wait && to.cli === 'claude-code') {
-    // The frame is the native leg, and --wait rides it: an order that leads elsewhere, or holds
-    // no native leg at all, has no frame for the reply listener to stand beside.
-    if (order[0] !== 'native') {
-      const leads = order.length === 0 ? 'empty' : order.join(', ');
-      const why = `--wait needs the native leg first, and its delivery order is ${leads}; nothing was sent`;
-      if (dry) return dryRun(io, to.seat, `${to.cli} ${why}`, report);
-      return refuse(io, dir, who, `${to.seat}: ${why}`, host, report);
-    }
-    return deliverSocket(io, dir, who, from, to, body, dry, timeoutS, host, report, startedAt);
-  }
 
-  // A plain send, every seat: one signed record is written into the recipient's folder — the
-  // whole body, its thread, the address it resolved to and the rule that admitted it — and the
-  // leg that takes the send transports that record. A compose seat (a CLI that builds its work
-  // item from its own screens) types the body through those screens instead of a trigger line.
-  const msgId = randomUUID();
+  // One signed record is written into the recipient's folder — the whole body, its thread, the
+  // address it resolved to and the rule that admitted it — and the leg that takes the send
+  // transports that record. A compose seat (a CLI that builds its work item from its own screens)
+  // types the body through those screens instead of a trigger line. When `--wait` is given, the
+  // send walks the same delivery order and then waits on the thread for the first verified reply
+  // record within the timeout window.
+  const msgId = host.sendId?.() ?? randomUUID();
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
   const dropPath = join(dropDir, msgId);
   const record = recordOf(msgId, to, body, from, admission, host.now().toISOString());
+  const callerRoot = { root, session: team.session };
   if (dry) {
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative)}; nothing was written`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait)}; nothing was written`, report);
   }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
@@ -629,8 +601,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // takes the send only while the seat's own inbox server is listening, and is otherwise
   // recorded and passed. The native leg is skipped while SOCKET_SEND is off — the frame path is
   // a socket write this build does not make — and a walk that reaches it records the skip; a
-  // sender whose own file declares Claude Code gets the handoff instead. A human's walk is the
-  // drop leg alone; the legs this rule kept out are recorded first, so the history line the
+  // sender whose own file declares Claude Code gets the handoff instead (unless `--wait` is set,
+  // since a handoff returns immediately to the caller before the frame is sent). A human's walk is
+  // the drop leg alone; the legs this rule kept out are recorded first, so the history line the
   // drop leg writes (or the refusal) names what the pane was spared.
   const failures: string[] = [];
   if (human) {
@@ -651,7 +624,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         failures.push(`mcp-inbox: ${live.reason}`);
         continue;
       }
-      return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs);
+      return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot);
     }
     if (leg === 'native') {
       // A seat whose CLI has no cross-session socket has no native leg to walk: the leg is
@@ -661,8 +634,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         // A sender whose own file declares Claude Code can make the leg itself: the handoff
         // writes the pending record, prints the exact target and body, and the sender's own
         // SendMessage carries the message. Any other sender gets the skip, as before. A handoff
-        // that cannot name a live address hands the send to the leg after this one.
-        if (callerNative) {
+        // that cannot name a live address hands the send to the leg after this one. A `--wait`
+        // run needs the message delivered in this call before it waits on the thread, so it
+        // skips the handoff and continues the walk.
+        if (callerNative && !wait) {
           const fallback = fallbackAfterNative(walk, at);
           const off = handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
           if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
@@ -673,8 +648,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
         continue;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt);
-      if (attempt.kind === 'delivered') return delivered(io, to.seat, report, 'socket');
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait);
+      if (attempt.kind === 'delivered') {
+        if (wait) {
+          return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'socket', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+        }
+        return delivered(io, to.seat, report, 'socket');
+      }
       if (attempt.kind === 'held') return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
       failures.push(`native: ${attempt.reason}`);
       socketNote = `typed, socket ${attempt.reason}`;
@@ -689,7 +669,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // receiver watches its own drop folder, and for a pane that must never be typed into: a
     // file can wait where a keystroke cannot be taken back.
     if (leg === 'drop') {
-      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human);
+      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot);
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. A compose seat's typed leg is
@@ -702,9 +682,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     // The daemon serves seats of the caller's own team; a seat in another team's record is
     // reached directly, under that team's folder. A compose seat is reached directly too: the
-    // screen walk and the seat lock belong to one process.
+    // screen walk and the seat lock belong to one process. A `--wait` run is reached directly so
+    // the signed record is written into the checkout's transport tree and the thread wait watches
+    // that tree.
     const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
-    const viaDaemon = to.cross || compose !== null
+    const viaDaemon = to.cross || compose !== null || wait
       ? null
       : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
@@ -730,12 +712,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // The seat's own folder: the record's `cwd` under the receiving team's root, else the
       // folder this send already writes to.
       const seatCwd = declared === undefined ? to.dir : resolve(to.root, declared.cwd);
-      return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, seatCwd, host, report, startedAt, failures, to.sentAs);
+      return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, seatCwd, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot);
     }
     if (trigger === null) {
       return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
     }
-    return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, socketNote ?? undefined, failures, to.sentAs);
+    return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, socketNote ?? undefined, failures, to.sentAs, wait, timeoutS, callerRoot);
   }
 
   // No leg took the send: the walk ran out of legs with nothing written — the record is only
@@ -1267,137 +1249,178 @@ function finishDaemonSend(
   return refuse(io, dir, who, res.detail, host, report);
 }
 
+type ThreadReply = { reply: string; msg_id: string };
+
+const THREAD_RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+
+function isThreadSidecarName(name: string): boolean {
+  return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read') || name.endsWith('.json') || name.startsWith('work-');
+}
+
+function sameCheckout(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return left === right;
+  }
+}
+
+function peelSenderHeader(body: string): string {
+  const split = body.indexOf('\n\n');
+  if (split > 0 && body.startsWith('from ') && body.slice(0, split).includes(' — admitted by: ')) {
+    return body.slice(split + 2);
+  }
+  return body;
+}
+
 /**
- * `--wait` to a Claude Code seat. The frame is what the reply listener needs, and while
- * SOCKET_SEND is off this build writes no frame: the run is refused, naming the leg that
- * would carry it, and nothing dials. With the constant on, a successful write says the frame
- * was sent on the socket: the write is not an acknowledgement that the seat read it.
+ * Looks across the session's transport tree (`<root>/.agents/send-drops/<session>/<seat>/<id>`)
+ * for the first verified message record on `sentPayload.thread` other than `sentPayload.id`.
  */
-async function deliverSocket(
+function findThreadReply(
+  roots: readonly { root: string; session: string }[],
+  sentPayload: RecordPayload,
+  home: string,
+): ThreadReply | null {
+  const keyState = messageKeyState(home);
+  if (keyState.kind !== 'key') return null;
+  const hits: { at: number; id: string; body: string }[] = [];
+  for (const { root, session } of roots) {
+    const sessionDir = join(root, '.agents', 'send-drops', session);
+    let seats: string[];
+    try {
+      seats = readdirSync(sessionDir).sort();
+    } catch {
+      continue;
+    }
+    for (const seat of seats) {
+      if (!THREAD_RECORD_NAME.test(seat)) continue;
+      const seatDir = join(sessionDir, seat);
+      let names: string[];
+      try {
+        names = readdirSync(seatDir).sort();
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        if (!THREAD_RECORD_NAME.test(name) || isThreadSidecarName(name)) continue;
+        const looked = readRecord(join(seatDir, name));
+        if (!looked.ok || looked.record === null) continue;
+        const payload = looked.record.payload;
+        if (payload.thread !== sentPayload.thread || payload.id === sentPayload.id) continue;
+        if (payload.session !== session || !sameCheckout(payload.root, root)) continue;
+        if (!verifyRecord(looked.record, keyState.key)) continue;
+        const at = Date.parse(payload.at);
+        hits.push({ at: Number.isFinite(at) ? at : 0, id: payload.id, body: peelSenderHeader(payload.body) });
+      }
+    }
+  }
+  if (hits.length === 0) return null;
+  hits.sort((a, b) => (a.at - b.at) || a.id.localeCompare(b.id));
+  const first = hits[0] as { at: number; id: string; body: string };
+  return { reply: first.body, msg_id: first.id };
+}
+
+/**
+ * Waits up to `timeoutMs` for a verified reply record on `sentPayload.thread`, looking once,
+ * then every `pollMs`. A timeout of zero is the one look and no wait at all.
+ */
+async function awaitThreadReply(
+  roots: readonly { root: string; session: string }[],
+  sentPayload: RecordPayload,
+  home: string,
+  timeoutMs: number,
+  pollMs = INBOX_POLL_MS,
+): Promise<ThreadReply | null> {
+  const immediate = findThreadReply(roots, sentPayload, home);
+  if (immediate !== null) return immediate;
+  const deadline = Date.now() + timeoutMs;
+  for (let left = deadline - Date.now(); left > 0; left = deadline - Date.now()) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(pollMs, left));
+    });
+    const found = findThreadReply(roots, sentPayload, home);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/**
+ * Completes a `--wait` send after the receiving seat's delivery leg has written the signed record:
+ * waits on the thread for the first verified reply record within `timeoutS` (or `host.waitMs`),
+ * records `answered` when a reply arrives, or `timeout` when the window closes with no reply
+ * while leaving the thread open for a late reply.
+ */
+async function finishThreadWait(
   io: Io,
   dir: string,
+  root: string,
   who: string,
   from: string,
-  to: Aim,
-  body: string,
-  dry: boolean,
+  project: string,
+  session: string,
+  seatName: string,
+  dropDir: string,
+  payload: RecordPayload,
+  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox',
   timeoutS: number,
   host: SendHost,
   report: Report,
-  /** When this run started: the ms the outcome's history entry carries is measured from it. */
   startedAt: number,
+  failures: readonly string[] = [],
+  sentAs: SentAs | null = null,
+  note?: string,
+  extraRoot?: { root: string; session: string },
 ): Promise<number> {
-  // The address as written, when it was a form: every history line carries it beside the seat.
-  const sentAs = to.sentAs === null ? {} : to.sentAs;
-  // No socket, no waited frame: the frame the reply listener needs is one this build does not
-  // write, so the run is refused rather than carried by a channel the reply cannot come back
-  // on. The dry run prints the same sentence; nothing dials either way.
-  if (!SOCKET_SEND) {
-    const reason = '--wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent';
-    if (dry) return dryRun(io, to.seat, `${to.cli} ${reason}`, report);
-    return refuse(io, dir, who, `${to.seat}: ${reason}`, host, report);
+  const failed = failures.length > 0 ? { failed: [...failures] } : {};
+  const roots = extraRoot !== undefined && (!sameCheckout(extraRoot.root, root) || extraRoot.session !== session)
+    ? [{ root, session }, extraRoot]
+    : [{ root, session }];
+  const waitMs = host.waitMs ?? timeoutS * 1000;
+  const found = await awaitThreadReply(roots, payload, host.home, waitMs);
+  if ((via === 'mcp-inbox' || via === 'drop') && (found !== null || receiptHeld(dropDir, payload.id, { to: seatName, root, session }, host.home))) {
+    clearPending(dropDir, payload.id);
   }
-  // One JSON line, exactly the frame the probe measured: `type:"user"`, the content, and a
-  // msg_id for a reader's own correlation. No `from`: this process has no session socket, so
-  // any sender address it claimed would be a claim, not a fact — the listener shows the
-  // connection's verified pid instead, and a `--wait` run listens at that pid's measured path
-  // (reply.ts), so the address the seat answers to is answered. JSON.stringify escapes
-  // newlines and control characters, so multi-line text stays one frame; the frame is never
-  // truncated.
-  const msgId = randomUUID();
-  const frame = frameFor(body, msgId);
-  report.sent = msgId;
-  if (frame.length > FRAME_LIMIT) {
-    return refuse(io, dir, who, `${to.seat}: the message is too large for this channel: the frame is ${String(frame.length)} characters and the socket's measured limit is ${String(FRAME_LIMIT)}; nothing was sent`, host, report);
-  }
-  if (dry) {
-    return dryRun(io, to.seat, 'claude-code via the cross-session socket; nothing was sent', report);
-  }
-
-  const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
-  const viaDaemon = to.cross
-    ? null
-    : await requestDaemon(
-        daemonSock,
-        { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, wait: true, timeout_s: timeoutS },
-        (timeoutS + 30) * 1000,
-      );
-  if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
-    return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon);
-  }
-
-  // The pane is read live, by the seat's name: a recorded pane may have been reused by another
-  // seat since the record was written.
-  const found: Found = findAgent(host, to.session, to.seat);
-  if (!found.ok) {
-    if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
-    return unreachable(io, dir, who, to.seat, found.reason, host, report);
-  }
-  const pane = found.pane;
-  const processes = host.processInfo(to.session, pane);
-  if (processes === null) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
-    return unreachable(io, dir, who, to.seat, "the pane's processes could not be read", host, report);
-  }
-  // The registry's recorded address while it is still live, else today's discovery, the pane's
-  // own processes — which also covers the alternative sockets folder.
-  const socketPath = liveSocketOf(to.address, processes, host.socketsDir) ?? socketOf(host, processes);
-  if (socketPath === null) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt });
-    return unreachable(io, dir, who, to.seat, `no cross-session socket was found for its pane's processes (looked in ${socketDirs(host)})`, host, report);
-  }
-
-  // One send per seat at a time, the same lock `answer` and the launch that resumes a seat
-  // take: two commands never reach one seat at once. A `--wait` send holds it until the reply
-  // or the timeout — the outstanding request is the thing the lock serializes.
-  const lock = acquireSeatLock(to.dir, to.session, to.seat);
-  if (!('release' in lock)) {
-    return refuse(io, dir, who, `${to.seat}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
-  }
-  try {
-    // The reply listener is opened before the frame is written: a seat that answers at once
-    // must find it standing. A listener that cannot be opened is a refusal — nothing sent.
-    // The listener stands next to the socket the frame goes to: the answering session looks for
-    // the sender's pid at the sockets folder of the channel, and this is that one.
-    const opened = await openReplyListener(dirname(socketPath), process.pid);
-    if (!opened.ok) {
-      return refuse(io, dir, who, `${to.seat}: ${opened.reason}`, host, report);
-    }
-    const listener = opened.listener;
+  const entry = {
+    ts: host.now().toISOString(),
+    from,
+    to: seatName,
+    ...(sentAs === null ? {} : sentAs),
+    body: payload.body,
+    id: payload.id,
+    thread: payload.thread,
+  };
+  if (found !== null) {
     try {
-      const taken = await host.deliver(socketPath, frame);
-      if (!taken.ok) {
-        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: msgId, outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'socket' });
-        return unreachable(io, dir, who, to.seat, taken.reason, host, report);
-      }
-      // The log keeps the seat and the frame's size; never the message's text, and never
-      // the word delivered: the socket accepted the write, which is all this run knows.
-      logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
-      // The frame can land at the receiving session's held-message dialog: the seat shows it
-      // when it was busy, the box is blocked while it is up, and no typed line gets through it.
-      // Read the pane for about a second after the write; the dialog, not the reply window, is
-      // the outcome then.
-      if (await heldAtDialog(to.session, pane, host)) {
-        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: msgId, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket' });
-        return held(io, dir, who, to.seat, HELD_FRAME_REASON, host, report, 'socket');
-      }
-      const outcome = await listener.wait(timeoutS * 1000);
-      if (outcome.kind === 'answered') {
-        const read = readReply(outcome.line);
-        logLine(to.dir, 'send', who, `${to.seat}: answered (reply ${String(read.reply.length)} characters)`, host.now());
-        appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: msgId, outcome: 'answered', ms: host.now().getTime() - startedAt, via: 'socket' });
-        return answered(io, to.seat, read, report);
-      }
-      logLine(to.dir, 'send', who, `${to.seat}: timeout (sent, no reply within ${String(timeoutS)}s)`, host.now());
-      appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: msgId, outcome: 'timeout', ms: host.now().getTime() - startedAt, via: 'socket' });
-      return timedOut(io, to.seat, timeoutS, report);
-    } finally {
-      listener.close();
+      const receipt = signReceiptPayload(
+        { kind: 'receipt', status: 'replied', id: payload.id, to: seatName, root, session, at: host.now().toISOString() },
+        host.home,
+      );
+      writeReceipt(dropDir, receipt, host.home);
+    } catch {
+      // A reply record on the thread is the answer even if the receipt sidecar cannot be written.
     }
-  } finally {
-    lock.release();
+    logLine(dir, 'send', who, `${seatName}: answered (reply ${String(found.reply.length)} characters)`, host.now());
+    appendHistory(project, root, host.home, {
+      ...entry,
+      outcome: 'answered',
+      ...(note !== undefined ? { note } : {}),
+      ms: host.now().getTime() - startedAt,
+      via,
+      ...failed,
+    });
+    return answered(io, seatName, found, report, via, payload.thread);
   }
+  logLine(dir, 'send', who, `${seatName}: timeout (sent, no reply on the thread within ${String(timeoutS)}s; the thread stays open)`, host.now());
+  appendHistory(project, root, host.home, {
+    ...entry,
+    outcome: 'timeout',
+    ...(note !== undefined ? { note } : {}),
+    ms: host.now().getTime() - startedAt,
+    via,
+    ...failed,
+  });
+  return timedOut(io, seatName, timeoutS, report);
 }
 
 type Found = { ok: true; pane: string } | { ok: false; kind: 'unreachable' | 'refused'; reason: string };
@@ -1421,7 +1444,7 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
  * The marker is what the watch watches for the receipt; a human's drop is read by a person, who
  * writes none, so no marker is left there.
  */
-function deliverDropped(
+async function deliverDropped(
   io: Io,
   dir: string,
   root: string,
@@ -1442,7 +1465,10 @@ function deliverDropped(
   /** The receiving pane is a human's: a person reads the drop and writes no receipt, so no
    *  marker is left for a receipt that is never owed. */
   human = false,
-): number {
+  wait = false,
+  timeoutS = 60,
+  extraRoot?: { root: string; session: string },
+): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
@@ -1473,26 +1499,29 @@ function deliverDropped(
         leg: 'drop',
       });
     }
-    const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: sent to its drop folder (drop ${String(body.length)} characters); no read receipt yet`, host.now());
-    appendHistory(project, root, host.home, {
-      ts: host.now().toISOString(),
-      from,
-      to: seatName,
-      ...(sentAs === null ? {} : sentAs),
-      body,
-      id: msgId,
-      thread: payload.thread,
-      outcome: 'sent (unconfirmed)',
-      ms,
-      via: 'drop',
-      ...failed,
-    });
     report.sent = msgId;
-    return sentUnconfirmed(io, seatName, report, ms, 'drop');
   } finally {
     lock.release();
   }
+  if (wait) {
+    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
+  }
+  const ms = host.now().getTime() - startedAt;
+  appendHistory(project, root, host.home, {
+    ts: host.now().toISOString(),
+    from,
+    to: seatName,
+    ...(sentAs === null ? {} : sentAs),
+    body,
+    id: msgId,
+    thread: payload.thread,
+    outcome: 'sent (unconfirmed)',
+    ms,
+    via: 'drop',
+    ...failed,
+  });
+  return sentUnconfirmed(io, seatName, report, ms, 'drop');
 }
 
 /**
@@ -1527,6 +1556,9 @@ async function deliverNative(
   failures: readonly string[] = [],
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: SentAs | null = null,
+  wait = false,
+  timeoutS = 60,
+  extraRoot?: { root: string; session: string },
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -1535,6 +1567,7 @@ async function deliverNative(
   if (!('release' in lock)) {
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
+  let taken = false;
   try {
     let path: string;
     try {
@@ -1573,19 +1606,8 @@ async function deliverNative(
       markPending(dropDir, entry);
       return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}`, host, report);
     }
-    const taken = result.evidence === 'taken';
+    taken = result.evidence === 'taken';
     logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
-    // A taken send is a delivery with its confirmation still to come: the history says so, and a
-    // record beside the drop lets a running watch look for the later sign. It is never a retry
-    // record — a taken line is never typed again.
-    appendHistory(project, root, host.home, {
-      ...entry,
-      outcome: 'delivered',
-      ...(taken ? { note: TAKEN_REASON } : {}),
-      ms: host.now().getTime() - startedAt,
-      via: 'typed',
-      ...failed,
-    });
     if (taken) {
       markTaken(dropDir, {
         id: msgId,
@@ -1596,10 +1618,30 @@ async function deliverNative(
         before: result.prior ?? 'unknown',
       });
     }
-    return delivered(io, seatName, report, taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note);
   } finally {
     lock.release();
   }
+  if (wait) {
+    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'typed', timeoutS, host, report, startedAt, failures, sentAs, taken ? TAKEN_REASON : undefined, extraRoot);
+  }
+  // A taken send is a delivery with its confirmation still to come: the history says so, and a
+  // record beside the drop lets a running watch look for the later sign. It is never a retry
+  // record — a taken line is never typed again.
+  appendHistory(project, root, host.home, {
+    ts: host.now().toISOString(),
+    from,
+    to: seatName,
+    ...(sentAs === null ? {} : sentAs),
+    body,
+    id: msgId,
+    thread: payload.thread,
+    outcome: 'delivered',
+    ...(taken ? { note: TAKEN_REASON } : {}),
+    ms: host.now().getTime() - startedAt,
+    via: 'typed',
+    ...failed,
+  });
+  return delivered(io, seatName, report, taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note);
 }
 
 /**
@@ -1630,6 +1672,9 @@ async function deliverInbox(
   failures: readonly string[] = [],
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: SentAs | null = null,
+  wait = false,
+  timeoutS = 60,
+  extraRoot?: { root: string; session: string },
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -1638,8 +1683,8 @@ async function deliverInbox(
   if (!('release' in lock)) {
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
+  const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
   try {
-    let path: string;
     try {
       sealDropTree(dir, session, seatName);
     } catch {
@@ -1649,26 +1694,27 @@ async function deliverInbox(
     if (!written.ok) {
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
     }
-    path = written.path;
     report.sent = msgId;
-    const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
     // Written before the wait: a process that dies mid-wait still leaves the message marked
     // for the watch's later pass. A receipt clears it; `sent (unconfirmed)` leaves it on disk.
     markPending(dropDir, { ...entry, leg: 'mcp-inbox' });
-    const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-    if (await awaitReceipt(dropDir, msgId, { to: seatName, root, session }, host.home, grace)) {
-      clearPending(dropDir, msgId);
-      logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
-      appendHistory(project, root, host.home, { ...entry, outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'mcp-inbox', ...failed });
-      return delivered(io, seatName, report, 'read');
+    if (!wait) {
+      const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
+      if (await awaitReceipt(dropDir, msgId, { to: seatName, root, session }, host.home, grace)) {
+        clearPending(dropDir, msgId);
+        logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
+        appendHistory(project, root, host.home, { ...entry, outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'mcp-inbox', ...failed });
+        return delivered(io, seatName, report, 'read');
+      }
+      const ms = host.now().getTime() - startedAt;
+      logLine(dir, 'send', who, `${seatName}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
+      appendHistory(project, root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
+      return sentUnconfirmed(io, seatName, report, ms, 'mcp-inbox');
     }
-    const ms = host.now().getTime() - startedAt;
-    logLine(dir, 'send', who, `${seatName}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
-    appendHistory(project, root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
-    return sentUnconfirmed(io, seatName, report, ms, 'mcp-inbox');
   } finally {
     lock.release();
   }
+  return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'mcp-inbox', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
 }
 
 /**
@@ -1698,6 +1744,9 @@ async function deliverComposeSeat(
   failures: readonly string[] = [],
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: SentAs | null = null,
+  wait = false,
+  timeoutS = 60,
+  extraRoot?: { root: string; session: string },
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -1711,6 +1760,7 @@ async function deliverComposeSeat(
   if (!('release' in lock)) {
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
+  const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
   try {
     let path: string;
     try {
@@ -1733,7 +1783,6 @@ async function deliverComposeSeat(
       message: body,
     });
     const where = `the record is at ${path}`;
-    const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
     if (result.outcome === 'unreachable') {
       appendHistory(project, root, host.home, { ...entry, outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
       return unreachable(io, dir, who, seatName, `${result.reason}; ${where}`, host, report);
@@ -1743,11 +1792,14 @@ async function deliverComposeSeat(
       return typedBriefNotSubmitted(io, dir, who, seatName, `${result.reason}; ${where}`, host, report);
     }
     logLine(dir, 'send', who, `${seatName}: delivered (typed brief, ${result.evidence})`, host.now());
-    appendHistory(project, root, host.home, { ...entry, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
-    return delivered(io, seatName, report, 'typed brief');
   } finally {
     lock.release();
   }
+  if (wait) {
+    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'typed', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
+  }
+  appendHistory(project, root, host.home, { ...entry, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+  return delivered(io, seatName, report, 'typed brief');
 }
 
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
@@ -1977,6 +2029,7 @@ async function deliverSocketFrame(
   host: SendHost,
   report: Report,
   startedAt: number,
+  wait = false,
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -2019,7 +2072,9 @@ async function deliverSocketFrame(
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: payload.thread, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
     return { kind: 'held', reason: HELD_FRAME_REASON };
   }
-  appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
+  if (!wait) {
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
+  }
   return { kind: 'delivered' };
 }
 
@@ -2343,11 +2398,18 @@ function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 
   return 0; // exit: send.sent-unconfirmed
 }
 
-/** The reply came back: printed, and the send is over. Exit 0, always. */
-function answered(io: Io, seat: string, read: { reply: string; msg_id: string | null }, report: Report): number {
+/** A reply record on the thread arrived within the window: printed, and the send is over. Exit 0, always. */
+function answered(
+  io: Io,
+  seat: string,
+  read: { reply: string; msg_id: string | null },
+  report: Report,
+  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' = 'socket',
+  thread: string | null = report.sent,
+): number {
   const summary = `${seat}: answered`;
   if (report.json) {
-    writeAction(io, report, { status: 'answered', summary, channel: 'socket', reply: read.reply, replyId: read.msg_id });
+    writeAction(io, report, { status: 'answered', summary, channel, reply: read.reply, replyId: read.msg_id, thread });
   } else {
     openText(io, report);
     io.stdout(`${summary}\n${read.reply}\n`);
@@ -2355,9 +2417,9 @@ function answered(io: Io, seat: string, read: { reply: string; msg_id: string | 
   return 0; // exit: send.answered
 }
 
-/** The frame was sent on the socket, and the window closed with no reply. Exit 1, always. */
+/** The record was sent, and the wait window closed with no reply on the thread (the thread stays open). Exit 1, always. */
 function timedOut(io: Io, seat: string, seconds: number, report: Report): number {
-  const why = `sent, no reply within ${String(seconds)}s; a seat which does not accept messages from other sessions holds the frame until a person lets it through`;
+  const why = `sent, no reply on the thread within ${String(seconds)}s; the thread stays open`;
   const message = `${seat}: timeout: ${why}`;
   if (report.json) writeJsonError(io, 'send.timeout', message);
   else io.stderr(`team send: ${message}\n`);
@@ -2459,8 +2521,10 @@ type ActionFields = {
   channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
-  /** The reply frame's own id, on an answered wait. */
+  /** The reply record's own id, on an answered wait. */
   replyId?: string | null;
+  /** The thread id, on an answered wait. */
+  thread?: string | null;
   /** The native handoff: the exact SendMessage target, the body it carries, and the line that
    *  records the delivery — present on the handoff alone. */
   to?: string;
@@ -2484,6 +2548,7 @@ function writeAction(io: Io, report: Report, fields: ActionFields): void {
     ...(fields.to !== undefined ? { to: fields.to } : {}),
     ...(fields.confirm !== undefined ? { confirm: fields.confirm } : {}),
     ...(fields.message !== undefined ? { message: fields.message } : {}),
+    ...(fields.thread !== undefined ? { thread: fields.thread } : {}),
     ids: { sent: report.sent, reply: fields.replyId ?? null },
     ...(fields.reply !== undefined ? { reply: fields.reply } : {}),
     ...(fields.plan !== undefined ? { plan: [...fields.plan] } : {}),

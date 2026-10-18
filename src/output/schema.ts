@@ -1230,6 +1230,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
             reply: { type: ['string', 'null'] },
           },
         },
+        thread: { type: ['string', 'null'] },
         reply: { type: 'string' },
         address: { type: ['string', 'null'] },
         plan: { type: 'array', items: PLAN_STEP_SCHEMA_FRAGMENT },

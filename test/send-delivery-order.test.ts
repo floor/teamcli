@@ -936,16 +936,23 @@ describe('a human seat is never typed into', () => {
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
-  test('a waited send is refused: the wait rides the native leg a human never walks', async () => {
+  test('a waited send to a human seat walks the drop leg alone, types nothing, and waits on the thread', async () => {
     const w = world({ lead: HUMAN });
-    const host = walker(w);
+    const host = { ...walker(w), waitMs: 0 };
     const io = owner(w.root);
 
-    expect(await runSend(['lead', 'hello', '--wait'], io, host)).toBe(1);
+    expect(await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host)).toBe(1);
 
-    expect(io.err).toContain("lead: the pane is a human's; the native leg is never walked for it, and --wait rides that leg; nothing was sent");
+    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
+    expect(lastEntry(w.root, w.home)).toMatchObject({
+      outcome: 'timeout',
+      via: 'drop',
+    });
   });
 });
 
@@ -998,21 +1005,21 @@ describe('the dry run names only the legs this build can walk', () => {
   });
 });
 
-describe('a waited send needs the native leg to lead the order', () => {
-  test('an order that leads elsewhere refuses the wait, naming the order', async () => {
+describe('a waited send walks the delivery order and waits on the thread', () => {
+  test('an order that leads with typed writes the record on the typed leg and waits on the thread', async () => {
     const w = world();
-    const host = walker(w, { seat: ['typed'] });
+    const host = { ...walker(w, { seat: ['typed'] }), waitMs: 0 };
     const io = owner(w.root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg first, and its delivery order is typed; nothing was sent\n');
-    expect(host.typed).toEqual([]);
-    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(host.typed).toHaveLength(1);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
   });
 
-  test('its dry run prints the same refusal as a dry-run line', async () => {
+  test('its dry run names the walk and writes nothing', async () => {
     const w = world();
     const host = walker(w, { entity: ['typed', 'native'] });
     const io = owner(w.root);
@@ -1020,38 +1027,34 @@ describe('a waited send needs the native leg to lead the order', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    // The entity's word adds `native` — the one leg a word may add — and names `typed` first, so
-    // the order in force is typed, native; the refusal names it.
-    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg first, and its delivery order is typed, native; nothing was sent\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
   });
 
-  test('a dry run of a waited send to a native-CLI seat reports that seat’s refusal, exit 1', async () => {
+  test('a dry run of a waited send to a native-CLI seat names the walk and writes nothing', async () => {
     const w = world();
     const host = walker(w);
     const io = owner(w.root);
 
-    // The seat runs codex: no run of this build could wait on it, dry or not, so the dry run
-    // reports the refusal the real run would print rather than naming a channel it cannot walk.
     const code = await runSend(['native', 'hello', '--wait', '--dry-run'], io, host);
 
-    expect(code).toBe(1);
-    expect(io.err).toBe('team send: refused: native runs codex: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent\n');
-    expect(io.out).toBe('');
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane, then a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.err).toBe('');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropDir(w.root, 'native'))).toBe(false);
   });
 
-  test('a word naming only the native leg leads the wait to that leg, which this build carries no frame for', async () => {
+  test('a word naming only the native leg ends unreachable when no socket frame is available', async () => {
     const w = world();
-    const host = walker(w, { seat: ['native'] });
+    const host = { ...walker(w, { seat: ['native'] }), waitMs: 0 };
     const io = owner(w.root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    // The word is honoured and the order leads with native, so the wait is not refused over its
-    // order; the refusal is the build's own, which writes no frame yet.
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(io.err).toBe(
+      "team send: lead: unreachable: no leg of its delivery order took the send (native: unavailable; the native leg is the sending session's own SendMessage)\n",
+    );
     expect(host.dials()).toBe(0);
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });

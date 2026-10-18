@@ -3043,7 +3043,7 @@
       "code": 0,
       "command": "send",
       "id": "send.answered",
-      "meaning": "the seat's reply came back within the window",
+      "meaning": "a reply record on the thread arrived within the window",
       "trigger": "team send worker hello --wait"
     },
     {
@@ -3141,7 +3141,7 @@
       "code": 1,
       "command": "send",
       "id": "send.timeout",
-      "meaning": "sent on the socket, but no reply within the window",
+      "meaning": "the record was sent, and the wait window closed with no reply on the thread (the thread stays open)",
       "trigger": "team send worker hello --wait --timeout 10"
     },
     {
