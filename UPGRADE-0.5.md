@@ -2,13 +2,83 @@
 
 For a team running under 0.3.5, or under one of the 0.4.x builds between them.
 
-1. `team doctor`. It checks this machine against the file and names whatever is missing.
-2. `team check`. It reads the file, the state, herdr, the registries and the agents' records, and
-   reports the differences alone, each with its repair. It writes nothing.
-3. `team up`. The file in your clone is the record, so nothing is approved by hand any more.
+The install leaves your team as it is: the file stays byte for byte what it was, the 0.3.5 key,
+approval record and log stay where they are, and the upgraded build reads all of it without
+asking for a new approval. Silence about approval is that survival — no command below warns that
+the approval is missing or has changed, and that silence is correct.
+
+What changed is the step after editing the file. Approval is gone: the live file in your clone is
+the record, `team check` reads it against what is running, and `team up` admits from it.
+
+1. **`team check`**. It reads the file, the state, herdr, the registries and the agents' records,
+   and reports the differences alone, each with its repair. What it finds depends on what is
+   running; in the upgrade acceptance run, with the team not started yet, it answered:
+
+   ```
+   difference: orchestrator is in the file and is not running
+     repair: team up
+     who: the owner
+   1 difference, 1 for the owner
+   ```
+
+   It exits 1 while a difference stands, and it carries the warnings for the deprecated keys
+   listed below.
+2. **`team doctor`**. It checks this machine against the file and names what is missing; a ready
+   machine ends `team doctor: nothing missing` (a warning count may follow). Its closing block,
+   `what 0.5.0 must not pretend`, is the plainest statement of what these controls are and are
+   not — it says in as many words that only the owner grants rights and adds seats.
+3. **`team up --dry-run`**. The plan is built from your file unchanged — its launch command,
+   model, cwd and session — with no approval step and no legacy refusal. One change from 0.3.5
+   shows here: the seat's workspace is created in the project, and its pane label reads
+   `orchestrator · orchestrator` (0.3.5 used the lobby and `claude opus 0`). The plan's standing
+   rules no longer name commands this build does not have.
+   <!-- recheck at rc.6: the launch rules drop `team approve` -->
+4. **`team up`**. The file in your clone is the record, so nothing is approved by hand any more.
    Running seats keep working as they are; relaunch one with `team restart <seat>`, or the team —
    `team down`, then `team up`, typed as two commands, the second only after the first has
    returned — when you want it on this build.
+5. **`team seats`** and **`team status`**. Both read the upgraded team without asking anything:
+   `seats` lists the old seat with its role, CLI and model, and `status` shows the same one
+   difference as `team check`, with its `repair: team up`, until the team is up.
+
+## `team approve` is gone
+
+The command is not in the CLI. A typed `team approve` gets a line of its own saying the command
+is gone, not the generic unknown-command answer, and exits 2.
+<!-- recheck at rc.6: confirm the typed-approve wording -->
+`team --help` carries no `approve` line. A fresh `team init` ends by naming `team up` as the next
+command.
+<!-- recheck at rc.6: confirm the init line -->
+
+`team up` admits from the live file now: edit the file in your clone, then run `up` — or `add`,
+`remove`, `down`, `restart`; each reads the file itself. A script that guarded on `team approve`
+can drop that call.
+
+The approved copy is gone with it. Every command reads the live file, and
+[`team check`](https://github.com/floor/teamcli/blob/main/docs/commands/check.md) is integrity,
+not authority: it reads the file, the state,
+herdr, the registries and the agents' records, and reports the differences alone, each with its
+repair — a reading of whether the records agree, never a grant. No approval, no launch and no
+right follows from a clean answer, and the check writes nothing at all, for every caller, the
+owner included.
+
+## Grants replace approval
+
+`grant`, `delegate` and `revoke` are in the command list where 0.3.5 had approval and trust. The
+owner runs them from a terminal outside herdr — no seat can. Where 0.3.5 answered trust dialogs,
+the replacement is the grant `team check` prints in its repair:
+`team grant @team --capabilities dialogs.trust`; `team revoke` ends it. A right given to a team
+or a seat stands until it is revoked and may carry an end date; the `what 0.5.0 must not pretend`
+block in `team doctor` is the honest list of what those rights are not.
+
+## The file itself
+
+The file stays at `format: 1`, and the install does not rewrite it — header comment and schema
+URL included. Only a file that `team init` writes now carries the new schema URL
+(`floor/teamcli/v0.5.0-rc.5` where 0.3.5 wrote `floor/team/v0.3.5`); no command reads it. A file
+written by 0.3.5's own `init` already has `leads: true` and absolute trust entries, so a team that
+never hand-edited its file has nothing to change here. The deprecated keys, and what to do with
+each, are next.
 
 ## Messages you may meet, and what to do
 
@@ -16,12 +86,15 @@ Every finding `team check` prints carries its `repair:` on the same line, and ev
 its way out. These are the messages an upgrade produces most often; each has its what-to-do here
 as well.
 
-- **`` `dialogs:` is deprecated and grants nothing ``** (`team check` warns, once). Remove
+- **`` `dialogs:` is deprecated and grants nothing ``** (`team check` warns, once; `team doctor`
+  notes it too). <!-- recheck at rc.6: doctor's dialogs note lands with the fix --> Remove
   `dialogs:` from the file. Trust answering is the owner's grant now: `team grant @team
   --capabilities dialogs.trust` turns it on and `team revoke` ends it.
 - **`` `coordinator:` is now `leads: true` on the lead's seat, and is still read ``**
-  (`team check` warns). Set `leads: true` on the lead's seat and remove `coordinator:` from the
-  file.
+  (`team check` warns, with the repair; `team doctor` warns without it). Set `leads: true` on
+  the lead's seat and remove `coordinator:` from the file. A seat's `role:` string —
+  `coordinator`, `orchestrator` — is a label and stays as written; the lead is the seat
+  `leads: true` marks.
 - **`budgets.marks replaces watch.quota_marks`** (`team check` warns). Remove the old
   `watch.quota_marks` key and keep `budgets.marks`.
 - **``team check: `team check` is now `team commits check`, and is still read through 0.3.3``**
@@ -40,6 +113,16 @@ as well.
   denies prints `deny` and exits 1). Run the command the `to unblock` line names: it is the
   owner's run of this folder, the file's delegate entry, or the verified grant that admits the
   caller.
+- **``! up would refuse: the file is legacy: migrate trust to absolute paths including the lobby …``**
+  (`team up`; the dry run says the same). Paste the block the message prints into the file. It
+  spells the lobby `~/.config/team/lobby` and gives the project's absolute path where the 0.3.5
+  file said `.`:
+
+  ```
+  trust:
+    - ~/.config/team/lobby
+    - /absolute/path/to/your/project
+  ```
 - **`! add would refuse: …` then `! to unblock: …`** (`team add`). Same reading: the unblock line
   names what admits the add. A delegate adds only a seat the file already declares, exactly as
   written; any other add is the owner's.
@@ -59,21 +142,6 @@ as well.
 - **`team doctor` names something missing.** Follow its line; a ready machine ends `team doctor:
   nothing missing` (a warning count may follow).
 
-## `team approve` is gone
-
-The command is not in the CLI: `team approve` prints `team: unknown command "approve"` and exits
-2, and `team --help` carries no `approve` line. `team up` admits from the live file now: edit the
-file in your clone, then run `up` — or `add`, `remove`, `down`, `restart`; each reads the file
-itself. A script that guarded on `team approve` can drop that call.
-
-The approved copy is gone with it. Every command reads the live file, and
-[`team check`](https://github.com/floor/teamcli/blob/main/docs/commands/check.md) is integrity,
-not authority: it reads the file, the state,
-herdr, the registries and the agents' records, and reports the differences alone, each with its
-repair — a reading of whether the records agree, never a grant. No approval, no launch and no
-right follows from a clean answer, and the check writes nothing at all, for every caller, the
-owner included.
-
 ## Caller gates are strict now
 
 The file decides who may do what, a grant cannot widen its own entry, and `--file` and `--session`
@@ -90,8 +158,8 @@ stay the owner's, from a terminal outside herdr.
   `down` and `remove` also admit the file's delegate whose entry carries them; `restart`
   is not delegable. An operator the record does not mark a lead loses these unless a delegate
   entry carries `down` or `remove`.
-- **`team grant` and `team revoke`** — the owner alone, from a terminal outside herdr, at both
-  seat level and team level.
+- **`team grant`, `team delegate` and `team revoke`** — the owner alone, from a terminal outside
+  herdr, at both seat level and team level.
 
 ## A send says how it ended, and takes the channel it names
 
