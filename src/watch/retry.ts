@@ -15,7 +15,8 @@
 // typed; a message still unread when `INBOX_FALLBACK_MS` ends is handed to this same retry, which
 // types its trigger and records why the fallback happened. A message the drop leg left is not a
 // held send either: nothing is ever typed for it, and a receipt from the seat's own watcher — the
-// turn-start hook's `drop_read`, or its inbox client's `inbox_read` — promotes it the same way. A
+// turn-start hook's read (`team drops --read`), or its inbox client's `inbox_read` — promotes it
+// the same way. A
 // drop no watcher read is given up on with the file's path, never typed and never called lost.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
