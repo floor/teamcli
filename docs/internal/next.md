@@ -31,12 +31,12 @@ The watch's ring is unchanged: `Team: run team messages`.
 
 ## What it reads and writes
 
-Reads the git checkout (`findRoot`), the team file, the YAML list at `tasks.path`, and the
-lease files under `.agents/leases/` in this clone. The path is relative to the checkout. A
-record's `id` and `title` are required. The printed block is the `team issues` block, one
-record. No lease field is printed.
+Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
+the team file, the YAML list at `tasks.path`, and the lease files under `.agents/leases/`
+at that root. The path is relative to that root. A record's `id` and `title` are required.
+The printed block is the `team issues` block, one record. No lease field is printed.
 
-On a broker source it reads the same git checkout and team file, then asks the broker over
+On a broker source it reads the same root and team file, then asks the broker over
 `.agents/broker.sock`: one request line carrying the caller's seat and pane, one answer line back,
 with a five-second deadline. Nothing is read from the tracker directly, and the credential is
 never read here. The seat gate runs first; the broker checks the same claim again on the request,

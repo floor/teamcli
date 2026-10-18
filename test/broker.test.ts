@@ -899,6 +899,19 @@ describe('the start protocol', () => {
     }
   });
 
+  test('a folder that is not a checkout reads the team root it holds', async () => {
+    project();
+    record();
+    // The team root is this folder itself: no checkout names it, and the broker binds its socket
+    // under that folder's own `.agents`. It starts and stops cleanly, the same as in a clone.
+    rmSync(join(root, '.git'), { recursive: true, force: true });
+    const { running, io, finish } = await startCommand();
+    expect(io.err).toContain('team broker: answering on .agents/broker.sock\n');
+    finish();
+    expect(await running).toBe(0);
+    expect(existsSync(brokerSocket(root))).toBe(false);
+  });
+
   test('a second broker refuses as busy, through the module and through the command', async () => {
     project();
     record();

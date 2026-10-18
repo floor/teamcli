@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
 import { type KeyObject } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findRoot } from '../src/file/load.ts';
@@ -151,6 +151,23 @@ describe('team messages', () => {
       err: '',
     });
     expect(readFileSync(receiptFile(record.root, 'lead', 'm1'), 'utf8')).toBe(receipt);
+  });
+
+  test('a folder that is not a checkout reads the team root it holds', async () => {
+    project();
+    // The team root is this folder itself: no checkout names it, and the owner's mailbox is
+    // `.agents/team.yaml` beside the process. The record binds to that root, so the read proves
+    // the root the command resolved is the plain one, not a checkout found somewhere above.
+    mkdirSync(join(base, 'plain'), { recursive: true });
+    const plain = realpathSync(join(base, 'plain'));
+    mkdirSync(join(plain, '.agents'), { recursive: true });
+    writeFileSync(join(plain, '.agents', 'team.yaml'), TEAM);
+    plantRecord(home, plain, 'acme', 'lead', 'm1', BODY, { from: 'harness', at: '2026-10-04T09:00:00.000Z' });
+    const io = testIo(plain, { kind: 'owner' });
+    expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
+    expect(io.out).toBe(SHOWN);
+    expect(io.err).toBe('');
+    expect(existsSync(join(recordDir(plain, 'acme', 'lead'), 'm1.read.json'))).toBe(true);
   });
 
   test('a bad signature prints no body and writes no receipt', async () => {

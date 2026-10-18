@@ -19,7 +19,7 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
@@ -36,7 +36,7 @@ without one takeable it stands down. --release unlinks the caller's own lease. -
 the source every tasks.cadence while a pass finds nothing takeable, and cannot be read as one
 --json document. A claim is a local lease: the tracker is never written.
 
-Exits 0 when a task is claimed, released, or none is open, 1 when the caller, policy, broker, or file is refused, 2 when the invocation can't be read or this folder is not a git repository.
+Exits 0 when a task is claimed, released, or none is open, 1 when the caller, policy, broker, or file is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
 
 export type NextSources = {
@@ -95,16 +95,24 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
   if (args.error || args.rest.length) {
     return invocation(io, args.error ?? `unexpected "${args.rest[0]}"`, true, json);
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    // `team next` takes no `--file`, so the no-repository refusal must not offer one.
-    if (json) writeJsonError(io, 'next.not-a-repo', NOT_A_REPO_NO_FILE, 'run team next from inside the git checkout');
-    else io.stderr(`team next: ${NOT_A_REPO_NO_FILE}\n`);
-    // exit: next.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team next` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
-  if (!loaded.ok) return file(io, loaded.errors[0]?.message ?? 'the team file can\'t be read', json);
+  if (!loaded.ok) {
+    const problem = loaded.errors[0];
+    const message = problem?.message ?? 'the team file can\'t be read';
+    if (problem !== undefined && isNoRepository(problem)) {
+      const shown = withoutFileOffer(message);
+      if (json) writeJsonError(io, 'next.not-a-repo', shown, 'run team next from inside a checkout, or from the folder that holds .agents/team.yaml');
+      else io.stderr(`team next: ${shown}\n`);
+      // exit: next.not-a-repo
+      return 2;
+    }
+    return file(io, message, json);
+  }
   const tasks = loaded.team.tasks;
   if (!tasks) return file(io, 'the team file declares no task source', json);
   const emit: Emit = {
