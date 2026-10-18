@@ -15,7 +15,7 @@ import { storePath, writeApproval } from '../../src/store/store.ts';
 import { testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-14T12:00:00Z');
-const LABEL = 'Iris · first assistant';
+const LABEL = 'Lead · first assistant';
 const DISPLAY = 'Grok 4.7 high';
 
 function teamYaml(irisStopped: boolean): string {

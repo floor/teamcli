@@ -142,7 +142,7 @@ function readSeats(
     // already named `lead` is legacy and keeps loading — the address still means the seat holding
     // `leads`, and `team check` notes a `lead` seat that holds them not — but no nickname may take
     // the name, and `team add` and `team rename` refuse it: the reservation binds new names only.
-    // The human name for this seat (OD-20261017-15). It confers nothing — the role keeps the
+    // The human name for this seat. It confers nothing — the role keeps the
     // grants — and it is a field of the built seat like every other, so it is in the digest and
     // omitted when the file omits the key. The same rule as the name, because a send addresses
     // it as `<nickname>@<team>` and `@` is the address's own separator.

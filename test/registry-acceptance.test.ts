@@ -5,7 +5,7 @@
 // (b) an orchestrator reaches another team's orchestrator by `name@team`, no guessing: two
 //     teams hold a seat of the same name, and the message lands in the named team's seat;
 // (c) a relaunch keeps a seat's agent id and re-points reach.pane to the pane it starts on.
-// R4c, verified delivery, in the same fake-CLI frame (builder-1's src/send/deliver.ts):
+// R4c, verified delivery, in the same fake-CLI frame (src/send/deliver.ts):
 // (d) a CLI that swallows the first Enter is pressed again, and the receipt is delivered;
 // (e) a CLI that never submits earns not-submitted, with the box text, inside the try bound;
 // (f) a box drawn with a dim (SGR 2) suggestion counts as empty, and no Enter goes out on it.

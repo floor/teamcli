@@ -1,6 +1,6 @@
 // The projection the `team` CLI generates from a file's `reach` grants — `<lobby>/reach-roster.json`,
-// the one file the bridge and the seat-shuttle daemon both read (briefs/autodiscovery-flo821-seam.md
-// in teamcli). The parse of the grant itself is test/seat-reach.test.ts.
+// the one file the bridge and the seat-shuttle daemon both read. The parse of the grant itself is
+// test/seat-reach.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -57,8 +57,8 @@ describe('the projection', () => {
       version: 1,
       seats: [{ alias: 'iris', route: 'iris', key_id: 'seat-iris-1', guard_dir: '/Users/x/.config/team/lobby/guard-floor-iris', reach: ['grokbot'] }],
     });
-    const named = projectionOf(team(teamText('    reach:\n      to: [grokbot]\n      alias: "Iris-X"\n      route: floor-20\n      key_id: seat-iris-1\n      guard_dir: /Users/x/guard-floor-iris\n')), home);
-    expect(named.seats).toEqual([{ alias: 'iris-x', route: 'floor-20', key_id: 'seat-iris-1', guard_dir: '/Users/x/guard-floor-iris', reach: ['grokbot'] }]);
+    const named = projectionOf(team(teamText('    reach:\n      to: [grokbot]\n      alias: "Lead-X"\n      route: floor-20\n      key_id: seat-iris-1\n      guard_dir: /Users/x/guard-floor-iris\n')), home);
+    expect(named.seats).toEqual([{ alias: 'lead-x', route: 'floor-20', key_id: 'seat-iris-1', guard_dir: '/Users/x/guard-floor-iris', reach: ['grokbot'] }]);
   });
 
   test('the generator emits only seats whose reach.to includes a known front', () => {

@@ -61,7 +61,7 @@ export const POLICY_DOMAIN = 'team-policy-v1\n';
 
 /**
  * The EIGHT everyday operations whose caller gate `dev-mode` lifts when `on`
- * (OD-20261017-01, OD-20261017-08, and Atlas ruling of 2026-10-17 adding `reload`).
+ * (`reload` was added last).
  * Never reaches `grant`, `delegate`, `revoke`, `approve`, `create`, `agree`, `leads`,
  * `remove --abandon`, `broker`, `tempo`, or a delegate's file-editing `add`.
  */

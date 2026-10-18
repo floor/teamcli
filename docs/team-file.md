@@ -117,7 +117,7 @@ or out of the list, changes that digest, because the word is part of the seat.
 
 Nothing in the launch line reads `effort`.
 
-`nickname` is optional on a seat: the human name for it, such as `Agamemnon`. It takes the same
+`nickname` is optional on a seat: the human name for it, such as `Ada`. It takes the same
 characters as the seat's `name` — a letter or digit first, then letters, digits, `.`, `_` and
 `-` — it must be unique in the team, and it must not be another seat's name. Either collision
 would make one address name two seats, so a file that writes one is refused when it loads, and

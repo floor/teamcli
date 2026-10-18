@@ -1386,7 +1386,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     accounts.sort(byLine);
     // A lab no screen reads and no reading reached yet is still the lab its team's seats draw
     // on: count them, so the one line that stands for the lab says how many instead of the lab
-    // printing an `unknown` row that reads as a figure not yet seen (Atlas, 2026-10-17).
+    // printing an `unknown` row that reads as a figure not yet seen.
     const noFigure = accounts.length === 0 || accounts.every((entry) =>
       entry.machine.state === 'unknown' && entry.kind === 'subscription' && !entry.readable);
     let seats = 0;
@@ -1777,7 +1777,7 @@ export function reportText(report: UsageReport, tree = false): string {
     }
   }
   // The RESERVE column is only there when a row has something in it: a table whose every row
-  // reads `-` drops the column (Atlas, 2026-10-17), headers and cells together.
+  // reads `-` drops the column, headers and cells together.
   const reserveAt = USAGE_HEADERS.indexOf('RESERVE');
   const keepReserve = rows.length === 0 || rows.some((row) => row[reserveAt] !== '-');
   const lines = [
@@ -1863,7 +1863,7 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
   const margin = m.pace === null ? marginOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window) : null;
   const pace = m.other && report.view === 'restricted' ? '' : m.pace === null && margin !== null ? marginWord(margin) : paceWord(m.pace);
   // The STATE cell is the block's four words — ok, near cap, walled, unknown — with freshness as
-  // the marker after them (owner/Atlas, 2026-10-17): an account at 89% used and half a window
+  // the marker after them: an account at 89% used and half a window
   // ahead said `fresh` and nothing else, which is where it was read, not where it stands.
   const state = quotaStateOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window)
     ?? figureState(m);

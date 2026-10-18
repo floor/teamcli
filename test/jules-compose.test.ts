@@ -7,7 +7,7 @@
 // The safety property this file exists for: a brief is created on the seat's own repo and no
 // other. The scene starts the chooser on a different repo, and the walk must still prove the
 // seat's repo on the collapsed form before it types. The probe repo every scene names is
-// floor/jules-sandbox, the private repo Jules probes are confined to.
+// example/sandbox, a sandbox repo the probes are confined to.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,7 +19,7 @@ import { profileFor } from '../src/profiles/index.ts';
 import { deliverCompose, repoFromUrl } from '../src/send/compose.ts';
 import type { NativePane } from '../src/send/native.ts';
 
-const SANDBOX = 'floor/jules-sandbox';
+const SANDBOX = 'example/sandbox';
 const MESSAGE = 'Say PING in one line.';
 const PROOF = 'Session created: https://jules.google.com/session/<id>';
 /** The real 148x39 table: the banner and `Welcome to Jules CLI!` stay on screen above it. */
@@ -298,12 +298,12 @@ describe('the jules compose walk', () => {
 });
 
 describe('the send glue names the seat\'s own origin as the repo', () => {
-  test('a folder whose origin is floor/jules-sandbox delivers there and nowhere else', async () => {
+  test('a folder whose origin is example/sandbox delivers there and nowhere else', async () => {
     const base = mkdtempSync(join(tmpdir(), 'jules-seat-'));
     made.push(base);
     execFileSync('git', ['init', '-q', base], { stdio: 'ignore' });
-    execFileSync('git', ['-C', base, 'remote', 'add', 'origin', 'git@github.com:floor/jules-sandbox.git'], { stdio: 'ignore' });
-    expect(repoFromUrl('git@github.com:floor/jules-sandbox.git')).toBe(SANDBOX);
+    execFileSync('git', ['-C', base, 'remote', 'add', 'origin', 'git@github.com:example/sandbox.git'], { stdio: 'ignore' });
+    expect(repoFromUrl('git@github.com:example/sandbox.git')).toBe(SANDBOX);
 
     // The listing command runs the CLI's own `repos` arguments; the scene stands a bun script
     // in place of the binary so no live account is asked, and the walk itself is unchanged.
@@ -345,7 +345,7 @@ describe('the send glue names the seat\'s own origin as the repo', () => {
     const base = mkdtempSync(join(tmpdir(), 'jules-seat-'));
     made.push(base);
     execFileSync('git', ['init', '-q', base], { stdio: 'ignore' });
-    execFileSync('git', ['-C', base, 'remote', 'add', 'origin', 'git@github.com:floor/jules-sandbox.git'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', base, 'remote', 'add', 'origin', 'git@github.com:example/sandbox.git'], { stdio: 'ignore' });
     const lobby = mkdtempSync(join(tmpdir(), 'jules-lobby-'));
     made.push(lobby);
 

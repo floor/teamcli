@@ -1,6 +1,6 @@
 // The reach projection: the machine-readable form of the team file's per-seat `reach` grants
 // (the seat auto-discovery seam; docs/projects/teamcli/mcp/seat-auto-discovery.md in the docs
-// tree, briefs/autodiscovery-flo821-seam.md in teamcli). `up`, `add` and `remove` regenerate it
+// tree). `up`, `add` and `remove` regenerate it
 // at `<lobby>/reach-roster.json` after their own file write; the bridge and the seat-shuttle
 // daemon read it, and both refuse anything malformed and keep the last good file. So this writer
 // must never emit a document a reader would refuse: every default is validated here, before the

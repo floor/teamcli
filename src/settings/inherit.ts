@@ -12,7 +12,7 @@ export type SettingLevel = 'machine' | 'entity' | 'project' | 'team' | 'seat';
 export const SETTING_LEVELS: readonly SettingLevel[] = ['machine', 'entity', 'project', 'team', 'seat'];
 
 /** One level's word on a setting: the level that holds it, the value it declares, and when the
- *  word stops counting (an expired word is unset at its level, Atlas ruling 5). */
+ *  word stops counting (an expired word is unset at its level). */
 export type Declaration = { level: SettingLevel; value: boolean; expiry?: string | null };
 
 /**
@@ -74,7 +74,7 @@ export type NumberSettingSpec = {
 };
 
 /** One level's word on a number setting: the level that holds it, the value it declares, and when
- *  the word stops counting (an expired word is unset at its level, Atlas ruling 5). */
+ *  the word stops counting (an expired word is unset at its level). */
 export type NumberDeclaration = { level: SettingLevel; value: number; expiry?: string | null };
 
 /** The declarations a chain of per-level numbers holds, in inheritance order; a level the chain
@@ -226,7 +226,7 @@ export type OrderSettingSpec<L extends string> = {
 };
 
 /** One level's word on an order setting: the level that holds it, the order it declares, and when
- *  the word stops counting (an expired word is unset at its level, Atlas ruling 5). */
+ *  the word stops counting (an expired word is unset at its level). */
 export type OrderDeclaration<L extends string = string> = { level: SettingLevel; value: readonly L[]; expiry?: string | null };
 
 /** The declarations a chain of per-level orders holds, in inheritance order; a level the chain

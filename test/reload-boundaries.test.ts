@@ -221,7 +221,7 @@ describe('the screen the close demands', () => {
     // nothing is typed into the unrecognised screen. A pane whose CLI really exited is caught
     // by the process re-read below, not by this text.
     remember('worker', 'low');
-    const { sources, closed } = harness({ text: 'jvial@mac acme % ' });
+    const { sources, closed } = harness({ text: 'user@mac acme % ' });
     const io = testIo(root, OWNER);
     const code = await runReload(['worker'], io, sources);
     expect(code, io.out + io.err).toBe(0);

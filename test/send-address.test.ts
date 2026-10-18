@@ -44,7 +44,7 @@ function processInfo(shell: number, foreground: number[]): unknown {
 
 function init(overrides: Partial<AgentInit> = {}): AgentInit {
   return {
-    name: 'Hephaestus',
+    name: 'Builder One',
     signing: { model: 'Claude Sonnet', version: '5.5', role: 'builder' },
     lab: 'anthropic',
     cli: 'claude-code',

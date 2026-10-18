@@ -126,8 +126,8 @@ carries no key that could land on it.
 
 - `claude-code-shell-move-question.txt`: the release run's own capture of this form, taken
   2026-10-06T21:37:29Z from its Claude pane after a `team down` of a seat holding a background
-  shell, with `pane read <pane> --format text --lines 80` — the stdout of
-  `briefs/032-proof-main-2.md` section e, copied byte for byte. Before the rule admitted this
+  shell, with `pane read <pane> --format text --lines 80` — that run's proof output, copied
+  byte for byte. Before the rule admitted this
   tail it read `question`, so the stop sent nothing and left the seat on this dialog. Reads
   `exit question`.
 - `claude-code-shell-scheduled-move-question-ansi.txt`: my own scratch capture of the same form,

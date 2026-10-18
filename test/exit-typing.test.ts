@@ -236,7 +236,7 @@ describe("the CLI's own exit question", () => {
   });
 
   test('the three-choice form the release run captured reads as its own kind', () => {
-    // The release blocker, from the proof run (briefs/032-proof-main-2.md, section e; copied
+    // The release blocker, from a release proof run's capture (section e; copied
     // byte for byte): a seat with a background shell that the CLI can move to the background
     // draws "2. Move to background and exit" between the marked choice and "3. Stay", and the
     // frame rule read it as an ordinary question — no key was sent and the seat was left.
@@ -753,9 +753,9 @@ describe('the caller check is taken again after a wait', () => {
 });
 
 describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', () => {
-  const home = '/Users/jvial';
-  const startDir = '/Users/jvial/start/dir';
-  const liveDir = '/Users/jvial/live/dir';
+  const home = '/Users/example';
+  const startDir = '/Users/example/start/dir';
+  const liveDir = '/Users/example/live/dir';
 
   const makeWrappedScreen = (promptText: string, pathLines: string[]) => [
     '  Cursor Agent',
@@ -819,7 +819,7 @@ describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', (
     const origType = pane.io.typeText;
     pane.io.typeText = (text) => {
       const res = origType(text);
-      currentCwd = '/Users/jvial/swapped/dir';
+      currentCwd = '/Users/example/swapped/dir';
       return res;
     };
 
@@ -831,19 +831,19 @@ describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', (
   test('Suite 4: adversarial suffixes fail closed to unknown', () => {
     // Trailing row with shell command
     const injectedShell = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', 'rm -rf / && echo hacked']);
-    expect(readScreen('cursor', injectedShell, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedShell, { cwd: '/Users/example/.config/team/lobby', home }).kind).toBe('unknown');
 
     // Trailing row with prompt glyph
     const injectedPrompt = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', '→ malicious command']);
-    expect(readScreen('cursor', injectedPrompt, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedPrompt, { cwd: '/Users/example/.config/team/lobby', home }).kind).toBe('unknown');
 
     // Trailing row with quoted suffix
     const injectedQuote = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', '(quoted text)']);
-    expect(readScreen('cursor', injectedQuote, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedQuote, { cwd: '/Users/example/.config/team/lobby', home }).kind).toBe('unknown');
 
     // Trailing row with extra footer
     const injectedFooter = makeWrappedScreen('Plan, search, build anything', ['~/.config/team/lobby', 'extra footer']);
-    expect(readScreen('cursor', injectedFooter, { cwd: '/Users/jvial/.config/team/lobby', home }).kind).toBe('unknown');
+    expect(readScreen('cursor', injectedFooter, { cwd: '/Users/example/.config/team/lobby', home }).kind).toBe('unknown');
   });
 
   test('Cursor wrapped paths with working and permission screens', () => {
