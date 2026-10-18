@@ -7,12 +7,21 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
+import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
-import { PENDING_NATIVE_TTL_MS, pendingDir, pendingPath, sweepPendingNative } from '../src/send/pending.ts';
+import {
+  PENDING_NATIVE_CONFIRM_WINDOW_MS,
+  PENDING_NATIVE_TTL_MS,
+  pendingDir,
+  pendingPath,
+  sweepPendingNative,
+} from '../src/send/pending.ts';
 import { updateState } from '../src/state.ts';
+import { expirePendingNative } from '../src/watch/native.ts';
+import type { RetryScene } from '../src/watch/retry.ts';
 import { testIo, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
@@ -501,3 +510,163 @@ test('the 24h sweep keeps records younger than or at 24h, deletes records older 
   expect(await runSend(['--confirm', idYounger], confirmIo, fake(made, { now: () => NOW }))).toBe(0);
   expect(existsSync(pendingPath('acme', made.root, made.home, idYounger))).toBe(false);
 });
+
+function watchScene(made: World, now: Date, pane = scripted(['idle', 'working'])): { scene: RetryScene; pane: ReturnType<typeof scripted>; said: string[] } {
+  const loaded = loadTeamFile(made.root, { home: made.home });
+  if (!loaded.ok) throw new Error('failed to load team file');
+  const said: string[] = [];
+  const scene: RetryScene = {
+    dir: made.dir,
+    session: 'acme',
+    root: made.root,
+    home: made.home,
+    team: loaded.team,
+    live: {
+      agents: [{ name: 'lead', pane: 'w1:p1', status: 'idle' }],
+      screens: { 'w1:p1': 'idle prompt' },
+    },
+    ownPane: null,
+    sources: {
+      screen: () => 'idle prompt',
+      status: () => 'idle',
+      typeText: (_id, text) => pane.typeText('acme', _id, text),
+      pressEnter: (_id) => pane.pressEnter('acme', _id),
+      sleep: async () => {},
+    },
+    now,
+    say: (text) => {
+      said.push(text);
+    },
+  };
+  return { scene, pane, said };
+}
+
+test('expiry after 10m falls through to drop for a human-pane seat ([native, drop]) with no pane write', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, {
+    native: pane,
+    newId: () => ID,
+    delivery: { seat: ['native', 'drop'] },
+  });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  expect(existsSync(pending(made))).toBe(true);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const { scene, pane: watchPane } = watchScene(made, expiredAt);
+  await expirePendingNative(scene);
+
+  // Pending record was claimed and removed; drop file was written; zero pane writes occurred.
+  expect(existsSync(pending(made))).toBe(false);
+  expect(pane.typed).toEqual([]);
+  expect(pane.enters).toBe(0);
+  expect(watchPane.typed).toEqual([]);
+  expect(watchPane.enters).toBe(0);
+
+  const drops = dropDir(made.dir, 'lead');
+  const files = readdirSync(drops);
+  expect(files).toEqual([ID]);
+  expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
+  expect(readFileSync(join(drops, ID), 'utf8')).toBe(HANDOFF_BODY);
+
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: expiredAt.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      outcome: 'delivered',
+      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
+      via: 'drop',
+      failed: ['native: unconfirmed after 10m'],
+    },
+  ]);
+});
+
+test('confirm after expiry is refused and never causes a second delivery', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working'], `Cross-session message [${NONCE}]: hello`);
+  const host = fake(made, {
+    native: pane,
+    newId: () => ID,
+    delivery: { seat: ['native', 'drop'] },
+  });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const { scene } = watchScene(made, expiredAt);
+  await expirePendingNative(scene);
+
+  // Late confirm after expiry is refused and records no second history entry or drop file.
+  const lateConfirmIo = helperCaller(made.root);
+  const lateHost = fake(made, {
+    native: pane,
+    now: () => new Date(expiredAt.getTime() + 1_000),
+    newId: () => ID,
+  });
+  expect(await runSend(['--confirm', ID], lateConfirmIo, lateHost)).toBe(1);
+  expect(lateConfirmIo.err).toContain('no pending native record holds that id');
+
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries.length).toBe(1);
+  expect(history.ok && history.entries[0]?.via).toBe('drop');
+  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
+});
+
+test('confirm inside the 10m window leaves no fallback triggered', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working'], `Cross-session message [${NONCE}]: hello`);
+  const host = fake(made, {
+    native: pane,
+    newId: () => ID,
+    delivery: { seat: ['native', 'drop'] },
+  });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+
+  // Watch pass at 5m (and at exact 10m boundary) does not expire the handoff.
+  const insideAt = new Date(NOW.getTime() + 5 * 60_000);
+  await expirePendingNative(watchScene(made, insideAt).scene);
+  await expirePendingNative(watchScene(made, new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS)).scene);
+  expect(existsSync(pending(made))).toBe(true);
+  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+
+  // Confirm inside the window records native delivery; a subsequent watch pass past 10m sees no
+  // pending record and triggers no fallback.
+  const confirmIo = helperCaller(made.root);
+  const confirmHost = fake(made, { native: pane, now: () => insideAt, newId: () => ID });
+  expect(await runSend(['--confirm', ID], confirmIo, confirmHost)).toBe(0);
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: delivered (native, 300000 ms)\n');
+
+  const pastWindow = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 60_000);
+  await expirePendingNative(watchScene(made, pastWindow).scene);
+
+  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: insideAt.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      outcome: 'delivered',
+      ms: 300_000,
+      via: 'native',
+    },
+  ]);
+});
+

@@ -122,6 +122,13 @@ export const PENDING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
  *  A record younger than (or at) 24 hours is never deleted by the sweep. */
 export const PENDING_NATIVE_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** How long a native handoff waits for `team send --confirm` before `team watch` expires it and
+ *  walks the remaining legs in the recipient seat's `delivery_order`: 10 minutes. */
+export const PENDING_NATIVE_CONFIRM_WINDOW_MS = 10 * 60_000;
+
+/** The legs that may stand behind `native` in a seat's `delivery_order`. */
+export type PendingNativeFallbackLeg = 'mcp-inbox' | 'typed' | 'drop';
+
 /** The short nonce a native handoff carries in its body (`nv-<8 hex>`): `--confirm` records
  *  `delivered` only when the recipient's transcript shows this token. */
 export function nativeNonceOf(id: string): string {
@@ -162,6 +169,9 @@ export type PendingNative = {
    *  own name. */
   spec?: string;
   resolved?: string;
+  /** The legs of the recipient's `delivery_order` that stand after `native`, walked in order if
+   *  this handoff is not confirmed within `PENDING_NATIVE_CONFIRM_WINDOW_MS`. */
+  fallback?: readonly PendingNativeFallbackLeg[];
   /** The whole body the sender was told to send, sender header and nonce included. */
   body: string;
 };
@@ -428,6 +438,38 @@ export function restoreTaken(taken: string, project: string, root: string, home:
   }
 }
 
+/** Every pending native record currently held in `<project state folder>/pending`, oldest first. */
+export function listPendingNative(project: string, root: string, home: string): PendingNative[] {
+  const dir = pendingDir(project, root, home);
+  if (folderProblem(dir) !== null) return [];
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const records: PendingNative[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -'.json'.length);
+    if (!PENDING_ID.test(id)) continue;
+    const filePath = join(dir, name);
+    if (heldAt(filePath).kind !== 'file') continue;
+    if (process.getuid !== undefined && heldAt(filePath).uid !== process.getuid()) continue;
+    const text = readNoFollow(filePath);
+    if (text === null) continue;
+    try {
+      const record = shapeOf(JSON.parse(text), id);
+      if (record !== null) records.push(record);
+    } catch {
+      continue;
+    }
+  }
+  return records.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+}
+
+const FALLBACK_LEGS: ReadonlySet<string> = new Set<PendingNativeFallbackLeg>(['mcp-inbox', 'typed', 'drop']);
+
 /** The record's shape, checked whole: an unknown version, a missing field or a wrongly-typed one
  *  is not a record this version wrote. The id inside must be the file's own name. */
 function shapeOf(value: unknown, id: string): PendingNative | null {
@@ -450,6 +492,16 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
     }
     sentAs = { spec: flat.spec, resolved: flat.resolved };
   }
+  let fallback: PendingNativeFallbackLeg[] | undefined;
+  if (flat.fallback !== undefined) {
+    if (
+      !Array.isArray(flat.fallback) ||
+      flat.fallback.some((leg) => typeof leg !== 'string' || !FALLBACK_LEGS.has(leg))
+    ) {
+      return null;
+    }
+    fallback = [...(flat.fallback as PendingNativeFallbackLeg[])];
+  }
   return {
     v: 1,
     id,
@@ -468,6 +520,7 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
     project: flat.project as string,
     root: flat.root as string,
     ...(sentAs ?? {}),
+    ...(fallback !== undefined ? { fallback } : {}),
     body: flat.body as string,
   };
 }
