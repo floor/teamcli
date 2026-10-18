@@ -4,7 +4,7 @@ import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { isLeadSeat, relaunchRepair, seatRestartRepair, unidentifiedRepair } from '../file/sections/lead.ts';
+import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
@@ -187,7 +187,7 @@ export function compare(
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
           : cannotTie(seat, agent.pane, live.screens[agent.pane], team);
         rows.push({ ...found.row, ...idField });
-        differences.push(found.difference);
+        if (found.difference) differences.push(found.difference);
         if (found.note) notes.push(found.note);
         continue;
       }
@@ -369,7 +369,7 @@ export function compare(
       claimed.add(held);
       const found = cannotTie(seat, held, live.screens[held], team);
       rows.push({ ...found.row, ...idField });
-      differences.push(found.difference);
+      if (found.difference) differences.push(found.difference);
       if (found.note) notes.push(found.note);
       continue;
     }
@@ -565,7 +565,7 @@ function cannotTie(
   pane: string,
   screen: string | undefined,
   team: TeamFile,
-): { row: Row; difference: Difference; note?: string } {
+): { row: Row; difference?: Difference; note?: string } {
   const running = seatModel(seat, screen);
   const launcher = usesLauncher(seat);
   const shown = running
@@ -581,11 +581,22 @@ function cannotTie(
   // A model that is not the file's, or a launch line that names a launcher, is the report.
   // The row stays `-`: the declared model is not shown as the one running. Nothing starts the seat.
   if (differs || launcher) {
+    // A lead's own seat is never restarted alone, and the whole-team restart is not the repair:
+    // the note says what the process is, with no command that stops the team. An ordinary seat's
+    // restart relaunches it in a fresh workspace, so it does not need this pane.
+    if (isLeadSeat(team, seat.name)) {
+      return {
+        row,
+        note: launcher && !differs
+          ? `${seat.name}: started by a launcher; team cannot tell its process from the one it launched`
+          : restoredProcessWhat(seat, running, launcher),
+      };
+    }
     return {
       row,
       difference: {
         what: restoredProcessWhat(seat, running, launcher),
-        repair: seatRestartRepair(team, seat.name),
+        repair: `team restart ${seat.name}`,
         needs: 'approve',
       },
     };

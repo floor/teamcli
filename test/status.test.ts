@@ -1010,7 +1010,8 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(readable.out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
     expect(readable.out).toContain(
       'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol; the process in its pane is not the one team launched\n' +
-        '  repair: team remove codex-acme --keep, then team add codex-acme (the owner runs the add, or an approved delegate when the file names one)\n',
+        '  repair: team restart codex-acme\n' +
+        "  who: the team's lead\n",
     );
     expect(readable.out).not.toContain('note: codex-acme: its pane runs');
     expect(readable.out).not.toMatch(/codex-acme\s+restored, not launched by team\s+GPT/);
@@ -1108,11 +1109,66 @@ describe('a pane that no longer holds the process team launched', () => {
     // The launch line is: it starts a launcher, and this process is not the one team launched.
     expect(out).toContain(
       'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
-        '  repair: team remove deepseek-acme --keep, then team add deepseek-acme (the owner runs the add, or an approved delegate when the file names one)\n',
+        '  repair: team restart deepseek-acme\n' +
+        "  who: the team's lead\n",
     );
+    expect(out).not.toContain('team down, then team up');
     expect(out).not.toContain('deepseek-acme runs');
     expect(out).not.toContain('repair: look at the pane\n');
     expect(out).not.toContain('repair: team up\n');
+  });
+
+  test('a lead whose launcher the record cannot tie draws the note, never a restart', async () => {
+    // The live state: the lead's record holds the launch but no agent session, so this pane is
+    // not tied to it, and the launch line starts a launcher.
+    writeFileSync(file, example.replace('    launch: claude --model claude-opus-5-5', '    launch: team-claude'));
+    approveOnDisk();
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['claude-coordinator-acme'] = {
+        stage: 'ready',
+        pane: 'w1:p1',
+        workspace: 'w1',
+        launched: { shell: 400, cli: [401] },
+      };
+    });
+    live = { ...built(), processes: { 'w1:p1': { shell: 400, foreground: [500] } } };
+    const { out } = await status();
+    expect(out).toMatch(/claude-coordinator-acme\s+restored, not launched by team\s+-\s+w1:p1/);
+    // A lead's own seat is never restarted alone: the reading is a note, and no repair stops
+    // the team.
+    expect(out).toContain('note: claude-coordinator-acme: started by a launcher; team cannot tell its process from the one it launched\n');
+    expect(out).not.toContain('difference: claude-coordinator-acme: its launch line starts a launcher');
+    expect(out).not.toContain('difference: claude-coordinator-acme runs');
+    expect(out).not.toContain('team restart claude-coordinator-acme');
+    expect(out).not.toContain('team down, then team up');
+  });
+
+  test('a lead whose untied pane runs another model draws the note, never a restart', async () => {
+    // The same live state, on a screen that names a model the file does not carry: the note says
+    // what the pane runs, and there is still no command that stops the team.
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['claude-coordinator-acme'] = {
+        stage: 'ready',
+        pane: 'w1:p1',
+        workspace: 'w1',
+        launched: { shell: 400, cli: [401] },
+      };
+    });
+    live = {
+      ...built(),
+      processes: { 'w1:p1': { shell: 400, foreground: [500] } },
+      screens: { ...built().screens, 'w1:p1': claudeScreen('Opus 4.6') },
+    };
+    const { out } = await status();
+    expect(out).toMatch(/claude-coordinator-acme\s+restored, not launched by team\s+-\s+w1:p1/);
+    expect(out).toContain(
+      'note: claude-coordinator-acme runs Claude Opus 4.6; the file says Claude Opus 5.5; the process in its pane is not the one team launched\n',
+    );
+    expect(out).not.toContain('difference: claude-coordinator-acme runs');
+    expect(out).not.toContain('team restart claude-coordinator-acme');
+    expect(out).not.toContain('team down, then team up');
   });
 
   test('gone with no agent listed: its pane is read, not called a missing seat', async () => {
