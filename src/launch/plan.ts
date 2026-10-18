@@ -569,6 +569,9 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}) },
       });
     }
+    // The place's session is the herdr session this launch aims at. A file route binds the
+    // team file's own session instead (`mcp/register.ts`), read in the seat's folder: the
+    // server refuses any other.
     const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
