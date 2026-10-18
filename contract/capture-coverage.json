@@ -368,7 +368,7 @@
     },
     "jules": {
       "idle": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
@@ -1976,6 +1976,12 @@
     },
     {
       "file": "jules/0.1.42/idle.txt",
+      "cli": "jules",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "jules/0.1.42/wide.txt",
       "cli": "jules",
       "kind": "idle",
       "provenance": "capture"

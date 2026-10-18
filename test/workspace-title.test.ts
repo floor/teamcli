@@ -101,10 +101,13 @@ describe('the pane display', () => {
     expect(displayAgent(seatNamed('lead', minimal))).toBe('Claude Opus 5.5 default');
     const effort = minimal.replace('    launch:', '    effort: high\n    launch:');
     expect(displayAgent(seatNamed('lead', effort))).toBe('Claude Opus 5.5 high');
-    expect(displayAgent({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 high');
-    expect(displayAgent({ display: 'Opus 5.5' })).toBe('Opus 5.5 default');
-    expect(displayAgent({ display: 'Gemini 3.8 Flash' })).toBe('Gemini 3.8 Flash default');
-    expect(displayAgent({ display: 'DeepSeek V4.1 Flash', effort: 'high' })).toBe('DeepSeek V4.1 Flash high');
+    expect(displayAgent({ display: 'Grok 4.7', effort: 'high', cli: 'grok' })).toBe('Grok 4.7 high');
+    expect(displayAgent({ display: 'Opus 5.5', cli: 'claude-code' })).toBe('Opus 5.5 default');
+    expect(displayAgent({ display: 'DeepSeek V4.1 Flash', effort: 'high', cli: 'claude-code' })).toBe('DeepSeek V4.1 Flash high');
+    // A CLI whose launcher takes no effort setting carries no token, `default` included.
+    expect(displayAgent({ display: 'Jules 0.1.42', cli: 'jules' })).toBe('Jules 0.1.42');
+    expect(displayAgent({ display: 'Gemini 3.8 Flash', cli: 'gemini' })).toBe('Gemini 3.8 Flash');
+    expect(displayAgent({ display: 'Gemini 3.8 Flash', effort: 'high', cli: 'gemini' })).toBe('Gemini 3.8 Flash');
   });
 
   test('the plan reports display_agent after the seat is named', () => {
@@ -286,6 +289,13 @@ describe('the live line', () => {
 
   test('a different pair is the status rule\'s model and version, not the file\'s display', () => {
     expect(liveDisplayAgent(opus, 'Sonnet 4.5\n').line).toBe('Claude Sonnet 4.5 default');
+  });
+
+  test('a CLI whose launcher takes no effort setting draws the display alone', () => {
+    const jules = { cli: 'jules', model: 'Jules', version: '0.1.42', display: 'Jules 0.1.42' };
+    expect(liveDisplayAgent(jules, '').line).toBe('Jules 0.1.42');
+    expect(liveDisplayAgent(jules, undefined).line).toBe('Jules 0.1.42');
+    expect(liveDisplayAgent({ ...jules, effort: 'high' }, '').line).toBe('Jules 0.1.42');
   });
 
   test('a grok footer names the model, and a screen without one keeps the file display', () => {

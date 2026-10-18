@@ -1,7 +1,8 @@
 # Jules (jules) 0.1.42 terminal captures
 
 Captured from the installed google/jules CLI with herdr 0.7.1, `pane read --source visible`,
-in a scratch session created for the purpose and stopped afterwards. `jules version` printed
+in a scratch session created for the purpose and stopped afterwards, at a 54x23 pane and, for
+`wide.txt`, at a 148x39 one (a client attached at 196x40). `jules version` printed
 `Version: v0.1.42`; `jules --version` answered `Error: unknown flag: --version` and exited 1.
 Workspaces were scratch checkouts (`<workspace>`, `<ws>`). Session ids, descriptions, repo
 names, ages and branches are placeholders at the same widths. The rows keep the pane's
@@ -19,6 +20,14 @@ trailing padding as the read drew it, and each file ends with the pane read's on
 - `done.txt`: the detail card of a completed session — the same card with `Completed` in the
   status cell. The profile reads it idle, so the next send walks back to the table before it
   types.
+- `wide.txt`: the session table at 148x39. The table scrolls the banner's top rows off but
+  keeps `Welcome to Jules CLI!` on screen above it, so the banner is drawn in the ready screen
+  and marks neither a leaving screen nor a logged-out one. The input line reads
+  ` > Search sessions or type / to use commands`, the footer stays on one line
+  (` enter: select session | ctrl+r: refresh | ctrl+d: delete | ctrl+c: quit`), the status
+  column is drawn (`Completed` on ten of eleven rows, blank on one), the repo group lines read
+  `# <repo>` at the group name's own width, and eight trailing list rows are blank. The
+  `Working in:` row shares its line with herdr's two status words.
 
 ## Not produced
 

@@ -218,7 +218,29 @@ export function renderNotes(notes: readonly string[], opts?: CollapseNotesOption
   return collapseNotes(notes, opts).map((note) => `note: ${displayPath(note, opts?.home)}`);
 }
 
-const REPAIR_TEAM_COMMAND = /\bteam\s+([a-z][a-z0-9-]*)\b/;
+const REPAIR_TEAM_COMMAND = /\bteam\s+([a-z][a-z0-9-]*)\b/g;
+
+/** The chain a repair prints: its text before any ` or ` alternative — `…, or …` or `(or …)`.
+ *  An alternative is another way into the repair, not a leg of the chain, so its commands do not
+ *  narrow the actor the chain admits. A verb phrase's own "or" (`clear or send it in the pane`)
+ *  carries no comma or parenthesis and stays inside the chain. */
+function repairChain(repair: string): string {
+  return repair.split(/,\s+or\s+|\(or\s+/)[0] ?? repair;
+}
+
+/** The actor every leg of a chain admits, said in the closed vocabulary: the narrowest word that
+ *  still covers all of them. The owner is admitted by every row, so an owner-only leg narrows the
+ *  chain to the owner. A capability leg promises a grant holder and a lead leg a lead — a seat
+ *  with one and not the other cannot finish the chain — so a chain mixing either with anything
+ *  else is the owner's too. Leads are seats, so lead and any-seat legs resolve to the lead. */
+function narrowestWho(legs: readonly DifferenceWho[]): DifferenceWho {
+  if (legs.includes('the owner')) return 'the owner';
+  if (legs.includes('a grant holder')) {
+    return legs.every((leg) => leg === 'a grant holder') ? 'a grant holder' : 'the owner';
+  }
+  if (legs.includes("the team's lead")) return "the team's lead";
+  return 'any seat';
+}
 
 /**
  * Maps a `team <command>` name to the first `DifferenceWho` that applies from
@@ -252,8 +274,14 @@ export function whoFromCommand(command: string): DifferenceWho {
  *    `diff.repair` starts with `'the owner '`, or `diff.repair` is the approval
  *    precondition (`'the live file is what the commands read'`).
  * 3. Otherwise, strips any trailing ` (after: …)` annotation (added when `diff.needs === 'approve'`)
- *    and maps the first `team <command>` in `diff.repair` through `whoFromCommand(command)`
- *    (falling back to `"the team's lead"` when the repair names no `team` subcommand).
+ *    and maps every `team <command>` on the repair's chain — its text before any `, or ` /
+ *    `(or ` alternative — through `whoFromCommand(command)`. A chain runs its legs in order, so
+ *    its who is the actor every leg admits, the narrowest of the four (a `team remove … then
+ *    team add …` chain is the owner's, because `add` is); an alternative branch is not a leg
+ *    and does not narrow it. A repair that names no `team` subcommand falls back to
+ *    `"the team's lead"`, and so does a `team <word>` the map does not carry — prose like
+ *    "the team file's model", or a session-level `watch`/`worktree` — which keeps the actor
+ *    such a line named before the chain rule.
  */
 export function whoOfDifference(diff: OutputDifference): DifferenceWho {
   if (diff.who !== undefined) return diff.who;
@@ -266,10 +294,10 @@ export function whoOfDifference(diff: OutputDifference): DifferenceWho {
     return 'the owner';
   }
   const coreRepair = diff.repair.replace(/\s+\(after:\s+.*\)$/, '');
-  const match = REPAIR_TEAM_COMMAND.exec(coreRepair);
-  if (match && match[1]) {
-    return whoFromCommand(match[1]);
-  }
+  const legs = [...repairChain(coreRepair).matchAll(REPAIR_TEAM_COMMAND)]
+    .map((match) => match[1]!)
+    .map(whoFromCommand);
+  if (legs.length > 0) return narrowestWho(legs);
   return "the team's lead";
 }
 
@@ -305,13 +333,11 @@ export interface DifferenceSummaryCounts {
   owner_differences: number;
 }
 
+/** A difference is "for the owner" when its own `who:` line says so: the count follows the
+ *  rendered who, chain narrowing included, so a `<n> for the owner` word never disagrees with
+ *  the rows above it. */
 function isOwnerSummaryDifference(diff: OutputDifference): boolean {
-  if (diff.owner === true || diff.approval === true) return true;
-  if (diff.who !== undefined) return diff.who === 'the owner';
-  return (
-    diff.repair.startsWith('the owner ')
-    || diff.repair === 'the live file is what the commands read'
-  );
+  return whoOfDifference(diff) === 'the owner';
 }
 
 /** Counts total differences and owner-only differences for the closing summary line. */

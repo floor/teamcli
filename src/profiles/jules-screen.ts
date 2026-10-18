@@ -4,11 +4,16 @@
 // the whole visible screen — the core's window is the data patterns' — so this reader sees the
 // input line, the table's footer and the card's status wherever the TUI draws them.
 //
-// Captured from jules 0.1.42 (herdr 0.7.1, a 54x23 pane):
-//   * the table's footer wraps at this width as
-//       ` enter: select session | ctrl+r: refresh |` / `ctrl+d: delete | ctrl+c: quit`
-//   * its input line reads ` > Search sessions or type / to use` when empty, and
-//       ` > unsent probe text` once text is typed — the first line of the screen.
+// Captured from jules 0.1.42 (herdr 0.7.1, a 54x23 pane and a 148x39 one):
+//   * the table's footer wraps at 54 columns as
+//       ` enter: select session | ctrl+r: refresh |` / `ctrl+d: delete | ctrl+c: quit`,
+//     and stays on one line at 148: ` enter: select session | ctrl+r: refresh | ctrl+d: delete | ctrl+c: quit`.
+//   * at 148 columns the banner and `Welcome to Jules CLI!` stay on screen above the table, so
+//     neither marks a screen the TUI leaves behind: the table's footer is the ready mark at
+//     both widths, and before the table draws the reader is unknown on the footer's absence.
+//   * the input line below the banner reads ` > Search sessions or type / to use` when empty,
+//     and ` > unsent probe text` once text is typed. On a 54x23 pane, where the table scrolls
+//     the banner away, it is the screen's first line.
 //   * a row of the session list at 120 columns (a wider pane, captured locally) ends in its
 //     status cell: `...  4m45s ago                             │` for no status, and
 //       `...  7m16s ago        Awaiting User Feed   │`, `...  18h4m46s ago     Completed            │`.
@@ -64,7 +69,6 @@ const TRANSITIONAL: readonly RegExp[] = [
   /Failed to list tasks/,
   /forget to login\?/,
   /Jules authentication is required/,
-  /Welcome to Jules CLI!/,
 ];
 
 export const profile: ScreenProfile = {

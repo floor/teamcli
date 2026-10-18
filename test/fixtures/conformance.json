@@ -1821,6 +1821,13 @@
       "provenance": "capture"
     },
     {
+      "file": "jules/0.1.42/wide.txt",
+      "cli": "jules",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "jules/0.1.42/working.txt",
       "cli": "jules",
       "classify": "working",

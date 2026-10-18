@@ -207,6 +207,23 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
     expect(renderSummary([])).toBe('no differences');
   });
 
+  // A chain runs its legs in order, so its who is the actor every leg admits — the narrowest.
+  // An "or" alternative is another way into the repair, not a leg, and does not narrow it.
+  test('a chained repair takes the actor every leg admits, and an alternative does not narrow it', () => {
+    const at = (repair: string) => ({ what: 'a difference', repair });
+    expect(whoOfDifference(at('team remove codex-acme --keep, then team add codex-acme'))).toBe('the owner');
+    expect(whoOfDifference(at('restart the seat on the file\'s model (team remove codex-acme --keep, then team add codex-acme), or correct the file'))).toBe('the owner');
+    expect(whoOfDifference(at('team remove codex-acme --abandon, then team up'))).toBe("the team's lead");
+    // A verb phrase's own "or" is not an alternative branch: the chain is still `team up`'s.
+    expect(whoOfDifference(at('clear or send it in the pane, then team up (it resumes the launch)'))).toBe("the team's lead");
+    // The branch after ", or" is not a leg: its owner-only remove-then-add does not narrow this
+    // chain. The chain keeps prose "the team file" (the map's lead fallback) beside `team
+    // register`, so the line reads as it did before the chain rule.
+    expect(whoOfDifference(at('update the team file\'s model, then team register codex-acme, or relaunch on the recorded model (team remove codex-acme --keep, then team add codex-acme)'))).toBe("the team's lead");
+    // The closing count speaks from the same who the row prints.
+    expect(renderSummary([at('team remove codex-acme --keep, then team add codex-acme')])).toBe('1 difference, 1 for the owner');
+  });
+
   test('severity vocabulary, deprecation helper, action helpers, and help exits helper', () => {
     expect(SEVERITY_LEVELS).toEqual(['ok', 'warn', 'miss', 'note']);
     expect(SEVERITY_LABELS).toEqual({

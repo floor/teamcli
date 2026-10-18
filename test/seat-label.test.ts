@@ -113,7 +113,7 @@ describe('the workspace title of a seat', () => {
   });
 
   test('line 2 is the display, a space, and the effort or default', () => {
-    expect(displayAgent({ display: 'Grok 4.7', effort: 'high' })).toBe('Grok 4.7 high');
+    expect(displayAgent({ display: 'Grok 4.7', effort: 'high', cli: 'grok' })).toBe('Grok 4.7 high');
     expect(displayAgent(seatNamed(valid(minimal), 'lead'))).toBe('Claude Opus 5.5 default');
   });
 

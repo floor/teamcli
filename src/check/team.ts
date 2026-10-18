@@ -48,6 +48,7 @@ import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
+import { displayEffort } from '../profiles/profile.ts';
 import {
   loadAndResolvePolicyChain,
   readProjectPolicySource,
@@ -845,7 +846,9 @@ function displayLineMatches(seat: Seat, line: string, screen: string | undefined
   const effort = cut < 0 ? '' : line.slice(cut + 1);
   const observedCut = observed.lastIndexOf(' ');
   if (model !== (observedCut < 0 ? observed : observed.slice(0, observedCut))) return false;
-  if (effort === (seat.effort || 'default')) return true;
+  const own = displayEffort(seat.cli, seat.effort);
+  if (own === null) return false;
+  if (effort === own) return true;
   return seat.cli === 'grok' || EFFORT_WORDS.has(effort);
 }
 

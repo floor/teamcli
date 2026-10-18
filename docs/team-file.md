@@ -72,8 +72,12 @@ either way. Nothing in this build writes the file or the tracker.
 
 ## `seats`
 
-Each seat names a model and how it is launched. The orchestrator and the operator start in
-the project folder. Every other seat starts in the team's lobby. A lead already running in
+Each seat names a model and how it is launched. `model` and `version` are required even when
+the launch picks the model itself: for a CLI that chooses its own — or one whose screen names
+no model — write the CLI's own name and version as the pair (`model: Jules`,
+`version: "0.1.42"`) and mark the seat `model_from: launcher`, which tells `doctor` that the
+launcher chooses it and checks the running seat instead of the launch line. The orchestrator
+and the operator start in the project folder. Every other seat starts in the team's lobby. A lead already running in
 either folder is left there. The fields are in the README's
 [file format](../README.md#the-files-format). The sidebar has two lines:
 
@@ -87,9 +91,11 @@ either folder is left there. The fields are in the README's
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
   as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
   display_agent to `<display> <effort>` when the seat sets `effort`, and to `<display> default`
-  when it does not. The display stays the proper-case name, including a multi-word model
-  (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2 as its status word, then
-  ` · `, then that text (`done · Grok 4.7 high`, `idle · Opus 5.5 default`). That is line 2.
+  when it does not. A CLI whose launcher takes no effort setting is the display alone —
+  `Jules 0.1.42`, with no effort word and no `default`. The display stays the proper-case name,
+  including a multi-word model (`DeepSeek V4.1 Flash`, `Gemini 3.8 Flash`). Herdr draws line 2
+  as its status word, then ` · `, then that text (`done · Grok 4.7 high`,
+  `idle · Opus 5.5 default`, `idle · Jules 0.1.42`). That is line 2.
 
 While the seat runs, the watch paints both lines. Line 1 is the file's title. Line 2 takes the
 running model and version the pane's screen shows when they differ from the file's, and the

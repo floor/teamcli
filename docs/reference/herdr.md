@@ -148,7 +148,8 @@ prompt, not the line the screen held before (`src/launch/plan.ts`).
 ## The second name a seat shows: the display line
 
 Each seat's pane is given a `display_agent` — the file's `display` and `effort`
-(`Claude Opus 5.5 default`) — and a pane that a CLI has not identified is in no agent list at all:
+(`Claude Opus 5.5 default`), or the display alone when its CLI takes no effort setting
+(`Jules 0.1.42`) — and a pane that a CLI has not identified is in no agent list at all:
 
     $ herdr --session beacon agent list
     {"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}
