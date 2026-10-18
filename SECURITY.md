@@ -32,13 +32,25 @@ what a run of it does in a project: the team file and the grants it holds, the c
 gate that reads them, the message files and drop files it writes, the local sockets it
 binds, and the behaviour its own documentation states.
 
+## A known limit: the owner check
+
+The owner check guards against a mistake: an agent in a herdr pane running the command
+that only the owner should run, or a seat acting on a rule it should not. It does not
+guard against a determined process running as the same OS user as the owner — a detached
+one, for example — and so a process that sets out to look like the owner can pass it.
+
+What contains it today is not the check alone: the writes it admits are signed with the
+owner's key, every admission is logged, and grants are scoped to named sessions and
+commands. Those bound an abuse and make it visible afterwards; they do not stop one.
+
+Closing this needs containment at the operating system's level, not another check inside
+the CLI. That work is planned after 0.5.x.
+
 ## What is not a weakness in TeamCLI
 
 - TeamCLI protects against an agent's mistake, not against a hostile program running as
-  you: agents run as your user, and what you can read on your machine, they can read.
-- The owner check tells the owner's own terminal from an agent's seat; it stops mistakes
-  and agents that follow the rules, not a program running as you that sets out to look
-  like the owner.
+  you: agents run as your user, and what you can read on your machine, they can read. The
+  owner check has the same limit, stated above.
 - What an agent's own program or its lab does with what it reads; whether a lab's model
   can be trusted; what a page an agent read told it to do.
 - Keys and tokens your own shell exports are visible to every agent started from it.
