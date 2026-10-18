@@ -13,6 +13,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   commits: () => import('./commands/commits.ts'),
   doctor: () => import('./commands/doctor.ts'),
   down: () => import('./commands/down.ts'),
+  drops: () => import('./commands/drops.ts'),
   init: () => import('./commands/init.ts'),
   grant: () => import('./commands/grant.ts'),
   delegate: () => import('./commands/delegate.ts'),

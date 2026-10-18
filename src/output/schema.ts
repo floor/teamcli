@@ -1101,6 +1101,42 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team drops` (`schema/drops.schema.json`). */
+export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.drops',
+  fileName: 'drops.schema.json',
+  title: 'team drops --json output',
+  required: ['format', 'project', 'session', 'seat', 'drops', 'counts'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    drops: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['from', 'received', 'path'],
+        properties: {
+          // The sender the file's first line names, or null when that line is no sender header.
+          from: { type: ['string', 'null'] },
+          received: { type: 'string', minLength: 1 },
+          path: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['drops'],
+      properties: {
+        drops: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team route` (`schema/route.schema.json`): the action
  *  surface, then the answered address. `session` is the caller's team session; the recipient's
  *  session travels as `recipient_session`. */
@@ -1696,6 +1732,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   REGISTER_OUTPUT_SCHEMA,
   ASK_SHOW_OUTPUT_SCHEMA,
   MESSAGES_OUTPUT_SCHEMA,
+  DROPS_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,

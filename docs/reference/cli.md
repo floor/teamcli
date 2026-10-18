@@ -286,6 +286,27 @@ Usage:
 
 None.
 
+## `drops`
+
+Hidden: no
+
+Usage:
+
+    team drops [--follow] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--follow` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `feed`
 
 Hidden: no

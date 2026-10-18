@@ -1144,6 +1144,48 @@
     },
     {
       "code": 0,
+      "command": "drops",
+      "id": "drops.ok",
+      "meaning": "the caller's unread drops were listed, or followed until it stopped",
+      "trigger": "team drops"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team drops"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.refused",
+      "meaning": "the caller is not a placed seat of this team",
+      "trigger": "team drops"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.unreadable",
+      "meaning": "the drop folder can't be read",
+      "trigger": "team drops"
+    },
+    {
+      "code": 2,
+      "command": "drops",
+      "id": "drops.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team drops extra"
+    },
+    {
+      "code": 2,
+      "command": "drops",
+      "id": "drops.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team drops"
+    },
+    {
+      "code": 0,
       "command": "feed",
       "id": "feed.ok",
       "meaning": "the message feed was printed",

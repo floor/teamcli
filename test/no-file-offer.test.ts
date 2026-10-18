@@ -62,6 +62,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
 const REACHED = [
   'broker',
   'delegate',
+  'drops',
   'feed',
   'grant',
   'hold',
