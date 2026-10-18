@@ -295,12 +295,41 @@ function withoutHeredocBodies(line: string): string {
   return kept.join('\n');
 }
 
-/** True when a `kill` asks for SIGKILL: `-9`, `-KILL`, or `-s 9` / `-s KILL`. */
+/** A signal word normalised the way `kill` reads it: `SIG` stripped, upper-cased. */
+function signalName(value: string): string {
+  return value.replace(/^SIG/i, '').toUpperCase();
+}
+
+/** True when a signal value asks for SIGKILL: `9` or `KILL`, in any spelling `kill` accepts. */
+function hardSignal(value: string | undefined): boolean {
+  if (value === undefined || value === '') return false;
+  const name = signalName(value);
+  return name === '9' || name === 'KILL';
+}
+
+/**
+ * True when a `kill` asks for SIGKILL: `-9`, `-KILL`, `-SIGKILL`, `-s 9`, `-s SIGKILL`,
+ * `--signal=KILL` or `--signal KILL`.
+ */
 function hardKill(args: readonly string[]): boolean {
-  return args.some((arg, at) =>
-    /^-[A-Za-z]*9[A-Za-z]*$/.test(arg)
-    || /^-[A-Za-z]*KILL[A-Za-z]*$/i.test(arg)
-    || (arg === '-s' && /^(9|KILL)$/i.test(args[at + 1] ?? '')));
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    if (arg === '--') break;
+    if (arg === '-s' || arg === '--signal') {
+      if (hardSignal(args[at + 1])) return true;
+      continue;
+    }
+    if (arg.startsWith('--signal=')) {
+      if (hardSignal(arg.slice('--signal='.length))) return true;
+      continue;
+    }
+    if (arg.startsWith('-s') && arg.length > 2) {
+      if (hardSignal(arg.slice(2))) return true;
+      continue;
+    }
+    if (/^-(?:[0-9]+|[A-Za-z][A-Za-z0-9]*)$/.test(arg) && hardSignal(arg.slice(1))) return true;
+  }
+  return false;
 }
 
 /** The short-option letters of `git clean`, `--force` counted as `-f`. */
@@ -312,6 +341,43 @@ function cleanFlags(args: readonly string[]): Set<string> {
     else if (/^-[A-Za-z]+$/.test(arg)) for (const letter of arg.slice(1)) flags.add(letter);
   }
   return flags;
+}
+
+/** True when `git branch` deletes with force in any spelling: `-D`, `-d -f`, `-df`,
+ *  `--delete --force`, or either long option on its own. */
+function branchForceDelete(args: readonly string[]): boolean {
+  const shorts = new Set<string>();
+  const longs = new Set<string>();
+  for (const arg of args) {
+    if (arg === '--') break;
+    if (arg.startsWith('--')) longs.add(arg);
+    else if (/^-[A-Za-z]+$/.test(arg)) for (const letter of arg.slice(1)) shorts.add(letter);
+  }
+  const deletes = shorts.has('d') || shorts.has('D') || longs.has('--delete');
+  const forces = shorts.has('f') || shorts.has('D') || longs.has('--force');
+  return deletes && forces;
+}
+
+/** The npm options whose value is a separate word, so the subcommand comes after it. */
+const NPM_VALUE_OPTIONS = new Set([
+  '--prefix', '--loglevel', '--registry', '--userconfig', '--globalconfig', '--cache', '--ca',
+  '--cafile', '--cert', '--key', '--proxy', '--https-proxy', '--scope', '--tag', '--otp',
+  '--workspace', '--include', '--omit', '--before', '--access', '--location', '--script-shell',
+  '--install-strategy', '--fetch-retries', '--fetch-timeout', '--call', '--jobs', '-w', '-C',
+]);
+
+/** The npm subcommand, after its global options (their values included) and flags. */
+function npmSubcommand(args: readonly string[]): string | null {
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    if (arg === '--') continue;
+    if (arg.startsWith('-')) {
+      if (NPM_VALUE_OPTIONS.has(arg)) at += 1;
+      continue;
+    }
+    return arg;
+  }
+  return null;
 }
 
 /** `git -C <dir> push --force`: the subcommand, after the global options that take a value. */
@@ -363,11 +429,11 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
         return { rule: 'git-clean', guidance: GUIDANCE['git-clean'] };
       }
     }
-    if (sub === 'branch' && rest.some((arg) => /^-[A-Za-z]*D[A-Za-z]*$/.test(arg))) {
+    if (sub === 'branch' && branchForceDelete(rest)) {
       return { rule: 'git-branch-force-delete', guidance: GUIDANCE['git-branch-force-delete'] };
     }
   }
-  if (word === 'npm' && args[0] === 'publish') {
+  if (word === 'npm' && npmSubcommand(args) === 'publish') {
     return { rule: 'npm-publish', guidance: GUIDANCE['npm-publish'] };
   }
   if (word === 'xargs') {
