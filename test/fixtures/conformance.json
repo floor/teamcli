@@ -1653,6 +1653,55 @@
       "provenance": "capture"
     },
     {
+      "file": "cursor/2026.10.16/exit.txt",
+      "cli": "cursor",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/idle.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/permission.txt",
+      "cli": "cursor",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/question.txt",
+      "cli": "cursor",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/trust.txt",
+      "cli": "cursor",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/unsent.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/working.txt",
+      "cli": "cursor",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/2.1.299/exit.txt",
       "cli": "claude-code",
       "classify": "unknown",

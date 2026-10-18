@@ -7,7 +7,7 @@ process_names:
   - cursor-agent
 tested:
   from: '2026.10.01'
-  to: '2026.10.14'
+  to: '2026.10.16'
 unattended:
   - --force
   - --sandbox
@@ -50,6 +50,17 @@ trust_answer:
     label: '[a] Trust this workspace'
     action: '61'
     capture: cursor/2026.10.14/trust.txt
+    extract:
+      after: 'directory?'
+      before: '[a] Trust this workspace'
+      box: true
+  # The same dialog again on cursor-agent 2026.10.16-e3cb207 (`cursor/2026.10.16/trust.txt`):
+  # the marked row is still `[a] Trust this workspace` and the key is still `a`.
+  - from: '2026.10.16-e3cb207'
+    to: '2026.10.16-e3cb207'
+    label: '[a] Trust this workspace'
+    action: '61'
+    capture: cursor/2026.10.16/trust.txt
     extract:
       after: 'directory?'
       before: '[a] Trust this workspace'

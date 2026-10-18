@@ -197,27 +197,27 @@
     },
     "cursor": {
       "idle": {
-        "real": 12,
+        "real": 13,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 5,
+        "real": 6,
         "constructed": 5,
         "undocumented": 0
       },
       "unsent": {
-        "real": 23,
+        "real": 24,
         "constructed": 0,
         "undocumented": 0
       },
       "permission": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
       "question": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
@@ -227,7 +227,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 3,
+        "real": 4,
         "constructed": 0,
         "undocumented": 0
       },
@@ -247,7 +247,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 4,
+        "real": 5,
         "constructed": 0,
         "undocumented": 0
       }
@@ -1688,6 +1688,48 @@
     },
     {
       "file": "cursor/2026.10.14/working.txt",
+      "cli": "cursor",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/exit.txt",
+      "cli": "cursor",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/idle.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/permission.txt",
+      "cli": "cursor",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/question.txt",
+      "cli": "cursor",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/trust.txt",
+      "cli": "cursor",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/unsent.txt",
+      "cli": "cursor",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/working.txt",
       "cli": "cursor",
       "kind": "working",
       "provenance": "capture"
