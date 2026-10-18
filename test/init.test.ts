@@ -242,6 +242,12 @@ describe('team init', () => {
     // while it runs — the patterns the start protocol names in its write inventory.
     writeFileSync(join(project, '.agents', 'broker.sock.lock.takeover'), '');
     writeFileSync(join(project, '.agents', 'broker.sock.lock.1234.new'), '');
+    // The bus binds its own socket under its own start lock, with the same takeover claim and
+    // temp beside it; its event log and segments live in the project store, not the checkout.
+    writeFileSync(join(project, '.agents', 'bus.sock'), '');
+    writeFileSync(join(project, '.agents', 'bus.sock.lock'), '');
+    writeFileSync(join(project, '.agents', 'bus.sock.lock.takeover'), '');
+    writeFileSync(join(project, '.agents', 'bus.sock.lock.1234.new'), '');
     // The per-launch hook settings and the state files their hooks write: runtime files of this
     // clone's launches, never the project's to commit.
     mkdirSync(join(project, '.agents', 'hooks'));
@@ -267,6 +273,10 @@ describe('team init', () => {
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock.takeover\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock.*.new\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock.lock\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock.lock.takeover\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock.lock.*.new\n');
   });
 
   test('a linked worktree shares the exclusion', async () => {
