@@ -23,6 +23,34 @@ import {
   readEventsFromCursor,
   verifySignedEvent,
 } from '../src/bus/log.ts';
+import { seatResolverOf } from '../src/bus/seats.ts';
+import type { Agent, AgentLifecycle } from '../src/registry/agents.ts';
+
+function registryAgent(
+  id: string,
+  seat: string,
+  team: string,
+  lifecycle: AgentLifecycle = 'running',
+): Agent {
+  return {
+    id,
+    name: seat,
+    signing: { model: 'claude', version: '4.6', role: 'worker' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team, seat, session: 'acme', pane: null, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle,
+    provenance: {
+      registered_by: 'owner',
+      registered_at: '2026-10-18T00:00:00.000Z',
+      updated_at: '2026-10-18T00:00:00.000Z',
+    },
+  };
+}
 
 const dirs: string[] = [];
 
@@ -142,6 +170,56 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
       team,
     );
     expect([...gate]).toEqual(['clerk']);
+  });
+
+  test('resolves a recipient named by agent registry id to the seat that holds it, keeps a plain name, and leaves an unknown, retired, or foreign id as written', () => {
+    const team = {
+      orchestrator: 'clerk',
+      operator: 'op-1',
+      seats: [{ name: 'clerk', leads: true }, { name: 'op-1' }, { name: 'worker-1' }, { name: 'worker-2' }],
+    };
+    const resolve = seatResolverOf(
+      [
+        registryAgent('agt_111111111111', 'worker-1', 'team-a'),
+        registryAgent('agt_222222222222', 'worker-2', 'team-a', 'retired'),
+        registryAgent('agt_333333333333', 'worker-2', 'team-b'),
+      ],
+      'team-a',
+    );
+    const question = { kind: 'seat.at-prompt' as const, seat: 'worker-1', prompt: 'question' };
+
+    const byId = recipientsForEvent(question, team, { 'seat.at-prompt': ['agt_111111111111'] }, [], resolve);
+    expect([...byId].sort()).toEqual(['clerk', 'op-1', 'worker-1']);
+
+    const byName = recipientsForEvent(question, team, { 'seat.at-prompt': ['worker-1'] }, [], resolve);
+    expect([...byName].sort()).toEqual(['clerk', 'op-1', 'worker-1']);
+
+    const retired = recipientsForEvent(question, team, { 'seat.at-prompt': ['agt_222222222222'] }, [], resolve);
+    expect(retired.has('worker-2')).toBe(false);
+    expect(retired.has('agt_222222222222')).toBe(true);
+
+    const foreignTeam = recipientsForEvent(question, team, { 'seat.at-prompt': ['agt_333333333333'] }, [], resolve);
+    expect(foreignTeam.has('worker-2')).toBe(false);
+
+    const unknown = recipientsForEvent(question, team, { 'seat.at-prompt': ['agt_444444444444'] }, [], resolve);
+    expect([...unknown].sort()).toEqual(['agt_444444444444', 'clerk', 'op-1']);
+  });
+
+  test('the release defaults stand under a routing chain: a word cannot remove a recipient it did not add, and a privileged kind keeps its default owner', () => {
+    const team = { orchestrator: 'clerk', operator: 'op-1', seats: [{ name: 'clerk', leads: true }] };
+    const chain = [
+      {
+        level: 'team' as const,
+        word: {
+          'seat.blocked': { remove: ['lead' as const, 'operator' as const] },
+          'team.policy-refused': { remove: ['owner' as const] },
+        },
+      },
+    ];
+    const blocked = recipientsForEvent({ kind: 'seat.blocked', seat: 'worker-1' }, team, undefined, chain);
+    expect([...blocked].sort()).toEqual(['clerk', 'op-1']);
+    const refused = recipientsForEvent({ kind: 'team.policy-refused' }, team, undefined, chain);
+    expect(refused.has('owner')).toBe(true);
   });
 });
 

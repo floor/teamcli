@@ -237,6 +237,12 @@ export function leadSeatsOf(team: TeamRoutingRoles): Set<string> {
   return leads;
 }
 
+/** Resolves a `{ seat }` routing recipient that names an agent registry id to the seat that agent
+ *  holds in this team. A plain seat name answers `undefined` and stands as written, and so does an
+ *  id the registry does not know. The resolver is passed in so `recipientsForEvent` stays pure:
+ *  the bus reads the registry behind it (`src/bus/seats.ts`). */
+export type SeatRecipientResolver = (entry: string) => string | undefined;
+
 function toRoutingRecipient(entry: string): RoutingRecipient {
   if (entry === 'lead' || entry === 'operator' || entry === 'sender' || entry === 'subject' || entry === 'owner') {
     return entry;
@@ -261,6 +267,7 @@ export function recipientsForEvent(
   team: TeamRoutingRoles,
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>,
   chain: RoutingChain = [],
+  resolveSeat?: SeatRecipientResolver,
 ): Set<string> {
   const out = new Set<string>();
   const leads = leadSeatsOf(team);
@@ -287,7 +294,7 @@ export function recipientsForEvent(
   const resolved = resolveRouting(event.kind, effectiveChain, { defaults: EVENT_ROUTING_DEFAULTS });
   for (const recipient of resolved) {
     if (typeof recipient !== 'string') {
-      if (recipient.seat !== '') out.add(recipient.seat);
+      if (recipient.seat !== '') out.add(resolveSeat?.(recipient.seat) ?? recipient.seat);
       continue;
     }
     if (recipient === 'owner') {
