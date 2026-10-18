@@ -153,17 +153,25 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
 is an ordinary change, and a file that writes none reads as the default order.
-Omitted, the order is `native`, then `mcp-inbox`, then `typed`.
+Omitted, the order is `native`, then `mcp-inbox`, then `typed`, then `drop`; the typed leg is
+terminal, so a walk reaches `drop` only when a level puts it before `typed` or leaves `typed`
+out.
 
 ```yaml
 delivery_order: [typed]
 ```
 
-- The word is one or more of `native`, `mcp-inbox` and `typed`, each at most once, in the order
-  a send tries them. A written key with no legs is `delivery_order needs at least one leg:
-  native, mcp-inbox, typed` — the default order is the absence of the key. A word outside the
-  three is `delivery_order "<word>" must be one of: native, mcp-inbox, typed`; a repeated one is
-  `delivery_order names "<word>" twice`.
+- The word is one or more of `native`, `mcp-inbox`, `typed` and `drop`, each at most once, in the
+  order a send tries them. A written key with no legs is `delivery_order needs at least one leg:
+  native, mcp-inbox, typed, drop` — the default order is the absence of the key. A word outside
+  the four is `delivery_order "<word>" must be one of: native, mcp-inbox, typed, drop`; a
+  repeated one is `delivery_order names "<word>" twice`.
+- The four legs: `native` is the frame on a Claude Code seat's cross-session socket;
+  `mcp-inbox` is the seat's own MCP inbox, which this build does not carry — a walk that reaches
+  it records it unavailable; `typed` is the 0600 drop file and one composer trigger line; `drop`
+  is the same 0600 drop file and nothing typed into the pane at all — no trigger line and no
+  socket frame. `delivery_order: [drop]` is the opt-in for a receiver that watches its own drop
+  folder, and for a pane that must never receive typing.
 - The receiving seat's chain is read outermost first: the entity, the project's registry record,
   this file's key, then the seat's own key. No entity record carries an order in this build, so
   that level is always silent; the project's word is `delivery_order` beside `teams` in

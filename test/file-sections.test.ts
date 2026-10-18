@@ -139,11 +139,20 @@ describe('delivery_order', () => {
     expect(seated.team.deliveryOrder).toBeNull();
   });
 
+  test('drop is a leg the file and a seat may name, in its own position', () => {
+    const checked = validateTeamFile(`${TEAM}delivery_order: [drop]\n`);
+    if (!checked.ok) throw new Error('the drop fixture does not validate');
+    expect(checked.team.deliveryOrder).toEqual(['drop']);
+    const seated = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    delivery_order: [drop, typed]\n`));
+    if (!seated.ok) throw new Error('the seat drop fixture does not validate');
+    expect(seated.team.seats[0]?.deliveryOrder).toEqual(['drop', 'typed']);
+  });
+
   test('a written key with no legs, an unknown leg and a repeated one are refused', () => {
     const cases = [
-      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
-      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
-      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed, drop' },
+      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed, drop' },
+      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: native, mcp-inbox, typed, drop' },
       { text: `${TEAM}delivery_order: [typed, typed]\n`, message: 'delivery_order names "typed" twice' },
     ];
     for (const one of cases) {

@@ -1146,7 +1146,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },
         seat: { type: 'string', minLength: 1 },
-        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'native', null] },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'native', null] },
         ids: {
           type: 'object',
           additionalProperties: false,

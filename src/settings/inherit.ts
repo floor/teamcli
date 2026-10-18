@@ -243,17 +243,21 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
 /**
  * The legs a send may walk, in the words the delivery order is written in: `native`, the frame on
  * the receiving seat's cross-session socket; `mcp-inbox`, the seat's own MCP inbox; `typed`, the
- * 0600 drop file and one composer trigger line.
+ * 0600 drop file and one composer trigger line; `drop`, the same 0600 drop file and no keystroke
+ * at all — for a receiver that watches its own drop folder, or a pane that must not be typed into.
  */
-export type DeliveryLeg = 'native' | 'mcp-inbox' | 'typed';
+export type DeliveryLeg = 'native' | 'mcp-inbox' | 'typed' | 'drop';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'typed'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'typed', 'drop'];
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: native, then
- * mcp-inbox, then typed. mcp-inbox is not in this build: a walk that reaches it skips the leg and
- * records it unavailable. The chain is the receiving seat's own — entity, project, team, seat —
- * because the order says how that seat's messages may travel.
+ * mcp-inbox, then typed, then drop. mcp-inbox is not in this build: a walk that reaches it skips
+ * the leg and records it unavailable. The typed leg is terminal, so a walk reaches `drop` only
+ * when a level puts it before `typed` or leaves `typed` out — the default order carries it so any
+ * level may name it, and a send to a seat that declares nothing is typed exactly as before. The
+ * chain is the receiving seat's own — entity, project, team, seat — because the order says how
+ * that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',

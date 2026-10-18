@@ -82,6 +82,7 @@
           "enum": [
             "socket",
             "typed",
+            "drop",
             "native",
             null
           ]

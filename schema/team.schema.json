@@ -539,7 +539,8 @@
               "enum": [
                 "native",
                 "mcp-inbox",
-                "typed"
+                "typed",
+                "drop"
               ]
             },
             "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and never adds a leg, which the walk settles"
@@ -651,10 +652,11 @@
         "enum": [
           "native",
           "mcp-inbox",
-          "typed"
+          "typed",
+          "drop"
         ]
       },
-      "$comment": "the legs a send may walk, outermost first: native, mcp-inbox, typed; a level may drop or reorder the legs in force and may never add one"
+      "$comment": "the legs a send may walk, outermost first: native, mcp-inbox, typed, drop; a level may drop or reorder the legs in force and may never add one"
     },
     "policies": {
       "type": "object",

@@ -60,6 +60,6 @@ export const deliveryOrder: Section = {
     minItems: 1,
     uniqueItems: true,
     items: { enum: DELIVERY_LEGS },
-    $comment: 'the legs a send may walk, outermost first: native, mcp-inbox, typed; a level may drop or reorder the legs in force and may never add one',
+    $comment: 'the legs a send may walk, outermost first: native, mcp-inbox, typed, drop; a level may drop or reorder the legs in force and may never add one',
   },
 };

@@ -65,21 +65,23 @@ legs the run would walk, writes no drop file, and types nothing. It appends one
 line to the team log.
 
 A send walks the receiving seat's delivery order — native, mcp-inbox, typed by
-default. A level of that seat's own chain, entity, project, team, seat, may drop
-legs from the order or put the legs it keeps in a different order, and may never
-add one: a word naming a leg the order does not have, or naming one twice, is set
-aside and the order in force stands. Each leg in turn either takes the send, which
-ends the walk, or definitely cannot take it, which hands the send to the next leg
-and is recorded as a failure; mcp-inbox is not in this build, so a walk that
-reaches it skips it and records it unavailable; the typed leg is terminal, taking
-the send or ending the walk unreachable. The history line names the channel the
-send went by and the legs that failed before it.
+default, with drop after them. A level of that seat's own chain, entity, project,
+team, seat, may drop legs from the order or put the legs it keeps in a different
+order, and may never add one: a word naming a leg the order does not have, or
+naming one twice, is set aside and the order in force stands. Each leg in turn
+either takes the send, which ends the walk, or definitely cannot take it, which
+hands the send to the next leg and is recorded as a failure; mcp-inbox is not in
+this build, so a walk that reaches it skips it and records it unavailable; the
+typed leg is terminal, taking the send or ending the walk unreachable. The drop
+leg writes the same 0600 drop file and types nothing at all. The history line
+names the channel the send went by and the legs that failed before it.
 
 The outcome is one of seven, and none of them is silent:
   delivered    the drop path (exit 0): herdr reported the seat working — or done or
                blocked, changed from the status read before Enter — or the transcript
                showed the drop read, the line had left the input box, and the pane
-               was not one of the dialogs listed above
+               was not one of the dialogs listed above; on the drop leg, the drop
+               file is in place and nothing was typed
   answered     --wait to a Claude Code seat: the reply came back; the reply follows
                on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
@@ -554,7 +556,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
   // the send ends the walk; a leg that definitely cannot take it hands the send to the next
   // one and its reason joins `failures`, which every history line this walk writes carries;
-  // the typed leg is terminal, taking the send or ending the walk unreachable. mcp-inbox is
+  // the typed leg is terminal, taking the send or ending the walk unreachable. The drop leg
+  // writes the typed leg's own file and stops there, with nothing typed. mcp-inbox is
   // not in this build: the walk skips it and records it unavailable. So is the native leg
   // while SOCKET_SEND is off — the frame path is a socket write this build does not make —
   // and a walk that reaches it records the skip exactly as mcp-inbox's.
@@ -583,6 +586,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         logLine(dir, 'send', who, `${to.seat}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
       }
       continue;
+    }
+    // The drop leg: the same 0600 drop file the typed leg writes, and no keystroke at all — no
+    // trigger line, no socket frame, no daemon round trip. It is the channel for a seat whose
+    // receiver watches its own drop folder, and for a pane that must never be typed into: a
+    // file can wait where a keystroke cannot be taken back.
+    if (leg === 'drop') {
+      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, msgId, body, host, report, startedAt, failures, to.sentAs);
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. A compose seat's typed leg is
@@ -642,13 +652,16 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
  *  A leg this build does not carry — mcp-inbox always, native while SOCKET_SEND
  *  (src/send/uds.ts) is off — is not a channel a run would take, and a seat whose CLI has no
  *  cross-session socket has no native leg at all; none of them is named. What is left is the
- *  native channel when it leads, with the typed channel behind it, or the typed channel alone.
- *  The where-nothing-is-carried phrase is unreachable by the default order of a codex seat —
- *  mcp-inbox out, native out, typed left — and only an order that drops the typed leg too
- *  prints it. */
+ *  drop channel when it leads, the native channel when it leads with the typed channel behind it,
+ *  or the typed channel alone. The where-nothing-is-carried phrase is unreachable by the default
+ *  order of a codex seat — mcp-inbox out, native out, typed left — and only an order that drops
+ *  the typed leg too prints it. */
 function walkPhrase(order: readonly DeliveryLeg[], cli: string): string {
-  const walkable = order.filter((leg) => (leg === 'native' ? cli === 'claude-code' && SOCKET_SEND : leg === 'typed'));
+  const walkable = order.filter((leg) => leg === 'drop' || (leg === 'native' ? cli === 'claude-code' && SOCKET_SEND : leg === 'typed'));
   if (walkable.length === 0) return 'no leg of its delivery order this build can walk';
+  // The drop leg is a file and no keystroke, whether or not the CLI's typed leg builds its brief
+  // through its own screens.
+  if (walkable[0] === 'drop') return 'a 0600 drop file with nothing typed into the pane';
   // A compose seat's brief is not a drop-file trigger: it is typed through the CLI's screens.
   if (profileFor(cli)?.compose != null) return 'a typed brief through its own screens';
   if (walkable[0] !== 'native') return 'a 0600 drop file and one trigger line';
@@ -982,6 +995,65 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
   if (named.length === 0) return { ok: false, kind: 'unreachable', reason: 'no live agent carries that name in the session' };
   if (named.length > 1) return { ok: false, kind: 'refused', reason: `${seatName}: herdr lists more than one agent of this name; nothing was sent` };
   return { ok: true, pane: (named[0] as { pane: string }).pane };
+}
+
+/**
+ * The drop leg: the body is written to the seat's 0600 drop file under the seat lock, and the
+ * pane is not touched — no trigger line, no socket frame, no daemon round trip, so no agent has
+ * to be live and no screen is read. Delivered means the file is in place, which is the one thing
+ * this leg does; the history line says `via: drop`, and the receiver finds the file by watching
+ * its own drop folder.
+ */
+function deliverDropped(
+  io: Io,
+  dir: string,
+  root: string,
+  who: string,
+  from: string,
+  project: string,
+  session: string,
+  seatName: string,
+  dropDir: string,
+  msgId: string,
+  body: string,
+  host: SendHost,
+  report: Report,
+  startedAt: number,
+  /** The reasons the legs before this one did not take the send: every history line carries them. */
+  failures: readonly string[] = [],
+  /** The address as written, when it was a form: every history line carries it beside the seat. */
+  sentAs: SentAs | null = null,
+): number {
+  const failed = failures.length > 0 ? { failed: [...failures] } : {};
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) {
+    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+  }
+  try {
+    try {
+      sealDropTree(dir, session, seatName);
+      dropMessage(dropDir, msgId, body);
+    } catch {
+      return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was sent`, host, report);
+    }
+    logLine(dir, 'send', who, `${seatName}: delivered (dropped ${String(body.length)} characters)`, host.now());
+    appendHistory(project, root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      ...(sentAs === null ? {} : sentAs),
+      body,
+      id: msgId,
+      outcome: 'delivered',
+      ms: host.now().getTime() - startedAt,
+      via: 'drop',
+      ...failed,
+    });
+    report.sent = msgId;
+    return delivered(io, seatName, report, 'dropped');
+  } finally {
+    lock.release();
+  }
 }
 
 /**
@@ -1711,13 +1783,14 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** Herdr reported the seat took the trigger, and the pane was not a known dialog. Exit 0, always.
- *  The note names the path the send went by — `socket`, or `typed, socket <reason>` after the
- *  frame was not taken — and is left off where the seat has one channel only. */
+/** Herdr reported the seat took the trigger — or, on the drop leg, the file is in place — and the
+ *  pane was not a known dialog. Exit 0, always. The note names the path the send went by —
+ *  `socket`, `dropped`, or `typed, socket <reason>` after the frame was not taken — and is left
+ *  off where the seat has one channel only. */
 function delivered(io: Io, seat: string, report: Report, note?: string): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   if (report.json) {
-    writeAction(io, report, { status: 'delivered', summary, channel: note === 'socket' ? 'socket' : 'typed' });
+    writeAction(io, report, { status: 'delivered', summary, channel: note === 'socket' ? 'socket' : note === 'dropped' ? 'drop' : 'typed' });
   } else {
     openText(io, report);
     io.stdout(`${summary}\n`);
@@ -1836,8 +1909,8 @@ type ActionFields = {
   status: 'delivered' | 'answered' | 'recorded' | 'dry-run';
   summary: string;
   dryRun?: boolean;
-  /** The leg that carried the send: `socket`, `typed`, or `native` for a record. */
-  channel?: 'socket' | 'typed' | 'native' | null;
+  /** The leg that carried the send: `socket`, `typed`, `drop`, or `native` for a record. */
+  channel?: 'socket' | 'typed' | 'drop' | 'native' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
   /** The reply frame's own id, on an answered wait. */

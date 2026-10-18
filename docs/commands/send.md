@@ -9,12 +9,19 @@ the line that creates the item. A compose seat's brief is typed for one repo: th
 seat's own folder, read from `git remote get-url origin` there. The module proves the CLI's own
 chooser collapsed on that repo before it types, and refuses with nothing typed when the CLI's
 list does not hold it. The receiving seat's
-delivery order decides the channel: `native`, `mcp-inbox`, then `typed` when no level of the
-seat's chain declares one. Each leg in turn either takes the send, which ends the walk, or
+delivery order decides the channel: `native`, `mcp-inbox`, `typed`, then `drop` when no level of
+the seat's chain declares one. Each leg in turn either takes the send, which ends the walk, or
 definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
 the history line names the channel the send went by and the legs that failed before it. The
 typed leg is terminal: the drop file and one trigger line, the only channel a send of this build
-can go by. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
+can go by.
+
+The drop leg writes that same drop file and types nothing at all — no trigger line, no socket
+frame, nothing read from a pane — so a receiver that watches its own drop folder finds the
+message there. It is chosen with `delivery_order: [drop]`, or by putting `drop` first in the
+order, and its console line is `delivered (dropped)` with `via: drop` on the history line.
+Because the typed leg is terminal, a walk reaches `drop` only when it comes before `typed` or
+`typed` is left out. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
 from the order or put the legs it keeps in a different order, and may never add one: a word
 naming a leg the order in force does not have is set aside and the order in force stands. The
 words are read from the receiving seat's own files: the team file's `delivery_order` key and the
@@ -35,7 +42,9 @@ one of those dialogs is not reached. The report names the kind and the drop path
 further is pressed. The exit code of the typing commands is not the evidence. On herdr 0.7.1 the
 working status is the pane hint `ctrl+c to stop` for cursor, a spinner in the terminal title for
 codex, and the `esc to cancel` footer for agy. A cursor pane narrow enough to wrap the hint can
-submit while herdr stays idle; that run is delivered as taken, never a failed send.
+submit while herdr stays idle; that run is delivered as taken, never a failed send. The drop leg
+never types: there `delivered` means the 0600 drop file is in place, and no box, status or
+transcript is read.
 
 `team send --wait` needs the native leg — the team route that carries the call and the caller's
 own `SendMessage` that carries the reply — and this build does not ship it. A waited send is

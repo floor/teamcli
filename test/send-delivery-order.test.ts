@@ -1,11 +1,12 @@
 // The delivery-order walk: the receiving seat's own chain — entity, project, team, seat — decides
-// the order a plain send walks (native, mcp-inbox, typed when nothing declares one); a level may
-// drop legs or reorder the ones it keeps, and may never add one nor empty it — an empty word is
+// the order a plain send walks (native, mcp-inbox, typed, drop when nothing declares one); a level
+// may drop legs or reorder the ones it keeps, and may never add one nor empty it — an empty word is
 // set aside; a leg that definitely cannot take the send hands it on and is recorded as a failure
 // on the history line; and the legs this build does not carry — mcp-inbox always, native while
 // its frame path is a socket write this build does not make — are recorded `unavailable` in the
 // walk's own words. A waited send is refused unless the native leg leads the order: the frame the
-// reply listener stands beside is that leg.
+// reply listener stands beside is that leg. The drop leg writes the typed leg's own file and types
+// nothing: a scene here proves the pane sees no keystroke at all.
 //
 // Both ways a chain reaches the walk are here: handed in on the host, and — the production
 // reading — left out, so the team file's own `delivery_order` and its seats' are what the walk
@@ -24,6 +25,7 @@ import type { ProjectSources } from '../src/commands/projects.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import type { ProjectRecord } from '../src/registry/projects.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
@@ -34,6 +36,7 @@ import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
 import { storePath } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
+import { assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T06:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -394,6 +397,82 @@ describe('the chain is read from the files when the host hands none in', () => {
     });
     expect(asked).toEqual([teamIdOf(w.root)]);
     expect(chain).toEqual({ project: ['mcp-inbox', 'typed'] });
+  });
+});
+
+describe('the drop leg', () => {
+  test('a seat that opts into drop gets the file and zero pane writes', async () => {
+    const w = world();
+    const host = walker(w, { seat: ['drop'] });
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(io.err).toBe('');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(lastEntry(w.root, w.home)).toEqual({
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${HEADER}hello`,
+      id: expect.any(String),
+      outcome: 'delivered',
+      ms: 0,
+      via: 'drop',
+    });
+  });
+
+  test('drop first in the order takes the send before the typed leg behind it', async () => {
+    const w = world();
+    const host = walker(w, { seat: ['drop', 'typed'] });
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
+    expect(lastEntry(w.root, w.home).via).toBe('drop');
+  });
+
+  test('its JSON document names the drop channel', async () => {
+    const w = world();
+    const host = walker(w, { seat: ['drop'] });
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--json'], io, host)).toBe(0);
+
+    const doc = assertMatchesOutputSchema<{
+      status: string;
+      channel: string;
+      action_summary: string;
+      ids: { sent: string };
+    }>(io.out, SEND_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('delivered');
+    expect(doc.channel).toBe('drop');
+    expect(doc.action_summary).toBe('lead: delivered (dropped)');
+    expect(readFileSync(join(dropDir(w.root, 'lead'), doc.ids.sent), 'utf8')).toBe(`${HEADER}hello`);
+  });
+
+  test('its dry run names the drop file and no typing', async () => {
+    const w = world();
+    const host = walker(w, { seat: ['drop'] });
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
+
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: dry-run: claude-code via a 0600 drop file with nothing typed into the pane; nothing was written\n',
+    );
+    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+    expect(host.typed).toEqual([]);
   });
 });
 
