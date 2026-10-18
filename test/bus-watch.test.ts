@@ -416,26 +416,37 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       (r, ev) => publishToBus(r, ev),
     );
 
-    const withBus = await syncWatchBus(root, tracker, {
-      busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 500 }),
-      onBusEvent: (ev) => seenEvents.push(ev),
-      onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
-    });
+    const delivered: SignedEventRecord[] = [];
+    const withBus = await syncWatchBus(
+      root,
+      tracker,
+      {
+        busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 500 }),
+        onBusEvent: (ev) => seenEvents.push(ev),
+        onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
+      },
+      // The watch's owner delivery rides on the same poll, after the observation seam.
+      (ev) => delivered.push(ev),
+    );
     expect(withBus).toBe(true);
+    expect(delivered.map((e) => e.payload.record_id)).toEqual(seenEvents.map((e) => e.payload.record_id));
     expect(
       seenEvents.map((e) => ({
         kind: e.payload.kind,
         seat: e.payload.seat,
         prompt: e.payload.prompt,
+        to: e.payload.to,
       })),
     ).toEqual([
-      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'permission' },
-      { kind: 'seat.blocked', seat: 'worker-1', prompt: undefined },
-      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'vendor notice' },
-      { kind: 'seat.blocked', seat: 'worker-2', prompt: undefined },
-      { kind: 'seat.unreachable', seat: 'worker-3', prompt: undefined },
-      { kind: 'seat.at-prompt', seat: 'worker-4', prompt: 'rate limit' },
-      { kind: 'seat.blocked', seat: 'worker-5', prompt: undefined },
+      // An owner-addressed report is one event addressed to `owner`: the owner's copy and the
+      // operator's copy of the same observation merge, so the list carries one line, not two.
+      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'permission', to: 'owner' },
+      { kind: 'seat.blocked', seat: 'worker-1', prompt: undefined, to: undefined },
+      { kind: 'seat.at-prompt', seat: 'worker-1', prompt: 'vendor notice', to: 'owner' },
+      { kind: 'seat.blocked', seat: 'worker-2', prompt: undefined, to: 'owner' },
+      { kind: 'seat.unreachable', seat: 'worker-3', prompt: undefined, to: undefined },
+      { kind: 'seat.at-prompt', seat: 'worker-4', prompt: 'rate limit', to: 'owner' },
+      { kind: 'seat.blocked', seat: 'worker-5', prompt: undefined, to: 'owner' },
     ]);
     expect(seenEvents.some((e) => e.payload.seat?.endsWith(':owner'))).toBe(false);
     expect(tracker.cursor).toBe(7);
