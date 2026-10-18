@@ -6,7 +6,7 @@
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
 import type { BrokerRequest } from '../broker/protocol.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
@@ -31,7 +31,7 @@ tasks.fallback tie-break — against this clone's clock. Reads the checkout, the
 task file or the owner's broker; claims nothing and writes no lease. A deadline the clock has
 passed reads overdue in the STATE column and decides nothing.
 
-Exits 0 when the plan is shown, 1 when the caller, broker, or file is refused, 2 when the invocation can't be read or this folder is not a git repository.
+Exits 0 when the plan is shown, 1 when the caller, broker, or file is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
 
 export type PlanSources = {
@@ -103,16 +103,24 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
     // exit: plan.invocation
     return 2;
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    // `team plan` takes no `--file`, so the no-repository refusal must not offer one.
-    if (json) writeJsonError(io, 'plan.not-a-repo', NOT_A_REPO_NO_FILE, 'run team plan from inside the git checkout');
-    else out.stderr(`team plan: ${NOT_A_REPO_NO_FILE}\n`);
-    // exit: plan.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team plan` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
-  if (!loaded.ok) return file(io, loaded.errors[0]?.message ?? 'the team file can\'t be read', json);
+  if (!loaded.ok) {
+    const problem = loaded.errors[0];
+    const message = problem?.message ?? 'the team file can\'t be read';
+    if (problem !== undefined && isNoRepository(problem)) {
+      const shown = withoutFileOffer(message);
+      if (json) writeJsonError(io, 'plan.not-a-repo', shown, 'run team plan from inside a checkout, or from the folder that holds .agents/team.yaml');
+      else out.stderr(`team plan: ${shown}\n`);
+      // exit: plan.not-a-repo
+      return 2;
+    }
+    return file(io, message, json);
+  }
   const tasks = loaded.team.tasks;
   if (!tasks) return file(io, 'the team file declares no task source', json);
   if (tasks.source === 'linear') {

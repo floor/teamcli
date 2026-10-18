@@ -6,7 +6,7 @@
 import { readArgs } from '../args.ts';
 import { startBus } from '../bus/server.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { stopped } from './broker.ts';
 
@@ -48,12 +48,18 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
     );
   }
 
-  const root = findRoot(io.cwd);
-  if (!root) return badConfig(io, NOT_A_REPO_NO_FILE);
-
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team bus` takes no
+  // `--file`, so the shared sentence must not offer one. The refusal's own exit is unchanged:
+  // `bus.configuration` is the id a configuration that cannot be read has always answered with.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {
-    return badConfig(io, loaded.errors[0]?.message ?? "the team file can't be read");
+    const problem = loaded.errors[0];
+    if (problem !== undefined && isNoRepository(problem)) {
+      return badConfig(io, withoutFileOffer(problem.message));
+    }
+    return badConfig(io, problem?.message ?? "the team file can't be read");
   }
 
   const started = await startBus({

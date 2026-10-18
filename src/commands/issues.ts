@@ -3,7 +3,7 @@
 // here: this command connects to no broker, holds no tracker credential, and has no seat gate —
 // and it keeps holding none of those. A listing is not a claim and not the intake rule.
 import { readArgs } from '../args.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import {
@@ -26,7 +26,7 @@ the team file and the task file; writes nothing and creates no key. A listing is
 \`team plan\` prints the takeable queue and claims nothing, and a broker source is read by
 \`team next\`, never from here.
 
-Exits 0 when the issues are listed, 1 when the team file or issues file can't be read, 2 when the invocation can't be read or this folder is not a git repository.
+Exits 0 when the issues are listed, 1 when the team file or issues file can't be read, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
 
 export type IssuesSources = {
@@ -100,17 +100,23 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
     // exit: issues.invocation
     return 2;
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    // `team issues` takes no `--file`, so the no-repository refusal must not offer one.
-    if (json) writeJsonError(io, 'issues.not-a-repo', NOT_A_REPO_NO_FILE, 'run team issues from inside the git checkout');
-    else out.stderr(`team issues: ${NOT_A_REPO_NO_FILE}\n`);
-    // exit: issues.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team issues` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {
-    return refuse(io, 'file', loaded.errors[0]?.message ?? 'the team file can\'t be read', json);
+    const problem = loaded.errors[0];
+    const message = problem?.message ?? 'the team file can\'t be read';
+    if (problem !== undefined && isNoRepository(problem)) {
+      const shown = withoutFileOffer(message);
+      if (json) writeJsonError(io, 'issues.not-a-repo', shown, 'run team issues from inside a checkout, or from the folder that holds .agents/team.yaml');
+      else out.stderr(`team issues: ${shown}\n`);
+      // exit: issues.not-a-repo
+      return 2;
+    }
+    return refuse(io, 'file', message, json);
   }
   if (!loaded.team.tasks) return refuse(io, 'file', 'the team file declares no task source', json);
   if (loaded.team.tasks.source === 'linear') {

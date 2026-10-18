@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvedFingerprints } from '../src/approve/approval.ts';
@@ -84,6 +84,20 @@ describe('team issues', () => {
       out: `${CONTEXT}${TABLE}${OPEN_M1}  m2  open   -         another title\n2 issues\n`,
       err: '',
     });
+  });
+
+  test('a folder that is not a checkout reads the team root it holds', async () => {
+    project();
+    // The team root is this folder itself: no checkout names it, and the listing writes nothing.
+    mkdirSync(join(base, 'plain'), { recursive: true });
+    const plain = realpathSync(join(base, 'plain'));
+    mkdirSync(join(plain, '.agents'), { recursive: true });
+    writeFileSync(join(plain, '.agents', 'team.yaml'), WITH);
+    writeFileSync(join(plain, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
+    const io = testIo(plain);
+    expect(await runIssues([], io, { home })).toBe(0);
+    expect(io.out).toBe(ONE_OPEN);
+    expect(io.err).toBe('');
   });
 
   test('tasks validates, and a file without it still validates', () => {

@@ -36,6 +36,16 @@ export function isParseError(problem: Problem): boolean {
   return problem.line > 0;
 }
 
+/**
+ * Whether a `loadTeamFile` / `currentTeam` problem is the no-repository refusal — no checkout
+ * names this folder and no plain team root stands in it (a link found instead of one included) —
+ * rather than an unreadable or invalid team file. The shared sentence offers `--file`; a command
+ * that takes none prints `withoutFileOffer(problem.message)`.
+ */
+export function isNoRepository(problem: Problem): boolean {
+  return problem.line === 0 && problem.message.startsWith(NOT_A_REPO);
+}
+
 // The team file in a folder that is not a git repository. The folder the process was given is
 // resolved first: when that path is itself a link, the real directory is the folder (the shell
 // chose it). Inside it, `.agents` must be a real directory and `team.yaml` a real file. A link at

@@ -27,14 +27,15 @@ The mark is against this clone's clock. Another machine's clock may disagree.
 
 ## What it reads and writes
 
-Reads the git checkout (`findRoot`), the team file, and the YAML list at `tasks.path`. The path
-is relative to the checkout. A record's `id` and `title` are required. The plain plan is the
+Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
+the team file, and the YAML list at `tasks.path`. The path is relative to that root. A record's
+`id` and `title` are required. The plain plan is the
 contract's table: one row per takeable record, in `team next`'s order — priority first (a number
 before a text, ascending), then the `tasks.fallback` tie-break — with the queue position, the
 STATE mark, the owner or `-`, and the title. Every other field the record carries is in the
 `--json` task. A record with `blocked-by`, `repos`, or `needs` is not takeable and is not printed.
 
-On a broker source it reads the same git checkout and team file, then asks the broker over
+On a broker source it reads the same root and team file, then asks the broker over
 `.agents/broker.sock`: one request line carrying the caller's seat and pane, one answer line
 back, with a five-second deadline. The seat gate runs first; the broker checks the same claim
 again on the request.

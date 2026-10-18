@@ -49,7 +49,7 @@ ${SEATS}tasks:
   path: .agents/tasks.yaml
 `;
 
-const FOOTER = "Exits 0 when it stopped, 1 when it refused to start or lost its socket, 2 when the\ninvocation can't be read or this folder is not a git checkout.\n";
+const FOOTER = "Exits 0 when it stopped, 1 when it refused to start or lost its socket, 2 when the\ninvocation can't be read or this folder is neither a checkout nor a team root.\n";
 
 let repo: Repository;
 let home: string;

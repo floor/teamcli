@@ -3,7 +3,7 @@
 // STATE `overdue`, which decides nothing.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NOT_RUNNING } from '../src/broker/client.ts';
@@ -171,6 +171,27 @@ describe('team plan', () => {
         '  2     open   -      the z title\n' +
         '2 tasks\n',
     });
+  });
+
+  test('a folder that is not a checkout reads the team root it holds', async () => {
+    project();
+    // The team root is this folder itself: no checkout names it, and the queue is read from that
+    // folder's own `.agents` — nothing is claimed and no lease is written.
+    mkdirSync(join(base, 'plain'), { recursive: true });
+    const plain = realpathSync(join(base, 'plain'));
+    mkdirSync(join(plain, '.agents'), { recursive: true });
+    writeFileSync(join(plain, '.agents', 'team.yaml'), WITH);
+    writeFileSync(join(plain, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
+    updateState(join(plain, '.agents'), (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'w1:p1' };
+    });
+    expect(await run([], lead, {}, plain)).toEqual({
+      code: 0,
+      out: 'team acme, session "acme"\n  STEP  STATE  OWNER  TITLE\n  1     open   -      the task title\n1 task\n',
+      err: '',
+    });
+    expect(existsSync(join(plain, '.agents', 'leases'))).toBe(false);
   });
 
   test('a deadline the clock has passed is marked, and the mark decides nothing', async () => {

@@ -821,6 +821,20 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     });
     expect(cleanCode).toBe(0);
     expect(existsSync(busSocket(root))).toBe(false);
+
+    // A folder that is not a checkout reads the team root it holds: the same clean start binds
+    // its socket under this folder's own `.agents`, with no checkout named anywhere.
+    rmSync(join(root, '.git'), { recursive: true, force: true });
+    const plainCode = await runBus([], baseIo({ caller: { kind: 'owner' } }), {
+      home,
+      reconcileIntervalMs: 0,
+      stop: (end) => {
+        setTimeout(end, 20);
+        return () => {};
+      },
+    });
+    expect(plainCode).toBe(0);
+    expect(existsSync(busSocket(root))).toBe(false);
   });
 
   test('a gap answer carrying a declared drop round-trips, and a reason without its bounds is refused', () => {

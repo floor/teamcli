@@ -33,12 +33,13 @@ The approval key never signs a message.
 
 ## What it reads and writes
 
-Reads the git checkout (`findRoot`), the team file's session, and
+Reads the team root the shared loader resolves (`loadTeamFile`: the enclosing checkout, or the
+folder that holds `.agents/team.yaml`), the team file's session, and
 `.agents/send-drops/<session>/<seat>/<id>`, and the older store's
 `.agents/messages/<seat>/<id>.json` where a previous build left one. The id is the filename. The
-recipient is the seat directory. The root is `findRoot`. The session is the team file's, or for a
+recipient is the seat directory. The root is that resolution. The session is the team file's, or for a
 record the session directory it was found under. A copy under a new id, or into another seat's
-directory, or bound to another checkout or session, does not verify.
+directory, or bound to another root or session, does not verify.
 
 Writes the signed read receipt beside the record, `<id>.read.json` in the same folder — the older
 store keeps its own receipt shape at `.agents/messages/<seat>/<id>.read.json` — signed with the
@@ -54,7 +55,7 @@ Under `--json` the reading is one `team.messages` v1 document on stdout, its `sc
 `notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
 `owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
 `refused`, the table's own closing figures). An empty mailbox's document carries no rows, the note
-`nothing is waiting`, and three zero counts. An invocation, checkout, team-file or key refusal
+`nothing is waiting`, and three zero counts. An invocation, root, team-file or key refusal
 under `--json` writes a `team.error` v1 document on stdout instead — `messages.invocation`,
 `messages.not-a-repo`, `messages.file` or `messages.key`, its `message` and a null `repair` — and
 stderr stays empty. The exit code is the same as without `--json`.

@@ -11,7 +11,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import {
   contextLine,
@@ -55,7 +55,7 @@ import {
 
 export const USAGE = `Usage: team messages [--json]
 
-Exits 0 when the inbox is read, 1 when the caller, team file, or message record is refused, 2 when the invocation can't be read or this folder is not a git repository.
+Exits 0 when the inbox is read, 1 when the caller, team file, or message record is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
@@ -511,20 +511,25 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // exit: messages.invocation
     return 2;
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    // `team messages` takes no `--file`, so the no-repository refusal must not offer one.
-    if (json) {
-      writeJsonError(io, 'messages.not-a-repo', NOT_A_REPO_NO_FILE, null);
-    } else {
-      io.stderr(`team messages: ${NOT_A_REPO_NO_FILE}\n`);
-    }
-    // exit: messages.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team messages` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {
-    const message = loaded.errors[0]?.message ?? 'the team file can\'t be read';
+    const problem = loaded.errors[0];
+    const message = problem?.message ?? 'the team file can\'t be read';
+    if (problem !== undefined && isNoRepository(problem)) {
+      const shown = withoutFileOffer(message);
+      if (json) {
+        writeJsonError(io, 'messages.not-a-repo', shown, null);
+      } else {
+        io.stderr(`team messages: ${shown}\n`);
+      }
+      // exit: messages.not-a-repo
+      return 2;
+    }
     if (json) {
       writeJsonError(io, 'messages.file', message, null);
     } else {
@@ -533,6 +538,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // exit: messages.file
     return 1;
   }
+  const root = loaded.root;
   const session = loaded.team.session;
   const state = messageKeyState(sources.home);
   const waiting = candidates(root, session).filter((candidate) => {

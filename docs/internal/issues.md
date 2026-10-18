@@ -23,8 +23,9 @@ The watch's ring is unchanged: `Team: run team messages`.
 
 ## What it reads and writes
 
-Reads the git checkout (`findRoot`), the team file, and the YAML list at `tasks.path`. The path
-is relative to the checkout. A record's `id` and `title` are required. The plain listing prints
+Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
+the team file, and the YAML list at `tasks.path`. The path is relative to that root. A record's
+`id` and `title` are required. The plain listing prints
 the contract's four columns; every other field the file carries is in the `--json` record.
 `blocked-by`, `repos` and `needs` make the STATE cell `blocked`; none of them is judged or
 resolved here.
