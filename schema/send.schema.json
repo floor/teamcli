@@ -49,10 +49,11 @@
           "type": "string",
           "enum": [
             "delivered",
+            "delivered (read)",
+            "sent (unconfirmed)",
             "answered",
             "recorded",
             "native",
-            "sent (unconfirmed)",
             "dry-run"
           ]
         },
@@ -85,6 +86,7 @@
             "socket",
             "typed",
             "drop",
+            "mcp-inbox",
             "native",
             null
           ]

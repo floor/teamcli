@@ -209,10 +209,10 @@ describe('team send history log & team feed', () => {
       ms: 0,
       via: 'typed',
       // The walk landed on the typed leg through both legs ahead of it: the native leg only the
-      // sending session's own SendMessage can make, and the mcp-inbox leg it does not carry.
+      // sending session's own SendMessage can make, and an inbox no server was listening on.
       failed: [
         'native: unavailable; the native leg is the sending session\'s own SendMessage',
-        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+        'mcp-inbox: no live inbox listener',
       ],
     });
 
@@ -251,7 +251,7 @@ describe('team send history log & team feed', () => {
     });
     expect(doc.events[0]?.failed).toEqual([
       'native: unavailable; the native leg is the sending session\'s own SendMessage',
-      'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+      'mcp-inbox: no live inbox listener',
     ]);
   });
 

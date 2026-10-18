@@ -252,12 +252,14 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'ty
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: native, then
- * mcp-inbox, then typed, then drop. mcp-inbox is not in this build: a walk that reaches it skips
- * the leg and records it unavailable. The typed leg is terminal, so a walk reaches `drop` only
- * when a level puts it before `typed` or leaves `typed` out — the default order carries it so any
- * level may name it, and a send to a seat that declares nothing is typed exactly as before. The
- * chain is the receiving seat's own — entity, project, team, seat — because the order says how
- * that seat's messages may travel.
+ * The order a send walks when no level of the receiving seat's chain declares one: native, then
+ * mcp-inbox, then typed, then drop. The mcp-inbox leg takes a send only while the seat's own
+ * inbox server is listening, and writes the message to that inbox without typing; otherwise it
+ * is skipped as `no live inbox listener` and the walk moves on. The typed leg is terminal, so a
+ * walk reaches `drop` only when a level puts it before `typed` or leaves `typed` out — the
+ * default order carries it so any level may name it, and a send to a seat that declares nothing
+ * is typed exactly as before. The chain is the receiving seat's own — entity, project, team,
+ * seat — because the order says how that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',

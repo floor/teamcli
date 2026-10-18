@@ -1015,7 +1015,7 @@ describe('team send: native drop', () => {
     const code = await runSend(['native', 'hello', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written\n');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
     expect(existsSync(join(dir, 'send-drops'))).toBe(false);
@@ -1027,17 +1027,17 @@ describe('team send: native drop', () => {
       format: 1,
       dry_run: true,
       status: 'dry-run',
-      action_summary: 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written',
+      action_summary: 'lead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written',
       project: 'acme',
       session: 'acme',
       seat: 'lead',
       channel: null,
       ids: { sent: null, reply: null },
-      plan: [{ step: 'send', seat: 'lead', detail: 'claude-code via a 0600 drop file and one trigger line; nothing was written', prefix: '+' }],
+      plan: [{ step: 'send', seat: 'lead', detail: 'claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written', prefix: '+' }],
     });
     const claude = owner(root);
     expect(await runSend(['lead', 'hello', '--dry-run'], claude, fake(sockets))).toBe(0);
-    expect(claude.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written\n');
+    expect(claude.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written\n');
     const waited = owner(root);
     expect(await runSend(['lead', 'hello', '--wait', '--dry-run'], waited, fake(sockets))).toBe(0);
     expect(waited.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
@@ -1070,7 +1070,7 @@ describe('team send: native drop', () => {
     writeFileSync(file, teamFile(root, lobbyDir(host.home)));
     const plans = owner(root);
     expect(await runSend(['native', 'hello', '--dry-run'], plans, fake(sockets))).toBe(0);
-    expect(plans.out).toBe('team acme, session "acme"\nnative: dry-run: codex via a 0600 drop file and one trigger line; nothing was written\n');
+    expect(plans.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written\n');
     const sent = owner(root);
     expect(await runSend(['native', 'hello'], sent, host)).toBe(0);
     expect(sent.out).toBe('team acme, session "acme"\nnative: delivered\n');

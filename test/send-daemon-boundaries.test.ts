@@ -194,10 +194,10 @@ describe('the send daemon\'s boundaries', () => {
         ms: expect.any(Number),
         // The walk reached the typed leg through the native and mcp-inbox legs, and the history
         // line carries what each of them said: the native leg is the sending session's own
-        // SendMessage, and this build carries no mcp-inbox leg.
+        // SendMessage, and no inbox server is listening for the seat.
         failed: [
           "native: unavailable; the native leg is the sending session's own SendMessage",
-          'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+          'mcp-inbox: no live inbox listener',
         ],
       },
     ]);

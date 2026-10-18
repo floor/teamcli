@@ -377,6 +377,36 @@ describe('retryHeldDrops', () => {
       `lead: a held send from owner was not delivered (its drop file is gone from ${dropDir}); send it again`,
     ]);
   });
+
+  test('an mcp-inbox marker is not a held send: the pass leaves it and types nothing', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const body = 'from the owner\n\nread by the seat when it polls';
+    const path = dropMessage(dropDir, 'drop-inbox', body);
+    // The marker send leaves when its mcp-inbox leg gets no receipt: it records the leg so the
+    // watch knows the message is the seat's own to read, not one to type.
+    markPending(dropDir, { id: 'drop-inbox', from: 'owner', to: 'lead', body, ts: NOW.toISOString(), leg: 'mcp-inbox' });
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(said).toEqual([]);
+    // The record keeps its leg and its try count: this pass never walked it.
+    const records = readPending(dropDir);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ id: 'drop-inbox', leg: 'mcp-inbox', tries: 0 });
+    expect(readFileSync(path, 'utf8')).toBe(body);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok && history.entries).toEqual([]);
+  });
 });
 
 describe('a retry that ends taken', () => {
