@@ -52,6 +52,13 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   rename: () => import('./commands/rename.ts'),
 };
 
+/** Commands an earlier line carried and this one does not, each with the one line a typed one
+ *  gets. A record rather than a `name ===` comparison on purpose: the command contract reads
+ *  those comparisons as command definitions, and a removed command is not one. */
+const REMOVED: Record<string, string> = {
+  approve: 'team approve was removed in 0.5.0: the live team file is the record, and nothing needs approving; see UPGRADE-0.5.md',
+};
+
 // The usage below the opening sentence: `team --help`'s first line is package.json's
 // description, read at print time by helpText, so it is the same sentence the READMEs carry.
 // This const stays a plain string, with no interpolation: scripts/contract.ts reads it from
@@ -137,9 +144,12 @@ export async function main(argv: string[], io: Io): Promise<number> {
   const load = commands[name];
   if (!load) {
     // 0.3.5's last setup step was `team approve`. A user typing it out of habit is told the
-    // command was removed, in one line, rather than given the generic help.
-    if (name === 'approve') {
-      io.stderr('team approve was removed in 0.5.0: the live team file is the record, and nothing needs approving; see UPGRADE-0.5.md\n');
+    // command was removed, in one line, rather than given the generic help. A record and not a
+    // `name ===` comparison: the command contract reads those comparisons as command
+    // definitions, and this one is not a command any more.
+    const removed = REMOVED[name];
+    if (removed !== undefined) {
+      io.stderr(`${removed}\n`);
       return 2; // exit: team.approve-removed
     }
     io.stderr(`team: unknown command "${name}"\n\n${helpText()}`);
