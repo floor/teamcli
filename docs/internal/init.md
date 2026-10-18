@@ -48,7 +48,7 @@ named. A run with no terminal is refused with one sentence, before the repositor
 
 ## What it prints
 
-`Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.`, or
+`Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team up.`, or
 `Restored .agents/team.yaml from the copy this machine stored.`, followed by the
 privacy paragraph: the file is private to this clone, listed in `.git/info/exclude` and never in
 `.gitignore`, so git doesn't see it and a fresh clone doesn't carry it; a collaborator writes
@@ -107,7 +107,7 @@ team file knows nothing about yet:
 
 ```console
 $ team init
-Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run the seats.
+Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team up.
 
 The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
