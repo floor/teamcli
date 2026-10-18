@@ -15,6 +15,7 @@ import {
   EVENT_ROUTING_DEFAULTS,
   isPrivilegedKind,
   PRIVILEGED_KINDS,
+  PRIVILEGED_KINDS_SETTING,
   type EventRouting,
   type RoutingChange,
   type RoutingRecipient,
@@ -55,6 +56,12 @@ export type RoutingWrite = {
   inherited: readonly RoutingRecipient[];
   /** The privileged list in force: the release defaults, grown by the owner's additions. */
   privileged?: readonly string[];
+  /**
+   * The default table the write is judged against. The caller hands in the same table it will
+   * fold with (`resolveRouting`'s `options.defaults`), so the check and the fold cannot disagree
+   * about which recipients a kind carries by default.
+   */
+  defaults?: EventRouting;
 };
 
 /** The rule a refusal names, in the word the amendment gives it. */
@@ -62,8 +69,10 @@ export type RoutingRule =
   | 'privileged-self-subscription'
   | 'privileged-owner-only'
   | 'privileged-default-stands'
+  | 'grant-holder-scope'
   | 'routing-removes-inherited'
-  | 'seat-adds-itself-only';
+  | 'seat-adds-itself-only'
+  | 'privileged-kinds-owner-only';
 
 /** A refused routing write, with everything a reader needs to see it whole. */
 export type RoutingRefusal = {
@@ -71,7 +80,7 @@ export type RoutingRefusal = {
   rule: RoutingRule;
   /** The seat's registry id (or its name when it has none), or `owner`. */
   requester: string;
-  /** The event kind the write was about. */
+  /** The event kind the write was about, or the setting's name for a list write. */
   kind: string;
   /** The level the write was made at. */
   level: PolicyLevel;
@@ -119,6 +128,7 @@ function refuse(write: RoutingWrite, rule: RoutingRule, detail: string): Routing
  * machine and in every test.
  */
 export function checkRoutingWrite(write: RoutingWrite): RoutingDecision {
+  const defaults = write.defaults ?? EVENT_ROUTING_DEFAULTS;
   const privileged = write.privileged ?? PRIVILEGED_KINDS;
   const isPrivileged = isPrivilegedKind(write.kind, privileged);
   const added = write.change.add ?? [];
@@ -164,9 +174,20 @@ export function checkRoutingWrite(write: RoutingWrite): RoutingDecision {
     }
   }
 
+  // A grant's ordinary routing delegation is project and team, the two scopes the draft names;
+  // entity and seat sit outside it. A privileged kind is not this rule's: the grant names the
+  // kind itself, and its holder may route it at any scope.
+  if (!isPrivileged && actor.kind === 'grant-holder' && write.level !== 'project' && write.level !== 'team') {
+    return refuse(
+      write,
+      'grant-holder-scope',
+      `a grant holder writes non-privileged kinds at project or team; ${requesterOf(actor)} tried ${write.level}`,
+    );
+  }
+
   for (const recipient of removed) {
     // A privileged kind's default recipients stand, whatever a level says.
-    if (isPrivileged && (EVENT_ROUTING_DEFAULTS[write.kind] ?? []).some((one) => sameRecipient(one, recipient))) {
+    if (isPrivileged && (defaults[write.kind] ?? []).some((one) => sameRecipient(one, recipient))) {
       return refuse(
         write,
         'privileged-default-stands',
@@ -183,6 +204,31 @@ export function checkRoutingWrite(write: RoutingWrite): RoutingDecision {
   }
 
   return { ok: true, added, removed };
+}
+
+/** One write to the privileged-kinds list, at the scope it would be made at. */
+export type PrivilegedKindsWrite = { actor: RoutingActor; level: PolicyLevel };
+
+/** The list write's answer: approved for the owner, a refusal for everybody else. */
+export type PrivilegedKindsDecision = { ok: true } | RoutingRefusal;
+
+/**
+ * Judges a write to the privileged-kinds list. The list is the owner's alone: no level, no seat
+ * and no grant reaches it, so its growth (`growPrivilegedKinds`) has exactly one caller whose
+ * actor passed through here. A refusal is shaped like a routing one, so the same record and the
+ * same `team.policy-refused` event carry it.
+ */
+export function checkPrivilegedKindsWrite(write: PrivilegedKindsWrite): PrivilegedKindsDecision {
+  if (write.actor.kind === 'owner') return { ok: true };
+  const requester = requesterOf(write.actor);
+  return {
+    ok: false,
+    rule: 'privileged-kinds-owner-only',
+    requester,
+    kind: PRIVILEGED_KINDS_SETTING.name,
+    level: write.level,
+    detail: `${PRIVILEGED_KINDS_SETTING.name} is the owner's: ${requester} may not add to it or change it`,
+  };
 }
 
 /**
