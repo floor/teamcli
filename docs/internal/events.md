@@ -66,7 +66,8 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   `.gate`, `.suite`), and team/governance (`team.seat-added`, `.seat-removed`, `.seat-reloaded`,
   `.grant-issued`, `.grant-revoked`, `.grant-expired`, `.policy-changed`, `.policy-refused`),
   the lead's own `release.ready` and `decision.needed`, the two refusals — `record.invalid` for a
-  record that does not verify, `security.refused` for an identity or an admission the rules deny —
+  record that does not verify, `security.refused` for an identity, an admission or a shell command
+  the rules deny —
   plus the operational `team.event-log-dropped` that retention raises. That kind is not privileged
   and is routed to `lead` and `operator` by default: it reports log maintenance, not governance.
   `release.ready` and `decision.needed` are the two kinds `team raise` writes; they are routed to

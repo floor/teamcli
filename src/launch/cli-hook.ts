@@ -29,13 +29,17 @@ import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import type { CliHookReading } from '../labels/state.ts';
 import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
+import {
+  commandGuardAvailable, commandGuardEntry, commandGuardHookCommand, type CommandGuardContext,
+} from './command-guard.ts';
 
 /** `O_NOFOLLOW` is POSIX: a platform without it gets 0, and the `lstat` checks above every open
  *  still refuse a link. */
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
-/** What a launch needs to decide on a hook: the seat's name, its CLI, and the line it runs. */
-export type CliHookSeat = { name: string; cli: string; launch: string };
+/** What a launch needs to decide on a hook: the seat's name, its CLI, and the line it runs. A
+ *  human's pane is never launched into, and it carries no guard even if a caller names it. */
+export type CliHookSeat = { name: string; cli: string; launch: string; human?: boolean };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
  *  no `/`, no leading `.` or `..`), and a `.json` name within the filesystem's limit. */
@@ -190,11 +194,12 @@ function dropReadCommand(seat: string, session: string): string {
   ].join('\n');
 }
 
-/** The settings text one seat's launch loads: `working` at turn start, `idle` at turn end, and,
- *  when the seat has a drop folder, the turn-start read of it. Two commands share
- *  `UserPromptSubmit`: the state word first, so a read that takes a moment still leaves the seat
- *  reading `working`, then the folder read whose stdout the CLI adds to the turn. */
-export function cliHookSettings(statePath: string, drops?: { seat: string; session: string }): string {
+/** The settings text one seat's launch loads: `working` at turn start, `idle` at turn end, the
+ *  turn-start read of the seat's drop folder when it has one, and — for a claude-code seat — the
+ *  PreToolUse command guard. Two commands share `UserPromptSubmit`: the state word first, so a
+ *  read that takes a moment still leaves the seat reading `working`, then the folder read whose
+ *  stdout the CLI adds to the turn. */
+export function cliHookSettings(statePath: string, drops?: { seat: string; session: string }, guard?: string): string {
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
@@ -202,18 +207,20 @@ export function cliHookSettings(statePath: string, drops?: { seat: string; sessi
   if (drops) {
     start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session) }] });
   }
-  return `${JSON.stringify({
-    hooks: { UserPromptSubmit: start, Stop: [hook('idle')] },
-  }, null, 2)}\n`;
+  const hooks: Record<string, unknown> = {};
+  if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
+  hooks.UserPromptSubmit = start;
+  hooks.Stop = [hook('idle')];
+  return `${JSON.stringify({ hooks }, null, 2)}\n`;
 }
 
 /** What this run would install, without touching anything: the settings path per seat whose CLI
  *  supports the hook and whose launch line does not set its own settings. A dry run prints the
- *  launch line the real run types. */
+ *  launch line the real run types. A human's pane is never launched into, so it is planned none. */
 export function plannedCliHooks(dir: string, session: string, seats: readonly CliHookSeat[]): Record<string, string> {
   const planned: Record<string, string> = {};
   for (const seat of seats) {
-    if (!supportsCliHook(seat.cli) || setsSettings(seat.launch)) continue;
+    if (seat.human === true || !supportsCliHook(seat.cli) || setsSettings(seat.launch)) continue;
     const path = cliHookSettingsPath(dir, session, seat.name);
     if (path !== null) planned[seat.name] = path;
   }
@@ -276,8 +283,15 @@ function writeSettings(path: string, text: string): boolean {
 }
 
 /** Installs one settings file per planned seat. Returns the settings path of every seat whose
- *  file landed; a seat that failed is absent, and its launch goes without the flag. */
-export function installCliHooks(dir: string, session: string, seats: readonly CliHookSeat[]): Record<string, string> {
+ *  file landed; a seat that failed is absent, and its launch goes without the flag. A claude-code
+ *  seat's file also carries the PreToolUse command guard when the caller hands the context the
+ *  refusal event is raised with — every launch path (`up`, `add`, `restart`, `reload`) does. */
+export function installCliHooks(
+  dir: string,
+  session: string,
+  seats: readonly CliHookSeat[],
+  guard?: CommandGuardContext,
+): Record<string, string> {
   const planned = plannedCliHooks(dir, session, seats);
   if (Object.keys(planned).length === 0) return {};
   const folder = sessionFolderName(session);
@@ -286,12 +300,14 @@ export function installCliHooks(dir: string, session: string, seats: readonly Cl
   const states = join(dir, 'seat-state', folder);
   if (!ensureFolder(join(dir, 'hooks')) || !ensureFolder(join(dir, 'seat-state'))
     || !ensureFolder(hooks) || !ensureFolder(states)) return {};
+  const guarded = guard !== undefined && commandGuardAvailable();
   const landed: Record<string, string> = {};
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
     if (statePath === null) continue;
     const drops = { seat, session };
-    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops))) continue;
+    const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
+    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command))) continue;
     landed[seat] = settingsPath;
   }
   return landed;
