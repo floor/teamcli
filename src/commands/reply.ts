@@ -326,7 +326,14 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   const judged = judgeCallerIn(io, dir, team);
   const who = logTag(judged.caller);
   const standing = standingOf(dir, judged.session, judged.caller);
-  const me = caller.kind === 'seat' ? caller.name : 'owner';
+  // The pane and pair checks below judge the caller placed in the session judged — the file's own,
+  // or the state session this caller stands in — never the sessionless reading the pre-file gate
+  // keeps. `placeCaller` records the session it was asked about, and `callerVerdict` and the
+  // admission's placement check both refuse a seat that carries none: the same reading `team send`
+  // judges, so a seat replying from its own pane is that seat and not "a caller of another
+  // session". A caller a test hands in is itself; its session is the one the scenes pin.
+  const placed = judged.caller;
+  const me = placed.kind === 'seat' ? placed.name : caller.kind === 'seat' ? caller.name : 'owner';
 
   // The id is looked up before the key is read: a name nothing holds needs no key to say so, and
   // a machine that never sent or read a record still gets the honest refusal rather than a
@@ -368,8 +375,8 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   if (close) {
     // Closing is the addressee's own act on its own thread: the standing check every write into
     // a seat's folder asks, and nothing else — no admission, since no message is written.
-    if (caller.kind === 'seat' && callerVerdict(caller, me, standing).kind !== 'ok') {
-      return refused(io, json, `seat ${me} is not this call on its own pane and session; this call is ${describeCaller(caller)}`);
+    if (caller.kind === 'seat' && (placed.kind !== 'seat' || callerVerdict(placed, me, standing).kind !== 'ok')) {
+      return refused(io, json, `seat ${me} is not this call on its own pane and session; this call is ${describeCaller(placed)}`);
     }
     if (state.reason !== null) return refused(io, json, `${closedWords(answered.thread, state.reason)}; nothing was written`);
     const closePayload: ClosePayload = { kind: 'thread-close', id: answered.id, thread: answered.thread, by: me, root, session, at };
@@ -431,7 +438,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   // written onto is open by construction — the answered thread while it is open, and otherwise
   // the new one this reply opens and cites (§3.5). A reply between seats no other rule pairs is
   // admitted by the reply rule; a send never carries the context.
-  const admission = admissionOf(caller, team, null, target, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
+  const admission = admissionOf(placed, team, null, target, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
   if (!admission.ok) return refused(io, json, `refused: ${admission.why}`);
 
   const replyId = host.newId?.() ?? randomUUID();
