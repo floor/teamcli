@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runReload, USAGE, type ReloadSources } from '../src/commands/reload.ts';
+import { generalBriefId } from '../src/launch/general-brief.ts';
 import { RELOAD_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { readRecord } from '../src/send/record.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -553,6 +555,42 @@ describe('team reload', () => {
     const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
     expect(doc).toMatchObject({ status: 'same', seat: 'worker', pane: 'worker-pane' });
     expect(doc.action_summary).toBe('team reload: worker is already running what the file declares');
+  });
+
+  test('--json: a matching seat is still a repair: the general brief is delivered and recorded', async () => {
+    remember('worker', 'high');
+    const { sources } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker', '--json'], io, sources);
+    expect(code, io.out + io.err).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({ status: 'same', seat: 'worker' });
+    expect(doc).not.toHaveProperty('notes');
+    // The drop is on disk and the session records the delivery: `team check`'s repair works
+    // on a seat whose model, version and effort already match the file.
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
+    const looked = readRecord(path, generalBriefId());
+    expect(looked.ok && looked.record?.payload).toMatchObject({ to: 'worker', session: 'alpha' });
+    expect(readState(dir).sessions.alpha?.briefs?.worker).toEqual({ id: generalBriefId(), at: NOW.toISOString() });
+  });
+
+  test('--json: a brief that cannot be written is a note in the document', async () => {
+    remember('worker', 'high');
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, 'not a record\n');
+    const { sources } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker', '--json'], io, sources);
+    expect(code, io.out + io.err).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({ status: 'same', seat: 'worker' });
+    expect(doc.notes).toEqual([
+      'worker: the general seat brief was not delivered (a file that is not a record already holds that id)',
+    ]);
+    expect(logText()).toContain('worker: the general seat brief was not delivered');
   });
 
   test('--json: a refusal writes the team.error envelope on stdout, stderr empty', async () => {

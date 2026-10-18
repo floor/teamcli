@@ -171,8 +171,6 @@ describe('the delivery', () => {
 
 describe('team up, a human seat', () => {
   test('delivers the brief by drop to every declared seat and types nothing into the human pane', async () => {
-    // A stopped CLI seat and a human seat: the plan is skips alone, so no launch call can be
-    // mistaken for the delivery's work.
     // The human seat leads and the CLI seat is stopped in the file: the plan is skips alone, so
     // no launch call can be mistaken for the delivery's work.
     const trusted = `format: 1

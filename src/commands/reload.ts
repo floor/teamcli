@@ -341,7 +341,29 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // leave the check red. A seat with no home to look under has no file to compare.
   const rulesProblem = home === undefined ? null : rulesFileProblem(standing, team, seat, root, home);
   const driftDetail = [detail, rulesProblem === null ? null : 'rules'].filter((part): part is string => part !== null).join('; ');
+  const now = sources.now ?? (() => new Date());
+  // The lines plain output writes beside the document ride on it as notes under `--json`;
+  // stdout carries the one document and nothing else.
+  const jsonNotes: string[] = [];
+  const sayBrief = (said: string): void => {
+    if (json) jsonNotes.push(said);
+    else out.stdout(`team reload: ${said}\n`);
+    logLine(dir, 'reload', describeCaller(caller), said, now());
+  };
+  // The general seat brief goes to the seat on every path this command reaches it, the paths
+  // that leave it running included: the check names `team reload <seat>` as a repair, so a
+  // reload must deliver the brief even when nothing else drifts. Without a home there is no
+  // message key to sign the record with, so nothing is written.
+  const deliverBrief = (): void => {
+    if (home === undefined) return;
+    const briefs = deliverGeneralBrief({ dir, root, session, seats: [seat.name], home, at: now().toISOString() });
+    for (const delivery of briefs.deliveries) {
+      if (!delivery.ok) sayBrief(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
+    }
+    if (briefs.recording !== undefined) sayBrief(`the general seat brief was written and not recorded (${briefs.recording})`);
+  };
   if (detail === null && rulesProblem === null && source === null) {
+    deliverBrief();
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
       writeJson(io, 'team.reload', {
@@ -353,6 +375,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         session,
         seat: seat.name,
         pane: recorded.pane,
+        ...(jsonNotes.length === 0 ? {} : { notes: jsonNotes }),
       });
     } else {
       out.stdout(`${summary}\n`);
@@ -385,6 +408,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         else held.effort = compared.effort;
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
+      deliverBrief();
       if (json) {
         writeJson(io, 'team.reload', {
           format: 1 as const,
@@ -395,6 +419,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           session,
           seat: seat.name,
           pane: recorded.pane,
+          ...(jsonNotes.length === 0 ? {} : { notes: jsonNotes }),
         });
       } else {
         out.stdout(`${summary}\n`);
@@ -517,25 +542,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // run starts.
     resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
-    const now = sources.now ?? (() => new Date());
-    // The general seat brief goes first, before the plan types a rules line into the pane: one
-    // signed drop, recorded in the session. A delivery that cannot be written is said and logged,
-    // and the reload goes on; `team check` names the seat with no record. Without a home there is
-    // no message key to sign the record with, so nothing is written.
-    if (home !== undefined) {
-      const briefs = deliverGeneralBrief({ dir, root, session, seats: [planned.name], home, at: now().toISOString() });
-      for (const delivery of briefs.deliveries) {
-        if (delivery.ok) continue;
-        const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
-        says(`team reload: ${said}\n`);
-        logLine(dir, 'reload', describeCaller(caller), said, now());
-      }
-      if (briefs.recording !== undefined) {
-        const said = `the general seat brief was written and not recorded (${briefs.recording})`;
-        says(`team reload: ${said}\n`);
-        logLine(dir, 'reload', describeCaller(caller), said, now());
-      }
-    }
+    // The general seat brief goes first, before the plan types a rules line into the pane.
+    deliverBrief();
     let closed = false;
     const host: Host = {
       agentList: (current) => launch.agents(current),
@@ -686,6 +694,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             session,
             seat: seat.name,
             pane: after.pane ?? recorded.pane,
+            ...(jsonNotes.length === 0 ? {} : { notes: jsonNotes }),
           });
         } else {
           out.stdout(`${summary}\n`);

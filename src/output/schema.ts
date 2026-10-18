@@ -498,6 +498,7 @@ export const RELOAD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   properties: {
     seat: { type: 'string', minLength: 1 },
     pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
   },
 });
 
