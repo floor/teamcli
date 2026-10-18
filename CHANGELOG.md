@@ -255,6 +255,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   team root keeps the no-repository refusal and exit 2, and an unreadable or invalid team file
   keeps its own exit.
 
+- `team reply` admits a placed seat in its own session. A seat a real launch placed carries its
+  session in the session-aware reading only, and the command judged the sessionless one, so the
+  seat's own reply — and its own `--close` — was refused as `a caller of another session is not
+  that seat`; it now judges the same session-aware placement `team send` does.
+
 ### Known limits
 
 - The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
