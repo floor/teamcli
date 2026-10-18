@@ -16,6 +16,7 @@
 //   the drop pending for `retryHeldDrops`), and appends the history line.
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { loadTeamFile } from '../file/load.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -49,6 +50,14 @@ function hostOf(scene: RetryScene, session: string): DeliverHost {
     wait: (ms) => scene.sources.sleep(ms),
     readAnsi: (id) => scene.sources.screen(id, session),
   };
+}
+
+function isHumanSeat(scene: RetryScene, home: string, record: PendingNative): boolean {
+  if (record.root === scene.root) {
+    return scene.team.seats.some((s) => s.name === record.to && s.human === true);
+  }
+  const loaded = loadTeamFile(record.root, { home });
+  return loaded.ok && loaded.team.seats.some((s) => s.name === record.to && s.human === true);
 }
 
 function paneIdentityProblem(
@@ -94,7 +103,10 @@ async function expireOne(
   const taken = takePending(scene.team.project, scene.root, home, record.id);
   if (!taken.ok) return;
 
-  const legs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['mcp-inbox', 'typed'];
+  const rawLegs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['mcp-inbox', 'typed', 'drop'];
+  const human = isHumanSeat(scene, home, record);
+  const legs: readonly PendingNativeFallbackLeg[] =
+    human && !rawLegs.includes('drop') ? [...rawLegs, 'drop'] : rawLegs;
   const failures: string[] = [NATIVE_UNCONFIRMED_10M];
   const sentAs =
     record.spec !== undefined && record.resolved !== undefined
@@ -147,6 +159,10 @@ async function expireOne(
     }
 
     if (leg === 'typed') {
+      if (human) {
+        failures.push("typed: the pane is a human's, and nothing is typed into it");
+        continue;
+      }
       if (noNudge) {
         restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
         return;
