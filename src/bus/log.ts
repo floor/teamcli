@@ -16,11 +16,13 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
+  readSync,
   renameSync,
   statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
@@ -313,6 +315,174 @@ export function readEventsFromCursor(
   };
 }
 
+/** One retained log file as the append index last saw it: identity and size, so an unchanged file
+ *  is not read again and a file that only grew is read from where the index stopped. */
+type LogFileStamp = { ino: number; size: number; mtimeMs: number };
+
+type AppendIndex = {
+  keyPrint: string;
+  files: (LogFileStamp | null)[];
+  /** The first verified record for each `(kind, record_id, session)`, in retained order. */
+  duplicates: Map<string, SignedEventRecord>;
+  newestSeq: number | null;
+  path: string;
+};
+
+const appendIndexes = new Map<string, AppendIndex>();
+
+function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
+  return `${payload.kind}\u0000${payload.record_id}\u0000${payload.session}`;
+}
+
+function fileStamp(path: string): LogFileStamp | null {
+  if (heldAt(path).kind !== 'file') return null;
+  try {
+    const stat = statSync(path);
+    return { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+function sameStamp(a: LogFileStamp | null, b: LogFileStamp | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
+
+/** The message key the index was built under: a key change invalidates every verification. */
+function keyPrintOf(home: string): string {
+  const state = messageKeyState(home);
+  if (state.kind !== 'key') return 'none';
+  return createHash('sha256').update(state.key.export({ type: 'pkcs8', format: 'pem' })).digest('hex');
+}
+
+/** Reads the bytes after `from` without following a link. Null when the file cannot be read that
+ *  way (the caller then reads it whole). */
+function readTailNoFollow(path: string, from: number): string | null {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size < from) return null;
+    const chunks: Buffer[] = [];
+    const buf = Buffer.alloc(8192);
+    let position = from;
+    while (position < stat.size) {
+      const n = readSync(fd, buf, 0, Math.min(buf.length, stat.size - position), position);
+      if (n === 0) break;
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+      position += n;
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Verifies the records in one stretch of the log, adding each to `into` when it is the first of
+ *  its key, and returns them in order. Malformed and unverified lines are skipped, as in
+ *  `readEvents`. */
+function verifyInto(
+  text: string,
+  keyState: ReturnType<typeof messageKeyState>,
+  into: Map<string, SignedEventRecord>,
+): SignedEventRecord[] {
+  const out: SignedEventRecord[] = [];
+  for (const rawLine of text.split('\n')) {
+    if (rawLine.trim() === '') continue;
+    const parsed = parseSignedEventLine(rawLine);
+    if (parsed === null) continue;
+    if (keyState.kind !== 'key' || !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)) {
+      continue;
+    }
+    out.push(parsed);
+    const key = eventKey(parsed.payload);
+    if (!into.has(key)) into.set(key, parsed);
+  }
+  return out;
+}
+
+/** What `appendEvent` needs from the retained log, kept across appends: the first verified record
+ *  per `(kind, record_id, session)` and the last verified sequence. The first look reads every
+ *  retained file; each later look reads only the bytes appended to `events.jsonl` since the last
+ *  one, so a growing session costs O(bytes) rather than re-verifying the whole log per publish. A
+ *  rotated or rewritten file — or a changed key — falls back to the full read. */
+function appendIndexOf(
+  project: string,
+  root: string,
+  home: string,
+  kept: number,
+): { ok: true; index: AppendIndex } | { ok: false; reason: string } {
+  const storeDir = storePath(project, root, home);
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot, storeDir]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+
+  const path = join(storeDir, EVENT_LOG_FILE);
+  const files: string[] = [];
+  for (let n = kept - 1; n >= 1; n--) files.push(`${path}.${String(n)}`);
+  files.push(path);
+  for (const candidate of files) {
+    const problem = fileProblem(candidate);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+
+  const keyState = messageKeyState(home);
+  const keyPrint = keyPrintOf(home);
+  const stamps = files.map((candidate) => fileStamp(candidate));
+  const cacheKey = `${storeDir}\u0000${String(kept)}`;
+  const cached = appendIndexes.get(cacheKey);
+  const sameFiles =
+    cached !== undefined &&
+    cached.keyPrint === keyPrint &&
+    cached.files.length === stamps.length &&
+    cached.files.every((stamp, at) => sameStamp(stamp, stamps[at] ?? null));
+  if (cached !== undefined && sameFiles) return { ok: true, index: cached };
+
+  const last = files.length - 1;
+  const grew =
+    cached !== undefined &&
+    cached.keyPrint === keyPrint &&
+    cached.files.length === stamps.length &&
+    cached.files.slice(0, last).every((stamp, at) => sameStamp(stamp, stamps[at] ?? null)) &&
+    cached.files[last] !== null &&
+    stamps[last] !== null &&
+    cached.files[last]!.ino === stamps[last]!.ino &&
+    stamps[last]!.size >= cached.files[last]!.size;
+  if (cached !== undefined && grew) {
+    const previousSize = cached.files[last]!.size;
+    const tail = readTailNoFollow(path, previousSize);
+    if (tail !== null && (tail === '' || tail.endsWith('\n'))) {
+      const fresh = verifyInto(tail, keyState, cached.duplicates);
+      if (fresh.length > 0) cached.newestSeq = fresh[fresh.length - 1]!.payload.seq;
+      cached.files[last] = fileStamp(path) ?? stamps[last] ?? null;
+      return { ok: true, index: cached };
+    }
+  }
+
+  const duplicates = new Map<string, SignedEventRecord>();
+  let newestSeq: number | null = null;
+  for (const candidate of files) {
+    if (heldAt(candidate).kind === 'missing') continue;
+    const text = readNoFollow(candidate);
+    if (text === null) return { ok: false, reason: 'the event log could not be read' };
+    const verified = verifyInto(text, keyState, duplicates);
+    if (verified.length > 0) newestSeq = verified[verified.length - 1]!.payload.seq;
+  }
+  const index: AppendIndex = { keyPrint, files: stamps, duplicates, newestSeq, path };
+  appendIndexes.set(cacheKey, index);
+  return { ok: true, index };
+}
+
 /** Appends one signed event to `<storeDir>/events.jsonl` at mode 0600, minting the next sequence
  *  number (`seq = newestSeq + 1`). When `deduplicate` is true (the default), if a verified event
  *  with the same `(kind, record_id, session)` is already present in the retained log, returns it
@@ -335,24 +505,19 @@ export function appendEvent(
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };
 
-  const existing = readEvents(project, root, home, { kept });
-  if (!existing.ok) return existing;
+  const indexed = appendIndexOf(project, root, home, kept);
+  if (!indexed.ok) return indexed;
 
   if (deduplicate) {
-    const found = existing.events.find(
-      (entry) =>
-        entry.payload.kind === input.kind &&
-        entry.payload.record_id === input.record_id &&
-        entry.payload.session === input.session,
-    );
+    const found = indexed.index.duplicates.get(eventKey(input));
     if (found !== undefined) {
-      return { ok: true, record: found, duplicate: true, path: existing.path };
+      return { ok: true, record: found, duplicate: true, path: indexed.index.path };
     }
   }
 
-  // If the current file rotated earlier and `existing.newestSeq` is null, start at 1; otherwise
-  // strictly increment from the highest sequence seen across the retained files.
-  const nextSeq = options.seqOverride ?? ((existing.newestSeq ?? 0) + 1);
+  // If the current file rotated earlier and `newestSeq` is null, start at 1; otherwise strictly
+  // increment from the highest sequence seen across the retained files.
+  const nextSeq = options.seqOverride ?? ((indexed.index.newestSeq ?? 0) + 1);
   const candidate: EventPayload = {
     v: 1,
     seq: nextSeq,
