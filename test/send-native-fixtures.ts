@@ -108,7 +108,7 @@ export function quietNative(): NativePane {
 export type Scripted = NativePane & { typed: string[]; enters: number };
 
 /** Status samples, one per read. `wait` resolves immediately so the polls cost nothing. */
-export function scripted(samples: string[]): Scripted {
+export function scripted(samples: string[], screen: string | null = null): Scripted {
   const typed: string[] = [];
   let enters = 0;
   let read = 0;
@@ -126,6 +126,7 @@ export function scripted(samples: string[]): Scripted {
       return true;
     },
     status: () => samples[Math.min(read++, samples.length - 1)] ?? 'idle',
+    paneText: () => screen,
     wait: async () => {},
   };
 }

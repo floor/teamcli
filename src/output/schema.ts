@@ -1141,7 +1141,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         schema: schemaTagFragment('team.send', 1),
         format: { type: 'integer', const: 1 },
         dry_run: { type: 'boolean' },
-        status: { type: 'string', enum: ['delivered', 'answered', 'recorded', 'native', 'confirmed', 'dry-run'] },
+        status: { type: 'string', enum: ['delivered', 'answered', 'recorded', 'native', 'sent (unconfirmed)', 'dry-run'] },
         action_summary: { type: 'string', minLength: 1 },
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },

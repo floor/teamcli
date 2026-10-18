@@ -122,6 +122,12 @@ export const PENDING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
  *  A record younger than (or at) 24 hours is never deleted by the sweep. */
 export const PENDING_NATIVE_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** The short nonce a native handoff carries in its body (`nv-<8 hex>`): `--confirm` records
+ *  `delivered` only when the recipient's transcript shows this token. */
+export function nativeNonceOf(id: string): string {
+  return `nv-${id.replace(/-/g, '').slice(0, 8)}`;
+}
+
 /** One handoff, exactly as the sender's own call will make it: the target's address and the
  *  body, and the pair's own record — the receiving project, team and rule the confirm writes
  *  the history line for. */
@@ -129,6 +135,8 @@ export type PendingNative = {
   v: 1;
   /** The id the handoff printed; the confirm names it, and the history line keeps it. */
   id: string;
+  /** The short nonce carried in `body`; transcript evidence of this token proves `delivered`. */
+  nonce: string;
   /** When the handoff printed it: the confirm's span is measured from here. */
   ts: string;
   /** The sender: the seat's name, or `owner`. */
@@ -154,7 +162,7 @@ export type PendingNative = {
    *  own name. */
   spec?: string;
   resolved?: string;
-  /** The whole body the sender was told to send, sender header included. */
+  /** The whole body the sender was told to send, sender header and nonce included. */
   body: string;
 };
 
@@ -427,7 +435,7 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
   const flat = value as Record<string, unknown>;
   if (flat.v !== 1) return null;
   if (flat.id !== id) return null;
-  const fields = ['ts', 'from', 'to', 'team', 'session', 'cli', 'pane', 'address', 'rule', 'project', 'root', 'body'] as const;
+  const fields = ['nonce', 'ts', 'from', 'to', 'team', 'session', 'cli', 'pane', 'address', 'rule', 'project', 'root', 'body'] as const;
   for (const field of fields) {
     if (typeof flat[field] !== 'string') return null;
   }
@@ -445,6 +453,7 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
   return {
     v: 1,
     id,
+    nonce: flat.nonce as string,
     ts: flat.ts as string,
     from: flat.from as string,
     from_id: flat.from_id as string | null,

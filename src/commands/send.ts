@@ -13,7 +13,7 @@ import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
-import { PENDING_ID, dropTaken, markPending, readPending, restoreTaken, takePending, writePending, type PendingNative } from '../send/pending.ts';
+import { PENDING_ID, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative } from '../send/pending.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
@@ -26,7 +26,7 @@ import { appendHistory } from '../send/history.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
-import { bindPane, deliverTrigger, showsHeldFrameDialog, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
+import { bindPane, deliverTrigger, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { markTaken } from '../send/taken.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
@@ -761,6 +761,13 @@ type HandOff =
  * record that cannot be written refuses: an unrecorded native send is never the easy path. An
  * address that cannot be resolved is the ordinary fallback to the leg behind native.
  */
+/** Stamps the handoff's short nonce onto the attribution header line (`from … — admitted by: … [<nonce>]`). */
+function stampHandoffNonce(body: string, nonce: string): string {
+  const newline = body.indexOf('\n');
+  if (newline < 0) return `${body} [${nonce}]`;
+  return `${body.slice(0, newline)} [${nonce}]${body.slice(newline)}`;
+}
+
 function handOff(
   storeProject: string,
   storeRoot: string,
@@ -777,9 +784,15 @@ function handOff(
   if (at === null) {
     return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
   }
+  const id = host.newId?.() ?? randomUUID();
+  if (!PENDING_ID.test(id)) {
+    return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
+  }
+  const nonce = nativeNonceOf(id);
   const record: PendingNative = {
     v: 1,
-    id: host.newId?.() ?? randomUUID(),
+    id,
+    nonce,
     ts: host.now().toISOString(),
     from,
     from_id: admission.sender === 'owner' ? null : 'id' in admission.sender ? admission.sender.id : null,
@@ -794,11 +807,8 @@ function handOff(
     project: to.project,
     root: to.root,
     ...(to.sentAs !== null ? { spec: to.sentAs.spec, resolved: to.sentAs.resolved } : {}),
-    body,
+    body: stampHandoffNonce(body, nonce),
   };
-  if (!PENDING_ID.test(record.id)) {
-    return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
-  }
   const written = writePending(storeProject, storeRoot, host.home, record);
   if (!written.ok) {
     return { kind: 'refused', why: `the native handoff could not be written down (${written.reason}); nothing was sent` };
@@ -1061,6 +1071,16 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   // so a test or the docs runner reads a fixed count.
   const ms = Math.max(0, host.now().getTime() - Date.parse(record.ts));
   if (args.flags.has('dry-run')) return recordDryRun(io, record.to, ms, report);
+  // `delivered` is earned only when the recipient's transcript shows this handoff's nonce,
+  // verified through the same stripped-row check the typed leg uses for a drop id. Without it,
+  // the confirm records `sent (unconfirmed)`, never `delivered`.
+  const found = findAgent(host, record.session, record.to);
+  const pane = found.ok ? found.pane : record.pane;
+  const screen = host.native.paneText?.(record.session, pane) ?? null;
+  const verified =
+    screen !== null &&
+    showsTranscriptToken(screen, record.nonce, `team send --confirm ${record.id}`);
+  const outcome: 'delivered' | 'sent (unconfirmed)' = verified ? 'delivered' : 'sent (unconfirmed)';
   // Take before writing: only the confirm that renamed the record writes the line.
   const taken = takePending(team.project, root, host.home, id);
   if (!taken.ok) return refuse(io, dir, who, `${id}: ${taken.reason}`, host, report);
@@ -1074,7 +1094,7 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     ...sentAs,
     body: record.body,
     id: record.id,
-    outcome: 'delivered',
+    outcome,
     ms,
     via: NATIVE_CHANNEL,
   });
@@ -1083,16 +1103,24 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     return refuse(io, dir, who, `the delivery could not be recorded: ${written.reason}`, host, report);
   }
   dropTaken(taken.taken);
-  logLine(join(record.root, '.agents'), 'send', who, `${record.to}: confirmed (native, ${String(ms)} ms)`, host.now());
-  return confirmed(io, record.to, ms, record.id, report);
+  logLine(join(record.root, '.agents'), 'send', who, `${record.to}: ${outcome} (native, ${String(ms)} ms)`, host.now());
+  return confirmed(io, record.to, ms, record.id, outcome, report);
 }
 
-/** The confirm wrote the one history line the handoff promised. Exit 0, always. */
-function confirmed(io: Io, seat: string, ms: number, id: string, report: Report): number {
+/** The confirm wrote the one history line the handoff promised: `delivered` when the recipient's
+ *  transcript showed the handoff's nonce, `sent (unconfirmed)` otherwise. Exit 0, always. */
+function confirmed(
+  io: Io,
+  seat: string,
+  ms: number,
+  id: string,
+  outcome: 'delivered' | 'sent (unconfirmed)',
+  report: Report,
+): number {
   report.sent = id;
-  const summary = `${seat}: confirmed (native, ${String(ms)} ms)`;
+  const summary = `${seat}: ${outcome} (native, ${String(ms)} ms)`;
   if (report.json) {
-    writeAction(io, report, { status: 'confirmed', summary, channel: 'native' });
+    writeAction(io, report, { status: outcome, summary, channel: 'native' });
   } else {
     openText(io, report);
     io.stdout(`${summary}\n`);
@@ -2185,7 +2213,7 @@ function configuration(io: Io, message: string, report: Report): number {
 /** The one action document's own fields: the frame is `writeAction`'s. `summary` is the closing
  *  line the plain run prints last, so the two faces say the same thing once. */
 type ActionFields = {
-  status: 'delivered' | 'answered' | 'recorded' | 'native' | 'confirmed' | 'dry-run';
+  status: 'delivered' | 'answered' | 'recorded' | 'native' | 'sent (unconfirmed)' | 'dry-run';
   summary: string;
   dryRun?: boolean;
   /** The leg that carried the send: `socket`, `typed`, `drop`, or `native` for a record or handoff. */
