@@ -62,7 +62,9 @@ Reads the team file (or the one `--file` names), this machine's approval store, 
 workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
 with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
-heartbeat), `.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
+heartbeat; and, under the session's `briefs`, each seat's general-brief record id and delivery
+time), each seat's general-brief record under `.agents/send-drops/<session>/<seat>/`,
+`.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
 starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
 workspace and pane for the watch. A real run holds the session mutator lock
 (`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove` share, from
@@ -236,6 +238,20 @@ herdr could not read when it stopped: the reading is taken once, after the idle 
 launch model check) keeps today's behaviour: nothing checks its pane.
 
 When the idle screen names no model this version can read, `up` writes `<seat>: its screen doesn't show a model this version knows; not checked` to stderr, after the seat's record, and continues. It is detail, not a record: the log keeps the seat's one line, the record `ready`. Nothing is assumed about which model is running.
+
+Before the plan lands anything, every declared seat — a human's pane included — receives the
+general seat brief: TeamCLI's built-in default, embedded in the package (`src/launch/general-brief-text.ts`,
+generated from the accepted source by `scripts/brief.ts --write`; `brief:check` pins its bytes, and
+compares it with the source when one is given) so the package never reads a documentation checkout.
+`deliverGeneralBrief` (`src/launch/general-brief.ts`) signs one message record per seat and writes
+it into that seat's drop folder; the record's id is the brief's sha256 read as a lowercase UUID, so
+a re-run leaves the delivered record and its first time as they are, and a reworded brief is a new
+message. The session's `briefs` map records each delivery — the record's id and its own `at` — in
+one locked state write, which is what [`team check`](check.md) reads to name a seat the session
+launched without one. A drop that cannot be written is a line on stderr and in the log for that
+seat alone, and the launch carries on: the record on disk is the message, and the check names the
+seat. Nothing is typed for the brief, and `add`, `restart` and `reload` deliver through the same
+function, for the one seat each starts.
 
 A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file:
 `up` writes the approved rules text to `<project state folder>/rules/<seat>.md` — owner-only,

@@ -90,6 +90,13 @@ Nothing else is repaired. A model drift keeps its relaunch, a blind seat its loo
 roster gap its `team register` — those are decisions the run names, and `--repair` never starts,
 stops or relaunches a seat.
 
+The general seat brief is checked against the state's `briefs` too. A seat the session launched —
+one whose record the state's `seats` hold, and a human's once the session has launched anything —
+with no delivery record is `<seat>: the general seat brief has not been delivered`, repaired with
+`team reload <seat> or team up`, or with `team up` alone when the seat is a human's, since
+`team reload` refuses that pane. The repair is a reload or an up, never `--repair`: the difference
+is advice, and the delivery is the launch's own act.
+
 ## Who the check answers
 
 The caller decides, not the flags. Three callers get the answer:
@@ -121,8 +128,8 @@ and open nothing: the target is the file the caller's own place finds.
 - the team file, as [`team status`](status.md) loads it — a plain folder's own
   `.agents/team.yaml` through the fallback, no git step;
 - the approval store: the record, its copy, and the file against it;
-- `team.state.json`: the seats' stages, waits, rules and launch identities, the worktrees, and
-  the session's watch;
+- `team.state.json`: the seats' stages, waits, rules and launch identities, the worktrees, the
+  general-brief deliveries (`briefs`), and the session's watch;
 - herdr, read-only, through the same reads status makes — narrowed to one pass over the panes
   **this project's state records for this team's seats**. A pane the state records for another
   session, another project or nobody at all is not read, and the pass uses the watch's own

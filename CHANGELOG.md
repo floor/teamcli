@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Known limits
+
+- No team can override the general seat brief yet: it is TeamCLI's built-in default, shipped in
+  the package, and every team receives that text. A registry-held definition, overridable by an
+  entity or a project, is deferred to 0.5.2.
+
 ## [0.5.0] - 2026-10-18
 
 The first release since 0.3.5, and the first on npm since it. The file in the clone is the

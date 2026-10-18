@@ -39,6 +39,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -958,6 +959,28 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
     const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
+    // The general seat brief goes first, before the plan types a rules line into the new seat's
+    // pane: one signed drop, human seats included. A delivery that cannot be written is said and
+    // logged, and the launch goes on; `team check` names the seat with no record.
+    const briefs = deliverGeneralBrief({
+      dir,
+      root,
+      session,
+      seats: [planSeat.name],
+      home: sources.home,
+      at: (sources.now?.() ?? new Date()).toISOString(),
+    });
+    for (const delivery of briefs.deliveries) {
+      if (delivery.ok) continue;
+      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+      out.stderr(`team add: ${plainText(said)}\n`);
+      logLine(dir, 'add', who, said, sources.now());
+    }
+    if (briefs.recording !== undefined) {
+      const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+      out.stderr(`team add: ${plainText(said)}\n`);
+      logLine(dir, 'add', who, said, sources.now());
+    }
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false };

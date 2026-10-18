@@ -38,6 +38,7 @@ import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, reso
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
@@ -517,6 +518,24 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
     const now = sources.now ?? (() => new Date());
+    // The general seat brief goes first, before the plan types a rules line into the pane: one
+    // signed drop, recorded in the session. A delivery that cannot be written is said and logged,
+    // and the reload goes on; `team check` names the seat with no record. Without a home there is
+    // no message key to sign the record with, so nothing is written.
+    if (home !== undefined) {
+      const briefs = deliverGeneralBrief({ dir, root, session, seats: [planned.name], home, at: now().toISOString() });
+      for (const delivery of briefs.deliveries) {
+        if (delivery.ok) continue;
+        const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+        says(`team reload: ${said}\n`);
+        logLine(dir, 'reload', describeCaller(caller), said, now());
+      }
+      if (briefs.recording !== undefined) {
+        const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+        says(`team reload: ${said}\n`);
+        logLine(dir, 'reload', describeCaller(caller), said, now());
+      }
+    }
     let closed = false;
     const host: Host = {
       agentList: (current) => launch.agents(current),
