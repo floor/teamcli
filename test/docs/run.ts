@@ -12,6 +12,7 @@ import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
 import { runApprove, type Waiting } from '../../src/approve/command.ts';
 import { runBroker } from '../../src/commands/broker.ts';
+import { runBus } from '../../src/commands/bus.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { pr } from '../../src/commands/pr.ts';
@@ -212,6 +213,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     // differ by platform, and the docs suite runs on macOS and Linux.
     case 'broker':
       return runBroker(rest, io, { home: fixture.home });
+    case 'bus':
+      return runBus(rest, io, { home: fixture.home });
     case 'approve':
       return runApprove(rest, io, {
         ask: async (question) => {

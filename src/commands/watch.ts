@@ -27,7 +27,7 @@ import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
-import { newMemory, ownUnsent, pass, type MailboxWaiting } from '../watch/pass.ts';
+import { newMemory, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
@@ -472,10 +472,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
 
       // Subscribe-first, poll-second (RFC 002 Amendment 01 §4.2): when the bus is running on
       // `.agents/bus.sock`, read unseen events from `busTracker.cursor` and apply them in sequence
-      // order; on `gap`, reset the cursor and let this pass resync from the durable records; when
-      // no bus is running, fall back cleanly to the poll path.
+      // order; on `gap`, reset the cursor and clear `memory.active` so this pass re-announces any
+      // still-true reports; when no bus is running, fall back cleanly to the poll path.
       const busConnected = !foreign && sources.busSubscribe !== undefined
-        ? await syncWatchBus(root, busTracker, sources)
+        ? await syncWatchBus(root, busTracker, sources, memory)
         : false;
 
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
@@ -1001,10 +1001,18 @@ async function closeEnded(input: {
   }
 }
 
+/**
+ * Reads unseen bus events from `tracker.cursor` and forwards each accepted event to `onBusEvent`.
+ * On a sequence `gap`, resets `tracker` to `newest_seq`, clears `memory.active` so the next pass
+ * re-announces any still-true screen/team reports (`pass()` derives `memory.grace` from
+ * `memory.active` each pass), and calls `onBusGap` so a subscriber maintaining a message projection
+ * can rebuild it from the durable records on disk.
+ */
 export async function syncWatchBus(
   root: string,
   tracker: SequenceTracker,
   sources: Pick<WatchSources, 'busSubscribe' | 'onBusEvent' | 'onBusGap'>,
+  memory?: Pick<Memory, 'active'>,
 ): Promise<boolean> {
   if (sources.busSubscribe === undefined) return false;
   try {
@@ -1022,6 +1030,7 @@ export async function syncWatchBus(
     }
     if (outcome.kind === 'gap') {
       tracker.reset(outcome.newest_seq);
+      memory?.active.clear();
       sources.onBusGap?.(outcome.oldest_seq, outcome.newest_seq);
       return true;
     }
