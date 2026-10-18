@@ -1310,11 +1310,16 @@ describe('the rules files of message seats', () => {
     expect(code).toBe(0);
   });
 
-  test('a file that differs from the team file\'s rules is a difference the owner repairs with reload', async () => {
+  test('a file that differs from the team file\'s rules is a difference a grant holder repairs with reload', async () => {
     writeAll(teamOf(), (seat) => (seat.cli === 'codex' ? 'other rules entirely' : rulesOf(teamOf(), seat, dir)));
     const { code, out } = await status();
     expect(out).toContain("codex-acme: its rules file differs from the team file's rules");
     expect(out).toContain('repair: team reload codex-acme');
+    // The repair names `team reload`, a grant scope: the owner or an approved grant holder may
+    // run it, and no `owner: true` narrows the row to the owner alone — the summary does not
+    // count it among the owner's differences.
+    expect(out).toContain('1 difference(s)\n');
+    expect(out).not.toContain('for the owner');
     expect(code).toBe(1);
   });
 

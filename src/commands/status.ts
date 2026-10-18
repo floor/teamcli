@@ -484,9 +484,10 @@ export function approvalAndOverrideRows(
 
 
 /** Every message-rules seat's file, against the rules the live file gives it. A file that
- *  differs is a difference for the owner to repair with `team reload <seat>` — never rewritten
- *  here. An option seat has no file, and a seat whose rules can't travel at all is `up`'s to
- *  refuse. */
+ *  differs is a difference for a grant holder — or the owner — to repair with `team reload
+ *  <seat>`, whose grant gate admits both; never rewritten here. No `owner: true` is set: the
+ *  repair names the command, and the map reads it as the grant scope it is. An option seat has
+ *  no file, and a seat whose rules can't travel at all is `up`'s to refuse. */
 /** The one seat's rules-file check, or null when the file holds exactly the rules the live file
  *  gives that seat. The reading `rulesFileDifferences` makes per seat, shared with `team reload`
  *  so a repair can never disagree with the check that named it: the same home rule, the same
@@ -514,7 +515,7 @@ export function rulesFileDifferences(standing: Standing, team: TeamFile, root: s
   const out: Difference[] = [];
   for (const seat of team.seats) {
     const problem = rulesFileProblem(standing, team, seat, root, home);
-    if (problem !== null) out.push({ what: `${seat.name}: ${problem}`, repair: `team reload ${seat.name}`, owner: true });
+    if (problem !== null) out.push({ what: `${seat.name}: ${problem}`, repair: `team reload ${seat.name}` });
   }
   return out;
 }
