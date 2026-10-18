@@ -11,8 +11,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { seatRegistryRows, type SeatRegistryRow } from '../src/commands/seats.ts';
+import { receiptPath } from '../src/mcp/inbox.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
@@ -177,8 +178,12 @@ describe('the turn-start folder read', () => {
     return parsed.hookSpecificOutput?.additionalContext ?? '';
   }
 
+  /** The receipt's suffix, taken from the one name every writer uses (`receiptPath`), so these
+   *  scenes follow the sidecar rule instead of pinning its spelling. */
+  const RECEIPT_SUFFIX = basename(receiptPath('', '0')).slice(1);
+
   function receiptOf(at: string, id: string): Record<string, unknown> {
-    return JSON.parse(readFileSync(join(at, `${id}.read`), 'utf8')) as Record<string, unknown>;
+    return JSON.parse(readFileSync(receiptPath(at, id), 'utf8')) as Record<string, unknown>;
   }
 
   test('the install adds the read to the same turn start, aimed at the seat’s own drop folder', () => {
@@ -203,7 +208,7 @@ describe('the turn-start folder read', () => {
     expect(receiptOf(at, ID1)).toMatchObject({ v: 1, id: ID1, seat: SEAT, session: SESSION, tool: 'drop_read' });
     expect(typeof receiptOf(at, ID1).ts).toBe('string');
     expect(Number.isInteger(receiptOf(at, ID1).pid)).toBe(true);
-    expect(statSync(join(at, `${ID1}.read`)).mode & 0o777).toBe(0o600);
+    expect(statSync(receiptPath(at, ID1)).mode & 0o777).toBe(0o600);
     // The second turn reads nothing: the receipt is what says the message was handed over.
     expect(run(command)).toBe('');
   });
@@ -218,10 +223,10 @@ describe('the turn-start folder read', () => {
     } finally {
       chmodSync(at, 0o700);
     }
-    expect(existsSync(join(at, `${ID1}.read`))).toBe(false);
+    expect(existsSync(receiptPath(at, ID1))).toBe(false);
     // With the folder writable again the same turn-start reads it and leaves the receipt.
     expect(landing(run(command))).toBe('a message that must not be shown unproven');
-    expect(existsSync(join(at, `${ID1}.read`))).toBe(true);
+    expect(existsSync(receiptPath(at, ID1))).toBe(true);
   });
 
   test('only a lowercase UUID is a message: links, other names and receipts are skipped', () => {
@@ -231,12 +236,12 @@ describe('the turn-start folder read', () => {
     symlinkSync(outside, join(at, ID2));
     writeFileSync(join(at, 'notes.txt'), 'not a message\n');
     writeFileSync(join(at, ID3), 'already read\n');
-    writeFileSync(join(at, `${ID3}.read`), '{"v":1}\n');
+    writeFileSync(receiptPath(at, ID3), '{"v":1}\n');
     const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
     expect(run(command)).toBe('');
-    expect(existsSync(join(at, `${ID2}.read`))).toBe(false);
-    expect(existsSync(join(at, `${ID3}.read`))).toBe(true);
-    expect(readFileSync(join(at, `${ID3}.read`), 'utf8')).toBe('{"v":1}\n');
+    expect(existsSync(receiptPath(at, ID2))).toBe(false);
+    expect(existsSync(receiptPath(at, ID3))).toBe(true);
+    expect(readFileSync(receiptPath(at, ID3), 'utf8')).toBe('{"v":1}\n');
   });
 
   test('one turn reads ten messages at most, and the rest wait for the next', () => {
@@ -246,10 +251,10 @@ describe('the turn-start folder read', () => {
     const command = dropCommand(installCliHooks(dir, SESSION, [seat()]));
     const first = landing(run(command));
     expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(10);
-    expect(readdirSync(at).filter((name) => name.endsWith('.read'))).toHaveLength(10);
+    expect(readdirSync(at).filter((name) => name.endsWith(RECEIPT_SUFFIX))).toHaveLength(10);
     const second = landing(run(command));
     expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
-    expect(readdirSync(at).filter((name) => name.endsWith('.read'))).toHaveLength(12);
+    expect(readdirSync(at).filter((name) => name.endsWith(RECEIPT_SUFFIX))).toHaveLength(12);
   });
 
   test('the body is handed over literally, shell words and all', () => {

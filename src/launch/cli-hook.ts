@@ -7,9 +7,11 @@
 //
 // The turn-start hook is also the seat's watcher for the drop leg: it reads the seat's own drop
 // folder (`.agents/send-drops/<session>/<seat>`) before the turn begins and prints each waiting
-// message, writing `<id>.read` first (tool `drop_read`) so the sender's side has proof beside the
-// message. A CLI whose launch installs this hook takes the drop leg; one whose launch installs
-// neither this hook nor an MCP inbox is a CLI that watches nothing (`cliWatcher`).
+// message, writing the read receipt first (tool `drop_read`) so the sender's side has proof
+// beside the message. The receipt's path is `receiptPath`, the one name the inbox server and
+// the watch also use, so no module here names the sidecar itself.
+// A CLI whose launch installs this hook takes the drop leg; one whose launch installs neither
+// this hook nor an MCP inbox is a CLI that watches nothing (`cliWatcher`).
 //
 // Only a CLI whose own per-launch settings file reaches command hooks is served here
 // (`supportsCliHook`). Nothing under the owner's CLI home is read or written: the settings file
@@ -19,9 +21,10 @@ import {
   closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync,
   writeSync, type Stats,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import type { CliHookReading } from '../labels/state.ts';
+import { receiptPath } from '../mcp/inbox.ts';
 import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 
 /** `O_NOFOLLOW` is POSIX: a platform without it gets 0, and the `lstat` checks above every open
@@ -164,11 +167,15 @@ const LANDING_ESCAPER = (() => {
   return `function esc(s,   out, i, c) { out = ""; for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); ${branches}; else out = out c } return out } { printf "%s%s", (NR > 1 ? "\\\\n" : ""), esc($0) }`;
 })();
 
+/** The read receipt's suffix, taken from `receiptPath` so the hook writes the sidecar the inbox
+ *  server writes and the watch promotes on; the sentinel id only names the suffix. */
+const RECEIPT_SUFFIX = basename(receiptPath('', '0')).slice(1);
+
 /**
  * The turn-start command that reads the seat's drop folder. It hands each waiting message to the
  * turn in name order, at most `DROP_READ_BATCH` a turn, with the same path rules the MCP inbox
  * keeps: only a lowercase-UUID name, never a link, never a directory, and never a message that
- * already has its `<id>.read` receipt. The body is read and escaped first, the receipt is written
+ * already has its read receipt. The body is read and escaped first, the receipt is written
  * whole by `mktemp` + `mv -f` at the hook's own umask (0600 under `umask 077`), and only then does
  * the message join the one `additionalContext` object the command prints: a read that cannot
  * leave proof says nothing, exactly as `inbox_read` refuses a body whose receipt did not land. A
@@ -196,11 +203,11 @@ function dropReadCommand(dropDir: string, seat: string, session: string): string
     `case "$b" in ${DROP_GLOB}) ;; *) continue ;; esac`,
     '[ -L "$p" ] && continue',
     '[ -f "$p" ] || continue',
-    'if [ -e "${p}.read" ] || [ -L "${p}.read" ]; then continue; fi',
+    `if [ -e "\${p}${RECEIPT_SUFFIX}" ] || [ -L "\${p}${RECEIPT_SUFFIX}" ]; then continue; fi`,
     `e=$(awk ${shellQuote(LANDING_ESCAPER)} "$p" 2>/dev/null) || continue`,
     'r=$(mktemp "$d/.receipt.XXXXXX" 2>/dev/null) || continue',
     `if ! printf ${receipt} "$b" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$r" 2>/dev/null; then rm -f "$r"; continue; fi`,
-    'if ! mv -f "$r" "${p}.read" 2>/dev/null; then rm -f "$r"; continue; fi',
+    `if ! mv -f "$r" "\${p}${RECEIPT_SUFFIX}" 2>/dev/null; then rm -f "$r"; continue; fi`,
     'if [ "$got" = 1 ]; then ctx="$ctx\\n\\n"; fi',
     'ctx="$ctx$e"',
     'got=1',
