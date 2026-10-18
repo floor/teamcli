@@ -538,6 +538,32 @@ describe('grant and revoke parse the invocation before attempting an edit', () =
     }
   });
 
+  test('a repository with no team file gets the loader refusal, never a raw lstat', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'team-authority-edit-no-file-')));
+    made.push(root);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, stdio: 'ignore' });
+    const home = join(root, 'home');
+    fs.mkdirSync(home);
+    const place: Place = { root, home, file: join(root, '.agents', 'team.yaml') };
+
+    for (const run of [
+      (io: TestIo) => runGrant(['lead', '--scope', 'up'], io, { home }),
+      (io: TestIo) => runDelegate(['outside/first', '--commands', 'up'], io, { home }),
+      (io: TestIo) => runRevoke(['grant'], io, { home }),
+    ]) {
+      const io = owner(place);
+      expect(await run(io)).toBe(2);
+      expect(io.err).toContain('no team file here');
+      expect(io.err).not.toContain('ENOENT');
+      expect(io.err).not.toContain('lstat');
+    }
+
+    const json = owner(place);
+    expect(await runGrant(['lead', '--scope', 'up', '--json'], json, { home })).toBe(2);
+    expect(json.err).toBe('');
+    assertJsonErrorShape(json.out, { id: 'grant.invalid', messageContains: 'no team file here', repair: null });
+  });
+
   test('revoke requires an exact kind and target without a wildcard or all form', async () => {
     const place = folder(BASE + GRANT + DELEGATES);
     for (const argv of [[], ['all'], ['grant', 'lead'], ['delegate'], ['delegate', 'outside/first', 'extra'], ['grant', '--all']]) {
