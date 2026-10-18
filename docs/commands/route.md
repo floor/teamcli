@@ -94,7 +94,7 @@ a warning about the pane, never a reason to hand-dial.
 | --- | --- | --- |
 | addressed and recorded | the context line, `<seat>  <id>  (<name>)` and the session, cli, pane, socket, native and rule lines, then the summary `<seat>: routed at <path\|no socket> (<state>)` | 0 |
 | `--dry-run`, addressed, nothing written | the same lines, then the step `+ record: <seat>: append the route to <path>` and `dry run: nothing was run` | 0 |
-| run with no terminal | `team route: only the owner runs this, from a terminal outside herdr` | 1 |
+| run with no terminal | `team route: only the owner or a seat the send admission admits runs this, from a terminal outside herdr or its own pane` | 1 |
 | refused (admission, or a seat with no registry record) | `team route: refused: <reason>` | 1 |
 | record could not be written | `team route: refused: the route record could not be written: <problem>` | 1 |
 | team file unreadable | `team route: <problem>` | 2 |

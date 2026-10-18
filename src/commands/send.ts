@@ -368,7 +368,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const json = hasJsonFlag(argv);
   const report: Report = { json, seat: seatName ?? null, sent: null, project: null, session: null };
   if (args.error) return usage(io, args.error, report);
-  const detached = detachedRefusal(callerOf(io));
+  const detached = detachedRefusal(callerOf(io), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     if (report.json) writeJsonError(io, 'send.detached', detached, 'run team send from a terminal outside herdr');
     else io.stderr(`team send: ${detached}\n`);

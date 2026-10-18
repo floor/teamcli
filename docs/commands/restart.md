@@ -30,7 +30,7 @@ profile's exit key there.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` and `--file` are the owner's own |
-| a run with no terminal | nothing: `team restart: only the owner runs this, from a terminal outside herdr` |
+| a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
 
 ## Output and exit codes

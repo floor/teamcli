@@ -116,17 +116,29 @@ export function isOwner(caller: Caller): boolean {
   return caller.kind === 'owner';
 }
 
-/** The one refusal for a run placed outside herdr with no terminal. Every owner-gated act uses it,
- *  with the command's own `team <command>:` prefix. */
-export const DETACHED_REFUSAL = 'only the owner runs this, from a terminal outside herdr';
-
-/** That sentence when `caller` is the no-terminal placement, otherwise undefined. */
-export function detachedRefusal(caller: Caller): string | undefined {
-  return caller.kind === 'owner-no-tty' ? DETACHED_REFUSAL : undefined;
+/** Who may run a command and where from, for the no-terminal refusal. A command the map admits
+ *  more widely than the owner passes its own route, so the sentence names the caller's own way
+ *  in; an owner-only act leaves it out and gets `DETACHED_REFUSAL`. */
+export interface DetachedRoute {
+  readonly who: string;
+  readonly where: string;
 }
 
-/** Who may launch seats: the owner at a terminal. `up` reads this. A run with no terminal is refused
- *  with `DETACHED_REFUSAL` and never prompts, because it does not launch.
+/** The refusal for an owner-only act, run outside herdr with no terminal. It is printed with the
+ *  command's own `team <command>:` prefix. A command that admits another actor does not use it:
+ *  it passes its route to `detachedRefusal` and the line names that actor too. */
+export const DETACHED_REFUSAL = 'only the owner runs this, from a terminal outside herdr';
+
+/** That sentence when `caller` is the no-terminal placement, otherwise undefined — the owner-only
+ *  constant, or the command's own route when it admits another actor. */
+export function detachedRefusal(caller: Caller, route?: DetachedRoute): string | undefined {
+  if (caller.kind !== 'owner-no-tty') return undefined;
+  return route === undefined ? DETACHED_REFUSAL : `only ${route.who} runs this, from ${route.where}`;
+}
+
+/** Who may launch seats: the owner at a terminal. `up` reads this. A run with no terminal is
+ *  refused by `detachedRefusal` with `up`'s own route, and never prompts, because it does not
+ *  launch.
  */
 export function mayLaunchSeats(caller: Caller): boolean {
   return caller.kind === 'owner';

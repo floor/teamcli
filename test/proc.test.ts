@@ -165,7 +165,7 @@ describe('team proc add', () => {
     const where = place();
     const io = testIo(where.root, { kind: 'owner-no-tty' });
     expect(await runProc(['add', 'build'], io, sources(where))).toBe(1);
-    expect(io.err).toBe('team proc: only the owner runs this, from a terminal outside herdr\n');
+    expect(io.err).toBe('team proc: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane\n');
   });
 
   test('--json carries the action envelope under the registered schema', async () => {

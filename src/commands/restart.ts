@@ -172,7 +172,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     : out;
 
   const walked = walkCaller(io);
-  const detached = detachedRefusal(walked);
+  const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) return detachedExit(out, json, detached);
 
   const flagRefusal = fileOwnerRefusal(io, args.values.file)

@@ -2835,7 +2835,7 @@ scene('proc.caller', async (place) => {
 });
 scene('proc.detached', async (place) => {
   write(place, TEAM);
-  return show(await proced(place, ['add', 'build'], detachedCaller), 'only the owner runs this, from a terminal outside herdr');
+  return show(await proced(place, ['add', 'build'], detachedCaller), 'only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane');
 });
 scene('proc.other-seat', async (place) => {
   write(place, TWO);
@@ -2926,7 +2926,7 @@ scene('hold.until', async (place) => {
 });
 scene('hold.detached', async (place) => {
   write(place, TEAM);
-  return show(await held(place, ['freeze deploys'], detachedCaller), 'only the owner runs this, from a terminal outside herdr');
+  return show(await held(place, ['freeze deploys'], detachedCaller), 'only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat');
 });
 scene('hold.caller', async (place) => {
   write(place, TEAM);
@@ -3362,7 +3362,7 @@ scene('route.dry-run', async (place) => {
   registeredLead(place);
   return show(await routed(place, ['lead', '--dry-run'], owner, sendHost(place)), 'append the route to');
 });
-scene('route.detached', async (place) => show(await routed(place, ['lead'], detachedCaller, sendHost(place)), SENTENCE));
+scene('route.detached', async (place) => show(await routed(place, ['lead'], detachedCaller, sendHost(place)), ADMISSION));
 scene('route.refused', async (place) => {
   write(place, TEAM);
   return show(await routed(place, ['missing'], owner, sendHost(place)), 'this team has no registry record yet');
@@ -3654,17 +3654,26 @@ scene('reload.grant-file', async (place) => {
 // CLIs this version knows, and every one of them now has a launch profile, so no team file can
 // reach the refusals — they stand, rows and exit sites whole, for a CLI listed before its profile
 // ships, which is the state grok itself was in until now.
+// The no-terminal refusal names each command's own actors and places: the owner-only commands
+// keep the plain sentence, and every command the map admits more widely prints its own.
 const SENTENCE = 'only the owner runs this, from a terminal outside herdr';
-scene('add.detached', async (place) => show(await added(place, ['worker'], detachedCaller, addSources(place)), SENTENCE));
-scene('answer.detached', async (place) => show(await answered(place, ['lead', 'trust'], detachedCaller, answerHost(place, '')), SENTENCE));
+const LEADS = 'only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane';
+const OWN_TEAM = 'only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane';
+const DELEGATE = 'only the owner or an approved delegate runs this, from a terminal outside herdr or its own pane';
+const ADMISSION = 'only the owner or a seat the send admission admits runs this, from a terminal outside herdr or its own pane';
+const ANSWER = 'only the owner or the orchestrator from its own seat runs this, from a terminal outside herdr or its own seat';
+const PLACED = 'only the owner or a placed seat runs this, from a terminal outside herdr or its own pane';
+const ORCH = 'only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat';
+scene('add.detached', async (place) => show(await added(place, ['worker'], detachedCaller, addSources(place)), DELEGATE));
+scene('answer.detached', async (place) => show(await answered(place, ['lead', 'trust'], detachedCaller, answerHost(place, '')), ANSWER));
 scene('broker.detached', async (place) => show(await brokered(place, [], { keyReader: okKey }, detachedCaller), SENTENCE));
-scene('down.detached', async (place) => show(await down(place, [], detachedCaller, downSources()), SENTENCE));
+scene('down.detached', async (place) => show(await down(place, [], detachedCaller, downSources()), LEADS));
 scene('init.detached', async (place) => show(await initial(place, [], detachedCaller), SENTENCE));
-scene('remove.detached', async (place) => show(await removed(place, ['worker'], detachedCaller, downSources()), SENTENCE));
-scene('send.detached', async (place) => show(await sent(place, ['--list'], detachedCaller, sendHost(place)), SENTENCE));
-scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), SENTENCE));
-scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), SENTENCE));
-scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), SENTENCE));
+scene('remove.detached', async (place) => show(await removed(place, ['worker'], detachedCaller, downSources()), LEADS));
+scene('send.detached', async (place) => show(await sent(place, ['--list'], detachedCaller, sendHost(place)), ADMISSION));
+scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), LEADS));
+scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), PLACED));
+scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), ORCH));
 
 const ACTIVE_TWO = TWO.replace('    stopped: true\n', '');
 
@@ -3697,7 +3706,7 @@ async function restarted(
 
 scene('restart.usage', async (place) => show(await restarted(place, []), 'a seat name is required'));
 scene('restart.configuration', async (place) => show(await restarted(place, ['worker', '--file', 'missing.yaml']), 'no team file'));
-scene('restart.detached', async (place) => show(await restarted(place, ['worker'], detachedCaller), SENTENCE));
+scene('restart.detached', async (place) => show(await restarted(place, ['worker'], detachedCaller), LEADS));
 scene('restart.caller', async (place) => {
   write(place, ACTIVE_TWO);
   return show(await restarted(place, ['worker'], other), 'only the owner or `leads` restarts a seat');
@@ -3834,7 +3843,7 @@ scene('register.usage', async (place) => show(await registered(place, []), 'a se
 scene('register.file', async (place) => show(await registered(place, ['lead']), 'no team file'));
 scene('register.detached', async (place) => {
   write(place, TEAM);
-  return show(await registered(place, ['lead'], detachedCaller), SENTENCE);
+  return show(await registered(place, ['lead'], detachedCaller), OWN_TEAM);
 });
 scene('register.caller', async (place) => {
   write(place, TEAM);

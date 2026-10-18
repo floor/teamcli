@@ -478,8 +478,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
-  // read, as `init` asks it.
-  const detached = detachedRefusal(walkCaller(io));
+  // read, as `init` asks it; the route names who may run it, so the sentence does not send every
+  // reader to the owner.
+  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
     // exit: down.detached

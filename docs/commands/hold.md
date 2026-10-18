@@ -44,7 +44,7 @@ its own seat.
 | --- | --- |
 | the owner, from a terminal outside herdr | place and release |
 | the orchestrator's or the operator's seat, on the pane the state records for it | place and release |
-| a run with no terminal | nothing: `team hold: only the owner runs this, from a terminal outside herdr` |
+| a run with no terminal | nothing: `team hold: only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat` |
 | any other seat, or an agent-run CLI | nothing: `team hold: only the owner, the orchestrator or the operator holds the team; this call is <caller>` |
 | the orchestrator's or the operator's seat, when the state records no pane for it | nothing: `team hold: no pane is recorded for seat <name> in this session: the owner stops that seat and runs \`team up\`` |
 | the same seat on a pane the state doesn't record for it | nothing: `team hold: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (\`team down\`, then \`team up\`)` |
@@ -70,7 +70,7 @@ its own seat.
 | `team hold: --until is a local <HH:MM>, or an ISO 8601 instant with Z or an offset, and nothing else` | 1 |
 | `team hold: already held: <reason>` — `already held until <instant>: <reason>` when the hold names an end | 1 |
 | `team hold: not held` | 1 |
-| `team hold: only the owner runs this, from a terminal outside herdr` | 1 |
+| `team hold: only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat` | 1 |
 | `team hold: only the owner, the orchestrator or the operator holds the team; this call is <caller>` | 1 |
 | `team hold: no pane is recorded for seat <name> in this session: the owner stops that seat and runs \`team up\`` | 1 |
 | `team hold: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: the owner stops the team and starts it again (\`team down\`, then \`team up\`)` | 1 |

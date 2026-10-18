@@ -166,7 +166,7 @@ function add(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSou
   if (extra !== undefined) return invocation(io, json, `unexpected "${plainLine(extra)}"`);
   if (!validLockName(name)) return invocation(io, json, nameProblem(name));
 
-  const detached = detachedRefusal(callerOf(io));
+  const detached = detachedRefusal(callerOf(io), { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) return refuseDetached(io, json, detached);
 
   let pid: number | undefined;
@@ -300,7 +300,7 @@ function done(rest: string[], args: Args, io: Io, json: boolean, sources: ProcSo
   if (extra !== undefined) return invocation(io, json, `unexpected "${plainLine(extra)}"`);
   if (!validLockName(name)) return invocation(io, json, nameProblem(name));
 
-  const detached = detachedRefusal(callerOf(io));
+  const detached = detachedRefusal(callerOf(io), { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) return refuseDetached(io, json, detached);
 
   const current = currentTeam(io.cwd, undefined, sources.now(), sources.home, false);

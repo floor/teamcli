@@ -154,7 +154,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // read, as `down` and `init` ask it —
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
   // order.
-  const detached = detachedRefusal(walkCaller(io));
+  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'remove', { id: 'remove.detached', message: detached, repair: null });
     // exit: remove.detached

@@ -71,7 +71,7 @@ is not yours to read.
 | `team proc: --pid needs a value` (with the usage) | 2 |
 | `team proc: unknown option --<name>` (with the usage) | 2 |
 | `team proc: list takes no --pid or --note` (with the usage) | 2 |
-| `team proc: only the owner runs this, from a terminal outside herdr` | 1 |
+| `team proc: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane` | 1 |
 | `team proc: only a seat of this team or the owner records a process; this call is <caller>` | 1 |
 | `team proc: pid <n> is not running` | 1 |
 | `team proc: "<name>" is <seat>'s, live since <at>` | 1 |

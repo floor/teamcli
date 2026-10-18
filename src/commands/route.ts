@@ -70,7 +70,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   // structured error document, and the parser errors before its flag set sees them.
   const report: Report = { json: hasJsonFlag(argv) };
   if (args.error) return usage(io, args.error, report);
-  const detached = detachedRefusal(callerOf(io));
+  const detached = detachedRefusal(callerOf(io), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     if (report.json) writeJsonError(io, 'route.detached', detached, 'run team route from a terminal outside herdr');
     else io.stderr(`team route: ${detached}\n`);

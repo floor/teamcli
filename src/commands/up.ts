@@ -703,7 +703,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const walked = walkCaller(io);
   // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
   // or the token. The refusal is one sentence, on the dry run and the real run.
-  const detached = detachedRefusal(walked);
+  const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
   // Dev mode, as the default live file's chain states it: this folder's own file is the caller's
   // place, never a file the caller names. The aimed branch below decides before that file is

@@ -77,8 +77,8 @@ still plans.
 
 The owner, from a terminal outside herdr; and a seat this team's record marks `leads` — its
 orchestrator, or a registry roster line that says `leads` — on this folder's own team file. A run
-with no terminal is refused with `only the owner runs this, from a terminal outside herdr` and
-launches nothing. An admitted run that is not that owner — a lead's, the grant's, a delegate's, the
+with no terminal is refused with ``only the owner or a `leads` seat runs this, from a terminal
+outside herdr or its own pane`` and launches nothing. An admitted run that is not that owner — a lead's, the grant's, a delegate's, the
 token's — never reads stdin and never prompts, so every dialog is left for the owner (below). `--dry-run` is open to anyone: it reaches nothing and
 changes nothing, prints the refusals it would hit as `! up would refuse: …` above the plan. A caller
 the run does not admit — not the owner, no grant, no delegate, no token — is refused with the word
@@ -564,7 +564,7 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 
 | Reason |
 | --- |
-| ``only the owner runs this, from a terminal outside herdr`` — a run with no terminal. ``only the owner or `leads` starts the team; this call is <caller>`` — any other caller the ordinary rule refuses. With a `delegates` section in the file, that other refusal is the delegate gate's to say, in its own words below |
+| ``only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` — a run with no terminal. ``only the owner or `leads` starts the team; this call is <caller>`` — any other caller the ordinary rule refuses. With a `delegates` section in the file, that other refusal is the delegate gate's to say, in its own words below |
 | ``only the owner or the approved delegate runs `up`; this call is <caller>`` — the delegate gate: the file's `delegates` section names panes, and this caller is none of them |
 | ``--<flag> is the owner's; the approved delegate cannot use it`` — the delegate gate, for `--session` and `--file` on a delegated run, refused before the file or the session the flag names is read |
 | the delegate gate's other refusals, each in its own words — no verified approval in force on this machine, the caller's placement in its pane unproven, or the caller's entry not naming `up` in `commands` — printed like every refusal here, and on a dry run above the plan |

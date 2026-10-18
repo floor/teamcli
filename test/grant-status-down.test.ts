@@ -23,7 +23,7 @@ const PAST = '2026-10-16T10:59:59Z';
 const TEAM = 'aaaaaaaaaaaa';
 
 const NOT_YOURS = 'team status: this team is not yours to read\n';
-const DETACHED = 'team down: only the owner runs this, from a terminal outside herdr\n';
+const DETACHED = 'team down: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane\n';
 const FILE_OWNER = 'team status: --file is the owner\'s, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n';
 const SESSION_OWNER = 'team status: --session is the owner\'s, from a terminal outside herdr; this call is unplaced (it runs under herdr)\n';
 

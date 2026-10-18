@@ -68,7 +68,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     // exit: worktree.subcommand
     return 2;
   }
-  const detached = detachedRefusal(walkCaller(io));
+  const detached = detachedRefusal(walkCaller(io), { who: 'the owner, the orchestrator or the operator', where: 'a terminal outside herdr or its own seat' });
   if (detached !== undefined) {
     refuse(io, json, 'worktree', { id: 'worktree.detached', message: detached, repair: null });
     // exit: worktree.detached

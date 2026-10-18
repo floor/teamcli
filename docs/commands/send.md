@@ -196,9 +196,10 @@ seat the live file declares for it, so the rules above reach it by that seat's n
 bootstrap a seat herdr placed, before `up` or `add` first recorded it, still needs — and nothing
 else does: a target in another team, and an owner-signed grant, both wait for its record. `up` and
 `add` register a seat when they first launch it. A run with no
-terminal is refused before `--list` as well: `team send: only the owner runs this, from a terminal
-outside herdr`. For every other caller, `--list` prints the file's roster and the seats of its
-entity's other teams, and sends nothing, so it needs no caller check.
+terminal is refused before `--list` as well: `team send: only the owner or a seat the send admission
+admits runs this, from a terminal outside herdr or its own pane`. For every other caller, `--list`
+prints the file's roster and the seats of its entity's other teams, and sends nothing, so it needs
+no caller check.
 
 | Caller | May send to |
 | --- | --- |

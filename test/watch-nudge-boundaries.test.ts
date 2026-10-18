@@ -498,7 +498,7 @@ describe('a second watch', () => {
     const second = testIo(customDir, { kind: 'owner-no-tty' });
     const refused = await runWatch(['--session', SESSION], second, watchSources(home, { alive: () => true }));
     expect(refused).toBe(1);
-    expect(second.err).toContain('only the owner runs this, from a terminal outside herdr');
+    expect(second.err).toContain('only the owner or a placed seat runs this, from a terminal outside herdr or its own pane');
 
     // The recorded pid itself, run with no terminal: the watch lives in a pane of its own now, so
     // a process outside a terminal is nobody's watch — the same refusal, for the pid too, and the
@@ -510,7 +510,7 @@ describe('a second watch', () => {
     const own = testIo(customDir, { kind: 'owner-no-tty' });
     const ran = await runWatch(['--session', SESSION], own, watchSources(home, { alive: () => true, pid: process.pid }));
     expect(ran).toBe(1);
-    expect(own.err).toContain('only the owner runs this, from a terminal outside herdr');
+    expect(own.err).toContain('only the owner or a placed seat runs this, from a terminal outside herdr or its own pane');
     expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom });
   });
 });

@@ -128,7 +128,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const message = args.error ?? (dialog && dialog !== 'trust' ? `unknown dialog "${dialog}"` : 'a seat and trust are required');
     return usage(io, json, message);
   }
-  const detached = detachedRefusal(walkCaller(io));
+  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or the orchestrator from its own seat', where: 'a terminal outside herdr or its own seat' });
   if (detached !== undefined) {
     if (json) writeJsonError(io, 'answer.detached', detached, 'run team answer from a terminal outside herdr');
     else io.stderr(`team answer: ${detached}\n`);

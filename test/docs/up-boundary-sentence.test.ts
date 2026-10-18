@@ -5,7 +5,6 @@
 // code can drift from the other unnoticed.
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
-import { DETACHED_REFUSAL } from '../../src/caller.ts';
 
 // Whitespace runs collapse before the match, so the sentences survive line wrapping but not
 // rewording: every other character is compared as written.
@@ -25,9 +24,11 @@ describe('the up pages boundary sentences', () => {
 
   test('the no-terminal refusal is quoted in the code\'s own words, on both pages', () => {
     // The commands page quotes it as the run prints it; the internal page quotes the sentence
-    // alone. Both must carry DETACHED_REFUSAL exactly — the constant, not a paraphrase.
-    expect(prose(PAGE)).toContain(`team up: ${DETACHED_REFUSAL}`);
-    expect(prose(INTERNAL)).toContain(DETACHED_REFUSAL);
+    // alone. `up` admits the owner and the team's lead, so its refusal is the route's sentence —
+    // not the owner-only constant — and both pages carry it word for word.
+    const sentence = 'only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane';
+    expect(prose(PAGE)).toContain(`team up: ${sentence}`);
+    expect(prose(INTERNAL)).toContain(sentence);
   });
 
   test('the grant row\'s --session and --file refusals stand, verbatim', () => {

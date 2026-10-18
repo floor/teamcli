@@ -69,7 +69,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     }
   }
   const walked = walkCaller(io);
-  const detached = detachedRefusal(walked);
+  const detached = detachedRefusal(walked, { who: 'the owner, the orchestrator or the operator', where: 'a terminal outside herdr or its own seat' });
   if (detached !== undefined) {
     if (json) {
       writeJsonError(out, 'hold.detached', detached, null, 1, 'unplaced');

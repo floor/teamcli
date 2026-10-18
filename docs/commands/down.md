@@ -33,7 +33,7 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
-| a run with no terminal | nothing, including `--dry-run`: `team down: only the owner runs this, from a terminal outside herdr` |
+| a run with no terminal | nothing, including `--dry-run`: ``team down: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | stop the other seats; never the orchestrator's or the operator's own seat |
 | the approved delegate, when the file's `delegates` section names it | stop the whole team, the orchestrator's and the operator's seats included; never `--abandon`, `--session` or `--file` |
 

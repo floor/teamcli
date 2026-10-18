@@ -23,8 +23,8 @@ const NOW = new Date('2026-10-03T14:10:00Z');
 const PAGE = '../docs/internal/status.md';
 
 const PERMISSION = readFileSync(new URL('./fixtures/codex/0.157.0/permission.txt', import.meta.url), 'utf8');
-const DIFFERENCE = "waits at a permission prompt: its owner's to answer";
-const REPAIR = 'the owner answers it in the pane';
+const DIFFERENCE = "waits at a permission prompt: its lead's to answer, or its owner's";
+const REPAIR = 'its lead answers it in the pane';
 
 const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
 
@@ -108,14 +108,14 @@ test('status and check say the same words, for a seat herdr calls working too', 
   const st = await status();
   expect(st.out).toContain(`difference: codex-acme ${DIFFERENCE}\n  repair: ${REPAIR}\n`);
   expect(st.code, 'a permission prompt is a difference, whatever herdr calls the seat').toBe(1);
-  expect(st.out).toContain('1 difference, 1 for the owner\n');
+  expect(st.out).toContain('1 difference\n');
 
   const ck = check();
   const pair = (out: string) => out.split('\n').filter((line) => line.includes(DIFFERENCE) || line.includes(REPAIR));
   expect(pair(ck.out)).toEqual(pair(st.out));
 });
 
-test('a temporary seat held at a prompt is the owner\'s difference too', async () => {
+test('a temporary seat held at a prompt is a difference too', async () => {
   updateState(join(dir, '.agents'), (state) => {
     const session = (state.sessions['acme-web'] ??= emptySession());
     session.seats['codex-acme-tmp-1'] = { stage: 'ready', pane: 'w6:p1', workspace: 'w6', temporary: { like: 'codex-acme', until: 'merged:fix/select-width' } };

@@ -27,7 +27,7 @@ const SRC = '../../src/commands/restart.ts';
 // The page's caller table, its busy enumeration, and the two flags it reserves to the owner.
 const OWNER_ROW = 'run it, from a terminal outside herdr; `--session` and `--file` are the owner\'s own';
 const NO_TERMINAL_ROW =
-  'nothing: `team restart: only the owner runs this, from a terminal outside herdr`';
+  'nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane``';
 const LEAD_ROW =
   'never its own recorded pane, never `--abandon` on the orchestrator\'s or the operator\'s seat, and never `--abandon` on a `working` seat';
 const BUSY_ENUMERATION =
@@ -51,7 +51,7 @@ const SRC_EXIT_QUESTION = 'sits at its own exit question; left as it is (team re
 const SRC_OWNER_WAY = '(team restart ${name} --abandon closes its workspace without typing)';
 // The source text escapes the backticks inside its template literal, so the pin does too.
 const SRC_CALLER = 'only the owner or \\`leads\\` restarts a seat; this call is ';
-const SRC_DETACHED_WIRING = 'const detached = detachedRefusal(walked);';
+const SRC_DETACHED_WIRING = "const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat'";
 const SRC_FLAG_WIRING = 'const flagRefusal = fileOwnerRefusal(io, args.values.file)';
 const SRC_SELF_PANE = 'caller.name === name || (recordedSeat?.pane !== undefined && caller.pane === recordedSeat.pane)';
 
@@ -269,7 +269,7 @@ describe('the restart page, held to its command', () => {
     const bare = makeWorld();
     const ioDetached = testIo(bare.root, { kind: 'owner-no-tty' });
     expect(await runRestart(['worker'], ioDetached, bare.sources)).toBe(1);
-    expect(ioDetached.err).toBe('team restart: only the owner runs this, from a terminal outside herdr\n');
+    expect(ioDetached.err).toBe('team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane\n');
     expect(ioDetached.out).toBe('');
 
     // An ordinary seat of the team may not restart another seat: the map's `restart` row admits

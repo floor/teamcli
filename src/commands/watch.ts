@@ -236,7 +236,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     if (json) writeJsonError(io, id, why, null);
     else io.stderr(`team watch: ${why}\n`);
   };
-  const detached = detachedRefusal(callerOf(io));
+  const detached = detachedRefusal(callerOf(io), { who: 'the owner or a placed seat', where: 'a terminal outside herdr or its own pane' });
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in

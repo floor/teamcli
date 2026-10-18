@@ -4998,7 +4998,7 @@ describe('team up, delegated', () => {
     expect(code).toBe(1);
     expect(asked).toBe(0);
     expect(audits).toEqual([]);
-    expect(io.err).toContain('team up: only the owner runs this, from a terminal outside herdr\n');
+    expect(io.err).toContain('team up: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane\n');
     expect(io.out).not.toContain('left out:');
     expect(made.closes).toEqual([]);
   });

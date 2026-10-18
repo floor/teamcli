@@ -78,7 +78,7 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` is the owner's own |
-| a run with no terminal | nothing: `team register: only the owner runs this, from a terminal outside herdr` — a caller outside herdr has no registry record, so no record admits it |
+| a run with no terminal | nothing: `team register: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane` — a caller outside herdr has no registry record, so no record admits it |
 | a seat of this team | run it: the record it writes belongs to the seat's own team, its own seat's included |
 | a caller the file's `delegates` section names for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it |
 | the seat the file's `grant` names for `up`, where the row above does not admit it | run it: the grant gate that admits the owner's `team up` admits the record write, and the write is audited as the grant's; a verified grant that names another seat or pane, or leaves `up` out of its scope, refuses it. The grant is the fallback for a caller the row refused: a run the row admitted is neither refused nor audited by it, and a file with no `grant` section grants nothing. `--session` is refused in the grant's words — the owner's flag |
@@ -113,7 +113,7 @@ its `id` is the contract row for that refusal (`register.caller`, `register.no-s
 | --- | --- |
 | `team register: unknown option <option>` / `team register: a seat name is required` / `team register: unexpected "<word>"` (with the usage) | 2 |
 | `team register: line <n>: <message>` / `team register: <message>` — the team file can't be read or parsed, or the folder is not inside a git repository | 2 |
-| `team register: only the owner runs this, from a terminal outside herdr` | 1 |
+| `team register: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane` | 1 |
 | `team register: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team register: --session is the owner's; the granted seat cannot use it` | 1 |
 | `team register: only the owner or a seat of this team registers a running seat; this call is <caller>` | 1 |

@@ -25,7 +25,7 @@ Anything else sends nothing.
 | Caller | May |
 | --- | --- |
 | the owner, from outside herdr | answer the dialog; `--file` and `--session` are the owner's alone, refused before the flagged file or session is read at all |
-| a run with no terminal | nothing: `team answer: only the owner runs this, from a terminal outside herdr` |
+| a run with no terminal | nothing: `team answer: only the owner or the orchestrator from its own seat runs this, from a terminal outside herdr or its own seat` |
 | the orchestrator, from its own seat | the same, in a session this project's state records, on the pane the state records for that name |
 | anyone else | nothing |
 

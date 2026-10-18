@@ -252,7 +252,6 @@ export function compare(
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = word === 'idle' || word === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
-      const isPermission = screen.kind === 'permission' || screen.kind === 'trust';
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
@@ -314,12 +313,19 @@ export function compare(
           });
         }
       }
-      if (isPermission) {
-        differences.push({
-          what: `${seat.name} waits at a permission prompt: its owner's to answer`,
-          repair: 'the owner answers it in the pane',
-          owner: true,
-        });
+      if (screen.kind === 'permission' || screen.kind === 'trust') {
+        // A permission prompt is the pane's lead's to answer, in the pane; a trust prompt stays
+        // the owner's alone (its live `dialogs.trust` grant).
+        differences.push(screen.kind === 'permission'
+          ? {
+              what: `${seat.name} waits at a permission prompt: its lead's to answer, or its owner's`,
+              repair: 'its lead answers it in the pane',
+            }
+          : {
+              what: `${seat.name} waits at a trust prompt: the owner's to answer`,
+              repair: 'the owner answers it in the pane',
+              owner: true,
+            });
       }
       if (recorded?.rules === 'undelivered') {
         differences.push({
@@ -475,11 +481,16 @@ export function compare(
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
       if (tempScreen.kind === 'permission' || tempScreen.kind === 'trust') {
-        differences.push({
-          what: `${name} waits at a permission prompt: its owner's to answer`,
-          repair: 'the owner answers it in the pane',
-          owner: true,
-        });
+        differences.push(tempScreen.kind === 'permission'
+          ? {
+              what: `${name} waits at a permission prompt: its lead's to answer, or its owner's`,
+              repair: 'its lead answers it in the pane',
+            }
+          : {
+              what: `${name} waits at a trust prompt: the owner's to answer`,
+              repair: 'the owner answers it in the pane',
+              owner: true,
+            });
       }
       notes.push(`${name} is temporary, until ${recorded.temporary.until}`);
     } else {

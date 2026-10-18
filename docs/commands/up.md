@@ -28,7 +28,7 @@ into — and its sidebar is rewritten from the file either way.
 | --- | --- |
 | the owner | run it, from a terminal outside herdr |
 | a seat an active create-grant names by its own registry id | run it, on the paths that record covers and before it expires |
-| a run with no terminal | a real run is refused: `team up: only the owner runs this, from a terminal outside herdr`; `--dry-run` prints the plan and `! up would refuse:` with that sentence, and launches nothing |
+| a run with no terminal | a real run is refused: ``team up: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane``; `--dry-run` prints the plan and `! up would refuse:` with that sentence, and launches nothing |
 | a seat this team's record marks `leads` — its orchestrator, or a registry roster line that says `leads` | run it on this folder's own team file, and the run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
 | a caller the run admits | run `--dry-run`, which reaches nothing and changes nothing |
 | a caller the run does not admit | a real run is answered with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1. A `--dry-run` is never denied: it prints `! up would refuse:` with that reason, `! to unblock:` with a `leads` seat's own run of this folder from its pane (or the owner's, from a terminal outside herdr), and — when no flag kept the file unread — the plan, and exits 1 |

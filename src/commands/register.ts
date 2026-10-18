@@ -367,7 +367,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   };
 
   const walked = walkCaller(io);
-  const detached = detachedRefusal(walked);
+  const detached = detachedRefusal(walked, { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
 
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {

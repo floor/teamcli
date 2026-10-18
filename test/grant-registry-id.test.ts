@@ -566,7 +566,7 @@ describe("a create-grant's registry id", () => {
       expect(stopped.n).toBe(1);
       // Both sentences this run would otherwise carry are absent — the detached one and the
       // caller rule.
-      expect(granted.err).not.toContain('only the owner runs this, from a terminal outside herdr');
+      expect(granted.err).not.toContain('only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane');
       expect(granted.err).not.toContain('stops the team');
 
       const cases: { name: string; body: string; cwd: string; who: typeof grantedSeat | typeof otherSeat }[] = [

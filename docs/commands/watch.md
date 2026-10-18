@@ -78,7 +78,8 @@ in the transcript above an ordinary box leaves the screen unknown.
 ## Who may run it
 
 Anyone, in any terminal. A run with no terminal is refused before the watch starts:
-`team watch: only the owner runs this, from a terminal outside herdr`. `up` starts one for the
+`team watch: only the owner or a placed seat runs this, from a terminal outside herdr or its own
+pane`. `up` starts one for the
 session in a workspace of its own, labelled `Watch · <project>`, and records that pane — and its own
 passes record the pid. This is the one `team status` and `team doctor` look for. The owner who runs
 `team watch` alone, from a terminal outside herdr, gets the same: the watch hands itself to a
@@ -278,7 +279,7 @@ a first sight, which the launch gate calls `first sight only, not yet counted`, 
 | `team watch: only the watch this session records may read the file up recorded; this call is <caller>` | 1 |
 | `team watch: the watch did not start in its workspace` | 1 |
 | `team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
-| `team watch: only the owner runs this, from a terminal outside herdr` | 1 |
+| `team watch: only the owner or a placed seat runs this, from a terminal outside herdr or its own pane` | 1 |
 | `team watch: unknown option --x` / `team watch: unexpected "x"` (each with the usage) | 2 |
 | `team watch: team.yaml line <n>: <message>` / `team watch: <message>` | 2 |
 
