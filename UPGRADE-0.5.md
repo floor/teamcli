@@ -46,8 +46,8 @@ the record, `team check` reads it against what is running, and `team up` admits 
 The command is not in the CLI. A typed `team approve` gets a line of its own: `team approve was
 removed in 0.5.0: the live team file is the record, and nothing needs approving; see
 UPGRADE-0.5.md`. It exits 2 — the generic unknown-command answer's code — but not its text.
-`team --help` carries no `approve` line. A fresh `team init` ends `Edit it, then run team up.`,
-naming the command that follows the edit.
+`team --help` carries no `approve` line. A fresh `team init` says `Edit it, then run team up.`
+in its first line, naming the command that follows the edit.
 
 `team up` admits from the live file now: edit the file in your clone, then run `up` — or `add`,
 `remove`, `down`, `restart`; each reads the file itself. A script that guarded on `team approve`
