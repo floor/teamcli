@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -74,9 +74,11 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBe(25);
+    expect(EVENT_KINDS.length).toBe(26);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
+    expect(isEventKind('team.event-log-dropped')).toBe(true);
+    expect(isPrivilegedKind('team.event-log-dropped')).toBe(false);
     expect(isEventKind('seat.at-prompt')).toBe(true);
     expect(isEventKind('not.a.kind')).toBe(false);
     expect(isEventKind('seat.started')).toBe(false);
@@ -408,7 +410,10 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
     if (!read.ok) return;
     expect(read.oldestSeq).not.toBeNull();
     expect(read.oldestSeq!).toBeGreaterThan(1);
-    expect(read.newestSeq).toBe(12);
+    expect(read.unverified).toBe(0);
+    // The newest record written — the last message — is still retained; each dropping pass also
+    // left its signed declaration after the records it kept.
+    expect(read.events.some((event) => event.payload.record_id === 'msg-12')).toBe(true);
 
     const rotatedPath = `${eventLogPath('acme', root, home)}.1`;
     expect(statSync(rotatedPath).mode & 0o777).toBe(0o600);
@@ -420,7 +425,7 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
     expect(gap.kind).toBe('gap');
     if (gap.kind === 'gap') {
       expect(gap.oldest_seq).toBe(read.oldestSeq!);
-      expect(gap.newest_seq).toBe(12);
+      expect(gap.newest_seq).toBe(read.newestSeq!);
     }
 
     // A cursor at or after oldestSeq receives the unseen events.
@@ -431,7 +436,7 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
     expect(recent.kind).toBe('events');
     if (recent.kind === 'events') {
       expect(recent.events.every((e) => e.payload.seq > validCursor)).toBe(true);
-      expect(recent.cursor).toBe(12);
+      expect(recent.cursor).toBe(read.newestSeq!);
     }
   });
 
@@ -475,7 +480,7 @@ describe('event-log retention: 30 days or 100 MB per team, oldest first', () => 
       .filter((line) => line.includes('retention dropped'));
   }
 
-  test('a segment past the age window is dropped whole, one record names the drop, and the surviving record is never rewritten', () => {
+  test('an age drop is declared by one signed record naming the dropped range, and a resync across it is told it was retention', () => {
     const { root, home } = makeScratch();
     expect(appendOne(root, home, 'old-1').ok).toBe(true);
     expect(appendOne(root, home, 'old-2').ok).toBe(true);
@@ -484,7 +489,8 @@ describe('event-log retention: 30 days or 100 MB per team, oldest first', () => 
     const monthAgo = new Date(Date.now() - 31 * DAY_MS);
     utimesSync(path, monthAgo, monthAgo);
 
-    // The append seals the idle file, then the prune drops it: both old records go, the new one stays.
+    // The append seals the idle file, then the prune drops it: both old records go, the new one
+    // stays, and the pass declares the dropped range in one signed record.
     const fresh = appendOne(root, home, 'fresh-1');
     expect(fresh.ok).toBe(true);
     if (!fresh.ok) return;
@@ -493,21 +499,42 @@ describe('event-log retention: 30 days or 100 MB per team, oldest first', () => 
     const read = readEvents('acme', root, home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.events.map((event) => event.payload.record_id)).toEqual(['fresh-1']);
+    expect(read.events.map((event) => event.payload.record_id)).toEqual(['fresh-1', 'retention:1-2']);
     expect(read.oldestSeq).toBe(3);
     expect(read.unverified).toBe(0);
 
-    // Retention unlinks a whole segment and never rewrites a file it keeps: the surviving line is
-    // byte for byte the signed record that was written.
-    expect(readFileSync(path, 'utf8')).toBe(`${JSON.stringify(fresh.record)}\n`);
+    // The declaration verifies and names the range and the reason.
+    const drop = read.events[1]!;
+    expect(drop.payload.kind).toBe('team.event-log-dropped');
+    expect(drop.payload.reason).toBe('age');
+    expect(drop.payload.dropped_oldest_seq).toBe(1);
+    expect(drop.payload.dropped_newest_seq).toBe(2);
+    expect(verifySignedEvent(drop, home)).toBe(true);
+
+    // Retention unlinks a whole segment and never rewrites a file it keeps: the surviving record
+    // is byte for byte the signed line that was written (the declaration follows it).
+    expect(readFileSync(path, 'utf8').split('\n')[0]).toBe(JSON.stringify(fresh.record));
 
     const drops = dropLines(root);
     expect(drops).toHaveLength(1);
     expect(drops[0]).toContain('events.jsonl.1');
     expect(drops[0]).toContain('past 2592000s old');
+
+    // A subscriber resyncing across the declared range is told the hole is retention, not loss.
+    const resync = readEventsFromCursor('acme', root, home, 1);
+    expect(resync.ok).toBe(true);
+    if (!resync.ok) return;
+    expect(resync.kind).toBe('gap');
+    if (resync.kind === 'gap') {
+      expect(resync.oldest_seq).toBe(3);
+      expect(resync.newest_seq).toBe(4);
+      expect(resync.reason).toBe('retention');
+      expect(resync.dropped_oldest_seq).toBe(2);
+      expect(resync.dropped_newest_seq).toBe(2);
+    }
   });
 
-  test('the oldest sealed segment is dropped first when the team log is over its size cap', () => {
+  test('the oldest sealed segment is dropped first when the team log is over its size cap, and every pass declares its range', () => {
     const { root, home } = makeScratch();
     for (let i = 1; i <= 12; i++) {
       expect(appendOne(root, home, `msg-${String(i)}`, { maxBytes: 600, kept: 2, maxTotalBytes: 450 }).ok).toBe(true);
@@ -516,13 +543,28 @@ describe('event-log retention: 30 days or 100 MB per team, oldest first', () => 
     const read = readEvents('acme', root, home, { kept: 2 });
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.newestSeq).toBe(12);
-    expect(read.oldestSeq!).toBeGreaterThan(1);
     expect(read.unverified).toBe(0);
+    expect(read.newestSeq).not.toBeNull();
+    expect(read.events.some((event) => event.payload.record_id === 'msg-12')).toBe(true);
 
-    // What is kept is the newest contiguous run of verified records: no hole inside the window.
+    // What is kept is the newest contiguous run of verified records, declarations included.
     const seqs = read.events.map((event) => event.payload.seq);
     expect(seqs).toEqual(seqs.map((_, at) => seqs[0]! + at));
+
+    // Every sequence below the retained window is inside a declared range carried by a retained
+    // drop record: the newest declaration keeps the oldest dropped sequence in view.
+    const declared = read.events.filter((event) => event.payload.kind === 'team.event-log-dropped');
+    expect(declared.length).toBeGreaterThan(0);
+    const ranges = declared.map((event) => [
+      event.payload.dropped_oldest_seq!,
+      event.payload.dropped_newest_seq!,
+    ]);
+    for (let seq = 1; seq < read.oldestSeq!; seq++) {
+      expect(ranges.some(([start, end]) => seq >= start! && seq <= end!)).toBe(true);
+    }
+    const latest = declared[declared.length - 1]!;
+    expect(verifySignedEvent(latest, home)).toBe(true);
+    expect(latest.payload.dropped_oldest_seq).toBe(1);
 
     const drops = dropLines(root);
     expect(drops.length).toBeGreaterThan(0);
@@ -532,7 +574,7 @@ describe('event-log retention: 30 days or 100 MB per team, oldest first', () => 
     }
   });
 
-  test('the bus-start prune drops an idle live file without appending anything', () => {
+  test('the bus-start prune drops an idle live file and leaves only its signed drop record', () => {
     const { root, home } = makeScratch();
     expect(appendOne(root, home, 'old-1').ok).toBe(true);
     expect(appendOne(root, home, 'old-2').ok).toBe(true);
@@ -543,13 +585,36 @@ describe('event-log retention: 30 days or 100 MB per team, oldest first', () => 
 
     pruneEventLog('acme', root, home);
 
-    expect(existsSync(path)).toBe(false);
     expect(existsSync(`${path}.1`)).toBe(false);
     const read = readEvents('acme', root, home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.events).toEqual([]);
-    expect(read.oldestSeq).toBeNull();
+    expect(read.events.map((event) => event.payload.record_id)).toEqual(['retention:1-2']);
+    expect(read.oldestSeq).toBe(3);
+    expect(read.unverified).toBe(0);
+    expect(verifySignedEvent(read.events[0]!, home)).toBe(true);
     expect(dropLines(root)).toHaveLength(1);
+  });
+
+  test('a missing segment no drop record declares stays an undeclared gap', () => {
+    const { root, home } = makeScratch();
+    for (let i = 1; i <= 3; i++) {
+      expect(appendOne(root, home, `msg-${String(i)}`, { maxBytes: 600, kept: 2 }).ok).toBe(true);
+    }
+    const path = eventLogPath('acme', root, home);
+    expect(existsSync(`${path}.1`)).toBe(true);
+    // Remove a segment by hand: nothing in the retained log declares this loss.
+    unlinkSync(`${path}.1`);
+
+    const read = readEventsFromCursor('acme', root, home, 1, { kept: 2 });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.kind).toBe('gap');
+    if (read.kind === 'gap') {
+      expect(read.oldest_seq).toBe(3);
+      expect(read.reason).toBeUndefined();
+      expect(read.dropped_oldest_seq).toBeUndefined();
+      expect(read.dropped_newest_seq).toBeUndefined();
+    }
   });
 });

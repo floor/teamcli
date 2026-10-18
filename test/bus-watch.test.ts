@@ -7,9 +7,11 @@ import { createSequenceTracker, readEvents, type SignedEventRecord } from '../sr
 import { reconcilePass } from '../src/bus/reconcile.ts';
 import {
   busSocket,
+  parseBusAnswer,
   publishToBus,
   startBus,
   subscribeBusOnce,
+  type BusAnswer,
   type BusHandle,
 } from '../src/bus/server.ts';
 import { runBus } from '../src/commands/bus.ts';
@@ -818,5 +820,41 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     });
     expect(cleanCode).toBe(0);
     expect(existsSync(busSocket(root))).toBe(false);
+  });
+
+  test('a gap answer carrying a declared drop round-trips, and a reason without its bounds is refused', () => {
+    const declared: BusAnswer = {
+      ok: true,
+      kind: 'gap',
+      oldest_seq: 10,
+      newest_seq: 20,
+      reason: 'retention',
+      dropped_oldest_seq: 1,
+      dropped_newest_seq: 9,
+    };
+    expect(parseBusAnswer(JSON.stringify(declared))).toEqual(declared);
+    expect(
+      parseBusAnswer(JSON.stringify({ ok: true, kind: 'gap', oldest_seq: 10, newest_seq: 20, reason: 'retention' })),
+    ).toBeNull();
+  });
+
+  test('watch reports a retention reason when it resyncs across a declared dropped range', async () => {
+    const { root } = makeScratch();
+    const tracker = createSequenceTracker(3);
+    const seen: Array<{ oldest: number; newest: number; reason?: 'retention' }> = [];
+    const ok = await syncWatchBus(root, tracker, {
+      busSubscribe: async () => ({
+        kind: 'gap',
+        oldest_seq: 9,
+        newest_seq: 12,
+        reason: 'retention',
+        dropped_oldest_seq: 4,
+        dropped_newest_seq: 8,
+      }),
+      onBusGap: (oldest, newest, reason) => seen.push({ oldest, newest, reason }),
+    });
+    expect(ok).toBe(true);
+    expect(tracker.cursor).toBe(12);
+    expect(seen).toEqual([{ oldest: 9, newest: 12, reason: 'retention' }]);
   });
 });

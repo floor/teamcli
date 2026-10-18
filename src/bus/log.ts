@@ -6,10 +6,14 @@
 // at mode 0600 without following symbolic links, and rotates at `MAX_EVENT_LOG_BYTES` keeping
 // `EVENT_LOG_KEPT` files. A segment is retained for the event thresholds' window (30 days) and
 // the team's log never holds more than `EVENT_LOG_TOTAL_BYTES` (100 MB); past either, the oldest
-// sealed segment is dropped, whole and unrewritten, and one operational record names the drop.
-// When a subscriber's cursor is older than the oldest sequence retained in the rotated log
-// (`cursor > 0 && cursor < oldestSeq`), `readEventsFromCursor` answers `gap` with `oldest_seq` so
-// the subscriber resyncs from the underlying records before following on.
+// sealed segment is dropped, whole and unrewritten; the pass writes one `.agents/team.log` line
+// and appends one signed `team.event-log-dropped` record naming the dropped sequence range and
+// whether the age window or a size bound dropped it, so a reader and a gap-resync see a declared
+// hole rather than an unexplained one.
+// When records between a subscriber's cursor and the oldest retained sequence are missing
+// (`cursor + 1 < oldestSeq`), `readEventsFromCursor` answers `gap` with `oldest_seq` so the
+// subscriber resyncs from the underlying records before following on; a window every retained
+// drop record covers also carries `reason: 'retention'`.
 import {
   chmodSync,
   closeSync,
@@ -67,6 +71,10 @@ export type EventPayload = {
   reason?: string;
   prompt?: string;
   rule?: string;
+  /** On `team.event-log-dropped`: the oldest sequence retention has dropped (carried forward
+   *  across declarations) and the newest sequence the declaring pass dropped. */
+  dropped_oldest_seq?: number;
+  dropped_newest_seq?: number;
 };
 
 export type SignedEventRecord = {
@@ -105,6 +113,11 @@ export type CursorReadResult =
       kind: 'gap';
       oldest_seq: number;
       newest_seq: number;
+      /** Set when retained drop records cover the whole missing range: the hole is retention,
+       *  not an unexplained loss. `dropped_oldest_seq`/`dropped_newest_seq` name that range. */
+      reason?: 'retention';
+      dropped_oldest_seq?: number;
+      dropped_newest_seq?: number;
     }
   | { ok: false; reason: string };
 
@@ -184,20 +197,89 @@ function writtenAtFile(path: string): number | null {
   }
 }
 
+/** One segment a pass dropped, with the verified sequence range it held (null when the segment
+ *  held no verified record), the oldest sequence any drop record inside it had already declared,
+ *  and the bounds that dropped it. */
+type DroppedSegment = {
+  name: string;
+  bytes: number;
+  oldestSeq: number | null;
+  newestSeq: number | null;
+  declaredOldest: number | null;
+  bounds: ('age' | 'rotation' | 'total')[];
+};
+
+/** The verified sequence range of a signed log file, and the oldest sequence its drop records
+ *  already declare. A segment is read this way before it is unlinked, so the drop can name the
+ *  range it removes and carry forward a declaration it is about to remove. Null when the file
+ *  cannot be read or holds no verified record. */
+function verifiedRangeOf(
+  path: string,
+  home: string,
+): { oldest: number; newest: number; declaredOldest: number | null } | null {
+  const keyState = messageKeyState(home);
+  if (keyState.kind !== 'key') return null;
+  const text = readNoFollow(path);
+  if (text === null) return null;
+  let oldest: number | null = null;
+  let newest: number | null = null;
+  let declaredOldest: number | null = null;
+  for (const rawLine of text.split('\n')) {
+    if (rawLine.trim() === '') continue;
+    const parsed = parseSignedEventLine(rawLine);
+    if (parsed === null) continue;
+    if (!verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)) {
+      continue;
+    }
+    const seq = parsed.payload.seq;
+    oldest = oldest === null ? seq : Math.min(oldest, seq);
+    newest = newest === null ? seq : Math.max(newest, seq);
+    const declared = parsed.payload.dropped_oldest_seq;
+    if (parsed.payload.kind === 'team.event-log-dropped' && declared !== undefined) {
+      declaredOldest = declaredOldest === null ? declared : Math.min(declaredOldest, declared);
+    }
+  }
+  return oldest === null || newest === null ? null : { oldest, newest, declaredOldest };
+}
+
+/** The oldest sealed slot a rotation is about to unlink, captured before the rotation drops it. */
+function captureOldestSlot(
+  path: string,
+  kept: number,
+  home: string,
+  cause: 'age' | 'rotation',
+): DroppedSegment | null {
+  const name = `${EVENT_LOG_FILE}.${String(kept - 1)}`;
+  const slot = `${path}.${String(kept - 1)}`;
+  if (heldAt(slot).kind !== 'file') return null;
+  const range = verifiedRangeOf(slot, home);
+  return {
+    name,
+    bytes: sizeOfFile(slot),
+    oldestSeq: range?.oldest ?? null,
+    newestSeq: range?.newest ?? null,
+    declaredOldest: range?.declaredOldest ?? null,
+    bounds: [cause],
+  };
+}
+
 /** Seals the live file when its last write is older than the window: every record it holds was
- *  written before the window too, so the prune that follows may drop it as one segment. */
-function sealIdleLiveFile(path: string, kept: number, cutoffMs: number): void {
+ *  written before the window too, so the prune that follows may drop it as one segment. Returns
+ *  the oldest sealed slot the rotation dropped, if any. */
+function sealIdleLiveFile(path: string, home: string, kept: number, cutoffMs: number): DroppedSegment | null {
   const writtenAt = writtenAtFile(path);
-  if (writtenAt === null || writtenAt >= cutoffMs || sizeOfFile(path) === 0) return;
-  rotateEventLog(path, kept);
+  if (writtenAt === null || writtenAt >= cutoffMs || sizeOfFile(path) === 0) return null;
+  const dropped = captureOldestSlot(path, kept, home, 'age');
+  const problem = rotateEventLog(path, kept);
+  if (problem !== null) throw new Error(problem);
+  return dropped;
 }
 
 /** Drops the oldest sealed segment while the retained bytes are over the cap or the segment was
  *  last written before the window, oldest first. The live file is kept: it holds the newest
  *  records and the next append. A dropped file is unlinked whole and a surviving one is never
- *  rewritten, so every record still read is byte for byte the one that was verified. One
- *  operational record names each pass that dropped something. */
-function pruneSealed(path: string, root: string, kept: number, options: EventLogRetention): void {
+ *  rewritten, so every record still read is byte for byte the one that was verified. */
+function pruneSealed(path: string, home: string, kept: number, options: EventLogRetention): DroppedSegment[] {
   const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
   const maxTotal = options.maxTotalBytes ?? EVENT_LOG_TOTAL_BYTES;
   const cutoff = Date.now() - retentionSeconds * 1_000;
@@ -211,52 +293,139 @@ function pruneSealed(path: string, root: string, kept: number, options: EventLog
     sealed.push({ name: `${EVENT_LOG_FILE}.${String(n)}`, path: candidate, size, writtenAt });
     total += size;
   }
-  const dropped: typeof sealed = [];
-  let bySize = false;
-  let byAge = false;
+  const dropped: DroppedSegment[] = [];
   for (const segment of sealed) {
     const overCap = total > maxTotal;
     const tooOld = segment.writtenAt < cutoff;
     if (!overCap && !tooOld) break;
+    const range = verifiedRangeOf(segment.path, home);
     try {
       unlinkSync(segment.path);
     } catch {
       break;
     }
     total -= segment.size;
-    dropped.push(segment);
-    bySize ||= overCap;
-    byAge ||= tooOld;
+    const bounds: DroppedSegment['bounds'] = [];
+    if (overCap) bounds.push('total');
+    if (tooOld) bounds.push('age');
+    dropped.push({
+      name: segment.name,
+      bytes: segment.size,
+      oldestSeq: range?.oldest ?? null,
+      newestSeq: range?.newest ?? null,
+      declaredOldest: range?.declaredOldest ?? null,
+      bounds,
+    });
   }
-  if (dropped.length === 0) return;
-  const bytes = dropped.reduce((sum, segment) => sum + segment.size, 0);
-  const why = [bySize ? `${String(maxTotal)} bytes` : null, byAge ? `${String(retentionSeconds)}s old` : null]
-    .filter((part) => part !== null)
-    .join(' or ');
+  return dropped;
+}
+
+/** One operational record per dropping pass. The `.agents/team.log` line names every segment the
+ *  pass dropped; a signed `team.event-log-dropped` event appended to the live log names the
+ *  dropped sequence range — its newest sequence is this pass's, its oldest carries forward the
+ *  oldest sequence retention has dropped — and whether the age window or a size bound dropped it,
+ *  so a reader, the reconcile pass and a gap-resync see a declared drop rather than an unexplained
+ *  hole. The event is appended after the drop with no retention of its own, so it cannot recurse.
+ *  Best effort: retention never fails the caller. */
+function declareDrop(
+  project: string,
+  root: string,
+  home: string,
+  kept: number,
+  options: EventLogRetention & { maxBytes?: number },
+  drops: DroppedSegment[],
+  session: string,
+): void {
+  if (drops.length === 0) return;
+  const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+  const maxTotal = options.maxTotalBytes ?? EVENT_LOG_TOTAL_BYTES;
+  const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
+  const bytes = drops.reduce((sum, drop) => sum + drop.bytes, 0);
+  const bounds: string[] = [];
+  if (drops.some((drop) => drop.bounds.includes('rotation'))) bounds.push(`${String(maxBytes)} bytes`);
+  if (drops.some((drop) => drop.bounds.includes('total'))) bounds.push(`${String(maxTotal)} bytes`);
+  if (drops.some((drop) => drop.bounds.includes('age'))) bounds.push(`${String(retentionSeconds)}s old`);
   logLine(
     join(root, '.agents'),
     'bus',
     'event-log',
-    `retention dropped ${dropped.map((segment) => segment.name).join(', ')} (${String(bytes)} bytes; past ${why})`,
+    `retention dropped ${drops.map((drop) => drop.name).join(', ')} (${String(bytes)} bytes; past ${bounds.join(' or ')})`,
+  );
+
+  const named = drops.filter(
+    (drop): drop is DroppedSegment & { oldestSeq: number; newestSeq: number } =>
+      drop.oldestSeq !== null && drop.newestSeq !== null,
+  );
+  if (named.length === 0) return;
+  const newest = Math.max(...named.map((drop) => drop.newestSeq));
+  const byAge = drops.some((drop) => drop.bounds.includes('age'));
+  const bySize = drops.some((drop) => drop.bounds.includes('rotation') || drop.bounds.includes('total'));
+  const reason = byAge && bySize ? 'age or size' : byAge ? 'age' : 'size';
+  const indexed = appendIndexOf(project, root, home, kept);
+  const retainedNewest = indexed.ok ? indexed.index.newestSeq : null;
+  // The declared floor is the oldest sequence retention has dropped, carried forward from the
+  // declaration records still retained and from those inside the segments this pass removes.
+  // Without it, a size-capped log would drop each declaration with the segment that held it and
+  // the older holes would look undeclared.
+  let floor: number | null = null;
+  const lower = (value: number | null): void => {
+    if (value === null) return;
+    floor = floor === null ? value : Math.min(floor, value);
+  };
+  for (const drop of drops) {
+    lower(drop.oldestSeq);
+    lower(drop.declaredOldest);
+  }
+  if (indexed.ok) {
+    for (const record of indexed.index.duplicates.values()) {
+      if (record.payload.kind !== 'team.event-log-dropped') continue;
+      lower(record.payload.dropped_oldest_seq ?? null);
+    }
+  }
+  if (floor === null) return;
+  const oldest: number = floor;
+  appendEvent(
+    project,
+    root,
+    home,
+    {
+      ts: new Date().toISOString(),
+      kind: 'team.event-log-dropped',
+      session,
+      record_id: `retention:${String(oldest)}-${String(newest)}`,
+      reason,
+      dropped_oldest_seq: oldest,
+      dropped_newest_seq: newest,
+    },
+    {
+      kept,
+      deduplicate: true,
+      retain: false,
+      ...(retainedNewest === null ? { seqOverride: newest + 1 } : {}),
+    },
   );
 }
 
 /** Applies the retention window without appending: an idle live file is sealed, then the oldest
  *  sealed segments are dropped while the log is over the cap or a segment is past the age window.
  *  The bus calls this at start, so a team that comes back after an idle month drops its old
- *  segments before its first event. Best effort: retention never fails the caller. */
+ *  segments before its first event; the pass leaves one signed drop record naming what it
+ *  dropped. Best effort: retention never fails the caller. */
 export function pruneEventLog(
   project: string,
   root: string,
   home: string,
-  options: EventLogRetention & { kept?: number } = {},
+  options: EventLogRetention & { kept?: number; session?: string } = {},
 ): void {
   try {
     const kept = options.kept ?? EVENT_LOG_KEPT;
     const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
     const path = eventLogPath(project, root, home);
-    sealIdleLiveFile(path, kept, Date.now() - retentionSeconds * 1_000);
-    pruneSealed(path, root, kept, options);
+    const drops: DroppedSegment[] = [];
+    const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+    if (sealed !== null) drops.push(sealed);
+    drops.push(...pruneSealed(path, home, kept, options));
+    declareDrop(project, root, home, kept, options, drops, options.session ?? project);
   } catch {
     // Dropped on purpose: reads and writes are unaffected by retention failing.
   }
@@ -274,6 +443,8 @@ const OPTIONAL_STRING_FIELDS = [
   'rule',
 ] as const;
 
+const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq'] as const;
+
 const ALLOWED_PAYLOAD_KEYS = new Set<string>([
   'v',
   'seq',
@@ -282,6 +453,7 @@ const ALLOWED_PAYLOAD_KEYS = new Set<string>([
   'session',
   'record_id',
   ...OPTIONAL_STRING_FIELDS,
+  ...OPTIONAL_SEQUENCE_FIELDS,
 ]);
 
 export function parseEventPayload(value: unknown): EventPayload | null {
@@ -309,6 +481,13 @@ export function parseEventPayload(value: unknown): EventPayload | null {
     if (field in obj && obj[field] !== undefined) {
       if (typeof obj[field] !== 'string' || obj[field] === '') return null;
       payload[field] = obj[field] as string;
+    }
+  }
+  for (const field of OPTIONAL_SEQUENCE_FIELDS) {
+    if (field in obj && obj[field] !== undefined) {
+      const value = obj[field];
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return null;
+      payload[field] = value;
     }
   }
   return payload;
@@ -394,9 +573,30 @@ export function readEvents(
   return { ok: true, events, unverified, oldestSeq, newestSeq, path };
 }
 
-/** Reads events after `cursor` (`seq > cursor`). When `cursor > 0` is older than the oldest
- *  event retained in the rotated log (`cursor < oldestSeq`), returns `{ kind: 'gap', oldest_seq }`
- *  so the subscriber knows to resync from the records before following on (Amendment 01 §4.2). */
+/** Whether the retained `team.event-log-dropped` records cover every sequence in `from`..`to`.
+ *  Ranges may abut and overlap; together they must reach the whole missing window. */
+function declaredDropCovers(events: SignedEventRecord[], from: number, to: number): boolean {
+  const ranges: [number, number][] = [];
+  for (const { payload } of events) {
+    if (payload.kind !== 'team.event-log-dropped') continue;
+    if (payload.dropped_oldest_seq === undefined || payload.dropped_newest_seq === undefined) continue;
+    ranges.push([payload.dropped_oldest_seq, payload.dropped_newest_seq]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  let reach = from - 1;
+  for (const [start, end] of ranges) {
+    if (start > reach + 1) break;
+    if (end > reach) reach = end;
+    if (reach >= to) return true;
+  }
+  return false;
+}
+
+/** Reads events after `cursor` (`seq > cursor`). When the records between the cursor and the
+ *  oldest retained event are missing (`cursor + 1 < oldestSeq`), returns `{ kind: 'gap' }` so the
+ *  subscriber resyncs from the durable records before following on (Amendment 01 §4.2). When
+ *  retained drop records declare that whole window, the gap carries `reason: 'retention'` and the
+ *  dropped range; an undeclared hole carries neither. */
 export function readEventsFromCursor(
   project: string,
   root: string,
@@ -407,12 +607,17 @@ export function readEventsFromCursor(
   const read = readEvents(project, root, home, options);
   if (!read.ok) return read;
   const { events, oldestSeq, newestSeq } = read;
-  if (cursor > 0 && oldestSeq !== null && cursor < oldestSeq) {
+  if (cursor > 0 && oldestSeq !== null && cursor + 1 < oldestSeq) {
+    const droppedOldest = cursor + 1;
+    const droppedNewest = oldestSeq - 1;
     return {
       ok: true,
       kind: 'gap',
       oldest_seq: oldestSeq,
       newest_seq: newestSeq ?? oldestSeq,
+      ...(declaredDropCovers(events, droppedOldest, droppedNewest)
+        ? { reason: 'retention' as const, dropped_oldest_seq: droppedOldest, dropped_newest_seq: droppedNewest }
+        : {}),
     };
   }
   const unseen = events.filter((entry) => entry.payload.seq > cursor);
@@ -611,6 +816,9 @@ export function appendEvent(
     seqOverride?: number;
     maxTotalBytes?: number;
     retentionSeconds?: number;
+    /** When false the append performs no retention of its own: the drop record written by a
+     *  dropping pass uses this so declaring a drop cannot drop again. */
+    retain?: boolean;
   } = {},
 ): EventAppendResult {
   const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
@@ -650,6 +858,11 @@ export function appendEvent(
       candidate[field] = input[field];
     }
   }
+  for (const field of OPTIONAL_SEQUENCE_FIELDS) {
+    if (input[field] !== undefined) {
+      candidate[field] = input[field];
+    }
+  }
   const validated = parseEventPayload(candidate);
   if (validated === null) return { ok: false, reason: 'the event payload is invalid' };
 
@@ -668,22 +881,29 @@ export function appendEvent(
 
   const line = `${JSON.stringify(record)}\n`;
   const bytes = Buffer.from(line, 'utf8');
+  const retain = options.retain ?? true;
+  const drops: DroppedSegment[] = [];
 
   try {
-    // An idle live file is sealed first, so the append starts a new segment and the records the
-    // old one holds are dropped by the prune below as one past-the-window segment.
-    try {
-      const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
-      sealIdleLiveFile(path, kept, Date.now() - retentionSeconds * 1_000);
-    } catch {
-      // Retention never fails an append: the write below carries on.
-    }
-    const current = heldAt(path);
-    if (current.kind === 'file') {
-      const size = statSync(path).size;
-      if (size > 0 && size + bytes.length > maxBytes) {
-        const rotateErr = rotateEventLog(path, kept);
-        if (rotateErr !== null) return { ok: false, reason: rotateErr };
+    if (retain) {
+      // An idle live file is sealed first, so the append starts a new segment and the records the
+      // old one holds are dropped by the prune below as one past-the-window segment.
+      try {
+        const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+        const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+        if (sealed !== null) drops.push(sealed);
+      } catch {
+        // Retention never fails an append: the write below carries on.
+      }
+      const current = heldAt(path);
+      if (current.kind === 'file') {
+        const size = statSync(path).size;
+        if (size > 0 && size + bytes.length > maxBytes) {
+          const captured = captureOldestSlot(path, kept, home, 'rotation');
+          const rotateErr = rotateEventLog(path, kept);
+          if (rotateErr !== null) return { ok: false, reason: rotateErr };
+          if (captured !== null) drops.push(captured);
+        }
       }
     }
 
@@ -700,13 +920,27 @@ export function appendEvent(
     } finally {
       closeSync(fd);
     }
-    try {
-      pruneSealed(path, root, kept, options);
-    } catch {
-      // Retention never fails an append: the record is written either way.
+    if (retain) {
+      try {
+        drops.push(...pruneSealed(path, home, kept, options));
+      } catch {
+        // Retention never fails an append: the record is written either way.
+      }
+      try {
+        declareDrop(project, root, home, kept, { ...options, maxBytes }, drops, input.session);
+      } catch {
+        // Retention never fails an append: the record is written either way.
+      }
     }
     return { ok: true, record, duplicate: false, path };
   } catch {
+    if (drops.length > 0) {
+      try {
+        declareDrop(project, root, home, kept, { ...options, maxBytes }, drops, input.session);
+      } catch {
+        // The append already failed; the declaration is best effort too.
+      }
+    }
     return { ok: false, reason: 'the event log could not be written' };
   }
 }

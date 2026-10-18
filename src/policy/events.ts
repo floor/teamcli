@@ -81,6 +81,9 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   // The one answer that moves a table default: a refusal names a rule, so the owner is the
   // audience; the operational log holds the same record for every reader.
   'team.policy-refused': ['owner'],
+  // Retention is operational, not governance: a dropped range is declared to the lead and the
+  // operator, and the record itself is in the log every reader already verifies.
+  'team.event-log-dropped': ['lead', 'operator'],
 };
 
 /** Every event kind the default table routes, in the table's own order. */

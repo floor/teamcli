@@ -123,8 +123,10 @@ export type WatchSources = {
   busPublish?(root: string, event: EventAppendInput): Promise<BusPublishOutcome>;
   /** Optional listener invoked for each verified event received from the bus in sequence order. */
   onBusEvent?(event: SignedEventRecord): void;
-  /** Optional listener invoked when the bus reports a sequence gap (`cursor < oldest_seq`) and watch resyncs from records. */
-  onBusGap?(oldestSeq: number, newestSeq: number): void;
+  /** Optional listener invoked when the bus reports a sequence gap (`cursor + 1 < oldest_seq`)
+   *  and watch resyncs from records. `reason` is `'retention'` when retained drop records declare
+   *  the missing window. */
+  onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
 };
 
 export const realWatchSources: WatchSources = {
@@ -1104,7 +1106,7 @@ export async function syncWatchBus(
     if (outcome.kind === 'gap') {
       tracker.reset(outcome.newest_seq);
       memory?.active.clear();
-      sources.onBusGap?.(outcome.oldest_seq, outcome.newest_seq);
+      sources.onBusGap?.(outcome.oldest_seq, outcome.newest_seq, outcome.reason);
       return true;
     }
     return false;

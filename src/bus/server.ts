@@ -87,7 +87,16 @@ export type BusAnswer =
   | { ok: true; kind: 'published'; event: SignedEventRecord; duplicate: boolean }
   | { ok: true; kind: 'events'; events: SignedEventRecord[]; cursor: number }
   | { ok: true; kind: 'event'; event: SignedEventRecord }
-  | { ok: true; kind: 'gap'; oldest_seq: number; newest_seq: number }
+  | {
+      ok: true;
+      kind: 'gap';
+      oldest_seq: number;
+      newest_seq: number;
+      /** Set when retained drop records cover the missing window: the hole is retention. */
+      reason?: 'retention';
+      dropped_oldest_seq?: number;
+      dropped_newest_seq?: number;
+    }
   | {
       ok: false;
       at: 'caller' | 'policy' | 'write';
@@ -421,7 +430,29 @@ export function parseBusAnswer(line: string): BusAnswer | null {
       ) {
         return null;
       }
-      return { ok: true, kind: 'gap', oldest_seq: obj.oldest_seq, newest_seq: obj.newest_seq };
+      const gap: Extract<BusAnswer, { kind: 'gap' }> = {
+        ok: true,
+        kind: 'gap',
+        oldest_seq: obj.oldest_seq,
+        newest_seq: obj.newest_seq,
+      };
+      if (obj.reason !== undefined) {
+        const droppedOldest = obj.dropped_oldest_seq;
+        const droppedNewest = obj.dropped_newest_seq;
+        if (
+          obj.reason !== 'retention' ||
+          typeof droppedOldest !== 'number' ||
+          !Number.isInteger(droppedOldest) ||
+          typeof droppedNewest !== 'number' ||
+          !Number.isInteger(droppedNewest)
+        ) {
+          return null;
+        }
+        gap.reason = 'retention';
+        gap.dropped_oldest_seq = droppedOldest;
+        gap.dropped_newest_seq = droppedNewest;
+      }
+      return gap;
     }
     return null;
   }
@@ -832,6 +863,13 @@ function dispatchBusRequest(
       kind: 'gap',
       oldest_seq: fromCursor.oldest_seq,
       newest_seq: fromCursor.newest_seq,
+      ...(fromCursor.reason !== undefined
+        ? {
+            reason: fromCursor.reason,
+            dropped_oldest_seq: fromCursor.dropped_oldest_seq,
+            dropped_newest_seq: fromCursor.dropped_newest_seq,
+          }
+        : {}),
     });
     return;
   }
@@ -956,7 +994,14 @@ export function publishToBus(
 
 export type BusSubscribeOutcome =
   | { kind: 'events'; events: SignedEventRecord[]; cursor: number }
-  | { kind: 'gap'; oldest_seq: number; newest_seq: number }
+  | {
+      kind: 'gap';
+      oldest_seq: number;
+      newest_seq: number;
+      reason?: 'retention';
+      dropped_oldest_seq?: number;
+      dropped_newest_seq?: number;
+    }
   | { kind: 'refused'; at: 'caller' | 'policy' | 'write'; message: string; rule?: string; eventKind?: EventKind }
   | { kind: 'unavailable' }
   | { kind: 'wrong' }
@@ -1010,7 +1055,18 @@ export function subscribeBusOnce(
         return;
       }
       if (parsed.kind === 'gap') {
-        finish({ kind: 'gap', oldest_seq: parsed.oldest_seq, newest_seq: parsed.newest_seq });
+        finish({
+          kind: 'gap',
+          oldest_seq: parsed.oldest_seq,
+          newest_seq: parsed.newest_seq,
+          ...(parsed.reason !== undefined
+            ? {
+                reason: parsed.reason,
+                dropped_oldest_seq: parsed.dropped_oldest_seq,
+                dropped_newest_seq: parsed.dropped_newest_seq,
+              }
+            : {}),
+        });
         return;
       }
       if (parsed.kind === 'events') {
