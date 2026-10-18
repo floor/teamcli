@@ -59,6 +59,7 @@ import { main, reportFailure, version } from '../src/cli.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
+import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -3549,6 +3550,30 @@ scene('mcp.not-set-up', async (place) => show(await mcpRan(place, ['status'], { 
 scene('mcp.clear', async (place) => show(await mcpRan(place, ['doctor']), 'nothing missing'));
 scene('mcp.missing', async (place) => show(await mcpRan(place, ['doctor'], { listDir: () => [] }), 'no bridge configuration'));
 scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcommand is required'));
+// The server ends cleanly when its client closes stdin: no lines in, no lines out, exit 0.
+scene('mcp.serve-ended', async (place) => {
+  write(place, TEAM);
+  const io = testIo(place.root, owner);
+  const code = await runMcpServe({ seat: 'lead', session: undefined }, io, {
+    lines: (async function* () {
+      // stdin is already closed
+    })(),
+    write: () => {},
+  });
+  return { code, out: io.out, err: io.err };
+});
+// A seat the team file does not declare is refused before the server serves anything.
+scene('mcp.serve-refused', async (place) => {
+  write(place, TEAM);
+  const io = testIo(place.root, owner);
+  const code = await runMcpServe({ seat: 'ghost', session: undefined }, io, {
+    lines: (async function* () {
+      // the refusal leaves before any line is read
+    })(),
+    write: () => {},
+  });
+  return show({ code, out: io.out, err: io.err }, 'declares no seat');
+});
 
 const RELOAD_FILE = TEAM.replace(
   'launch: claude --model claude-opus-5-5\n',

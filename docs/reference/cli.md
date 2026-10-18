@@ -478,6 +478,7 @@ Usage:
 
     team mcp status [--json]
     team mcp doctor [--json]
+    team mcp serve --seat <seat> [--session <session>]
 
 ### Flags
 
@@ -504,6 +505,27 @@ Usage:
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `serve`
+
+Hidden: no
+
+Usage:
+
+    team mcp serve --seat <seat> [--session <session>]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--seat` | yes | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
