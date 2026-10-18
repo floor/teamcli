@@ -300,6 +300,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `projects.listed` | `projects` | 0 | the projects are listed | `team projects` |
 | `projects.unreadable` | `projects` | 1 | the project registry cannot be read | `team projects` |
 | `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
+| `raise.dry-run` | `raise` | 0 | the route the raise would take; nothing was written | `team raise release.ready "the release is ready for the owner" --dry-run` |
+| `raise.merged` | `raise` | 0 | the line was merged into the owner's open record, and the record counts it | `team raise release.ready "the release is ready for the owner"` |
+| `raise.raised` | `raise` | 0 | the line reached the owner's mailbox as a signed record, and the owner was notified | `team raise release.ready "the release is ready for the owner"` |
+| `raise.capped` | `raise` | 1 | ten raises have reached the owner today | `team raise release.ready "the release is ready for the owner"` |
+| `raise.io` | `raise` | 1 | the event log or the owner's record can't be read or written | `team raise release.ready "the release is ready for the owner"` |
+| `raise.refused` | `raise` | 1 | not the orchestrator's seat or a lead's | `team raise release.ready "the release is ready for the owner"` |
+| `raise.file` | `raise` | 2 | the team file can't be read | `team raise release.ready "the release is ready for the owner"` |
+| `raise.usage` | `raise` | 2 | the invocation can't be read | `team raise` |
 | `register.already` | `register` | 0 | the seat is already recorded on that pane | `team register worker` |
 | `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |
 | `register.ready` | `register` | 0 | the running seat's record was written | `team register worker` |

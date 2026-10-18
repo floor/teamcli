@@ -50,6 +50,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
   bus: 'starts a long-running local event bus server on .agents/bus.sock',
   hold: 'mutates .agents/state.json to place or clear a team hold',
+  raise: "writes one signed owner mailbox record and one event, and rings the owner's notification",
   init: 'writes .agents/team.yaml and registers the project on disk',
   lock: 'mutates project lock state to acquire a named lock',
   next: 'claims the next open task and writes a local lease at .agents/leases/<id>.json',

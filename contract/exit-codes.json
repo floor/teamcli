@@ -2061,6 +2061,62 @@
     },
     {
       "code": 0,
+      "command": "raise",
+      "id": "raise.dry-run",
+      "meaning": "the route the raise would take; nothing was written",
+      "trigger": "team raise release.ready \"the release is ready for the owner\" --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "raise",
+      "id": "raise.merged",
+      "meaning": "the line was merged into the owner's open record, and the record counts it",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 0,
+      "command": "raise",
+      "id": "raise.raised",
+      "meaning": "the line reached the owner's mailbox as a signed record, and the owner was notified",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 1,
+      "command": "raise",
+      "id": "raise.capped",
+      "meaning": "ten raises have reached the owner today",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 1,
+      "command": "raise",
+      "id": "raise.io",
+      "meaning": "the event log or the owner's record can't be read or written",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 1,
+      "command": "raise",
+      "id": "raise.refused",
+      "meaning": "not the orchestrator's seat or a lead's",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 2,
+      "command": "raise",
+      "id": "raise.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 2,
+      "command": "raise",
+      "id": "raise.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team raise"
+    },
+    {
+      "code": 0,
       "command": "register",
       "id": "register.already",
       "meaning": "the seat is already recorded on that pane",

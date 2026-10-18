@@ -21,6 +21,7 @@ import { runDown } from '../../src/commands/down.ts';
 import { runDrops } from '../../src/commands/drops.ts';
 import { runFeed } from '../../src/commands/feed.ts';
 import { runHold } from '../../src/commands/hold.ts';
+import { runRaise } from '../../src/commands/raise.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
 import { runRegister } from '../../src/commands/register.ts';
@@ -247,6 +248,10 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runFeed(rest, io, { home: fixture.home, poll: async () => false });
     case 'hold':
       return runHold(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'raise':
+      // The page's clock is pinned, so the hour's merge window is read against it. No
+      // notification source: a doc run writes no machine notification.
+      return runRaise(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'messages':
       return runMessages(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'reply':
