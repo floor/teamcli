@@ -94,6 +94,7 @@ const realLaunch: Launch = {
   sessionUp: () => null,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -514,7 +515,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       agentPanes: (current) => launch.agentPanes(current),
       createWorkspace: (current, cwd, label) => launch.createWorkspace(current, cwd, label),
       paneRun: (current, pane, command) => launch.paneRun(current, pane, command),
-      registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
+      ...(launch.registerInbox
+        ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+        : {}),
       renameAgent: (current, pane, next) => launch.renameAgent(current, pane, next),
       reportDisplayAgent: (current, pane, text) => launch.reportDisplayAgent?.(current, pane, text) ?? true,
       closeWorkspace(current, workspace) {

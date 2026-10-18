@@ -845,10 +845,7 @@ export async function executePlan(
         // starts in. A refusal costs the seat its inbox leg and nothing else.
         if (op.cli !== undefined && op.cwd !== undefined) {
           const inbox = host.registerInbox?.(op.cli, op.seat, op.cwd);
-          if (inbox && !inbox.ok) {
-            hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
-            host.log(op.seat, `the team inbox was not registered: ${inbox.reason}`);
-          }
+          if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
         }
         const here = place(op.seat, op.pane);
         if (!here || !host.paneRun(session, here.pane, op.command)) {
