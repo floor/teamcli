@@ -169,6 +169,32 @@ describe('delivery_order', () => {
   });
 });
 
+// `human` marks a pane a person uses: read as a flag on the seat, part of the built seat, and
+// omitted when the file marks no seat — every file that marks none keeps the digest it had.
+describe('human', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted key reads no field, false reads no field, and true reads the mark', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect('human' in (checked.team.seats[0] as object)).toBe(false);
+    const off = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    human: false\n`));
+    if (!off.ok) throw new Error('the human: false fixture does not validate');
+    expect('human' in (off.team.seats[0] as object)).toBe(false);
+    const marked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    human: true\n`));
+    if (!marked.ok) throw new Error('the human fixture does not validate');
+    expect(marked.team.seats[0]?.human).toBe(true);
+  });
+
+  test('a value that is not an unquoted flag is refused under the seat', () => {
+    for (const value of ['yes', '"true"', '1']) {
+      const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    human: ${value}\n`));
+      expect(checked.ok).toBe(false);
+      if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": human must be true or false']);
+    }
+  });
+});
+
 // `liveness` is a seat's own word on the three liveness windows: each a positive number of
 // seconds, under the same inheritance the watch's reports read. Omitted, the seat carries no
 // field and its digest is the one it had; writing one is an edit the owner re-approves.

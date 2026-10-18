@@ -46,6 +46,14 @@ submit while herdr stays idle; that run is delivered as taken, never a failed se
 never types: there `delivered` means the 0600 drop file is in place, and no box, status or
 transcript is read.
 
+A seat the team file marks `human: true` walks no typing leg at all: the typed trigger and the
+native frame are skipped, each one's reason recorded on the history line, and the walk falls to the
+drop leg — added to the walk when the order in force leaves it out — so the message still arrives
+in the drop file and the pane is never touched. With no leg left the send refuses, naming why.
+`--wait` is refused for such a seat, since it rides the native leg. The watch types no retry or
+nudge into a human's pane either: a held send's marker is given up on with the reason, and its
+message waits in the drop file.
+
 `team send --wait` needs the native leg — the team route that carries the call and the caller's
 own `SendMessage` that carries the reply — and this build does not ship it. A waited send is
 refused before anything is written: no frame, no reply listener, no drop file, nothing typed

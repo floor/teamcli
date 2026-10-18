@@ -1,6 +1,7 @@
 // `doctor` reads the team file through the same sections `team check` does, so a word it cannot
-// read is refused before any finding: the `drop` leg validates like the other three, and an
-// unknown leg names every word the file may write — the same list `team check` and the schema use.
+// read is refused before any finding: the `drop` leg validates like the other three, an unknown
+// leg names every word the file may write — the same list `team check` and the schema use — and a
+// seat's `human` key is a flag the file reads like `assistant`.
 // Fixtures only: the sample team file, a scratch home, and a doctor whose sources answer instead
 // of reading this machine.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -61,5 +62,29 @@ describe('doctor reads the delivery_order legs the file may write', () => {
     const run = await doctor('delivery_order: [telepathy]\n');
     expect(run.code).toBe(2);
     expect(run.err).toContain('delivery_order "telepathy" must be one of: native, mcp-inbox, typed, drop');
+  });
+});
+
+describe('doctor reads the seat keys the file may write', () => {
+  // The coordinator's own stanza ends on its mode line, so the mark goes in beside it.
+  const MODE = '    mode: shared               # the coordinator reads; it never implements\n';
+
+  async function doctorWithSeat(mark: string): Promise<{ code: number; out: string; err: string }> {
+    writeFileSync(join(root, '.agents/team.yaml'), `${EXAMPLE.replace(MODE, `${MODE}${mark}`)}`);
+    const io = testIo(root, OWNER);
+    const code = await runDoctor(FILE, io, sources());
+    return { code, out: io.out, err: io.err };
+  }
+
+  test('human: true is a seat flag: the file reads it, exit 2 is not reached', async () => {
+    const run = await doctorWithSeat('    human: true\n');
+    expect(run.err).not.toContain('human must be true or false');
+    expect(run.code).not.toBe(2);
+  });
+
+  test('a value that is not a flag is refused under the seat', async () => {
+    const run = await doctorWithSeat('    human: perhaps\n');
+    expect(run.code).toBe(2);
+    expect(run.err).toContain('seat "claude-coordinator-acme": human must be true or false');
   });
 });

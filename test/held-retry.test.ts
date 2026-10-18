@@ -204,6 +204,30 @@ describe('retryHeldDrops', () => {
     expect(said).toEqual(['lead: a held send from owner was delivered on retry']);
   });
 
+  test('a seat the file marks human is never typed into: the marker is given up with the reason', async () => {
+    const made = world();
+    const text = teamText(made.root, lobbyDir(made.home)).replace('    name: lead\n', '    name: lead\n    human: true\n');
+    const team = teamOf(text);
+    const dropDir = seedHeld(made.dir, 'acme', 'lead', 'drop-human', 'from the owner\n\nhello');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(said).toEqual([
+      `lead: a held send from owner was not delivered (the pane is a human's, and nothing is typed into it); the drop file is at ${join(dropDir, 'drop-human')}; send it again`,
+    ]);
+    // The message itself waits on disk: the person reads the drop file.
+    expect(readFileSync(join(dropDir, 'drop-human'), 'utf8')).toBe('from the owner\n\nhello');
+  });
+
   test('a trigger left unsent in the box is submitted, never typed over', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

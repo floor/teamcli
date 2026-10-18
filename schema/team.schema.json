@@ -587,6 +587,10 @@
             "type": "boolean",
             "$comment": "the entity's assistant: at most one seat carries it"
           },
+          "human": {
+            "type": "boolean",
+            "$comment": "the pane is a person's: a send walks no typing leg to it — the walk falls to the drop leg — and the watch types no retry or nudge there"
+          },
           "count": {
             "type": "integer",
             "minimum": 1

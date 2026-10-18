@@ -174,6 +174,15 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const drops = readPending(dropDir);
     if (drops.length === 0) continue;
+    // A pane the file marks as a human's is never typed into: a retry is typing, so a marker
+    // left for such a seat is given up on where it stands, with the reason, and the message
+    // waits in its drop file for a person to read.
+    if (seat.human === true) {
+      for (const drop of drops) {
+        giveUp(scene, dropDir, drop, 'the pane is a human\'s, and nothing is typed into it');
+      }
+      continue;
+    }
     // The age bound is applied before the pane is looked for: a seat that vanished leaves no
     // pane to retry, and its marker must not sit in the store forever.
     const now = scene.now.getTime();

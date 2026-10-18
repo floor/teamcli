@@ -476,6 +476,80 @@ describe('the drop leg', () => {
   });
 });
 
+describe('a human seat is never typed into', () => {
+  const HUMAN = '    human: true\n';
+  const TYPED_SKIP = "typed: the pane is a human's, and nothing is typed into it";
+  const NATIVE_SKIP_HUMAN = "native: the pane is a human's, and no frame is sent";
+
+  test('typed-only walks no typing leg: drop takes it and the reason is recorded', async () => {
+    const w = world({ lead: `${HUMAN}    delivery_order: [typed]\n` });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(lastEntry(w.root, w.home)).toEqual({
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${HEADER}hello`,
+      id: expect.any(String),
+      outcome: 'delivered',
+      ms: 0,
+      via: 'drop',
+      failed: [TYPED_SKIP],
+    });
+  });
+
+  test('native first falls through to drop: no frame, no trigger, no keystroke', async () => {
+    const w = world({ lead: `${HUMAN}    delivery_order: [native, typed]\n` });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+    expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, TYPED_SKIP]);
+  });
+
+  test('the dry run names the drop file, never a typing channel', async () => {
+    const w = world({ lead: `${HUMAN}    delivery_order: [typed]\n` });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
+
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: dry-run: claude-code via a 0600 drop file with nothing typed into the pane; nothing was written\n',
+    );
+    expect(host.typed).toEqual([]);
+    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+  });
+
+  test('a waited send is refused: the wait rides the native leg a human never walks', async () => {
+    const w = world({ lead: HUMAN });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--wait'], io, host)).toBe(1);
+
+    expect(io.err).toContain("lead: the pane is a human's; the native leg is never walked for it, and --wait rides that leg; nothing was sent");
+    expect(host.typed).toEqual([]);
+    expect(host.frames).toEqual([]);
+  });
+});
+
 describe('the dry run names only the legs this build can walk', () => {
   test('a Claude Code seat prints the typed channel: neither skip is a channel a run would take', async () => {
     const w = world();

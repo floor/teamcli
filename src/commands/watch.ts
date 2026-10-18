@@ -725,6 +725,13 @@ async function deliver(
 ): Promise<void> {
   const who = nudge.ring?.to ?? nudge.seat ?? 'the seat';
   const cli = nudge.cli ?? team.seats.find((seat) => seat.name === who)?.cli ?? '';
+  // A pane the team file marks as a human's is never typed into, and a nudge is typing: the
+  // line is not typed, and the report says whose pane was spared. A ring's record stays
+  // unacked, so the message waits for the person rather than being lost.
+  if (team.seats.some((seat) => seat.name === who && seat.human === true)) {
+    tellOnce(told, 'nudge:human', `a nudge was not typed: ${who} is a human's pane`, tell);
+    return;
+  }
   const look = () => readScreen(cli, sources.screen(nudge.pane, session) ?? undefined).kind;
   const holds = () => boxHoldsText(cli, nudge.text, sources.screen(nudge.pane, session) ?? undefined);
   const status = sources.status(nudge.pane, session);

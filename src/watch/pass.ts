@@ -568,10 +568,10 @@ export function pass({
   return { reports, work: workDrops(team, live, observations, watch, now, memory, read), ring, mailboxNote, readings, machineReadings, labels, refusals: refused };
 }
 
-/** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
- *  box that already holds text are not due. The stamp lives in this process: a restart starts
- *  the idle clock again. A seat seen working clears its stamp, so the next quiet stretch waits
- *  `idle_first` once more. */
+/** Idle workers due a work drop this pass. Leads, parked and stopped seats, a seat whose pane is
+ *  a human's, a dialog and a box that already holds text are not due. The stamp lives in this
+ *  process: a restart starts the idle clock again. A seat seen working clears its stamp, so the
+ *  next quiet stretch waits `idle_first` once more. */
 function workDrops(
   team: TeamFile,
   live: Live,
@@ -585,7 +585,8 @@ function workDrops(
   const body = team.watch.nudge ?? NUDGE_TEXT;
   const due: PassResult['work'] = [];
   for (const obs of observations) {
-    if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) {
+    const fileSeat = team.seats.find((item) => item.name === obs.name);
+    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
       delete sent[obs.name];
       continue;
     }

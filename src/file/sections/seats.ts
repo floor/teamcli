@@ -87,6 +87,7 @@ export const seats: Section = {
         stopped: { type: 'boolean' },
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
+        human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks no typing leg to it — the walk falls to the drop leg — and the watch types no retry or nudge there' },
         count: { type: 'integer', minimum: 1 },
         reach: {
           type: 'object',
@@ -128,7 +129,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'reach', 'delivery_order', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'reach', 'delivery_order', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -196,6 +197,10 @@ function readSeats(
     const assistantField = fields.get('assistant');
     const assistant = check.flag(assistantField, `${at}: assistant`);
     if (assistant && name && assistantField) assistants.push({ name, line: assistantField.value.line });
+    // The pane is a person's: no leg of a send types into it, and the watch types no retry or
+    // nudge there either. A field of the built seat like `assistant`, omitted when the file
+    // marks none — every file that marks no seat keeps the digest it had.
+    const human = check.flag(fields.get('human'), `${at}: human`);
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     if (assistant && count > 1) {
       check.fail(assistantField?.value.line ?? line, `\`assistant\` on "${name}" can't be a seat with count`);
@@ -247,6 +252,8 @@ function readSeats(
         ...(liveness ? { liveness } : {}),
         // Omitted when the file marks no assistant, so every file that writes none keeps its digest.
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
+        // Omitted when the file marks no human, for the same reason.
+        ...(human ? { human: true as const } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
         ...(reach ? { reach } : {}),

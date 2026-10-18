@@ -115,6 +115,13 @@ export type Seat = {
    * the owner approves, because the capability admits a send.
    */
   assistant?: true;
+  /**
+   * The pane is a person's: the file marks it with `human: true`. A send to it walks no typing
+   * leg — the typed trigger, the native frame, and the watch's retry and nudges are all skipped —
+   * and falls to the drop leg, which is added to the walk when the order in force leaves it out.
+   * Absent otherwise, so a file that marks none keeps every digest it had.
+   */
+  human?: true;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
   /**

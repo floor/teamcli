@@ -119,6 +119,21 @@ describe('watch.nudge', () => {
     expect(at(raw, leadMemory, 10 * MIN, scene({ 'claude-coordinator-acme': { status: 'idle', screen: idle } })).work).toEqual([]);
   });
 
+  test('a seat the file marks human is never a work-drop target', () => {
+    // The mark is written on the declared entry, so both instances of the counted seat carry it:
+    // neither is due, and nothing is put in a drop folder for a pane a person uses.
+    const text = raw
+      .replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`)
+      .replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    human: true\n');
+    const memory = newMemory();
+    const both = scene({
+      'deepseek-acme': { status: 'idle', screen: idle },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    at(text, memory, 0, both);
+    expect(at(text, memory, 10 * MIN, both).work).toEqual([]);
+  });
+
   test('a seat that was in a dialog is sent once the prompt is empty, still inside the same stretch', () => {
     const memory = newMemory();
     const free = scene({ 'deepseek-acme': { status: 'idle', screen: idle } });
@@ -197,6 +212,25 @@ describe('team watch writes the drop', () => {
     expect(statSync(join(dir, '.agents', 'send-drops')).mode & 0o777).toBe(0o700);
     expect(io.out).toContain(`nudged deepseek-acme-2: ${PROMPT}`);
     expect(io.out).not.toContain('nudged claude-coordinator-acme');
+  });
+
+  test('a human seat gets no typed line and no drop', async () => {
+    file = join(dir, '.agents', 'team.yaml');
+    writeFileSync(
+      file,
+      raw
+        .replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`)
+        .replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    human: true\n'),
+    );
+    typed = [];
+    screenNow = idle;
+    clock = Date.parse('2026-10-03T14:00:00Z');
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources({
+      ownPane: () => ({ pane: 'first:pane', workspace: 'first' }),
+    }));
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
   });
 
   test('an edited grant and delegates produces no approved-copy difference line', async () => {

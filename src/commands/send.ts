@@ -73,7 +73,10 @@ either takes the send, which ends the walk, or definitely cannot take it, which
 hands the send to the next leg and is recorded as a failure; mcp-inbox is not in
 this build, so a walk that reaches it skips it and records it unavailable; the
 typed leg is terminal, taking the send or ending the walk unreachable. The drop
-leg writes the same 0600 drop file and types nothing at all. The history line
+leg writes the same 0600 drop file and types nothing at all. A seat the file marks
+human: true walks no typing leg: the typed trigger and the native frame are kept
+out — each one's reason is recorded — and the walk falls to the drop leg, added
+when the order in force leaves it out; a waited send is refused. The history line
 names the channel the send went by and the legs that failed before it.
 
 The outcome is one of seven, and none of them is silent:
@@ -520,6 +523,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     ...(to.cross ? {} : { file: team }),
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
   }));
+  // A human's pane never takes typing, whatever its order says: the typing legs are kept out of
+  // the walk — each one's reason is recorded on the history line — and the walk falls to the drop
+  // leg, added when the order in force leaves it out, since a file can wait where a keystroke
+  // cannot be taken back. A walk with no drop leg left refuses on that leg's own terms.
+  const human = declared?.human === true;
+  const walk: readonly DeliveryLeg[] = human
+    ? [...order.filter((leg) => leg !== 'typed' && leg !== 'native'), ...(order.includes('drop') ? [] : (['drop'] as const))]
+    : order;
   // --wait needs the socket frame, and only a Claude Code seat has that listener. Any other
   // seat is refused before a write, a dry run included: the refusal is unconditional and stands
   // whether or not anything would be written, so the dry run reports the real run's refusal and
@@ -527,6 +538,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // as well when the order does not lead with the native leg — the frame the reply listener
   // stands beside is that leg — and while SOCKET_SEND is off (deliverSocket names that refusal);
   // those print a `dry-run:` line in a dry run, since nothing is written either way.
+  // A human's pane never takes the native leg either, so a waited send has no frame to ride: the
+  // refusal is unconditional, and a dry run reports the real run's refusal, as the non-native
+  // seat's does.
+  if (wait && human) {
+    return refuse(io, dir, who, `${to.seat}: the pane is a human's; the native leg is never walked for it, and --wait rides that leg; nothing was sent`, host, report);
+  }
   if (wait && to.cli !== 'claude-code') {
     return refuse(io, dir, who, `${to.seat} runs ${to.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`, host, report);
   }
@@ -550,7 +567,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
   const dropPath = join(dropDir, msgId);
   if (dry) {
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(order, to.cli)}; nothing was written`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli)}; nothing was written`, report);
   }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
@@ -560,10 +577,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // writes the typed leg's own file and stops there, with nothing typed. mcp-inbox is
   // not in this build: the walk skips it and records it unavailable. So is the native leg
   // while SOCKET_SEND is off — the frame path is a socket write this build does not make —
-  // and a walk that reaches it records the skip exactly as mcp-inbox's.
+  // and a walk that reaches it records the skip exactly as mcp-inbox's. A human's walk keeps no
+  // typing leg at all; the legs this rule kept out are recorded first, so the history line the
+  // drop leg writes (or the refusal) names what the pane was spared.
   const failures: string[] = [];
+  if (human) {
+    for (const leg of order) {
+      if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
+      else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
+    }
+  }
   let socketNote: string | null = null;
-  for (const [at, leg] of order.entries()) {
+  for (const [at, leg] of walk.entries()) {
     if (leg === 'mcp-inbox') {
       failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
       continue;
@@ -582,7 +607,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       failures.push(`native: ${attempt.reason}`);
       socketNote = `typed, socket ${attempt.reason}`;
       // The fallback's own line, only where the typed leg is still ahead to take the send.
-      if (order.slice(at + 1).includes('typed')) {
+      if (walk.slice(at + 1).includes('typed')) {
         logLine(dir, 'send', who, `${to.seat}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
       }
       continue;
