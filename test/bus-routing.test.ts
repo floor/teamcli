@@ -115,8 +115,8 @@ describe('the event thresholds', () => {
     expect(EVENT_THRESHOLDS.unreachable_threshold_seconds).toBe(600);
     expect(EVENT_THRESHOLDS.idle_threshold_seconds).toBe(300);
     expect(EVENT_THRESHOLDS.reconcile_interval_seconds).toBe(120);
-    expect(EVENT_THRESHOLDS.thread_ttl_seconds).toBe(7 * 24 * 60 * 60);
-    expect(EVENT_THRESHOLDS.thread_cap).toBe(1_000);
+    expect(EVENT_THRESHOLDS.thread_ttl_seconds).toBe(72 * 60 * 60);
+    expect(EVENT_THRESHOLDS.thread_cap).toBe(50);
     expect(EVENT_THRESHOLDS.retention_days).toBe(30);
   });
 

@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { plantRecord, recordDir } from '../src/commands/messages.ts';
-import { runReply, THREAD_CAP, THREAD_TTL_MS, USAGE, type ReplyHost } from '../src/commands/reply.ts';
+import { runReply, USAGE, type ReplyHost } from '../src/commands/reply.ts';
+import { EVENT_THRESHOLDS } from '../src/policy/events.ts';
 import { REPLY_RULE } from '../src/send/admit.ts';
 import { readHistory } from '../src/send/history.ts';
 import { signedCloseOf, signedReceiptOf, verifyClose, verifyReceipt } from '../src/send/record.ts';
@@ -243,11 +244,12 @@ describe('a thread ends on --close, on the ttl, or at the cap', () => {
   });
 
   test('a thread whose newest record is older than the ttl is closed by the clock', async () => {
-    sentTo('owner', SENT, { from: 'worker', at: new Date(NOW.getTime() - (THREAD_TTL_MS + HOUR)).toISOString() });
+    const past = EVENT_THRESHOLDS.thread_ttl_seconds * 1_000 + HOUR;
+    sentTo('owner', SENT, { from: 'worker', at: new Date(NOW.getTime() - past).toISOString() });
 
     const close = await run([SENT, '--close'], { kind: 'owner' });
     expect(close.code).toBe(1);
-    expect(close.err).toBe(`team reply: the thread ${SENT} ended: no record on it for 24h; nothing was written\n`);
+    expect(close.err).toBe(`team reply: the thread ${SENT} ended: no record on it for 72h; nothing was written\n`);
 
     const result = await run([SENT, 'still here'], { kind: 'owner' }, { newId: () => REPLY });
     expect(result.code).toBe(0);
@@ -257,13 +259,13 @@ describe('a thread ends on --close, on the ttl, or at the cap', () => {
   test('a thread at the cap is closed, and a reply opens a new one', async () => {
     const thread = 'cap-000';
     sentTo('owner', thread, { from: 'worker', thread });
-    for (let index = 1; index < THREAD_CAP; index += 1) {
+    for (let index = 1; index < EVENT_THRESHOLDS.thread_cap; index += 1) {
       sentTo('owner', `cap-${String(index).padStart(3, '0')}`, { from: 'worker', thread });
     }
 
     const close = await run([thread, '--close'], { kind: 'owner' });
     expect(close.code).toBe(1);
-    expect(close.err).toBe(`team reply: the thread ${thread} ended at its ${String(THREAD_CAP)}-record cap; nothing was written\n`);
+    expect(close.err).toBe(`team reply: the thread ${thread} ended at its ${String(EVENT_THRESHOLDS.thread_cap)}-record cap; nothing was written\n`);
 
     const result = await run([thread, 'after the cap'], { kind: 'owner' }, { newId: () => REPLY });
     expect(result.code).toBe(0);

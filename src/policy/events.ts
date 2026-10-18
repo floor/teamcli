@@ -111,13 +111,12 @@ export const EVENT_ROUTING_SETTING = {
 } as const;
 
 /**
- * The release defaults of the event settings, in seconds (and counts where a count is the unit),
- * in the shape the existing state thresholds use. **Placeholders**: the amendment fixes the
- * names and the direction each one moves; the shipping numbers are the owner's to set, and the
- * delay thresholds only ever shorten. Where a value exists today it is kept so the groundwork
- * changes nothing: the pending retry window and the inbox fallback are ten minutes, and the lead
- * is told about an idle seat after five. `reconcile-interval` mirrors the watch's two-minute
- * poll; `thread-ttl`, `thread-cap` and `retention` have no shipped counterpart yet.
+ * The shipping defaults of the event settings, in seconds (and counts where a count is the unit),
+ * in the shape the existing state thresholds use. These are the numbers every command reads: the
+ * pending retry window and the inbox fallback are ten minutes, the lead is told about an idle seat
+ * after five, `reconcile-interval` mirrors the watch's two-minute poll, a thread stays open for 72
+ * hours after its newest record or until it holds 50 records, and the event log keeps 30 days. The
+ * owner may change them, and the delay thresholds only ever shorten.
  */
 export const EVENT_THRESHOLDS = {
   /** How long a record may wait before `message.held` reaches the lead. */
@@ -129,9 +128,9 @@ export const EVENT_THRESHOLDS = {
   /** How often the bus reconciles records against the log. */
   reconcile_interval_seconds: 120,
   /** How long an unanswered thread stays open before `thread-ttl` closes it. */
-  thread_ttl_seconds: 7 * 24 * 60 * 60,
+  thread_ttl_seconds: 72 * 60 * 60,
   /** How many messages one thread may hold before a reply opens a new one. */
-  thread_cap: 1_000,
+  thread_cap: 50,
   /** How many days the event log keeps before rotation drops its oldest segment. */
   retention_days: 30,
 } as const;
