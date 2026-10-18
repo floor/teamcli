@@ -13,6 +13,12 @@ CLI that started it as a Model Context Protocol server over stdin and stdout. It
 JSON-RPC lines only. It reads only that seat's own drop folder, writes one listener marker while
 it runs, and writes one receipt per message it returns; it never writes the message itself.
 
+A seat's launch registers the server with its CLI where a run measured a route. A codex seat's
+launch line carries the registration itself — two `-c` values naming the server and this
+install's runner, and no file written into the seat's folder. The server names the seat it
+launched for; the session it serves is the team file's in the seat's folder, read the way a
+sender reads it.
+
 ## Synopsis
 
     team mcp status [--json]

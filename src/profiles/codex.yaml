@@ -53,6 +53,21 @@ trust_answer:
 startup_reads:
   - AGENTS.md
   - .codex/config.toml
+# The team inbox registers on the launch line and writes no file. A run in a scratch
+# CODEX_HOME: `codex mcp list --json` printed `[]`; the same command with
+# `-c 'mcp_servers.team_inbox.command="team"' -c 'mcp_servers.team_inbox.args=["mcp",
+# "serve","--seat","helper"]'` listed `team_inbox`, `"enabled": true`,
+# `"transport": {"type": "stdio"}`, that command and args array, and left the scratch
+# CODEX_HOME empty. `-c, --config <key=value>` is documented as "Override a configuration
+# value ... dotted path ... parsed as TOML". The runner is this install's own executable and
+# entry script, so the server starts whether or not `team` is on the PATH; the session is
+# the team file's in the seat's folder, which the server reads itself (send reads it too).
+mcp_inbox:
+  launch_args:
+    - -c
+    - 'mcp_servers.team_inbox.command="{command}"'
+    - -c
+    - 'mcp_servers.team_inbox.args=["{entry}","mcp","serve","--seat","{seat}"]'
 models:
   option:
     - -m
