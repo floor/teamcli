@@ -212,6 +212,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adds no event, and ten raises reach the owner per team per UTC day, an eleventh refused with the
   reason. `--dry-run` reads the log and the record, says what would happen, and writes nothing.
 
+- **Two refusal events reach the owner.** A record or receipt that fails verification — in the
+  seat's inbox server, in `team drops --read`, or in the message list — raises `record.invalid`,
+  and an identity or admission the send and reply rules deny raises `security.refused`. Both
+  kinds are privileged, routed to `owner` alone and on the owner-at-once list, so the watch rings
+  them and writes the owner's record at once, never into a person's pane; each event carries the
+  refusal's rule and object (a record id, a seat, a path) and never the refused content, and one
+  event stands per rule and object in an hour with every occurrence counted in
+  `.agents/team.log`, so a refusal loop counts instead of flooding.
+
 - The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
   unsent, working, question, permission and exit — are captured as fixtures, the trust dialog is
   unchanged and its model row under the footer is gone again, and the launch test's boundary moves
