@@ -35,6 +35,11 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // `register` and never printed: a grant's own approval-state key, not an approved copy.
   // A grant's own word: a delegate the owner granted `swap` to is an approved one.
   { literal: /an approved delegate swaps/, why: "the delegate grant's word: a delegate granted `swap` is an approved one" },
+  // The live file's delegate, the same word the file and the docs use for the pane its
+  // `delegates` entries name: who runs `add` when the caller is not the owner is the owner, or
+  // that delegate from its own pane.
+  { literal: /^the owner or an approved delegate$/, why: "add's detached refusal names who runs it: the owner, or the live file's delegate" },
+  { literal: /^an approved delegate runs /, why: "add's caller-gate repair names the delegate's own pane first, the owner's terminal otherwise" },
   // Seat membership in the file: the note names a pane the file does not carry.
   { literal: /^.*: its record is not an approved seat; left (?:running|as it is) \(the owner cleans it: team remove .*\)$/, why: "'approved' is the note's word for a seat of the file in force" },
   { literal: /^# the command and its model options; no approval flags$/, why: 'a line of the skeleton `init` writes: it carries no approval flags' },
