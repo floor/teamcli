@@ -48,6 +48,7 @@ import { machineLiveness, watchWords } from '../settings/declared.ts';
 import { entityLiveness } from '../entities.ts';
 import { defaultWatch } from '../file/validate.ts';
 import { createSequenceTracker, type EventAppendInput, type SignedEventRecord, type SequenceTracker } from '../bus/log.ts';
+import { OwnerDelivery } from '../bus/owner.ts';
 import {
   publishToBus,
   subscribeBusOnce,
@@ -409,6 +410,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
 
   const memory = newMemory();
   const told = new Set<string>();
+  // The owner-addressed texts this process has already told: an event raised from one of them
+  // must not be a second notice for the same words.
+  const ownerTold = new Set<string>();
   const busTracker: SequenceTracker = createSequenceTracker(0);
   let outcomes: CheckOutcome[] = [];
   let checksAt: number | null = null;
@@ -474,8 +478,27 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // `.agents/bus.sock`, read unseen events from `busTracker.cursor` and apply them in sequence
       // order; on `gap`, reset the cursor and clear `memory.active` so this pass re-announces any
       // still-true reports; when no bus is running, fall back cleanly to the poll path.
+      // Owner delivery (§4.5): the Runtime reaches the owner itself — the notice and the owner's
+      // own inbox — for every event the policy routes to `owner` or the raising side addresses to
+      // `owner`. No seat is in the path, so a held or unreachable liaison silences neither.
+      const owner = sources.home === undefined || foreign
+        ? undefined
+        : new OwnerDelivery({
+            root,
+            session,
+            team,
+            home: sources.home,
+            notify: (text) => tell(text, true),
+            now: sources.now,
+            alreadyTold: (text) => ownerTold.has(text),
+          });
       const busConnected = !foreign && sources.busSubscribe !== undefined
-        ? await syncWatchBus(root, busTracker, sources, memory)
+        ? await syncWatchBus(root, busTracker, sources, memory, owner === undefined ? undefined : (record) => {
+            const outcome = owner.onEvent(record.payload);
+            if (outcome.error !== undefined) {
+              tellOnce(told, 'owner-record', `the owner's inbox was not written: ${outcome.error}`, tell);
+            }
+          })
         : false;
 
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
@@ -581,7 +604,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           told.add(key);
           say(refusal.text, false);
         }
-        for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        for (const report of result.reports) {
+          if (report.to === 'owner') ownerTold.add(report.text);
+          tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        }
         if (busConnected && sources.busPublish !== undefined) {
           await publishWatchReportsToBus(root, session, result.reports, sources.now().toISOString(), sources.busPublish);
         }
@@ -745,7 +771,9 @@ function spendOf(outcomes: readonly CheckOutcome[]): SpendReading[] {
 // line this same process typed itself and never sent is sent instead of typed into; anything
 // else — another person's or agent's text, or the same text found after a restart — stays.
 function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string): MailboxWaiting[] {
-  return listUnacked(root, team.session, home).map((record) => {
+  // The owner's inbox is delivered by the Runtime, not a seat's message: a record there never
+  // counts as mail waiting in a pane.
+  return listUnacked(root, team.session, home).filter((record) => record.to !== 'owner').map((record) => {
     const named = live.agents.filter((agent) => agent.name === record.to);
     const agent = named.length === 1 ? named[0] : undefined;
     const seat = team.seats.find((item) => item.name === record.to);
@@ -1003,16 +1031,18 @@ async function closeEnded(input: {
 
 /**
  * Reads unseen bus events from `tracker.cursor` and forwards each accepted event to `onBusEvent`.
- * On a sequence `gap`, resets `tracker` to `newest_seq`, clears `memory.active` so the next pass
- * re-announces any still-true screen/team reports (`pass()` derives `memory.grace` from
- * `memory.active` each pass), and calls `onBusGap` so a subscriber maintaining a message projection
- * can rebuild it from the durable records on disk.
+ * Each accepted event also reaches `deliver`, when given: the owner's delivery path (§4.5) is
+ * built there. On a sequence `gap`, resets `tracker` to `newest_seq`, clears `memory.active` so
+ * the next pass re-announces any still-true screen/team reports (`pass()` derives `memory.grace`
+ * from `memory.active` each pass), and calls `onBusGap` so a subscriber maintaining a message
+ * projection can rebuild it from the durable records on disk.
  */
 export async function syncWatchBus(
   root: string,
   tracker: SequenceTracker,
   sources: Pick<WatchSources, 'busSubscribe' | 'onBusEvent' | 'onBusGap'>,
   memory?: Pick<Memory, 'active'>,
+  deliver?: (event: SignedEventRecord) => void,
 ): Promise<boolean> {
   if (sources.busSubscribe === undefined) return false;
   try {
@@ -1021,6 +1051,7 @@ export async function syncWatchBus(
       for (const event of outcome.events) {
         if (tracker.accept(event)) {
           sources.onBusEvent?.(event);
+          deliver?.(event);
         }
       }
       if (outcome.cursor > tracker.cursor) {
@@ -1047,7 +1078,10 @@ export async function publishWatchReportsToBus(
   ts: string,
   publish: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>,
 ): Promise<void> {
-  const publishedInPass = new Set<string>();
+  // One event per observation, even when a check emits an operator line and an owner line for it:
+  // both lines share a record id, and an owner-addressed copy marks the event addressed to `owner`
+  // (§4.5), so the watch's owner reports reach the owner's list as events, one list with the rest.
+  const events = new Map<string, EventAppendInput>();
   for (const report of reports) {
     const colon = report.key.indexOf(':');
     if (colon < 0) continue;
@@ -1055,6 +1089,7 @@ export async function publishWatchReportsToBus(
     const rawSeat = report.key.slice(colon + 1);
     const seat = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
     if (seat === '') continue;
+    const addressed = report.to === 'owner';
 
     let event: EventAppendInput | null = null;
     if (prefix === 'missing' || prefix === 'never-started' || prefix === 'gone') {
@@ -1125,8 +1160,13 @@ export async function publishWatchReportsToBus(
     }
 
     if (event === null) continue;
-    if (publishedInPass.has(event.record_id)) continue;
-    publishedInPass.add(event.record_id);
-    await publish(root, event).catch(() => {});
+    const existing = events.get(event.record_id);
+    if (existing !== undefined) {
+      if (addressed) existing.to = 'owner';
+      continue;
+    }
+    if (addressed) event.to = 'owner';
+    events.set(event.record_id, event);
   }
+  for (const event of events.values()) await publish(root, event).catch(() => {});
 }
