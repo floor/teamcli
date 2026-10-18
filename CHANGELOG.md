@@ -87,6 +87,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the server is asked, in its rules, to call `inbox_check` at the start of each turn and
   `inbox_read` for each message, then act on what it read.
 
+- **`team bus`, and the project event log.** The owner starts `team bus` in a foreground terminal
+  outside herdr, one per clone: it owns the project's event log (`events.jsonl`), appends each
+  event as a signed record, runs the reconciliation pass over durable message and seat records
+  when it starts and every two minutes after, and serves `publish` and `subscribe` on
+  `.agents/bus.sock`; Ctrl-C removes the socket and exits 0. Nothing starts it for you in 0.5.1.
+  It refuses to start when the caller is not the owner, when a bus is already answering, when
+  another start holds the socket lock, or when the socket cannot be bound, and exits 2 on a bad
+  invocation or a team file it cannot read. With a bus answering, `team watch` reads new events
+  in sequence order and publishes the events its reports imply — `seat.unreachable`,
+  `seat.at-prompt` and `seat.blocked` — to the log; with no bus running it polls exactly as
+  before. The reconciliation pass appends only the events the on-disk records imply and the log
+  is missing, keyed by kind, record and session, so a pass over unchanged records adds no second
+  event. A seat that is not a default recipient may not subscribe itself to a privileged kind —
+  a grant, a policy, `seat.at-prompt`, or one the owner has named — and the bus refuses it with
+  `privileged-self-subscription`, logs the refusal, and raises `team.policy-refused` to the
+  owner.
+
 ### Changed
 
 - **A human seat's pane is never touched, whichever command reaches it.** `up` skips the seat in
