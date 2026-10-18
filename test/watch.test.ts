@@ -645,17 +645,15 @@ describe('a pass of the watch', () => {
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
     const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart deepseek-acme';
-    // same, replaced, replaced, same, gone, unknown, gone: reported at the 2nd reading only.
-    // `unknown` is herdr failing to read, not the condition clearing: were it to clear the
+    // same, replaced, replaced, same, gone, unknown, gone: reported at the 2nd and 5th readings
+    // only. `unknown` is herdr failing to read, not the condition clearing: were it to clear the
     // mark, the `gone` after it would report a second time what the `gone` before it reported.
-    // The shell reading between them is one clear pass — a flicker — so the mark stands there
-    // too, and the launcher line rides the replaced readings and stays quiet once the pane is a
-    // shell.
+    // The launcher line rides the replaced readings and stays quiet once the pane is a shell.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
-    expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([]);
+    expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([restored]);
     expect(at({ 'w3:p1': null })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([]);
   });

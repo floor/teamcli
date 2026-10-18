@@ -519,15 +519,25 @@ export function pass({
   }
   for (const check of TEAM_CHECKS) if (enabled(check.name)) reports.push(...check.run(teamObservation, ctx));
 
-  // One pass of grace for a condition that stops being reported: a screen can flicker, and a
-  // report for every flicker is noise. A key stays active through the first pass that does not
-  // name it, and two in a row drop it — so a flicker reports once, and a condition that really
-  // cleared reports again when it comes back. A key `keep` carried through an unreadable pass
-  // is named above, and that clears its grace.
+  // One pass of grace for an attention key that stops being named: a screen can flicker, and a
+  // report for every flicker is noise. An attention key stays active through the first pass that
+  // does not name it, and two in a row drop it — so a flicker reports once, and a condition that
+  // really cleared reports again when it comes back. Every other key keeps the drop-on-first-
+  // clear rule, and a check turned off drops its keys at once. A key `keep` carried through an
+  // unreadable pass is named above, and that clears its grace.
+  const attentionKeys: [prefix: string, check: string][] = [
+    ['blocked:', 'attention'],
+    ['question:', 'attention'],
+    ['vendor notice:', 'attention'],
+    ['unknown:', 'attention'],
+    ['unsent:', 'unsent'],
+  ];
+  const flickers = (key: string): boolean =>
+    attentionKeys.some(([prefix, check]) => key.startsWith(prefix) && enabled(check));
   const next = new Set(current);
   const grace = new Set<string>();
   for (const key of memory.active) {
-    if (current.has(key) || memory.grace.has(key)) continue;
+    if (current.has(key) || memory.grace.has(key) || !flickers(key)) continue;
     next.add(key);
     grace.add(key);
   }

@@ -20,9 +20,11 @@ the pane the watch itself is running in are never the target of a work drop, and
 in a dialog or already holds unsent text is not either. The ring goes only to the message's
 recipient, and only when that box is free. A box that already holds the ring this watch typed is
 sent, not typed into twice — and only by the watch process that typed it: the same text from
-anyone else, or found after a restart, is its owner's, and is never sent or cleared. A report is
+anyone else, or found after a restart, is its owner's, and is never sent or cleared. An attention
+report — a permission prompt, a question, a vendor notice, an unknown screen, unsent text — is
 said once, and again only after it has cleared for two passes in a row: one pass that does not
-show it is the flicker grace, so a flickering screen reports once, not every other pass. A
+show it is the flicker grace, so a flickering screen reports once, not every other pass. Every
+other report keeps the drop-on-first-clear rule: it is said once and again as soon as it clears. A
 screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what load
 accepts; a hatch is trusted package code, not a sandbox.
@@ -135,9 +137,11 @@ Every line carries its time, and every line goes to `.agents/team.log` as well:
     2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
     2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 
-A report is printed when it starts, and again only after it has cleared for two passes in a row: a
-seat that stays blocked, or a machine that stays full, is said once, not every pass, and one pass
-that does not show it is the flicker grace, so a screen that comes and goes reports once.
+An attention report — a dialog, a question, a vendor notice, an unknown screen, unsent text — is
+printed when it starts, and again only after it has cleared for two passes in a row: one pass
+that does not show it is the flicker grace, so a screen that comes and goes reports once. Every
+other report is printed when it starts and again as soon as it clears: a seat that stays blocked,
+or a machine that stays full, is said once, not every pass.
 
 Two things go to `.agents/team.log` without being printed: the watch writes the machine's own
 readings once every ten minutes per watch — `readings: load 1.0/core, memory 69%, disk
