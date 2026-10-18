@@ -924,6 +924,41 @@
             },
             {
               "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "serve",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team mcp serve --seat <seat> [--session <session>]"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--json",
               "repeatable": false,
               "takesValue": false
@@ -946,7 +981,8 @@
       ],
       "usage": [
         "team mcp status [--json]",
-        "team mcp doctor [--json]"
+        "team mcp doctor [--json]",
+        "team mcp serve --seat <seat> [--session <session>]"
       ]
     },
     {

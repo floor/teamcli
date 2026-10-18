@@ -1,0 +1,219 @@
+// `team mcp serve`: one seat's inbox, spoken to its CLI as MCP over stdio.
+//
+// The server is started by the seat's own launch line, so the seat, session and root are the
+// launch's and never a tool argument's. It writes `.inbox-listener` into the seat's drop folder
+// while it runs, serves two tools (`inbox_check`, `inbox_read`), and removes the marker when its
+// stdin closes. A read writes `<id>.read` before the body is returned; that receipt is the only
+// proof of delivery this leg has, and it means the message was read, not acted on.
+//
+// Nothing here is a push: MCP is client-pull, so the seat notices a message when it calls
+// `inbox_check`. The drop-folder watch is the bounded fall-back, not this process.
+import { createInterface } from 'node:readline';
+import { loadTeamFile } from '../file/load.ts';
+import type { Io } from '../io.ts';
+import { version } from '../version.ts';
+import {
+  ensureInboxFolder,
+  inboxFolderHeld,
+  listUnread,
+  readMessage,
+  removeListener,
+  writeListener,
+  type InboxListener,
+} from './inbox.ts';
+
+/** The protocol version this server speaks when the client names one it does not know. */
+export const PROTOCOL_VERSION = '2025-06-18';
+
+/** The versions the server can answer in; the client's own is echoed when it is one of these. */
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ['2024-11-05', '2025-03-26', PROTOCOL_VERSION];
+
+export const SERVER_NAME = 'team-inbox';
+
+/** One JSON-RPC message per line in each direction. Tests pass their own. */
+export type ServeStreams = {
+  lines: AsyncIterable<string>;
+  write(line: string): void;
+  close?(): void;
+};
+
+export type ServeOptions = { seat: string | undefined; session: string | undefined };
+
+type Serving = { seat: string; session: string; root: string; dropDir: string };
+type RequestId = string | number | null;
+
+/** The process's stdin and stdout, framed the way MCP's stdio transport reads them. */
+export function processStreams(): ServeStreams {
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  return {
+    lines,
+    write: (line) => {
+      process.stdout.write(`${line}\n`);
+    },
+    close: () => {
+      lines.close();
+    },
+  };
+}
+
+function toolList(): unknown[] {
+  return [
+    {
+      name: 'inbox_check',
+      description: "List the messages waiting in this seat's inbox. Call it at the start of every turn.",
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
+      name: 'inbox_read',
+      description: "Read one message from this seat's inbox. The call marks it read.",
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'the id inbox_check returned' } },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    },
+  ];
+}
+
+function toolError(text: string): unknown {
+  return { content: [{ type: 'text', text }], isError: true };
+}
+
+function toolText(text: string): unknown {
+  return { content: [{ type: 'text', text }] };
+}
+
+function answer(id: RequestId, result: unknown): string {
+  return JSON.stringify({ jsonrpc: '2.0', id, result });
+}
+
+function failure(id: RequestId, code: number, message: string): string {
+  return JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } });
+}
+
+/** The client's requested protocol version when this server knows it, else this server's own. */
+function negotiate(params: unknown): string {
+  if (typeof params === 'object' && params !== null) {
+    const asked = (params as Record<string, unknown>).protocolVersion;
+    if (typeof asked === 'string' && SUPPORTED_PROTOCOL_VERSIONS.includes(asked)) return asked;
+  }
+  return PROTOCOL_VERSION;
+}
+
+/** One `tools/call` body. Tool faults are results with `isError`, not JSON-RPC errors. */
+function callTool(params: unknown, serving: Serving): unknown {
+  if (typeof params !== 'object' || params === null) return toolError('tools/call needs an object with a name');
+  const named = params as Record<string, unknown>;
+  const name = named.name;
+  const args = named.arguments;
+  if (name === 'inbox_check') {
+    if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
+      return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
+    }
+    return toolText(JSON.stringify({ unread: listUnread(serving.dropDir) }));
+  }
+  if (name === 'inbox_read') {
+    const id = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).id : undefined;
+    if (typeof id !== 'string') return toolError('inbox_read needs a string id');
+    if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
+      return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
+    }
+    const read = readMessage(serving.dropDir, id, serving.seat, serving.session, process.pid);
+    if (!read.ok) return toolError(read.reason);
+    return toolText(read.body);
+  }
+  return toolError(`unknown tool ${JSON.stringify(String(name))}`);
+}
+
+/** One line in, at most one line out. Notifications and blank lines write nothing. */
+export function handleLine(line: string, serving: Serving): string | null {
+  const text = line.trim();
+  if (text === '') return null;
+  let message: unknown;
+  try {
+    message = JSON.parse(text);
+  } catch {
+    return failure(null, -32700, 'Parse error');
+  }
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) {
+    return failure(null, -32600, 'Invalid Request');
+  }
+  const record = message as Record<string, unknown>;
+  const hasId = 'id' in record;
+  const rawId = record.id;
+  const id: RequestId = typeof rawId === 'string' || typeof rawId === 'number' || rawId === null ? rawId : null;
+  if (hasId && (typeof rawId !== 'string' && typeof rawId !== 'number' && rawId !== null)) {
+    return failure(null, -32600, 'Invalid Request');
+  }
+  const method = record.method;
+  if (typeof method !== 'string') return hasId ? failure(id, -32600, 'Invalid Request') : null;
+  // A notification (no id): nothing the client asked to be answered. `notifications/initialized`
+  // is the one every client sends after the handshake.
+  if (!hasId) return null;
+  switch (method) {
+    case 'initialize':
+      return answer(id, {
+        protocolVersion: negotiate(record.params),
+        capabilities: { tools: {} },
+        serverInfo: { name: SERVER_NAME, version: version() },
+      });
+    case 'ping':
+      return answer(id, {});
+    case 'tools/list':
+      return answer(id, { tools: toolList() });
+    case 'tools/call':
+      return answer(id, callTool(record.params, serving));
+    default:
+      return failure(id, -32601, `Method not found: ${method}`);
+  }
+}
+
+/**
+ * Runs the stdio server for one seat and returns the process exit code. The seat must be one the
+ * team file declares, and `--session`, when given, must be the team's own session: the server
+ * serves exactly one inbox. Exit 0 when stdin closes; 2 when it cannot start.
+ */
+export async function runMcpServe(options: ServeOptions, io: Io, streams: ServeStreams = processStreams()): Promise<number> {
+  const refuse = (message: string): number => {
+    io.stderr(`team mcp serve: ${message}\n`);
+    // exit: mcp.serve-refused
+    return 2;
+  };
+  if (options.seat === undefined || options.seat === '') return refuse('--seat <seat> is required');
+  const loaded = loadTeamFile(io.cwd);
+  if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
+  const team = loaded.team;
+  const session = options.session ?? team.session;
+  if (session !== team.session) {
+    return refuse(`the team's session is ${JSON.stringify(team.session)}, not ${JSON.stringify(session)}`);
+  }
+  const seat = team.seats.find((one) => one.name === options.seat);
+  if (seat === undefined) return refuse(`the team file declares no seat ${JSON.stringify(options.seat)}`);
+  const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
+  if (dropDir === null) {
+    return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');
+  }
+  const listener: InboxListener = {
+    v: 1,
+    seat: seat.name,
+    session: team.session,
+    root: loaded.root,
+    cli: seat.cli,
+    pid: process.pid,
+    ts: new Date().toISOString(),
+  };
+  if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
+  const serving: Serving = { seat: seat.name, session: team.session, root: loaded.root, dropDir };
+  try {
+    for await (const line of streams.lines) {
+      const reply = handleLine(line, serving);
+      if (reply !== null) streams.write(reply);
+    }
+  } finally {
+    streams.close?.();
+    removeListener(dropDir, process.pid);
+  }
+  // exit: mcp.serve-ended
+  return 0;
+}

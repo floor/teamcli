@@ -217,11 +217,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `lock.invocation` | `lock` | 2 | the invocation can't be read | `team lock` |
 | `lock.project` | `lock` | 2 | the caller's project can't be read | `team lock heavy-run` |
 | `mcp.clear` | `mcp` | 0 | the bridge is clear: doctor found nothing missing | `team mcp doctor` |
+| `mcp.serve-ended` | `mcp` | 0 | the inbox server's stdin closed and it stopped cleanly | `team mcp serve` |
 | `mcp.up` | `mcp` | 0 | every observed bridge leg is up | `team mcp status` |
 | `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |
 | `mcp.missing` | `mcp` | 1 | doctor found something missing | `team mcp doctor` |
 | `mcp.not-set-up` | `mcp` | 1 | no bridge configuration exists in the lobby folder | `team mcp status` |
 | `mcp.invocation` | `mcp` | 2 | the invocation can't be read | `team mcp` |
+| `mcp.serve-refused` | `mcp` | 2 | the inbox server can't start: the invocation, the team placement or its inbox folder can't be read | `team mcp serve` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
 | `messages.file` | `messages` | 1 | the team file can't be read | `team messages` |

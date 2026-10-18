@@ -1481,6 +1481,13 @@
     {
       "code": 0,
       "command": "mcp",
+      "id": "mcp.serve-ended",
+      "meaning": "the inbox server's stdin closed and it stopped cleanly",
+      "trigger": "team mcp serve"
+    },
+    {
+      "code": 0,
+      "command": "mcp",
       "id": "mcp.up",
       "meaning": "every observed bridge leg is up",
       "trigger": "team mcp status"
@@ -1512,6 +1519,13 @@
       "id": "mcp.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team mcp"
+    },
+    {
+      "code": 2,
+      "command": "mcp",
+      "id": "mcp.serve-refused",
+      "meaning": "the inbox server can't start: the invocation, the team placement or its inbox folder can't be read",
+      "trigger": "team mcp serve"
     },
     {
       "code": 0,
