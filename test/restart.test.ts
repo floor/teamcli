@@ -672,7 +672,7 @@ describe('team restart <seat>', () => {
     // The dry answer's line is the same command, without the dry run's own flag.
     const dry = testIo(fixture.root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
     expect(await runRestart(['worker', '--dry-run'], dry, sources)).toBe(1);
-    expect(dry.out).toContain('! to unblock: the owner runs `team restart worker` from this folder');
+    expect(dry.out).toContain('! to unblock: a `leads` seat runs `team restart worker`');
     expect(dry.out).not.toContain('--dry-run`');
   });
 

@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DETACHED_REFUSAL } from '../src/caller.ts';
+const UP_ROUTE = 'only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
@@ -62,7 +62,7 @@ test('up refuses a run with no terminal and does not launch', async () => {
   const io = testIo(root, { kind: 'owner-no-tty' });
   const code = await runUp([], io, sources);
   expect(code).toBe(1);
-  expect(io.err).toContain(`team up: ${DETACHED_REFUSAL}\n`);
+  expect(io.err).toContain(`team up: ${UP_ROUTE}\n`);
   expect(created).toBe(0);
 });
 
@@ -97,6 +97,6 @@ test('a dry run names the same sentence and still does not launch', async () => 
   const io = testIo(root, { kind: 'owner-no-tty' });
   const code = await runUp(['--dry-run'], io, sources);
   expect(code).toBe(1);
-  expect(io.out).toContain(`! up would refuse: ${DETACHED_REFUSAL}\n`);
+  expect(io.out).toContain(`! up would refuse: ${UP_ROUTE}\n`);
   expect(created).toBe(0);
 });

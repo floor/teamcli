@@ -6,7 +6,9 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { DETACHED_REFUSAL, type Caller } from '../src/caller.ts';
+import { type Caller } from '../src/caller.ts';
+
+const HOLD_ROUTE = 'only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat';
 import { runDoctor, holdFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { runHold, type HoldSources } from '../src/commands/hold.ts';
 import { HOLD_OUTPUT_SCHEMA } from '../src/output/index.ts';
@@ -324,7 +326,7 @@ describe('team hold', () => {
     const where = place();
     const { code, err } = await hold(['freeze deploys'], where, { kind: 'owner-no-tty' });
     expect(code).toBe(1);
-    expect(err).toBe(`team hold: ${DETACHED_REFUSAL}\n`);
+    expect(err).toBe(`team hold: ${HOLD_ROUTE}\n`);
     expect(stored(where)).toBeUndefined();
   });
 
@@ -436,7 +438,7 @@ describe('team hold', () => {
     expect(detached.err).toBe('');
     const detachedDoc = assertJsonErrorShape(detached.out, {
       id: 'hold.detached',
-      messageContains: DETACHED_REFUSAL,
+      messageContains: HOLD_ROUTE,
       repair: null,
     });
     expect(detachedDoc.error).toMatchObject({ rule: 'unplaced' });
