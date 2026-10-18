@@ -5,20 +5,24 @@ Reads the project's message history from `~/.config/team/<project>-<hash>/messag
 with any `briefs/<from>-to-<to>.md` files and Desk audit lines when present. It reads: it writes
 nothing, and following the log never grows it.
 
-Each completed `team send` run (`delivered`, `answered`, `held`, `not-submitted`, `timeout`, or
-`unreachable`) appends one JSON object per line to `messages.jsonl`:
+Each completed `team send` run (`delivered`, `delivered (read)`, `sent (unconfirmed)`,
+`answered`, `held`, `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
+line to `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>",...],"note":"<qualifier>"}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>",...],"note":"<qualifier>"}
 
 The last six fields are optional. `spec` is the address the sender wrote when it was a form
 rather than the seat's own name — a `@<nickname>`, a `<seat|nickname>@<team>`, `lead@<team>`, or
 an agent id — and `resolved` is the registry id (`agt_…`) that address resolved to; the two are written
 together, and `to` is that seat either way. `ms` is the whole milliseconds from send to outcome,
 written when the send measured it, and `via` is the path the message actually travelled — `typed`
-(a composer trigger) or `socket` (a frame) — absent when it never left the sender. `failed` names
+(a composer trigger), `socket` (a frame), or `mcp-inbox` (the seat's own inbox, where the message
+is still the drop file) — absent when it never left the sender. `failed` names
 the delivery legs a send walked past, each as `<leg>: <reason>`: the legs of the seat's delivery
 order that definitely could not take the send — the ones a walk passed before the leg that took
-it, or every leg that failed on a walk that ran out of legs — `native` or `mcp-inbox` in this
+it, or every leg that failed on a walk that ran out of legs — `native` (recorded `unavailable`
+while no socket write is made) or `mcp-inbox` (recorded `no live inbox listener` when no server
+is serving that seat's inbox) in this
 build. It is absent when no leg failed, and a line that has none of the six, from a build older
 than these fields, carries the six required fields alone. `note` is the short qualifier the
 outcome word cannot carry alone: a delivered send whose box cleared before herdr's status or the
@@ -92,7 +96,7 @@ from the next.
 
 With `--json` the run prints one pretty-printed `team.feed` document:
 
-    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>"],"note":"<qualifier>"}]}
+    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>"],"note":"<qualifier>"}]}
 
 `project` and `session` are `null` when the run names no single team, and `ms`, `via`, `failed`
 and `note` appear on an event only when the history line carries them. The schema is published at

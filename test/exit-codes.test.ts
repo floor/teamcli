@@ -3198,7 +3198,7 @@ scene('plan.read', async (place) => {
  *  the seat also answers at the sender's own pid path, as a session does. No path calls this
  *  deliver while SOCKET_SEND (src/send/uds.ts) is off, so `reply` stands unused until the
  *  answered scene returns with the native leg. No session is read. */
-function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; reply?: string } = {}): SendHost & { frames: string[] } {
+function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; reply?: string; inboxGraceMs?: number } = {}): SendHost & { frames: string[] } {
   const sockets = join(place.base, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   if (over.socket !== false) writeFileSync(join(sockets, '400.sock'), '');
@@ -3229,8 +3229,27 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
     },
     now: () => NOW,
     home: place.home,
+    ...(over.inboxGraceMs === undefined ? {} : { inboxGraceMs: over.inboxGraceMs }),
   };
   return host;
+}
+
+/** The lead seat's own inbox, with a listener marker a send will take as live: this process's
+ *  pid, the fixture's own seat, session and root. The folder is the drop directory `team send`
+ *  writes to, so the marker sits where the leg looks for it. */
+function liveInbox(place: Place, over: Partial<{ seat: string; session: string; pid: number; root: string }> = {}): string {
+  const dropDir = join(place.root, '.agents', 'send-drops', 'acme', 'lead');
+  mkdirSync(dropDir, { recursive: true });
+  writeFileSync(join(dropDir, '.inbox-listener'), `${JSON.stringify({
+    v: 1,
+    seat: over.seat ?? 'lead',
+    session: over.session ?? 'acme',
+    root: over.root ?? place.root,
+    cli: 'claude-code',
+    pid: over.pid ?? process.pid,
+    ts: NOW.toISOString(),
+  })}\n`);
+  return dropDir;
 }
 
 async function sent(place: Place, argv: string[], caller: Caller, host: SendHost): Promise<Ran> {
@@ -3322,9 +3341,16 @@ scene('send.delivered', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
 });
+scene('send.sent-unconfirmed', async (place) => {
+  write(place, TEAM);
+  // A live listener takes the message into the seat's inbox; the grace is zero, so the receipt
+  // never has time to land and the leg ends `sent (unconfirmed)` — exit 0, nothing typed.
+  liveInbox(place);
+  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: sent (unconfirmed) (mcp-inbox, 0 ms)');
+});
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written');
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);

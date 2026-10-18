@@ -187,7 +187,9 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
 export async function retryHeldDrops(scene: RetryScene): Promise<void> {
   for (const seat of scene.team.seats) {
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
-    const drops = readPending(dropDir);
+    // A marker the mcp-inbox leg left is not a held drop: the message waits in the seat's own
+    // inbox for its client to pull, and this pass never types it.
+    const drops = readPending(dropDir).filter((drop) => drop.leg === undefined);
     if (drops.length === 0) continue;
     // A pane the file marks as a human's is never typed into: a retry is typing, so a marker
     // left for such a seat is given up on where it stands, with the reason, and the message

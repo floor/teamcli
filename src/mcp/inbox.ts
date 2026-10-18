@@ -10,7 +10,7 @@
 // argument's; the folder is checked step by step so a link at `.agents`, `send-drops`, the
 // session or the seat refuses service; an id is a lowercase UUID and nothing else, so no id can
 // name a path; a drop or receipt that is a link is refused, never followed.
-import { chmodSync, lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
@@ -24,6 +24,19 @@ export const RECEIPT_SUFFIX = '.read';
 
 /** The only names the server serves: the ids `team send` writes (`randomUUID`, lowercase). */
 export const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** How long a send on the mcp-inbox leg waits for the read receipt before it reports
+ *  `sent (unconfirmed)`: long enough for a seat that checks its inbox at a turn boundary, short
+ *  enough not to block a sender. Nothing waits longer than this. */
+export const INBOX_GRACE_MS = 2_000;
+
+/** How often that wait looks for the receipt. */
+export const INBOX_POLL_MS = 25;
+
+/** The one reason a send skips the mcp-inbox leg: no server is serving this inbox. A marker that
+ *  is absent, malformed, dead, or names another seat, session or root says the same thing — there
+ *  is no listener here that could take the message. */
+export const NO_INBOX_LISTENER = 'no live inbox listener';
 
 /** What a running server leaves beside the inbox so `team send` can tell the leg is live. */
 export type InboxListener = {
@@ -148,6 +161,37 @@ export function listenerLive(listener: InboxListener): boolean {
   return pidAlive(listener.pid);
 }
 
+/** Whether two roots are the same folder once links are resolved. `root` reaches the sender from
+ *  a team file or a registry record, and the listener wrote its own root at launch. */
+function sameRoot(left: string, right: string): boolean {
+  const real = (at: string): string => {
+    try {
+      return realpathSync(at);
+    } catch {
+      return at;
+    }
+  };
+  return real(left) === real(right);
+}
+
+export type InboxLiveness = { live: true; listener: InboxListener } | { live: false; reason: string };
+
+/**
+ * Whether a server is serving exactly this inbox: a well-formed marker for this seat, this
+ * session and this root, whose process is still there. Anything else — no marker, a malformed
+ * one, a dead pid, a marker naming another inbox — is `no live inbox listener`, and the send
+ * hands the message to the next leg instead of writing into a folder nothing is reading.
+ */
+export function inboxLive(dropDir: string, root: string, session: string, seat: string): InboxLiveness {
+  const listener = readListener(dropDir);
+  if (listener === null) return { live: false, reason: NO_INBOX_LISTENER };
+  if (listener.seat !== seat || listener.session !== session || !sameRoot(listener.root, root)) {
+    return { live: false, reason: NO_INBOX_LISTENER };
+  }
+  if (!listenerLive(listener)) return { live: false, reason: NO_INBOX_LISTENER };
+  return { live: true, listener };
+}
+
 /** Removes the listener marker at exit, but only while it is still this process's own. */
 export function removeListener(dropDir: string, pid: number): void {
   const listener = readListener(dropDir);
@@ -240,4 +284,46 @@ export function readMessage(dropDir: string, id: string, seat: string, session: 
     return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
   }
   return { ok: true, body };
+}
+
+/**
+ * Whether `<id>.read` is there and names this id, seat and session: the receipt an `inbox_read`
+ * call wrote before it returned the body. A link is never followed, and a receipt that does not
+ * parse or does not name this message proves nothing — the send must not report a read it cannot
+ * point at.
+ */
+export function receiptHeld(dropDir: string, id: string, seat: string, session: string): boolean {
+  const text = readNoFollow(receiptPath(dropDir, id));
+  if (text === null || text === '') return false;
+  try {
+    const parsed = JSON.parse(text) as Partial<InboxReceipt>;
+    return parsed.v === 1 && parsed.id === id && parsed.seat === seat
+      && parsed.session === session && parsed.tool === 'inbox_read';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Waits up to `timeoutMs` for the receipt, looking once, then every `pollMs`. The
+ * caller's grace bounds the wait even while the disk keeps answering; a timeout of zero is the
+ * one look and no wait at all.
+ */
+export async function awaitReceipt(
+  dropDir: string,
+  id: string,
+  seat: string,
+  session: string,
+  timeoutMs: number,
+  pollMs = INBOX_POLL_MS,
+): Promise<boolean> {
+  if (receiptHeld(dropDir, id, seat, session)) return true;
+  const deadline = Date.now() + timeoutMs;
+  for (let left = deadline - Date.now(); left > 0; left = deadline - Date.now()) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(pollMs, left));
+    });
+    if (receiptHeld(dropDir, id, seat, session)) return true;
+  }
+  return false;
 }

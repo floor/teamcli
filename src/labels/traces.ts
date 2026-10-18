@@ -125,7 +125,9 @@ export function commitTrace(worktree: string): SeatTrace | null {
  * trouble, not the seat's work, and is no trace: counting it would read a seat as working because
  * someone failed to reach it, and would clear a blind seat's flag without a sign it moved.
  */
-const REACHED_SEAT: ReadonlySet<string> = new Set(['delivered', 'answered', 'recorded']);
+// `delivered (read)` is the mcp-inbox leg's receipt: the seat's own server returned the body, so
+// the message reached it — a stronger trace than the typed leg's.
+const REACHED_SEAT: ReadonlySet<string> = new Set(['delivered', 'delivered (read)', 'answered', 'recorded']);
 
 /**
  * The last ack or message the send history holds for the seat: the newest entry of

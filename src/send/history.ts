@@ -27,7 +27,15 @@ export const HISTORY_FILE = 'messages.jsonl';
 export const MAX_HISTORY_BYTES = 1_000_000;
 export const HISTORY_KEPT = 3;
 
-export type HistoryOutcome = 'delivered' | 'held' | 'not-submitted' | 'unreachable' | 'answered' | 'timeout';
+export type HistoryOutcome =
+  | 'delivered'
+  | 'delivered (read)'
+  | 'sent (unconfirmed)'
+  | 'held'
+  | 'not-submitted'
+  | 'unreachable'
+  | 'answered'
+  | 'timeout';
 
 export type HistoryEntry = {
   ts: string;

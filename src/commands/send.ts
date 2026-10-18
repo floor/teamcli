@@ -13,7 +13,7 @@ import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
-import { PENDING_ID, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
+import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
@@ -28,6 +28,7 @@ import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendRespon
 import { deliveryChainOf } from '../send/delivery.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { dropMessage, POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { awaitReceipt, inboxLive, INBOX_GRACE_MS } from '../mcp/inbox.ts';
 import { markTaken } from '../send/taken.ts';
 import { openReplyListener, readReply } from '../send/reply.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
@@ -72,21 +73,34 @@ team, seat, may drop legs from the order or put the legs it keeps in a different
 order, and may never add one: a word naming a leg the order does not have, or
 naming one twice, is set aside and the order in force stands. Each leg in turn
 either takes the send, which ends the walk, or definitely cannot take it, which
-hands the send to the next leg and is recorded as a failure; mcp-inbox is not in
-this build, so a walk that reaches it skips it and records it unavailable; the
-typed leg is terminal, taking the send or ending the walk unreachable. The drop
+hands the send to the next leg and is recorded as a failure; the typed leg is
+terminal, taking the send or ending the walk unreachable. The drop
 leg writes the same 0600 drop file and types nothing at all. A seat the file marks
 human: true walks no typing leg: the typed trigger and the native frame are kept
 out — each one's reason is recorded — and the walk falls to the drop leg, added
 when the order in force leaves it out; a waited send is refused. The history line
 names the channel the send went by and the legs that failed before it.
 
-The outcome is one of seven, and none of them is silent:
+The mcp-inbox leg writes the same 0600 drop file and types nothing: it takes the
+send only when the seat's own inbox server is running (\`.inbox-listener\` beside
+the message names this seat, this session and this root, with a live pid), and is
+otherwise skipped as \`mcp-inbox: no live inbox listener\`. A live listener gets
+the message and a short wait for the receipt its \`inbox_read\` call leaves; that
+receipt is \`delivered (read)\` — the seat read the message, not that it acted on
+it — and its absence is \`sent (unconfirmed)\`, exit 0: the file is safe on disk
+and the walk ends rather than typing into a pane the inbox was chosen over.
+
+The outcome is one of eight, and none of them is silent:
   delivered    the drop path (exit 0): herdr reported the seat working — or done or
                blocked, changed from the status read before Enter — or the transcript
                showed the drop read, the line had left the input box, and the pane
                was not one of the dialogs listed above; on the drop leg, the drop
-               file is in place and nothing was typed
+               file is in place and nothing was typed; \`delivered (read)\` when the
+               mcp-inbox leg's receipt came back inside its grace — the seat read the
+               message, which is not a claim that it acted on it
+  sent         the mcp-inbox leg's own success (exit 0): the message is the 0600 drop
+               file in the seat's inbox, no receipt came back inside the grace, and
+               the line says \`sent (unconfirmed)\`. Nothing was typed
   answered     --wait to a Claude Code seat: the reply came back; the reply follows
                on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
@@ -193,6 +207,10 @@ export type SendHost = {
    *  key and the seat's, and the registry project's (`src/send/delivery.ts`). A test hands in a
    *  chain to decide the order without a file to write. */
   delivery?: Partial<Record<SettingLevel, readonly (DeliveryLeg | PendingNativeFallbackLeg)[] | undefined>>;
+  /** How long the mcp-inbox leg waits for its receipt, in milliseconds. The real host leaves it
+   *  at `INBOX_GRACE_MS`; a test sets 0 (beside a listener it also writes) to see the
+   *  unconfirmed ending without waiting, or a small number to watch the receipt land. */
+  inboxGraceMs?: number;
 };
 
 export const realHost: SendHost = {
@@ -605,10 +623,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // the send ends the walk; a leg that definitely cannot take it hands the send to the next
   // one and its reason joins `failures`, which every history line this walk writes carries;
   // the typed leg is terminal, taking the send or ending the walk unreachable. The drop leg
-  // writes the typed leg's own file and stops there, with nothing typed. mcp-inbox is
-  // not in this build: the walk skips it and records it unavailable. So is the native leg
-  // while SOCKET_SEND is off — the frame path is a socket write this build does not make —
-  // and a walk that reaches it records the skip exactly as mcp-inbox's. A human's walk keeps no
+  // writes the typed leg's own file and stops there, with nothing typed. The mcp-inbox leg
+  // takes the send only while the seat's own inbox server is listening, and is otherwise
+  // recorded and passed. The native leg is skipped while SOCKET_SEND is off — the frame path is
+  // a socket write this build does not make — and a walk that reaches it records the skip; a
+  // sender whose own file declares Claude Code gets the handoff instead. A human's walk keeps no
   // typing leg at all; the legs this rule kept out are recorded first, so the history line the
   // drop leg writes (or the refusal) names what the pane was spared.
   const failures: string[] = [];
@@ -621,8 +640,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   let socketNote: string | null = null;
   for (const [at, leg] of walk.entries()) {
     if (leg === 'mcp-inbox') {
-      failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
-      continue;
+      // The seat's own inbox, not a pane: the leg takes the send only when a listener beside
+      // the message names this seat, session and root with a live pid. No listener is a leg
+      // that definitely cannot take it, and the walk moves on.
+      const live = inboxLive(dropDir, to.root, to.session, to.seat);
+      if (!live.live) {
+        failures.push(`mcp-inbox: ${live.reason}`);
+        continue;
+      }
+      return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, msgId, body, host, report, startedAt, failures, to.sentAs);
     }
     if (leg === 'native') {
       // A seat whose CLI has no cross-session socket has no native leg to walk: the leg is
@@ -717,36 +743,31 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 }
 
 /** The channel a dry run names: the legs of the order this build can actually walk, in words.
- *  A leg this build does not carry — mcp-inbox always, native for a sender that cannot make its
- *  own SendMessage (src/send/uds.ts's SOCKET_SEND is off) — is not a channel a run would take,
- *  and a seat whose CLI has no cross-session socket has no native leg at all; none of them is
- *  named. The handoff counts as the native leg only for a sender whose own file declares Claude
- *  Code, since only that sender makes the call the leg is. What is left is the drop channel when
- *  it leads, the native channel when it leads with the typed or drop channel behind it, or the
- *  typed channel alone. The where-nothing-is-carried phrase is unreachable by the default order
- *  of a codex seat — mcp-inbox out, native out, typed left — and only an order that drops the
- *  typed leg too prints it. */
+ *  A leg this build does not carry — native for a sender that cannot make its own SendMessage
+ *  (src/send/uds.ts's SOCKET_SEND is off) or a seat whose CLI has no cross-session socket — is
+ *  not a channel a run would take, and neither is named. The handoff counts as the native leg
+ *  only for a sender whose own file declares Claude Code, since only that sender makes the call
+ *  the leg is. The mcp-inbox leg is a channel: it writes the seat's inbox drop and waits for its
+ *  receipt, and the legs behind it are named as the fallbacks. The where-nothing-is-carried
+ *  phrase is unreachable by the default order of any seat — its legs are native, mcp-inbox,
+ *  typed, and each is either named or passed over for a reason — and only an order that holds
+ *  none of them prints it. */
 function walkPhrase(order: readonly DeliveryLeg[], cli: string, callerNative: boolean): string {
   const nativeWalkable = cli === 'claude-code' && (SOCKET_SEND || callerNative);
-  const walkable = order.filter((leg) => leg === 'drop' || (leg === 'native' ? nativeWalkable : leg === 'typed'));
-  if (walkable.length === 0) return 'no leg of its delivery order this build can walk';
-  // The drop leg is a file and no keystroke, whether or not the CLI's typed leg builds its brief
-  // through its own screens.
-  if (walkable[0] === 'drop') return 'a 0600 drop file with nothing typed into the pane';
-  // A compose seat's brief is not a drop-file trigger: it is typed through the CLI's screens.
-  if (profileFor(cli)?.compose != null) return 'a typed brief through its own screens';
-  if (walkable[0] !== 'native') return 'a 0600 drop file and one trigger line';
-  const nextWalkable = walkable[1];
-  const fallbackClause =
-    nextWalkable === 'typed'
-      ? ', falling back to a 0600 drop file and one trigger line'
-      : nextWalkable === 'drop'
-        ? ', falling back to a 0600 drop file, with nothing typed into the pane'
-        : '';
-  if (!SOCKET_SEND) {
-    return `the native handoff (your own SendMessage, then --confirm)${fallbackClause}`;
-  }
-  return `its cross-session socket${fallbackClause}`;
+  const typed = profileFor(cli)?.compose != null
+    ? 'a typed brief through its own screens'
+    : 'a 0600 drop file and one trigger line';
+  const words = (leg: DeliveryLeg): string => {
+    if (leg === 'native') return SOCKET_SEND ? 'its cross-session socket' : 'the native handoff (your own SendMessage, then --confirm)';
+    if (leg === 'mcp-inbox') return "the seat's own MCP inbox";
+    if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
+    return typed;
+  };
+  const walkable = order.filter((leg) => leg === 'drop' || leg === 'mcp-inbox' || leg === 'typed' || (leg === 'native' && nativeWalkable));
+  const [first, ...rest] = walkable;
+  if (first === undefined) return 'no leg of its delivery order this build can walk';
+  if (rest.length === 0) return first === 'drop' ? 'a 0600 drop file with nothing typed into the pane' : words(first);
+  return `${first === 'drop' ? 'a 0600 drop file with nothing typed into the pane' : words(first)}, falling back to ${rest.map(words).join(', then ')}`;
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
@@ -1478,6 +1499,70 @@ async function deliverNative(
 }
 
 /**
+ * The mcp-inbox leg: the message is written whole into the seat's own inbox — the same 0600
+ * drop file the typed leg would leave — and nothing is typed. The leg takes the send whenever
+ * the seat's own server is listening (`inboxLive` has just said so); the wait that follows is
+ * only for the receipt, and either ending exits 0. A receipt means the seat's client read the
+ * message — `delivered (read)`, never a claim that it acted on it — and clears the pending
+ * record. No receipt is `sent (unconfirmed)`, with the record left beside the drop carrying its
+ * leg, so a watch pass can tell the message is the seat's own to read and never types it. The
+ * lock is held across the write, as the typed leg holds it across its trigger.
+ */
+async function deliverInbox(
+  io: Io,
+  dir: string,
+  who: string,
+  from: string,
+  project: string,
+  root: string,
+  session: string,
+  seatName: string,
+  dropDir: string,
+  msgId: string,
+  body: string,
+  host: SendHost,
+  report: Report,
+  startedAt: number,
+  /** The reasons the legs before this one did not take the send: every history line carries them. */
+  failures: readonly string[] = [],
+  /** The address as written, when it was a form: every history line carries it beside the seat. */
+  sentAs: SentAs | null = null,
+): Promise<number> {
+  const failed = failures.length > 0 ? { failed: [...failures] } : {};
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) {
+    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+  }
+  try {
+    let path: string;
+    try {
+      sealDropTree(dir, session, seatName);
+      path = dropMessage(dropDir, msgId, body);
+    } catch {
+      return refuse(io, dir, who, `${seatName}: the drop file could not be written; nothing was sent`, host, report);
+    }
+    report.sent = msgId;
+    const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId };
+    // Written before the wait: a process that dies mid-wait still leaves the message marked
+    // for the watch's later pass. A receipt clears it; `sent (unconfirmed)` leaves it on disk.
+    markPending(dropDir, { ...entry, leg: 'mcp-inbox' });
+    const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
+    if (await awaitReceipt(dropDir, msgId, seatName, session, grace)) {
+      clearPending(dropDir, msgId);
+      logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
+      appendHistory(project, root, host.home, { ...entry, outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'mcp-inbox', ...failed });
+      return delivered(io, seatName, report, 'read');
+    }
+    const ms = host.now().getTime() - startedAt;
+    logLine(dir, 'send', who, `${seatName}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
+    appendHistory(project, root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
+    return sentUnconfirmed(io, seatName, report, ms);
+  } finally {
+    lock.release();
+  }
+}
+
+/**
  * A compose seat's typed leg: the drop file is written, then the profile's module walks the
  * CLI's own screens and types the brief there. Delivered means the CLI printed its proof line
  * (a created session); a module refusal after it typed is `not-submitted` — the box may hold
@@ -1734,14 +1819,10 @@ type SocketAttempt = { kind: 'delivered' } | { kind: 'held'; reason: string } | 
 const HELD_FRAME_REASON =
   'the session holds the socket frame at its held-message dialog ("Held message from another session"): the box is blocked while it is up, and nothing further is typed';
 
-/** What the walk records for the mcp-inbox leg: the leg is not in this build, so a walk that
- *  reaches it skips the leg, records it unavailable, and hands the send to the next leg. */
-const MCP_INBOX_UNAVAILABLE = 'unavailable; this build carries no mcp-inbox leg';
-
 /** What the walk records for the native leg when the sender cannot make the leg itself: the
  *  frame is the sending session's own cross-session SendMessage, which this process cannot make,
- *  so the leg cannot take this send, and the walk skips and records it exactly as it records the
- *  mcp-inbox leg's skip. A sender whose own file declares Claude Code gets the handoff instead. */
+ *  so the leg cannot take this send, and the walk skips and records it. A sender whose own file
+ *  declares Claude Code gets the handoff instead. */
 const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending session's own SendMessage";
 
 /** How long a socket write's pane is read for the held-message dialog, in all. */
@@ -2104,18 +2185,38 @@ function seatList(team: TeamFile): string {
 }
 
 /** Herdr reported the seat took the trigger — or, on the drop leg, the file is in place — and the
- *  pane was not a known dialog. Exit 0, always. The note names the path the send went by —
- *  `socket`, `dropped`, or `typed, socket <reason>` after the frame was not taken — and is left
- *  off where the seat has one channel only. */
+ *  pane was not a known dialog, or the seat's inbox server returned the message. Exit 0, always.
+ *  The note names the path the send went by — `socket`, `dropped`, or `typed, socket <reason>`
+ *  after the frame was not taken — and `read` for the mcp-inbox leg's receipt, whose own words
+ *  are `delivered (read)`: the seat read the message, which is not a claim that it acted on it. */
 function delivered(io: Io, seat: string, report: Report, note?: string): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
+  const read = note === 'read';
   if (report.json) {
-    writeAction(io, report, { status: 'delivered', summary, channel: note === 'socket' ? 'socket' : note === 'dropped' ? 'drop' : 'typed' });
+    writeAction(io, report, {
+      status: read ? 'delivered (read)' : 'delivered',
+      summary,
+      channel: read ? 'mcp-inbox' : note === 'socket' ? 'socket' : note === 'dropped' ? 'drop' : 'typed',
+    });
   } else {
     openText(io, report);
     io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.delivered
+}
+
+/** The mcp-inbox leg's own success: the message is the 0600 drop file in the seat's inbox, and
+ *  no receipt came back inside its grace. Nothing was typed, and the file is safe on disk.
+ *  Exit 0, always. */
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number): number {
+  const summary = `${seat}: sent (unconfirmed) (mcp-inbox, ${String(ms)} ms)`;
+  if (report.json) {
+    writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: 'mcp-inbox' });
+  } else {
+    openText(io, report);
+    io.stdout(`${summary}\n`);
+  }
+  return 0; // exit: send.sent-unconfirmed
 }
 
 /** The reply came back: printed, and the send is over. Exit 0, always. */
@@ -2226,11 +2327,12 @@ function configuration(io: Io, message: string, report: Report): number {
 /** The one action document's own fields: the frame is `writeAction`'s. `summary` is the closing
  *  line the plain run prints last, so the two faces say the same thing once. */
 type ActionFields = {
-  status: 'delivered' | 'answered' | 'recorded' | 'native' | 'sent (unconfirmed)' | 'dry-run';
+  status: 'delivered' | 'delivered (read)' | 'sent (unconfirmed)' | 'answered' | 'recorded' | 'native' | 'dry-run';
   summary: string;
   dryRun?: boolean;
-  /** The leg that carried the send: `socket`, `typed`, `drop`, or `native` for a record or handoff. */
-  channel?: 'socket' | 'typed' | 'drop' | 'native' | null;
+  /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, or `native` for a
+   *  record or handoff. */
+  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
   /** The reply frame's own id, on an answered wait. */

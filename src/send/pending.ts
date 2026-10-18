@@ -10,7 +10,9 @@
 // tries or a fixed age, and says the drop's path so the message can be sent again.
 //
 // The marker is a convenience, never the message: the drop file is the message, and a marker that
-// cannot be written or read costs a retry, not a byte of the body.
+// cannot be written or read costs a retry, not a byte of the body. The mcp-inbox leg writes the
+// same record with `leg: 'mcp-inbox'`: its message waits in the seat's own inbox, and the record
+// says which leg left it so a retry pass never mistakes it for a held typed send.
 //
 // A Claude Code seat's native leg is the sender's own cross-session SendMessage, which an
 // external process cannot call. So `team send` resolves the recipient, judges the pair and
@@ -46,6 +48,10 @@ export type PendingDrop = {
   ts: string;
   /** Typed retries made since the send. */
   tries: number;
+  /** The leg that left the record. Absent on a held or not-submitted typed send, which is the
+   *  retry's own business; `mcp-inbox` on a message left in the seat's inbox, whose marker is
+   *  followed by the inbox leg rather than typed by the retry pass. */
+  leg?: 'mcp-inbox';
 };
 
 /** The marker's path: the drop's own name with `.pending` after it. */
@@ -97,6 +103,9 @@ function readPendingDrops(dropDir: string): PendingDrop[] {
       if (typeof parsed.id !== 'string' || typeof parsed.from !== 'string' || typeof parsed.to !== 'string'
         || typeof parsed.body !== 'string' || typeof parsed.ts !== 'string') continue;
       if (name !== `${parsed.id}.pending`) continue;
+      // A leg this build does not know is not guessed at: a marker that names another kind of
+      // delivery is skipped rather than retried as a typed send.
+      if (parsed.leg !== undefined && parsed.leg !== 'mcp-inbox') continue;
       drops.push({
         id: parsed.id,
         from: parsed.from,
@@ -104,6 +113,7 @@ function readPendingDrops(dropDir: string): PendingDrop[] {
         body: parsed.body,
         ts: parsed.ts,
         tries: typeof parsed.tries === 'number' && Number.isInteger(parsed.tries) && parsed.tries >= 0 ? parsed.tries : 0,
+        ...(parsed.leg === 'mcp-inbox' ? { leg: 'mcp-inbox' as const } : {}),
       });
     } catch {
       continue;

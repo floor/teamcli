@@ -2970,6 +2970,13 @@
       "trigger": "team send --record builder-2 --channel native --ms 812"
     },
     {
+      "code": 0,
+      "command": "send",
+      "id": "send.sent-unconfirmed",
+      "meaning": "the mcp-inbox leg put the message in the seat's inbox and no receipt came back inside its grace",
+      "trigger": "team send worker hello"
+    },
+    {
       "code": 1,
       "command": "send",
       "id": "send.detached",
