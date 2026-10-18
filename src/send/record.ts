@@ -21,6 +21,7 @@
 // beside a message. It is not a message and carries no body: it names the record, the thread and
 // the side that closed it, and `team reply` reads it before a reply is admitted.
 import { type KeyObject } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { messageKeyOf, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -337,6 +338,20 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
 
 export type StatusContext = { to: string; root: string; session: string };
 
+/** Whether two folder paths name one folder once links are resolved; a path that cannot be
+ *  resolved is compared as written. A receipt and the message it belongs to are written by
+ *  different commands, so their `root` strings need not be spelled the same way. */
+function sameFolder(left: string, right: string): boolean {
+  const real = (at: string): string => {
+    try {
+      return realpathSync(at);
+    } catch {
+      return at;
+    }
+  };
+  return real(left) === real(right);
+}
+
 export type CloseRead = { ok: true; close: SignedClose | null } | { ok: false; reason: string };
 
 /** One close by path, or why it cannot be read. A missing file is `close: null`; the checks are
@@ -392,7 +407,7 @@ export function receiptHolds(
   const payload = receipt.payload;
   if (payload.id !== id || payload.status !== status) return false;
   if (payload.to !== context.to || payload.session !== context.session) return false;
-  if (payload.root !== context.root) return false;
+  if (!sameFolder(payload.root, context.root)) return false;
   return verifyReceipt(receipt, key);
 }
 
@@ -410,9 +425,22 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
 }
 
 /**
+ * Whether a message has been read: a signed `read` or `replied` receipt verifies for it. Statuses
+ * move forward only, so a reply counts as the read that came before it. This is the one answer the
+ * inbox, `team drops` and the watch give — a file at a receipt's name that the message key did not
+ * sign, or one that names another message, seat, checkout or session, proves nothing.
+ */
+export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject): boolean {
+  const status = statusOf(dropDir, id, context, key);
+  return status === 'read' || status === 'replied';
+}
+
+/**
  * Writes one status receipt beside its message. Receipts are write-once: a status already
  * recorded is not rewritten (`held` again is not a new fact), and an existing file at the path
- * is left untouched.
+ * is left untouched. Every status has its own name, so a later writer can never overwrite a
+ * receipt with a lower status: a second reader of a message that was already read, or answered,
+ * adds nothing and the derived status never moves backward.
  */
 export function writeReceipt(dropDir: string, receipt: SignedReceipt): RecordWrite {
   const id = receipt.payload.id;

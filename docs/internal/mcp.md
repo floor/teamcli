@@ -33,9 +33,13 @@ never reaches the filesystem.
 
 `inbox_read` writes `<id>.read.json` beside the message **before** it returns the body — a read that
 cannot leave that receipt is refused, so the server never hands over a body it did not record. The
-receipt holds `{v, id, seat, session, tool, ts, pid}`. That receipt is the whole evidence this leg
-produces, and it says the seat *read* the message, not that it acted on it: the status a send can
-honestly report from it is `delivered (read)`.
+receipt is the signed status receipt `team messages` also writes: `{payload: {kind, status, id, to,
+root, session, at}, signature}`, signed with the checkout's message key, so the inbox, `team
+drops`, `team messages` and the watch all verify the same file rather than trusting its presence.
+It is write-once per status, so a second read adds nothing and a late read never lowers a receipt
+already on disk. That receipt is the whole evidence this leg produces, and it says the seat *read*
+the message, not that it acted on it: the status a send can honestly report from it is
+`delivered (read)`.
 
 While it runs, the server keeps `.inbox-listener` in the seat's own drop folder — `{v, seat,
 session, root, cli, pid, ts}` — and removes it at exit, but only while it still names this

@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { runMcp } from '../src/commands/mcp.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
-import { signRecord } from '../src/send/record.ts';
+import { signRecord, verifyReceipt, type SignedReceipt } from '../src/send/record.ts';
+import { messageKeyState } from '../src/store/keys.ts';
 import { recordBody, testIo } from './helpers.ts';
 
 const SESSION = 'acme';
@@ -78,6 +79,17 @@ function signed(at: Place, to: string, id: string, body: string): string {
     thread: id,
   }, at.home);
   return drop(at.dropDir(to), id, `${JSON.stringify(record, null, 2)}\n`);
+}
+
+/** The signed read receipt a read wrote, checked with the checkout's own message key: the one
+ *  file shape every reader of a status agrees on. */
+function readReceipt(at: Place, seat: string, id: string): SignedReceipt {
+  const receipt = JSON.parse(readFileSync(receiptPath(at.dropDir(seat), id), 'utf8')) as SignedReceipt;
+  const key = messageKeyState(at.home);
+  expect(key.kind).toBe('key');
+  if (key.kind !== 'key') throw new Error('the fixture home holds no message key');
+  expect(verifyReceipt(receipt, key.key)).toBe(true);
+  return receipt;
 }
 
 /** A stream the test feeds: `push` one line, `end` closes it, `replies` collects what was written. */
@@ -247,8 +259,15 @@ describe('team mcp serve', () => {
       signed(at, 'lead', LEAD_ID, 'the body');
       const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID }), call('2', 'inbox_check')]);
       expect(replies[0]!.result).toEqual({ content: [{ type: 'text', text: 'the body' }] });
-      const receipt = JSON.parse(readFileSync(receiptPath(at.dropDir('lead'), LEAD_ID), 'utf8')) as Record<string, unknown>;
-      expect(receipt).toMatchObject({ v: 1, id: LEAD_ID, seat: 'lead', session: SESSION, tool: 'inbox_read', pid: process.pid });
+      const receipt = readReceipt(at, 'lead', LEAD_ID);
+      expect(receipt.payload).toMatchObject({
+        kind: 'receipt',
+        status: 'read',
+        id: LEAD_ID,
+        to: 'lead',
+        root: realpathSync(at.root),
+        session: SESSION,
+      });
       const listed = JSON.parse(replies[1]!.result.content[0].text) as { unread: unknown[] };
       expect(listed.unread).toEqual([]);
       // The record itself is untouched: the inbox marks, it never moves or rewrites the file.
@@ -276,7 +295,9 @@ describe('team mcp serve', () => {
       expect(replies[1]!.result.isError).toBe(true);
       expect(replies[1]!.result.content[0].text).toContain('not a file');
       const listed = JSON.parse(replies[2]!.result.content[0].text) as { unread: { id: string }[] };
-      expect(listed.unread.map((one) => one.id)).toEqual([]);
+      // The link at the receipt's name was never signed by the message key, so it proves nothing:
+      // the message is still waiting, and nothing was written through the link.
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
       expect(existsSync(outsideReceipt)).toBe(false);
     } finally {
       at.cleanup();
@@ -340,8 +361,8 @@ describe('an inbox read serves only a record it verified', () => {
       const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID })]);
       expect(replies[0]!.result.isError).toBeUndefined();
       expect(replies[0]!.result.content[0].text).toBe('the draft is ready');
-      const receipt = JSON.parse(readFileSync(receiptPath(at.dropDir('lead'), LEAD_ID), 'utf8')) as Record<string, unknown>;
-      expect(receipt).toMatchObject({ v: 1, id: LEAD_ID, seat: 'lead', session: SESSION, tool: 'inbox_read' });
+      const receipt = readReceipt(at, 'lead', LEAD_ID);
+      expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id: LEAD_ID, to: 'lead' });
     } finally {
       at.cleanup();
     }

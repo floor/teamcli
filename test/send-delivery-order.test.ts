@@ -37,6 +37,7 @@ import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/
 import { deliveryChainOf } from '../src/send/delivery.ts';
 import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
+import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
 import { storePath } from '../src/store/store.ts';
@@ -212,9 +213,12 @@ function inboxDrop(dir: string): string {
   return id;
 }
 
-/** The receipt an `inbox_read` call would write, for the first message that appears while the
- *  send waits — a live server's answer without a server. Returns the stop for the poll. */
-function receiptSoon(dir: string, over: { seat?: string; session?: string } = {}): () => void {
+/** The signed read receipt an `inbox_read` call writes, for the first message that appears while
+ *  the send waits — a live server's answer without a server. It is the same signed status receipt
+ *  `team messages` writes, so the send verifies it with the message key in `home`. Returns the
+ *  stop for the poll. */
+function receiptSoon(w: { root: string; home: string }, over: { seat?: string; session?: string } = {}): () => void {
+  const dir = dropDir(w.root, 'lead');
   const timer = setInterval(() => {
     let names: string[];
     try {
@@ -228,15 +232,16 @@ function receiptSoon(dir: string, over: { seat?: string; session?: string } = {}
       clearInterval(timer);
       return;
     }
-    writeFileSync(receiptPath(dir, id), `${JSON.stringify({
-      v: 1,
+    const receipt = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
       id,
-      seat: over.seat ?? 'lead',
+      to: over.seat ?? 'lead',
+      root: w.root,
       session: over.session ?? 'acme',
-      tool: 'inbox_read',
-      ts: NOW.toISOString(),
-      pid: process.pid,
-    })}\n`);
+      at: NOW.toISOString(),
+    }, w.home);
+    writeReceipt(dir, receipt);
     clearInterval(timer);
   }, 2);
   return () => clearInterval(timer);
@@ -365,7 +370,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
   test('a receipt inside the grace is delivered (read): nothing typed, and the marker is cleared', async () => {
     const w = world();
     const dir = liveInbox(w);
-    const stop = receiptSoon(dir);
+    const stop = receiptSoon(w);
     const host = walker(w, undefined, 1_000);
     const io = owner(w.root);
 
@@ -436,7 +441,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
   test('--json names the read on the inbox channel', async () => {
     const w = world();
     const dir = liveInbox(w);
-    const stop = receiptSoon(dir);
+    const stop = receiptSoon(w);
     const io = owner(w.root);
     try {
       expect(await runSend(['lead', 'hello', '--json'], io, walker(w, undefined, 1_000))).toBe(0);

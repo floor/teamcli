@@ -78,17 +78,22 @@ report — replaces the earlier outcome, and a `--follow` pass prints the update
 
 The receipt is the only evidence this leg produces, and it is written by `inbox_read` before the
 body is returned, once the record's signature has been checked against the checkout's message
-key. A file that is not a signed record, or whose signature does not verify, is refused with a
-tool error and no receipt: a receipt never proves a read of something the server could not
-authenticate. It says the seat *read* the message, not that it acted on it. So:
+key. It is the signed status receipt `team messages` writes — `{payload: {kind, status, id, to,
+root, session, at}, signature}` at `<id>.read.json`, signed with the same message key — so one
+module answers for the inbox, `team drops`, `team messages` and the watch, and each verifies the
+receipt rather than trusting the file's presence. A file that is not a signed record, or whose
+signature does not verify, is refused with a tool error and no receipt: a receipt never proves a
+read of something the server could not authenticate. It says the seat *read* the message, not
+that it acted on it. So:
 
 - a receipt is `delivered (read)`, in the console, the JSON, the history and `team feed`;
 - no receipt is `sent (unconfirmed)`, with the drop kept;
 - nothing on this leg is ever reported as acted on.
 
-The receipt holds `{v, id, seat, session, tool, ts, pid}`. Its presence is procedural evidence: it
-is a file in the seat's own folder, written by the command the CLI ran, and it is never derived
-from pane text or a status.
+The receipt is the signed status receipt, write-once per status, so a second reader adds nothing
+and no read moves a status backward. Its signature is the procedural evidence: a file at that name
+this key did not sign, or one naming another message, seat, checkout or session, proves nothing
+and leaves the message waiting. Nothing it says is ever derived from pane text or a status.
 
 ## Checking a build
 

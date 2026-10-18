@@ -32,8 +32,7 @@ import {
   writeJson,
   writeJsonError,
 } from '../output/index.ts';
-import { receiptPath } from '../mcp/inbox.ts';
-import { signedRecordOf, verifyRecord } from '../send/record.ts';
+import { isRead, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
@@ -125,17 +124,6 @@ export function senderOf(header: string): string | null {
   return lead === '' ? null : lead;
 }
 
-/** Whether a receipt file is there. An unreadable path counts as missing: the drop is still
- *  waiting, and a listing does not fail over a receipt it cannot see. */
-function receiptHeld(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** The file's text as JSON, or undefined when it is not JSON at all (an older raw drop). */
 function parsedJson(text: string): unknown {
   try {
@@ -150,10 +138,13 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
 /**
  * The unread drops in one seat's folder, oldest first. A name with a dot in it is a sidecar
  * (`<id>.pending`, `<id>.taken`, `<id>.<hex>.tmp`, `<id>.read.json`), never a drop; a symlink or a
- * directory whose name is plain is not a drop either. A folder that does not exist is an empty
- * one: no send has written here yet.
+ * directory whose name is plain is not a drop either. A drop is read only when the receipt beside
+ * it is the signed status receipt the inbox and `team messages` write and the receipt module
+ * verifies — a file at that name that was not signed by the message key leaves the drop waiting.
+ * Without a key and context nothing can be proven, so every drop is listed. A folder that does not
+ * exist is an empty one: no send has written here yet.
  */
-export function listDrops(dropDir: string, key?: KeyObject): DropListing {
+export function listDrops(dropDir: string, key?: KeyObject, context?: StatusContext): DropListing {
   let names: string[];
   try {
     names = readdirSync(dropDir);
@@ -173,9 +164,10 @@ export function listDrops(dropDir: string, key?: KeyObject): DropListing {
       continue;
     }
     if (!stat.isFile()) continue;
-    // The receipt means the drop was handed over: it is read, and this reading is done with it.
-    // Its name is the inbox's own rule (`<id>.read.json`), the one the server writes.
-    if (receiptHeld(receiptPath(dropDir, name))) continue;
+    // A verified read receipt means the drop was handed over: it is read, and this reading is
+    // done with it. The receipt is the signed `<id>.read.json` the inbox and `team messages` write;
+    // a file there that the message key did not sign proves nothing and leaves the drop waiting.
+    if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key)) continue;
     let from: string | null = null;
     try {
       const text = readFileSync(path, 'utf8');
@@ -273,7 +265,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const dropDir = join(dir, 'send-drops', session, seat);
   const keyState = messageKeyState(sources.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
-  const first = listDrops(dropDir, key);
+  const context: StatusContext = { to: seat, root: loaded.root, session };
+  const first = listDrops(dropDir, key, context);
   let unreadable: string | null = first.kind === 'unreadable' ? first.reason : null;
   const rows = first.kind === 'ok' ? first.rows : [];
   if (follow) {
@@ -283,7 +276,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const seen = new Set(rows.map((row) => row.id));
     let tick = 0;
     while (await poll(tick++)) {
-      const next = listDrops(dropDir, key);
+      const next = listDrops(dropDir, key, context);
       if (next.kind === 'unreadable') {
         unreadable = next.reason;
         break;

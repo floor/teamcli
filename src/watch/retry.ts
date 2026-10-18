@@ -191,17 +191,20 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
 }
 
 /**
- * Promotes every inbox send a seat has read since the last pass: `<id>.read.json` is the seat's own
- * client saying it read the message, so the history records `delivered (read)` once and the
- * marker is cleared. Nothing is typed and no pane is needed — the pass reads two files per marker
- * — so it runs in a watch without nudges too, where the receipt is the only word the sender gets.
+ * Promotes every inbox send a seat has read since the last pass: the `<id>.read.json` receipt the
+ * seat's inbox or `team messages` signed with the message key says it read the message, so the
+ * history records `delivered (read)` once and the marker is cleared. A receipt the key did not
+ * sign, or one naming another seat, checkout or session, proves nothing. Nothing is typed and no
+ * pane is needed — the pass reads two files per marker — so it runs in a watch without nudges too,
+ * where the receipt is the only word the sender gets.
  */
 export function promoteInboxDrops(scene: RetryScene): void {
   for (const seat of scene.team.seats) {
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     for (const drop of readPending(dropDir)) {
       if (drop.leg !== 'mcp-inbox') continue;
-      if (!receiptHeld(dropDir, drop.id, seat.name, scene.session)) continue;
+      if (scene.home === undefined) continue;
+      if (!receiptHeld(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session }, scene.home)) continue;
       clearPending(dropDir, drop.id);
       if (scene.home !== undefined) {
         appendHistory(scene.team.project, scene.root, scene.home, {

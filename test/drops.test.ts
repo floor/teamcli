@@ -132,9 +132,20 @@ describe('team drops', () => {
     drop(`${D_OWNER}.pending`, JSON.stringify({ id: D_OWNER, from: 'owner', to: 'lead', body: '', ts: '2026-10-04T09:00:00.000Z', tries: 0 }));
     drop(`${D_OWNER}.taken`, JSON.stringify({ id: D_OWNER }));
     drop(`${D_OWNER}.deadbeef.tmp`, 'partial');
-    // A drop with a receipt beside it was handed over: it is read, and is not listed.
+    // A drop with a signed receipt beside it was handed over: it is read, and is not listed. The
+    // receipt is the signed status receipt the inbox and `team messages` write; a bare file at
+    // that name proves nothing.
     drop(D_READ, `${FILE_SEAT_HEADER}\n\nread already\n`);
-    drop(`${D_READ}.read.json`, '');
+    const handedOver = writeReceipt(dropDir, signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: D_READ,
+      to: 'lead',
+      root,
+      session: 'acme',
+      at: '2026-10-04T09:00:00.000Z',
+    }, home));
+    expect(handedOver.ok).toBe(true);
     // A file whose first line is no sender header is still a drop, and its sender is unknown.
     const headlessPath = drop(D_HEADLESS, 'a body with no sender line\n');
     // A send of this version leaves one signed record: the payload names the sender, and the
