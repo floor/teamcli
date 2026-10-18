@@ -98,7 +98,10 @@ trust:
 workspace:
   mode: shared
 seats:
-${seatBlock('coordinator', 'lead', true)}`);
+${seatBlock('coordinator', 'lead', true)}# The send scenes here walk the typed trigger: the inbox is tried and skipped for want of a
+# listener, then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
+`);
   file(rootB, `format: 1
 project: teamcli.io
 in_project: TeamCLI
@@ -111,7 +114,10 @@ trust:
 workspace:
   mode: shared
 seats:
-${seatBlock('coordinator', 'lead-io', true)}${seatBlock('implementer', 'worker-io', false)}`);
+${seatBlock('coordinator', 'lead-io', true)}${seatBlock('implementer', 'worker-io', false)}# The send scenes here walk the typed trigger: the inbox is tried and skipped for want of a
+# listener, then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
+`);
   return { base, home, rootA, rootB };
 }
 

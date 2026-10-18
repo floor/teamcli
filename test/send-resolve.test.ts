@@ -70,7 +70,11 @@ trust:
 workspace:
   mode: shared
 seats:
-${seats.join('')}`);
+${seats.join('')}# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the drop file is named and its line typed. The team's word keeps the default's drop step
+# (which types nothing) out.
+delivery_order: [mcp-inbox, typed]
+`);
   return { base, home, root };
 }
 

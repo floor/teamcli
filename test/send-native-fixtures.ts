@@ -54,6 +54,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# The plain-send scenes here exercise the typed trigger: the inbox is tried and skipped for want
+# of a listener, then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 

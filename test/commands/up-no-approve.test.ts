@@ -39,7 +39,8 @@ operator: lead
 workspace:
   mode: shared
 seats:
-${SEAT('coordinator', 'lead')}${SEAT('builder', 'builder-1')}${SEAT('builder', 'builder-2')}${SEAT('tester', 'tester-1')}${SEAT('tester', 'tester-2')}grant:
+${SEAT('coordinator', 'lead')}${SEAT('builder', 'builder-1')}${SEAT('builder', 'builder-2')}${SEAT('tester', 'tester-1')}${SEAT('tester', 'tester-2')}delivery_order: [mcp-inbox, typed]
+grant:
   session: acme
   seat: lead
   scope:
@@ -53,7 +54,8 @@ operator: lead
 workspace:
   mode: shared
 seats:
-${SEAT('coordinator', 'lead')}${SEAT('builder', 'builder-1')}`;
+${SEAT('coordinator', 'lead')}${SEAT('builder', 'builder-1')}delivery_order: [mcp-inbox, typed]
+`;
 
 const lead = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } as const;
 const other = { kind: 'seat', name: 'other', pane: 'w9:p1', session: 'acme' } as const;

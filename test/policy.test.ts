@@ -184,7 +184,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     const delivery = resolvePolicy('delivery-order', []);
     expect(delivery.ok).toBe(true);
     if (delivery.ok) {
-      expect(delivery.effective.value).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
+      expect(delivery.effective.value).toEqual(['mcp-inbox', 'drop', 'typed']);
       expect(delivery.effective.level).toBe('default');
     }
 
@@ -1187,7 +1187,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     }
   });
 
-  test('scene: unsigned legacy delivery_order loosening a signed project policy points repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
+  test('scene: unsigned legacy delivery_order naming a leg the order in force lacks is set aside against a signed project policy, pointing the repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
     const fx = makeFixture();
     try {
       // Signed project policy delivery-order [typed]
@@ -1227,9 +1227,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       });
       expect(code1).toBe(1);
       expect(err1).toBe('');
+      // The word names `native`, which is no leg of the order in force: the settings reader sets
+      // the whole word aside, and that one difference stands in place of the policy loosening.
       expect(out1).toContain(
-        'difference: policy "delivery-order" at level team ("native, typed") loosens level project ("typed")\n' +
-          '  repair: remove or narrow delivery_order in .agents/team.yaml\n' +
+        'difference: delivery_order [native, typed] in .agents/team.yaml is set aside; [mcp-inbox, drop, typed] stands\n' +
+          '  repair: drop the 1 leg not in the inherited delivery_order in .agents/team.yaml\n' +
           "  who: the team's lead\n",
       );
       expect(out1).toContain('1 difference\n');
@@ -1387,7 +1389,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(await runPolicy(['--seat', 'worker', '--file', '.agents/team.yaml'], seatIo, { home: fx.home, now: () => NOW })).toBe(0);
       expect(seatIo.out).toContain('team beacon, session "beacon" · seat worker');
       expect(seatIo.out).toMatch(
-        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: native, mcp-inbox, typed, drop\)/,
+        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: mcp-inbox, drop, typed\)/,
       );
       expect(seatIo.out).not.toContain('same as the team');
     } finally {

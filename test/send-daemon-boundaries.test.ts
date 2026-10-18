@@ -87,6 +87,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# These scenes are the daemon's typed boundaries: the inbox is tried and skipped for want of a
+# listener, then the trigger line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -192,11 +195,10 @@ describe('the send daemon\'s boundaries', () => {
         id: expect.any(String),
         outcome: 'unreachable',
         ms: expect.any(Number),
-        // The walk reached the typed leg through the native and mcp-inbox legs, and the history
-        // line carries what each of them said: the native leg is the sending session's own
-        // SendMessage, and no inbox server is listening for the seat.
+        // The walk reached the typed leg through the inbox ahead of it, and the history line
+        // carries what that leg said: no inbox server is listening for the seat. The native leg
+        // is never part of an order in force, so it is not walked and nothing about it is said.
         failed: [
-          "native: unavailable; the native leg is the sending session's own SendMessage",
           'mcp-inbox: no live inbox listener',
         ],
       },

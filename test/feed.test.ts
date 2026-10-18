@@ -78,6 +78,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# This fixture's sends exercise the typed leg: the inbox is tried and skipped for want of a
+# listener, then the trigger line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -210,10 +213,10 @@ describe('team send history log & team feed', () => {
       thread: sentDoc.ids.sent,
       ms: 0,
       via: 'typed',
-      // The walk landed on the typed leg through both legs ahead of it: the native leg only the
-      // sending session's own SendMessage can make, and an inbox no server was listening on.
+      // The walk landed on the typed leg through the inbox ahead of it: no server was listening.
+      // The native leg is never part of an order in force — the sender chooses it — so it is not
+      // walked, and nothing about it is recorded.
       failed: [
-        'native: unavailable; the native leg is the sending session\'s own SendMessage',
         'mcp-inbox: no live inbox listener',
       ],
     });
@@ -252,7 +255,6 @@ describe('team send history log & team feed', () => {
       via: 'typed',
     });
     expect(doc.events[0]?.failed).toEqual([
-      'native: unavailable; the native leg is the sending session\'s own SendMessage',
       'mcp-inbox: no live inbox listener',
     ]);
   });

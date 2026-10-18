@@ -53,6 +53,9 @@ seats:
     model: Test
     version: "1"
     launch: claude
+# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -159,7 +162,7 @@ describe('team send: a --wait frame cannot land at a dialog', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg first, and its delivery order is mcp-inbox, typed; nothing was sent\n');
     expect(io.err).not.toContain('held');
     expect(host.frames.length).toBe(0);
     expect(host.pane.typed).toEqual([]);

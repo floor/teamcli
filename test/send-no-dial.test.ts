@@ -75,6 +75,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -189,7 +192,7 @@ describe('the sending paths never dial while the socket is off', () => {
     expect(code).toBe(1);
     expect(io.out).toBe('');
     expect(io.err).toBe(
-      'team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n',
+      'team send: refused: lead: --wait needs the native leg first, and its delivery order is mcp-inbox, typed; nothing was sent\n',
     );
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);

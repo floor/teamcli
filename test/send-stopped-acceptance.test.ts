@@ -83,7 +83,10 @@ seats:
     model: Test
     version: "1"
     launch: claude
-${stopped ? '    stopped: true\n' : ''}`;
+${stopped ? '    stopped: true\n' : ''}# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
+`;
 }
 
 type Fake = SendHost & { typed: string[]; enters: () => number };
