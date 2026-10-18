@@ -29,8 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept out, each one's reason recorded on the history line, so the message arrives in the drop
   file and nothing reaches a pane or an inbox; a person reads it and writes no receipt, so no
   marker waits there, and an expired handoff's fallback walks the same one leg. `--wait` is
-  refused for such a seat, and the watch types no retry, nudge, work drop or ring there, giving
-  a held drop up with the reason instead.
+  allowed for such a seat: the record is written on its `drop` leg, nothing is typed, and the run
+  awaits a reply record on the thread. The watch types no retry, nudge, work drop or ring there,
+  giving a held drop up with the reason instead.
 
 - **`team drops`.** The receiving seat reads its own folder under
   `.agents/send-drops/<session>/<seat>`: one row per waiting drop, the sender the record's payload
@@ -75,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thread that cites the record it answers. A reply goes only to the sender, admitted by
   `reply-on-open-thread`; a record the owner sent has no seat to answer, so a reply to it is
   refused before anything is written.
+
+- **A waited send.** `team send --wait` writes the signed record through the receiving seat's
+  delivery walk — `mcp-inbox`, `drop` or `typed`, or `drop` alone when the seat's file marks it
+  `human: true`, so nothing is typed into a person's pane — then waits on the thread for the first
+  verified reply record until the `--timeout` window (120 seconds by default) closes. A reply makes
+  the run `answered` (exit 0); a window that closes with no reply makes it `timeout` (exit 1) and
+  leaves the thread open, so a late `team reply` still lands on it, and an answered `--json`
+  document carries the thread id.
 
 - **The native leg, as a handoff.** When the recipient's CLI carries the cross-session channel and
   the sender's own file declares `cli: claude-code`, a send to the native leg becomes a handoff:
@@ -269,10 +278,9 @@ commands read them.
   mode-0600 drop file and types one short trigger line naming it — the body is never typed, and
   never split — for every seat, Claude Code's included: a socket write to a busy session can land
   at its held-message dialog, where the box is blocked, so no path opens a cross-session socket
-  at all. `--wait`, which would ride one, is refused for every seat — a Claude Code seat's
-  refusal names the native leg
-  (`team route` and the caller's own `SendMessage`) that will carry a waited send, and any other
-  seat gets its own reason — and nothing is written. A seat the receiving team file marks
+  at all. A waited send walks the same delivery order — `--wait` writes the record as a plain
+  send does and then waits on the thread for the first verified reply record (see the waited
+  send above). A seat the receiving team file marks
   `stopped: true` is not addressed at all: the send, its dry run and `team route` refuse it as
   stopped, with its own exit id, before a drop file exists, a leg is walked or a history line is
   written.
