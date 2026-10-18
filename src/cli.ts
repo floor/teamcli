@@ -136,6 +136,12 @@ export async function main(argv: string[], io: Io): Promise<number> {
   }
   const load = commands[name];
   if (!load) {
+    // 0.3.5's last setup step was `team approve`. A user typing it out of habit is told the
+    // command was removed, in one line, rather than given the generic help.
+    if (name === 'approve') {
+      io.stderr('team approve was removed in 0.5.0: the live team file is the record, and nothing needs approving; see UPGRADE-0.5.md\n');
+      return 2; // exit: team.approve-removed
+    }
     io.stderr(`team: unknown command "${name}"\n\n${helpText()}`);
     return 2; // exit: team.unknown
   }

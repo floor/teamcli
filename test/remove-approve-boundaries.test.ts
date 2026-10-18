@@ -347,12 +347,15 @@ describe('an agent the grant does not name', () => {
 });
 
 describe('the approve command is gone', () => {
-  test('the dispatch table carries no approve and the command answers unknown', async () => {
+  test('the dispatch table carries no approve and the command says it was removed', async () => {
     expect(Object.keys(commands)).not.toContain('approve');
     const io = testIo(base, owner);
     const code = await main(['approve'], io);
     expect(code).toBe(2);
-    expect(io.err).toContain('unknown command "approve"');
+    expect(io.err).toBe(
+      'team approve was removed in 0.5.0: the live team file is the record, and nothing needs approving; see UPGRADE-0.5.md\n',
+    );
+    expect(io.out).toBe('');
   });
 
   test('the exit-code contract keeps no approve row and carries the deny row', () => {

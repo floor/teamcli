@@ -10,8 +10,9 @@ For a team running under 0.3.5, or under one of the 0.4.x builds between them.
 
 ## `team approve` is gone
 
-The command is not in the CLI: `team approve` prints `team: unknown command "approve"` and exits
-2, and `team --help` carries no `approve` line. `team up` admits from the live file now: edit the
+The command is not in the CLI: `team approve` prints one line — `team approve was removed in
+0.5.0: the live team file is the record, and nothing needs approving; see UPGRADE-0.5.md` — and
+exits 2, and `team --help` carries no `approve` line. `team up` admits from the live file now: edit the
 file in your clone, then run `up` — or `add`, `remove`, `down`, `restart`; each reads the file
 itself. A script that guarded on `team approve` can drop that call.
 

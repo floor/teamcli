@@ -451,6 +451,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.help` | `team` | 0 | help was printed | `team --help` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
+| `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |

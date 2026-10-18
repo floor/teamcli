@@ -3119,6 +3119,13 @@
     {
       "code": 2,
       "command": "team",
+      "id": "team.approve-removed",
+      "meaning": "the approve command was removed in 0.5.0",
+      "trigger": "team approve"
+    },
+    {
+      "code": 2,
+      "command": "team",
       "id": "team.no-command",
       "meaning": "no command was given",
       "trigger": "team"
