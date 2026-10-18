@@ -312,6 +312,7 @@ Hidden: no
 Usage:
 
     team drops [--follow] [--json]
+    team drops --read --seat <seat> [--session <session>]
 
 ### Flags
 
@@ -320,6 +321,9 @@ Usage:
 | `--follow` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--read` | no | no | no |
+| `--seat` | yes | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
