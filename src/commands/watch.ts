@@ -489,7 +489,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // still-true reports; when no bus is running, fall back cleanly to the poll path.
       // Owner delivery (§4.5): the Runtime reaches the owner itself — the notice and the owner's
       // own inbox — for every event the policy routes to `owner` or the raising side addresses to
-      // `owner`. No seat is in the path, so a held or unreachable liaison silences neither.
+      // `owner`. No seat is in the path, so a held or unreachable liaison silences neither. The
+      // subscription is the owner's delivery path's own, so a watch that is not that path stays a
+      // reader of the file and the pass, and publishes what its checks see.
       const owner = sources.home === undefined || foreign
         ? undefined
         : new OwnerDelivery({
@@ -501,14 +503,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             now: sources.now,
             alreadyTold: (text) => ownerTold.has(text),
           });
-      const busConnected = !foreign && ownerPath && sources.busSubscribe !== undefined
-        ? await syncWatchBus(root, busTracker, sources, memory, owner === undefined ? undefined : (record) => {
-            const outcome = owner.onEvent(record.payload);
-            if (outcome.error !== undefined) {
-              tellOnce(told, 'owner-record', `the owner's inbox was not written: ${outcome.error}`, tell);
-            }
-          })
-        : false;
+      if (!foreign && ownerPath && sources.busSubscribe !== undefined) {
+        await syncWatchBus(root, busTracker, sources, memory, owner === undefined ? undefined : (record) => {
+          const outcome = owner.onEvent(record.payload);
+          if (outcome.error !== undefined) {
+            tellOnce(told, 'owner-record', `the owner's inbox was not written: ${outcome.error}`, tell);
+          }
+        });
+      }
 
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
       // `watch` or `tempo`, the watch keeps the waits that were approved, or the defaults.
@@ -623,7 +625,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           if (report.to === 'owner') ownerTold.add(report.text);
           tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
         }
-        if (busConnected && sources.busPublish !== undefined) {
+        // What the pass saw goes on the bus whatever started this watch: a report is the watch's
+        // contribution, not a privileged delivery, and a bus that is not running answers
+        // `unavailable` without making the pass wait.
+        if (!foreign && sources.busPublish !== undefined) {
           await publishWatchReportsToBus(root, session, result.reports, reportTs, sources.busPublish);
         }
         for (const label of result.labels) {
