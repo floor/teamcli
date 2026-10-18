@@ -442,11 +442,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, pro.dir, pro.who, pro.reason, host, report);
   }
   const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
-  // Whether this sender can make the native leg itself: a seat whose own file declares Claude
-  // Code carries the cross-session SendMessage the leg is made with. The owner's terminal, and
-  // every other CLI, do not, and their native leg stays a skip.
   const declaredCaller = caller.kind === 'seat' ? team.seats.find((seat) => seat.name === caller.name) : undefined;
-  const callerNative = declaredCaller?.cli === 'claude-code';
 
   // The authority rule, `admitSend` over the registry's records, default deny, judging the
   // resolved target when there is one. A sender the store holds no record for is judged as the
@@ -500,6 +496,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       cross,
     };
   }
+  // Whether this sender can make the native leg itself: a seat whose registry record or team file
+  // declares Claude Code carries the cross-session SendMessage the leg is made with. The owner's
+  // terminal, and every other CLI, do not, and their native leg stays a skip.
+  const senderCli = admission.sender !== 'owner' && 'cli' in admission.sender ? admission.sender.cli : declaredCaller?.cli;
+  const callerNative = senderCli === 'claude-code';
   report.seat = to.seat;
   // The team and session the send addresses, for the context line and the document: the
   // receiving team's own, read from the file that names it.
@@ -1031,8 +1032,29 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     return refuse(io, dir, who, `${id}: it was printed for ${record.from}, and this call is ${from}; nothing was recorded`, host, report);
   }
   // The sender stands where the handoff judged it — the owner always does; a seat is the seat it
-  // names, in the session judged, on the pane the state records for it.
+  // names, in the session judged, on the pane the state records for it, and when the handoff
+  // bound a registry agent record (`from_id`), the caller must still stand as that same agent.
   const standing = standingOf(dir, judged.session, caller);
+  if (caller.kind === 'seat') {
+    const callerRecord = recordFor(host.home, team.session, caller.name);
+    if (record.from_id !== null) {
+      if (callerRecord === null || callerRecord.id !== record.from_id) {
+        const current = callerRecord === null ? 'no running agent record' : `agent ${callerRecord.id}`;
+        return refuse(
+          io,
+          dir,
+          who,
+          `${id}: it was printed for agent ${record.from_id} (seat ${record.from}), and this call has ${current}; nothing was recorded`,
+          host,
+          report,
+        );
+      }
+    }
+    if (callerRecord !== null) {
+      const identity = recordIdentityProblem(caller, callerRecord, standing);
+      if (identity !== null) return refuse(io, dir, who, identity, host, report);
+    }
+  }
   const placement = placementProblemOf(caller, standing);
   if (placement !== null) return refuse(io, dir, who, placement, host, report);
   // The span the handoff measured, from the record's own clock to this run's: the host's clock,
