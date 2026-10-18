@@ -159,10 +159,16 @@ function boxState(cli: string, text: string, screen: string | undefined, options
 
 /** Whether the pane's box holds exactly `text` right now: an unsent composer, no fold marker, and
  *  rows that read back as the text. The one check the watch's nudge and the exit typing share
- *  with delivery — false for anything not observed, never `true` on trust. */
+ *  with delivery — false for anything not observed, never `true` on trust. A running turn reads
+ *  `working` whatever the composer below it holds, so the composer is read on its own there: a
+ *  draft typed during a turn is found as the text it is, never missed as an empty box. */
 export function boxHoldsText(cli: string, text: string, screen: string | undefined, options?: ScreenOptions): boolean {
   if (readFoldMark(cli, screen)) return false;
-  if (readScreen(cli, screen, options).kind !== 'unsent') return false;
+  if (screen === undefined) return false;
+  const read = readScreen(cli, screen, options);
+  const unsent = read.kind === 'unsent'
+    || (read.kind === 'working' && classifyComposer(cli, screen.split('\n'), options).kind === 'unsent');
+  if (!unsent) return false;
   const box = readBox(cli, screen, options);
   return box !== null && holdsBox(text, box);
 }
