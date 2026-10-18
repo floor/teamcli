@@ -32,33 +32,20 @@ The first release since 0.3.5, and the first to ship on npm since it. The full l
   seen, and a seat that is already running is written in — without a relaunch — so `team send`,
   `team seats`, `team watch` and `team down` can address it.
 - **`team send`, and the channel it takes.** A plain send walks the receiving seat's delivery
-<<<<<<< HEAD
   order — `native`, `mcp-inbox`, `typed`, then `drop` by default, and a level of that seat's chain
   may drop legs or reorder the ones it keeps, never add one. This build carries no mcp-inbox leg
   and makes no socket write, so the legs the walk keeps and cannot take are recorded `unavailable`
-  and the send goes by the drop file and one trigger line — or, on a seat that opts into the
-  `drop` leg, by the same drop file alone, with nothing typed into the pane. `--wait` is refused
-  for every seat — a Claude
-  Code seat's refusal names the native leg (`team route` and the caller's own `SendMessage`) that
-  will carry a waited send, any other seat its own reason, and a Claude Code seat whose delivery
-  order does not lead with the native leg is refused for that, naming the order in force — and
-  nothing is written. A sender with its own cross-session tool takes the native channel — `team
-  route <seat>` answers the address, and `team send --record <seat> --channel native --ms <n>`
-  writes the delivery down. Every run ends in one word — `delivered`, `answered`, `held`,
-=======
-  order — `native`, `mcp-inbox`, `typed` by default, and a level of that seat's chain may drop
-  legs or reorder the ones it keeps, never add one. This build carries no mcp-inbox leg and
-  makes no socket write, so a send goes by the drop file and one trigger line unless the sender's
-  own file declares Claude Code and the receiving seat is Claude's: `team send` then prints a
-  native handoff — the exact target, the body and the `team send --confirm <id>` line — and the
-  sender's own SendMessage carries the message, the confirm writing the one history line.
-  `--wait` is refused for every seat — a Claude Code seat's refusal names the native leg
-  (`team route` and the caller's own `SendMessage`) that will carry a waited send, any other seat
-  its own reason, and a Claude Code seat whose delivery order does not lead with the native leg
-  is refused for that, naming the order in force — and nothing is written. `team route` answers
-  the address and the rule beside a handoff, and `team send --record <seat> --channel native
-  --ms <n>` writes down a delivery made without one. Every run ends in one word — `delivered`, `answered`, `held`,
->>>>>>> d9c8698b (feat(send): hand the native leg to the sender and record it on --confirm)
+  and a send goes by the drop file and one trigger line — or, on a seat that opts into the `drop`
+  leg, by the same drop file alone, with nothing typed into the pane — unless the sender's own
+  file declares Claude Code and the receiving seat is Claude's: `team send` then prints a native
+  handoff — the exact target, the body and the `team send --confirm <id>` line — and the sender's
+  own SendMessage carries the message, the confirm writing the one history line. `--wait` is
+  refused for every seat — a Claude Code seat's refusal names the native leg (`team route` and the
+  caller's own `SendMessage`) that will carry a waited send, any other seat its own reason, and a
+  Claude Code seat whose delivery order does not lead with the native leg is refused for that,
+  naming the order in force — and nothing is written. `team route` answers the address and the
+  rule beside a handoff, and `team send --record <seat> --channel native --ms <n>` writes down a
+  delivery made without one. Every run ends in one word — `delivered`, `answered`, `held`,
   `not-submitted`, `timeout`, `unreachable` or `refused` — and the history `team feed` reads
   keeps the milliseconds, the channel it went by and the legs that failed. A seat its file marks
   `assistant: true` — one per file, never a seat with `count` — is its entity's assistant: the
