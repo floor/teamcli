@@ -8,7 +8,7 @@ import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { extractFolder, isEligible, labelMatches, versionMatches, wholeVersion, type TrustRecord } from '../src/profiles/trust-answer.ts';
+import { extractFolder, isEligible, keyOf, labelMatches, versionMatches, wholeVersion, type TrustRecord } from '../src/profiles/trust-answer.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -18,6 +18,7 @@ import { readGrants, writeGrant, writeRevocation } from '../src/permissions/gran
 import { teamIdOf } from '../src/registry/teams.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
 import { rulesFilePath } from '../src/launch/rules-file.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { testIo } from './helpers.ts';
 
 const cursorTrust = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
@@ -223,6 +224,26 @@ describe('what the captures show', () => {
     expect(labelMatches(agyRecord, agyTrust)).toBe(true);
     expect(agyTrust).toContain('> Yes, I trust this folder');
     expect(agyTrust).toContain('enter Confirm');
+  });
+
+  test('the 2026.10.16 record is the one the run applies to its own capture', () => {
+    const cursor = profileFor('cursor');
+    if (!cursor) throw new Error('profile');
+    const capture = readFileSync(new URL('./fixtures/cursor/2026.10.16/trust.txt', import.meta.url), 'utf8');
+    const record = cursor.answers.find((item) => item.capture === 'cursor/2026.10.16/trust.txt');
+    if (!record) throw new Error('record');
+    // The selection `team answer` and `team doctor` make: the exact version in force picks this
+    // record, eligible by its own registered capture.
+    expect(isEligible('cursor', record)).toBe(true);
+    expect(versionMatches(record, '2026.10.16-e3cb207')).toBe(true);
+    expect(cursor.answers.find((item) => isEligible('cursor', item) && versionMatches(item, '2026.10.16-e3cb207'))).toBe(record);
+    // Applied to its own capture: the screen is the dialog, the row `team` presses is the recorded
+    // label, the one folder between the anchors is the one the lobby path sits in, and the
+    // recorded key is still `a`.
+    expect(readScreen('cursor', capture).kind).toBe('trust');
+    expect(labelMatches(record, capture)).toBe(true);
+    expect(extractFolder(record.extract, capture)).toBe('<workspace>');
+    expect(keyOf(record.action)).toBe('a');
   });
 
   test('a run of rows is joined only when it proves one wrapped path', () => {
