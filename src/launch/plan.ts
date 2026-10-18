@@ -1,5 +1,6 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
+import { selfRunner } from '../mcp/register.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
@@ -566,7 +567,11 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}) },
       });
     }
-    const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name]);
+    const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
+      seat: seat.name,
+      session,
+      ...selfRunner(),
+    });
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {

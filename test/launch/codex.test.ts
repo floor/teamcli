@@ -25,6 +25,31 @@ describe('Codex launch and captured screens', () => {
     expect(versionVerdict('codex-cli 0.161.0', codex.tested)).toBe('tested');
     expect(versionVerdict('codex-cli 0.162.0', codex.tested)).toBe('newer');
   });
+  test('the team inbox rides the launch as two -c values, and no file is written', () => {
+    expect(codex.mcpInbox).toEqual({
+      launchArgs: [
+        '-c',
+        'mcp_servers.team_inbox.command="{command}"',
+        '-c',
+        'mcp_servers.team_inbox.args=["{entry}","mcp","serve","--seat","{seat}"]',
+      ],
+      add: null,
+      target: null,
+      file: null,
+    });
+    expect(
+      launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, {
+        seat: 'helper',
+        session: 'acme',
+        command: '/opt/bun',
+        entry: '/src/cli.ts',
+      }),
+    ).toBe(
+      'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen'
+      + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
+      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper"]\'',
+    );
+  });
   test.each([
     ['idle', 'idle'], ['unsent', 'unsent'], ['working', 'working'],
     ['typed-two-lines', 'unsent'], ['pasted-two-lines', 'unsent'], ['second-line-glyph', 'unsent'],

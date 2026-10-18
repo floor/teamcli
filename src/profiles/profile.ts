@@ -66,6 +66,9 @@ export interface Profile {
   /** Paths this CLI reads at start in its working folder. A `directory` entry is every file
    *  under that directory. Empty when a run showed this CLI reads none. */
   startupReads: readonly { path: string; directory: boolean }[];
+  /** How the team inbox registers with this CLI, from the route a run measured. Null when no
+   *  route is measured for this CLI: its seats stay on the drop and typed legs. */
+  mcpInbox: InboxBlock | null;
   /** Seconds to wait for the idle prompt after a launch. */
   idleTimeout: number;
   /** Seconds to wait for the pane's shell after the exit command. */
@@ -118,21 +121,55 @@ export function shellQuote(word: string): string {
   return `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
+/** The team inbox's registration for one CLI, as a run measured it. */
+export type InboxBlock = {
+  /** Launch-line arguments, appended when a seat launches. `{seat}`, `{session}`, `{command}`
+   *  and `{entry}` are filled from the launch. Empty when the CLI takes none. */
+  launchArgs: readonly string[];
+  /** The CLI's own project-scope `mcp add` subcommand arguments, run in the seat's folder at
+   *  launch. Null when the CLI has no measured add command. */
+  add: readonly string[] | null;
+  /** The file `add` writes, relative to the seat's folder. Null without `add`. */
+  target: string | null;
+  /** A config file team writes itself, relative to the seat's folder. Null when team writes
+   *  none: the CLI's own command writes it, or no file is involved. */
+  file: string | null;
+};
+
+/** What a launch fills into the profile's `mcp_inbox` words. `command` and `entry` are this
+ *  install's runner — the executable and its entry script — which reach the inbox server
+ *  whether or not `team` is on the PATH. */
+export type InboxPlace = { seat: string; session: string; command: string; entry: string };
+
+/** A profile word with the launch's own values filled in. */
+export function fillInboxPlace(text: string, place: InboxPlace): string {
+  return text
+    .replaceAll('{seat}', place.seat)
+    .replaceAll('{session}', place.session)
+    .replaceAll('{command}', place.command)
+    .replaceAll('{entry}', place.entry);
+}
+
 /**
  * The command a seat's pane runs: the unattended flag in its environment, the
  * file's launch line, then the profile's options and, where the CLI takes
  * them at launch, the rules. A CLI that loads a per-launch settings file also
  * gets that file, named at the end, unless its launch line already names one.
+ * A launch with a place adds the profile's measured team-inbox arguments.
  */
 export function launchCommand(
   profile: Profile,
   launch: string,
   rules: string,
   cliHook?: string | null,
+  place?: InboxPlace,
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = profile.unattended.filter((option) => !words.has(option));
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
+  if (place) {
+    for (const word of profile.mcpInbox?.launchArgs ?? []) options.push(fillInboxPlace(word, place));
+  }
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
     && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
     options.push('--settings', cliHook);
@@ -331,7 +368,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -459,6 +496,52 @@ function startupReadsOf(entry: YamlEntry): readonly { path: string; directory: b
     }
     return { path: value, directory };
   });
+}
+
+/**
+ * The value of `mcp_inbox`: the team inbox's measured registration for one CLI. One of three
+ * routes, never two: launch-line arguments, the CLI's own `mcp add` with the file it writes,
+ * or a config file team writes itself. Both file routes carry a relative path inside the seat's
+ * folder, in the `lobby_files` grammar; the launch refuses it there when git tracks it.
+ */
+function inboxOf(entry: YamlEntry): InboxBlock {
+  const entries = mapping(entry.value, 'mcp_inbox');
+  only(entries, ['launch_args', 'add', 'target', 'file']);
+  const launchArgsEntry = optional(entries, 'launch_args');
+  const addEntry = optional(entries, 'add');
+  const targetEntry = optional(entries, 'target');
+  const fileEntry = optional(entries, 'file');
+  if (addEntry !== undefined && fileEntry !== undefined) {
+    fail(fileEntry.line, '"mcp_inbox" registers with "add" or "file", not both');
+  }
+  if (addEntry !== undefined && targetEntry === undefined) {
+    fail(addEntry.line, '"mcp_inbox" needs "target" beside "add": the file the command writes');
+  }
+  if (targetEntry !== undefined && addEntry === undefined) {
+    fail(targetEntry.line, '"mcp_inbox" needs "add" beside "target"');
+  }
+  if (launchArgsEntry === undefined && addEntry === undefined && fileEntry === undefined) {
+    fail(entry.line, '"mcp_inbox" names launch_args, add or file');
+  }
+  return {
+    launchArgs: launchArgsEntry === undefined ? [] : strings(launchArgsEntry.value, 'launch_args'),
+    add: addEntry === undefined ? null : strings(addEntry.value, 'add'),
+    target: targetEntry === undefined ? null : relativeFileOf(targetEntry, 'target'),
+    file: fileEntry === undefined ? null : relativeFileOf(fileEntry, 'file'),
+  };
+}
+
+/** A relative path inside the seat's folder: the `lobby_files` grammar, one exact file. */
+function relativeFileOf(entry: YamlEntry, key: string): string {
+  const value = text(entry, key);
+  const parts = value.split('/');
+  if (value.startsWith('/') || value.endsWith('/') || parts.some((part) => part === '' || part === '.' || part === '..')) {
+    fail(entry.line, `"${key}" holds "${value}": not a relative path of a file inside the seat's folder`);
+  }
+  if (parts.some((part) => /[*?\[]/.test(part))) {
+    fail(entry.line, `"${key}" holds "${value}": a path is one exact name, not a pattern`);
+  }
+  return value;
 }
 
 /** The `startup_reads` a profile snippet names, by the loader's own rule: for tests. */
@@ -623,6 +706,7 @@ function launchOf(root: YamlNode): Shipped {
   const exitConfirmEntry = optional(entries, 'exit_confirm');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
+  const mcpInboxEntry = optional(entries, 'mcp_inbox');
   const exitEntry = optional(entries, 'exit');
   const exitKeysEntry = optional(entries, 'exit_keys');
   const composeEntry = optional(entries, 'compose_module');
@@ -660,6 +744,7 @@ function launchOf(root: YamlNode): Shipped {
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
+      mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),
       lastUsedModel: lastUsedEntry ? boolOf(lastUsedEntry.value, 'last_used_model') : false,
