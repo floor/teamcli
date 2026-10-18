@@ -234,7 +234,7 @@ function readByHook(at: SeedWorld, dropDir: string, id: string, seat: string, se
     root: realpathSync(at.root),
     session,
     at: NOW.toISOString(),
-  }, at.home));
+  }, at.home), at.home);
   if (!written.ok) throw new Error(written.reason);
 }
 
