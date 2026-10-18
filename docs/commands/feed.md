@@ -83,7 +83,7 @@ summary line, `<n> event` or `<n> events`. The table's columns are:
 | --- | --- |
 | TIME | when the entry was written, `HH:MM:SS` |
 | KIND | the send outcome, with `via <path>` and `in <n> ms` when the send measured them |
-| SEAT | `<from> -> <to>` |
+| SEAT | `<from> -> <to>`; the sender reads as the project's [`sender_name`](../team-file.md#sender_name) word asks, and `--json` keeps the line's own `from` |
 | DETAIL | the body, folded to one line; a reply opens with `re <id>: `, the record it answers |
 
 An empty history prints the context line and `0 events` — no table. `--follow` prints one

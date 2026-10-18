@@ -6,6 +6,8 @@ import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { lobbyDir } from '../lobby/gate.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { namingAcross, namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import {
   parseHistoryLine,
@@ -598,7 +600,7 @@ function eventJson(entry: HistoryEntry): Record<string, unknown> {
 
 /** The context line opens a run once; null when the run is not team-scoped (`--all` or
  *  outside a checkout), and a follow that starts empty prints nothing until its first event. */
-type Scope = { context: string | null; printed: boolean };
+type Scope = { context: string | null; printed: boolean; naming: SenderNaming };
 
 function printContext(io: Io, scope: Scope): void {
   if (scope.printed || scope.context === null) return;
@@ -618,7 +620,14 @@ function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): voi
   printContext(io, scope);
   const lines = renderTable({
     headers: ['TIME', 'KIND', 'SEAT', 'DETAIL'],
-    rows: entries.map((entry) => [timeOf(entry.ts), kindOf(entry), `${entry.from} -> ${entry.to}`, detailOf(entry)]),
+    // The SEAT cell carries the readable sender name the project's `sender_name` asks for; the
+    // line's own `from` — the seat name history records — is what `--json` carries.
+    rows: entries.map((entry) => [
+      timeOf(entry.ts),
+      kindOf(entry),
+      `${senderDisplayName({ seat: entry.from }, scope.naming)} -> ${entry.to}`,
+      detailOf(entry),
+    ]),
     indent: scope.context === null ? '' : '  ',
     style: ttyStyle(io, { json: false }),
   });
@@ -723,6 +732,11 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
   const scope: Scope = {
     context: project !== null && session !== null ? contextLine(project, session) : null,
     printed: false,
+    // A feed run outside a checkout (`--all`, or the lobby) has no project word and no own team
+    // to compare against: its senders read across the registry.
+    naming: root !== null && loaded.ok
+      ? namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team })
+      : namingAcross(sources.home),
   };
   if (json) {
     writeJson(io, 'team.feed', {

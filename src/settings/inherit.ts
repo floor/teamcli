@@ -44,6 +44,22 @@ export function declarationsOf(declared: Partial<Record<SettingLevel, boolean | 
 }
 
 /**
+ * How a sender reads in TeamCLI's own headlines: `auto` (the seat's nickname inside its own
+ * team, `seat@team` from another), `nickname`, `seat`, or `seat@team`. It is a presentation
+ * word, not a permission one: the registry id stays in every record, and only the human
+ * headline changes. A team file's own key and a seat's may stand nearer in the chain, and the
+ * project a team sits in declares the word under them; the default is `auto`.
+ */
+export const SENDER_NAME_MODES = ['auto', 'nickname', 'seat', 'seat@team'] as const;
+export type SenderNameMode = (typeof SENDER_NAME_MODES)[number];
+export const DEFAULT_SENDER_NAME: SenderNameMode = 'auto';
+
+/** Whether a declared word is one of the four. */
+export function isSenderNameMode(value: unknown): value is SenderNameMode {
+  return typeof value === 'string' && (SENDER_NAME_MODES as readonly string[]).includes(value);
+}
+
+/**
  * Seats of different teams inside one project may reach each other when this is on: the project
  * setting, default off. The project is the level that may open it; every level inside a project
  * may close it again. Resolve it for the seat that wants to reach out — admission reads the

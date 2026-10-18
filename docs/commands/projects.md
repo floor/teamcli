@@ -53,6 +53,14 @@ five minutes to the lead, fifteen to the owner, five to blind. The levels above 
 their own surfaces: the machine's `~/.config/team/settings.yaml` and the entity's `entities.yaml`
 entry, each under `liveness`.
 
+A record may also carry `sender_name` — how a sender from its teams reads in TeamCLI's own
+headlines: `auto` (the default when the record declares none), `nickname`, `seat` or `seat@team`.
+The word is presentation only: every signed record keeps the seat in `from` and the registry id in
+`from_id`, and the machine readings keep the record's own fields. A team file's own `sender_name`
+key and a seat's sit nearer in the chain than this word; a seat's reading resolves its own key
+first, then its file's, then the project's. Any word outside the four is refused when the registry
+is read, naming the four the record may carry.
+
 A missing file is no projects — every team is its own project — and prints the table header and
 `0 projects`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without

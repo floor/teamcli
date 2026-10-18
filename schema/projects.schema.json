@@ -85,6 +85,15 @@
               ]
             }
           },
+          "senderName": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "nickname",
+              "seat",
+              "seat@team"
+            ]
+          },
           "provenance": {
             "type": "object",
             "additionalProperties": false,

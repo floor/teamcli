@@ -353,10 +353,12 @@ so it cannot deliver what a refusal refused.
 ## The sender header
 
 Every record's body opens with a header, and the record's payload carries the same facts apart:
-the sender's agent id, and the reach above or the grant that admitted the send. A seat's header names it — its agent id, its name and
-its seat; the owner's reads `from the owner`. A sender the registry holds no record for is spelled
-as the file's seat instead of an id — `from the file's seat <seat> (no registry record yet) —
-admitted by: <rule>` — so a receiver reads why the id is absent. A handoff prints the body with
+the sender's seat and its agent id, and the reach above or the grant that admitted the send. The
+header itself carries no id: it names the sender as the receiving team's
+[`sender_name`](../team-file.md#sender_name) word asks — the nickname inside its own team, and
+`seat@team` from another under the default — and the owner's reads `from the owner`. A sender the
+registry holds no record for is spelled as the file's seat instead — `from the file's seat <name>
+(no registry record yet) — admitted by: <rule>` — so a receiver reads why the id is absent. A handoff prints the body with
 that header, so the sender's own call carries it too. A waited send's frame opens the
 same way, and so
 does the body the message history keeps. The receiver reads who sent a message and why that sender

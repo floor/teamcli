@@ -28,6 +28,7 @@ import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord,
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
+import { namingFor } from '../send/names.ts';
 import { bindPane, deliverTrigger, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
@@ -555,8 +556,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   }
   if (body.trim() === '') return usage(io, 'the message is empty', report);
   // The receiver sees the sender before the message: the drop file, the frame and the daemon's
-  // own write all carry the same first lines.
-  body = `${senderHeader(admission.sender, admission.rule)}\n${body}`;
+  // own write all carry the same first lines. The headline is the reading team's word on how a
+  // sender reads — inside its own team a nickname, across teams `seat@team` under the default —
+  // and the id it drops from the line stays on the signed record's payload.
+  const naming = namingFor({
+    home: host.home,
+    root: to.root,
+    viewerTeam: teamIdOf(to.root),
+    seat: to.seat,
+    ...(receiving.ok ? { file: receiving.team } : {}),
+    ...(host.projects ? { projectOfTeam: (id: string) => host.projects!.ofTeam(id) } : {}),
+  });
+  body = `${senderHeader(admission.sender, admission.rule, naming)}\n${body}`;
   // A seat whose profile carries its rules in every brief has no standing session to keep
   // them: `rules: prepend` puts the same text a launch would deliver in front of each brief,
   // on every leg — the drop file, the socket frame and a compose seat's typed box all carry

@@ -91,6 +91,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     orchestrator: valueOf<string>(ctx, 'orchestrator'),
     operator: valueOf<string>(ctx, 'operator'),
     deliveryOrder: valueOf<TeamFile['deliveryOrder']>(ctx, 'delivery_order'),
+    senderName: valueOf<TeamFile['senderName']>(ctx, 'sender_name'),
     ...(policies !== null && policies !== undefined ? { policies } : {}),
     tools: valueOf<TeamFile['tools']>(ctx, 'tools'),
     identity: valueOf<TeamFile['identity']>(ctx, 'identity'),

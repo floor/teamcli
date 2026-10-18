@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
-import { DELIVERY_LEGS } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
 export interface CommandSchemaSpec {
@@ -371,6 +371,7 @@ export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
             type: 'array',
             items: { type: 'string', enum: [...DELIVERY_LEGS] },
           },
+          senderName: { type: 'string', enum: [...SENDER_NAME_MODES] },
           provenance: {
             type: 'object',
             additionalProperties: false,

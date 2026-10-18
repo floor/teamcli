@@ -163,9 +163,17 @@ export function launchCommand(
   rules: string,
   cliHook?: string | null,
   place?: InboxPlace,
+  displayName?: string,
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = profile.unattended.filter((option) => !words.has(option));
+  // The session's own display name, where the CLI takes one and the line names none: a person
+  // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
+  // readable name rather than an anonymous session.
+  if (displayName !== undefined && displayName !== '' && supportsSessionName(profile.cli)
+    && !/(^|\s)(--name(=|\s|$)|-n(\s|$))/.test(launch)) {
+    options.push('--name', displayName);
+  }
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
   if (place) {
     for (const word of profile.mcpInbox?.launchArgs ?? []) options.push(fillInboxPlace(word, place));
@@ -180,6 +188,17 @@ export function launchCommand(
 /** True when the CLI loads a settings file named on its launch line, and that file may install
  *  command hooks: Claude Code's `--settings <file>`. */
 export function supportsCliHook(cli: string): boolean {
+  return cli === 'claude-code';
+}
+
+/** True when the CLI takes a session display name on its launch line. The one measured is
+ *  Claude Code's, from `claude --help` on 2.1.302:
+ *
+ *      -n, --name <name>                     Set a display name for this session
+ *                                            (shown in the prompt box, /resume
+ *                                            picker, and terminal title)
+ */
+export function supportsSessionName(cli: string): boolean {
   return cli === 'claude-code';
 }
 

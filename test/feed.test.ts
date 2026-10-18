@@ -200,8 +200,8 @@ describe('team send history log & team feed', () => {
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
     expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
-    // The seat's send files the body under its header: the id admission admitted, and the rule.
-    const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
+    // The seat's send files the body under its header: the seat's readable name, and the rule.
+    const seatHeader = 'from helper — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
       ts: NOW.toISOString(),
       from: 'helper',
