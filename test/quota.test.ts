@@ -179,6 +179,17 @@ describe('quota reads only the composer\'s own status row', () => {
     }
   });
 
+  test('the chrome row keeps its prefix when a warning rides along', () => {
+    // The plain row draws `← for agents · ? for shortcuts`; the warning form may keep the prefix
+    // beside the warning, and a pattern that demanded the bare form would leave that frame
+    // unknown — and the seat out of `up`.
+    const screen = `• Working (2m 10s • esc to interrupt)\n\n${statusLine}\n  ← for agents · ? for shortcuts … ⚠ 1 warning · f2 to view\n`;
+    expect(statusRow('codex', screen)).toBe(statusLine);
+    expect(figuresOf(patterns, statusRow('codex', screen))).toEqual([
+      { account: 'openai', window: 'weekly', left: 39, used: 61, resets: null },
+    ]);
+  });
+
   test('a line the seat prints under the status row is not chrome, so nothing reads', () => {
     // The one trailing row must be the captured chrome: status-then-one may not accept arbitrary
     // text under a status-shaped line, or a seat could print a status row and a line below it and

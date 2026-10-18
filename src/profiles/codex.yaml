@@ -146,12 +146,14 @@ screen:
     # captures draw `← for agents · ? for shortcuts` (0.161.0/idle-hint.txt, working.txt), and
     # the same hint carries the account's warning on it — `? for shortcuts … ⚠ N warning · f2 to
     # view`, the `⚠ N warning · f2 to view` tail the 0.157.0 captures draw on the status row.
-    # Anything else below a status row is the seat's own text, and the row above it is not the
-    # composer's: a seat cannot print a status-shaped line and a figure and have the watch read
-    # it (test/quota.test.ts).
+    # The `← for agents · ` prefix is optional on both forms: it is the plain row's own, and a
+    # warning or a width may draw the hint without it, or with it beside the warning. Anything
+    # else below a status row is the seat's own text, and the row above it is not the composer's:
+    # a seat cannot print a status-shaped line and a figure and have the watch read it
+    # (test/quota.test.ts).
     chrome:
-      - '^\s*← for agents · \? for shortcuts\s*$'
-      - '^\s*\? for shortcuts\s*…\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
+      - '^\s*(?:← for agents · )?\? for shortcuts\s*$'
+      - '^\s*(?:← for agents · )?\? for shortcuts\s*…\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
     # The input row carries the prompt at the pane's first column — unsent.txt draws `› Rules.`
     # there, content on the rows below at the second, and exit-typed.txt keeps the old
     # transcript and menu rows above it — and a prompt glyph on a content row is never the
