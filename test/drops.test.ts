@@ -134,7 +134,7 @@ describe('team drops', () => {
     drop(`${D_OWNER}.deadbeef.tmp`, 'partial');
     // A drop with a receipt beside it was handed over: it is read, and is not listed.
     drop(D_READ, `${FILE_SEAT_HEADER}\n\nread already\n`);
-    drop(`${D_READ}.read`, '');
+    drop(`${D_READ}.read.json`, '');
     // A file whose first line is no sender header is still a drop, and its sender is unknown.
     const headlessPath = drop(D_HEADLESS, 'a body with no sender line\n');
     // A send of this version leaves one signed record: the payload names the sender, and the

@@ -191,7 +191,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
 }
 
 /**
- * Promotes every inbox send a seat has read since the last pass: `<id>.read` is the seat's own
+ * Promotes every inbox send a seat has read since the last pass: `<id>.read.json` is the seat's own
  * client saying it read the message, so the history records `delivered (read)` once and the
  * marker is cleared. Nothing is typed and no pane is needed — the pass reads two files per marker
  * — so it runs in a watch without nudges too, where the receipt is the only word the sender gets.

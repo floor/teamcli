@@ -5,10 +5,9 @@
 // deletes one. The receiving seat reads what is there with `team drops`, and a Claude Code
 // Monitor reads each file as it lands with `team drops --follow`. A send of this version writes
 // a signed record (`src/send/record.ts`) whose payload names the sender; a file a previous build
-// wrote is still a drop, and its first line names the sender. A `<id>.read` sibling is the
-// receipt the planned inbox listener writes when it hands a drop over (no writer in this build),
-// and the record spine's `team messages` writes `<id>.read.json`; a drop with either beside it
-// is read, and is not listed.
+// wrote is still a drop, and its first line names the sender. A `<id>.read.json` receipt beside
+// it — the sidecar the seat's inbox server writes when it hands the drop over, the same name the
+// record spine gives a read receipt — means the drop was read, and it is not listed.
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -33,7 +32,8 @@ import {
   writeJson,
   writeJsonError,
 } from '../output/index.ts';
-import { signedRecordOf, receiptFile as recordReceiptFile, verifyRecord } from '../send/record.ts';
+import { receiptPath } from '../mcp/inbox.ts';
+import { signedRecordOf, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
@@ -41,8 +41,8 @@ export const USAGE = `Usage: team drops [--follow] [--json]
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
 record names — or, in a file an earlier build wrote, its first line — and the
-file's absolute path. A drop that has an <id>.read or <id>.read.json file
-beside it is read, and is not listed.
+file's absolute path. A drop that has an <id>.read.json receipt beside it
+is read, and is not listed.
 
 Options:
   --follow   print one line per drop file that appears while it runs,
@@ -149,7 +149,7 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
 
 /**
  * The unread drops in one seat's folder, oldest first. A name with a dot in it is a sidecar
- * (`<id>.pending`, `<id>.taken`, `<id>.<hex>.tmp`, `<id>.read`), never a drop; a symlink or a
+ * (`<id>.pending`, `<id>.taken`, `<id>.<hex>.tmp`, `<id>.read.json`), never a drop; a symlink or a
  * directory whose name is plain is not a drop either. A folder that does not exist is an empty
  * one: no send has written here yet.
  */
@@ -174,9 +174,8 @@ export function listDrops(dropDir: string, key?: KeyObject): DropListing {
     }
     if (!stat.isFile()) continue;
     // The receipt means the drop was handed over: it is read, and this reading is done with it.
-    // The record spine's receipt carries its status in the name (`<id>.read.json`); the older
-    // folder's is `<id>.read`.
-    if (receiptHeld(`${path}.read`) || receiptHeld(recordReceiptFile(dropDir, name, 'read'))) continue;
+    // Its name is the inbox's own rule (`<id>.read.json`), the one the server writes.
+    if (receiptHeld(receiptPath(dropDir, name))) continue;
     let from: string | null = null;
     try {
       const text = readFileSync(path, 'utf8');

@@ -30,7 +30,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
-import { MESSAGE_ID } from '../src/mcp/inbox.ts';
+import { MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { ProjectRecord } from '../src/registry/projects.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
@@ -224,11 +224,11 @@ function receiptSoon(dir: string, over: { seat?: string; session?: string } = {}
     }
     const id = names.find((name) => MESSAGE_ID.test(name));
     if (id === undefined) return;
-    if (existsSync(join(dir, `${id}.read`))) {
+    if (existsSync(receiptPath(dir, id))) {
       clearInterval(timer);
       return;
     }
-    writeFileSync(join(dir, `${id}.read`), `${JSON.stringify({
+    writeFileSync(receiptPath(dir, id), `${JSON.stringify({
       v: 1,
       id,
       seat: over.seat ?? 'lead',
@@ -393,7 +393,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
       failed: [NATIVE_SKIP],
     });
     expect(existsSync(join(dir, `${id}.pending`))).toBe(false);
-    expect(existsSync(join(dir, `${id}.read`))).toBe(true);
+    expect(existsSync(receiptPath(dir, id))).toBe(true);
   });
 
   test('no receipt inside the grace is sent (unconfirmed): exit 0, the message stays, nothing typed', async () => {
@@ -744,7 +744,7 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, INBOX_SKIP_HUMAN, TYPED_SKIP]);
   });
 
@@ -760,7 +760,7 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
   });
 
@@ -776,7 +776,7 @@ describe('a human seat is never typed into', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
     expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, TYPED_SKIP]);
   });
 
