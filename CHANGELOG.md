@@ -106,6 +106,12 @@ commands read them.
   carries `spec` and `resolved` (`agt_…`), and `team send --list` prints each seat's `NICKNAME`
   — `-`, an `@<nickname>` in the file's own roster, a `<nickname>@<team>` in another's.
 
+- **A lead from a 0.3.5 or 0.4 file is still the lead.** A team whose lead seat still carries the
+  old role word `coordinator` is judged by its file, never the word: an orchestrator of the same
+  entity reaches it by `lead@<team>` or its seat address, exactly as for a file written for this
+  release, and `team check` notes the 0.5 word, `role: orchestrator`, without a difference or an
+  exit change.
+
 - **A held send is retried, not abandoned.** When a typed send leaves its drop because the
   seat's composer held text, the seat did not take the trigger, or a dialog was up — `held`,
   `not-submitted`, or an `unreachable` that is a dialog — send writes a pending record beside
