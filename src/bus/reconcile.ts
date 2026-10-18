@@ -25,6 +25,7 @@ import {
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
+import { isOwnerDigestRecord } from './owner.ts';
 
 export type ReconcileOptions = {
   project: string;
@@ -325,6 +326,10 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
           const from = typeof payload.from === 'string' ? payload.from : undefined;
           const at = typeof payload.at === 'string' ? payload.at : nowIso;
           if (from !== undefined) messageSenders.set(id, from);
+          // The Runtime writes its own owner delivery summaries into the same mailbox. A digest is
+          // a summary of events already in the log, not a message: raising `message.arrived` for it
+          // would deliver it again, and the next pass would summarize that summary, forever.
+          if (isOwnerDigestRecord(id, from)) continue;
           raise({
             ts: at,
             kind: 'message.arrived',
