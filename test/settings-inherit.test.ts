@@ -92,9 +92,9 @@ describe('the chain builders', () => {
 });
 
 describe('delivery_order', () => {
-  test('native, mcp-inbox, typed, drop when nothing declares one', () => {
+  test('mcp-inbox, drop, typed when nothing declares one', () => {
     expect(DELIVERY_ORDER.name).toBe('delivery_order');
-    expect(deliveryOrder({})).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
+    expect(deliveryOrder({})).toEqual(['mcp-inbox', 'drop', 'typed']);
     const resolved = resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf<DeliveryLeg>({}));
     expect(resolved.source).toBeNull();
     expect(resolved.refused).toEqual([]);
@@ -108,7 +108,7 @@ describe('delivery_order', () => {
     expect(resolved.source).toBe('seat');
     expect(resolved.refused).toEqual([]);
     // The default word itself is no word at all, in any level's voice.
-    expect(deliveryOrder({ team: ['native', 'mcp-inbox', 'typed', 'drop'] })).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
+    expect(deliveryOrder({ team: ['mcp-inbox', 'drop', 'typed'] })).toEqual(['mcp-inbox', 'drop', 'typed']);
   });
 
   test('a level may drop a leg, and the levels below work on what is left', () => {
@@ -117,8 +117,8 @@ describe('delivery_order', () => {
   });
 
   test('a level may reorder the legs it keeps', () => {
-    expect(deliveryOrder({ seat: ['typed', 'native', 'mcp-inbox'] })).toEqual(['typed', 'native', 'mcp-inbox']);
-    const resolved = resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf<DeliveryLeg>({ seat: ['typed', 'native', 'mcp-inbox'] }));
+    expect(deliveryOrder({ seat: ['typed', 'mcp-inbox', 'drop'] })).toEqual(['typed', 'mcp-inbox', 'drop']);
+    const resolved = resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf<DeliveryLeg>({ seat: ['typed', 'mcp-inbox', 'drop'] }));
     expect(resolved.source).toBe('seat');
   });
 
@@ -132,39 +132,47 @@ describe('delivery_order', () => {
     expect(resolved.refused).toEqual([{ level: 'seat', value: [] }]);
     expect(deliveryOrder({ entity: ['typed'], seat: [] })).toEqual(['typed']);
     // Against the default order, an empty word at any level leaves the default standing.
-    expect(deliveryOrder({ team: [] })).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
-    expect(deliveryOrder({ entity: [], project: [], team: [], seat: [] })).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
+    expect(deliveryOrder({ team: [] })).toEqual(['mcp-inbox', 'drop', 'typed']);
+    expect(deliveryOrder({ entity: [], project: [], team: [], seat: [] })).toEqual(['mcp-inbox', 'drop', 'typed']);
   });
 
   test('a level may not add a leg: the word is set aside and the order in force stands', () => {
+    // `native` is the sender's own leg, chosen and recorded at the send: no order in force
+    // carries it, so a level that names it adds a leg and its word is set aside.
     const resolved = resolveOrderSetting(
       DELIVERY_ORDER,
-      orderDeclarationsOf<DeliveryLeg>({ entity: ['typed'], team: ['telepathy' as DeliveryLeg, 'typed'] }),
+      orderDeclarationsOf<DeliveryLeg>({ entity: ['typed'], team: ['native', 'typed'] }),
     );
     expect(resolved.value).toEqual(['typed']);
     expect(resolved.source).toBe('entity');
-    expect(resolved.refused).toEqual([{ level: 'team', value: ['telepathy', 'typed'] as DeliveryLeg[] }]);
+    expect(resolved.refused).toEqual([{ level: 'team', value: ['native', 'typed'] as DeliveryLeg[] }]);
+    const unknown = resolveOrderSetting(
+      DELIVERY_ORDER,
+      orderDeclarationsOf<DeliveryLeg>({ entity: ['typed'], team: ['telepathy' as DeliveryLeg, 'typed'] }),
+    );
+    expect(unknown.refused).toEqual([{ level: 'team', value: ['telepathy', 'typed'] as DeliveryLeg[] }]);
   });
 
   test('a level may not name a leg twice', () => {
-    const resolved = resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf<DeliveryLeg>({ project: ['native', 'native', 'typed'] }));
-    expect(resolved.value).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
-    expect(resolved.refused).toEqual([{ level: 'project', value: ['native', 'native', 'typed'] }]);
+    const resolved = resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf<DeliveryLeg>({ project: ['mcp-inbox', 'mcp-inbox', 'typed'] }));
+    expect(resolved.value).toEqual(['mcp-inbox', 'drop', 'typed']);
+    expect(resolved.refused).toEqual([{ level: 'project', value: ['mcp-inbox', 'mcp-inbox', 'typed'] }]);
   });
 
   test('a word equal to the order in force is no word at all', () => {
     const resolved = resolveOrderSetting(
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({
-        entity: ['native', 'mcp-inbox', 'typed', 'drop'],
-        seat: ['native', 'mcp-inbox', 'typed', 'drop'],
+        entity: ['mcp-inbox', 'drop', 'typed'],
+        seat: ['mcp-inbox', 'drop', 'typed'],
       }),
     );
-    expect(resolved.value).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
+    expect(resolved.value).toEqual(['mcp-inbox', 'drop', 'typed']);
     expect(resolved.source).toBeNull();
     expect(resolved.refused).toEqual([]);
-    // The three-leg word older files write is a word now: it drops the drop leg.
-    expect(deliveryOrder({ team: ['native', 'mcp-inbox', 'typed'] })).toEqual(['native', 'mcp-inbox', 'typed']);
+    // The older three-leg word names `native`, which the order in force does not carry: the
+    // word adds a leg and is set aside, so the default order stands.
+    expect(deliveryOrder({ team: ['native', 'mcp-inbox', 'typed'] })).toEqual(['mcp-inbox', 'drop', 'typed']);
   });
 
   test('within a level the last word wins, judged against what the one before it left', () => {
