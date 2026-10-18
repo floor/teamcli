@@ -301,3 +301,42 @@ describe('an approval written by main', () => {
     expect(approvalDifferences(checked.team, root, where)).toEqual(['`watch` changed']);
   });
 });
+
+// `sender_name` is the word on how a sender reads in TeamCLI's headlines. The file's own key and
+// a seat's are read — the same two places the delivery order is written — and the four words are
+// the ones the resolver reads. It is presentation, not permission: omitted, the file reads null
+// and the seat carries no field, so the digests a file had are unchanged.
+describe('sender_name', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted key reads null, and the seats carry no field', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect(checked.team.senderName).toBeNull();
+    expect('senderName' in (checked.team.seats[0] as object)).toBe(false);
+  });
+
+  test('the file’s own word and a seat’s are read, in the order written', () => {
+    for (const word of ['auto', 'nickname', 'seat', 'seat@team'] as const) {
+      const checked = validateTeamFile(`${TEAM}sender_name: ${word}\n`);
+      if (!checked.ok) throw new Error(`the ${word} fixture does not validate`);
+      expect(checked.team.senderName).toBe(word);
+      expect(checked.team.seats[0]?.senderName).toBeUndefined();
+    }
+    const seated = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    sender_name: seat@team\n`));
+    if (!seated.ok) throw new Error('the seat word fixture does not validate');
+    expect(seated.team.seats[0]?.senderName).toBe('seat@team');
+    expect(seated.team.senderName).toBeNull();
+  });
+
+  test('a word this build cannot read refuses, naming the four it reads', () => {
+    const file = validateTeamFile(`${TEAM}sender_name: full\n`);
+    expect(file.ok).toBe(false);
+    if (!file.ok) expect(file.errors.map((error) => error.message)).toContain('sender_name must be one of: auto, nickname, seat, seat@team');
+    const seat = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    sender_name: full\n`));
+    expect(seat.ok).toBe(false);
+    if (!seat.ok) {
+      expect(seat.errors.map((error) => error.message)).toContain('seat "lead": sender_name must be one of: auto, nickname, seat, seat@team');
+    }
+  });
+});

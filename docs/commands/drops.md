@@ -135,7 +135,9 @@ team beacon, session "beacon"
 exit 0
 ```
 
-A drop the orchestrator sent:
+A drop the orchestrator sent. A build before readable sender names wrote the agent id on the
+first line, and this build still reads that form; the line it writes names the sender as the
+receiving team's [`sender_name`](../team-file.md#sender_name) word asks:
 
 ```file file=.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
 from agt_d18cddafed22 (orchestrator, orchestrator@5e46a02374b3) — admitted by: an orchestrator or operator to a seat of its own team

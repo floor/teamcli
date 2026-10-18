@@ -239,7 +239,7 @@ describe('team send: delivered', () => {
     expect(pane.typed[0]).not.toContain('line one');
   });
 
-  test('the orchestrator from its recorded pane may send, and its id rides the drop file', async () => {
+  test('the orchestrator from its recorded pane may send, and its id rides the record while the header names the seat', async () => {
     const { root, dir, sockets } = world();
     registerSeat('lead', 'coordinator', 'w1:p1');
     record(dir, 'lead', 'w1:p1');
@@ -251,7 +251,7 @@ describe('team send: delivered', () => {
     expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
-      `from agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')} (lead, lead@acme) — admitted by: an orchestrator to another orchestrator\n\na note`,
+      'from lead — admitted by: an orchestrator to another orchestrator\n\na note',
     );
   });
 
@@ -268,7 +268,7 @@ describe('team send: delivered', () => {
     expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
-      `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: a seat to its own team's orchestrator\n\na note`,
+      "from helper — admitted by: a seat to its own team's orchestrator\n\na note",
     );
   });
 

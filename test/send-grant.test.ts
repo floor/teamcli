@@ -183,7 +183,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     const drops = join(dir, 'send-drops', 'acme', 'native');
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(recordBody(path)).toBe(
-      `from agt_${Buffer.from('helper').toString('hex').padEnd(12, '0')} (helper, helper@acme) — admitted by: an owner-signed grant naming send (helpers-to-reviewer)\n\na note`,
+      'from helper — admitted by: an owner-signed grant naming send (helpers-to-reviewer)\n\na note',
     );
   });
 

@@ -24,6 +24,7 @@ import type { Caller } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
 import { DROPS_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, type ReceiptPayload } from '../src/send/record.ts';
 import { receiptPath } from '../src/mcp/inbox.ts';
 import { messageKeyState } from '../src/store/keys.ts';
@@ -66,8 +67,13 @@ const D_RECORD = '4e9f1a5b-b263-4ea0-9a71-5c6d7e8f9a0b';
 const D_RECORD_READ = '5fa02b6c-c374-4fb1-0b82-6d7e8f9a0b1c';
 
 const OWNER_HEADER = 'from the owner — admitted by: the owner';
+/** The form a build before readable names wrote: the registry id, the name and the address. A
+ *  drop written then is still read the same way. */
 const AGENT_HEADER = 'from agt_d18cddafed22 (orchestrator, orchestrator@acme) — admitted by: an orchestrator or operator to a seat of its own team';
 const FILE_SEAT_HEADER = "from the file's seat worker (no registry record yet) — admitted by: the file's seat";
+/** The form this build writes: the readable name the project's `sender_name` word chose. */
+const READABLE_HEADER = "from orchestrator@acme — admitted by: a seat to its own team's orchestrator";
+const NICKNAME_HEADER = "from Iris — admitted by: a seat to its own team's orchestrator";
 
 let base: string;
 let root: string;
@@ -241,6 +247,38 @@ describe('team drops', () => {
     expect(Number.isFinite(Date.parse(parsed.drops[0]!.received))).toBe(true);
   });
 
+  test('a record reads by the name the project’s word chooses, while the record keeps the registry id', async () => {
+    // The team file's `sender_name: nickname`, and the roster line the record's id resolves to.
+    teamYaml(`${TEAM}sender_name: nickname\n`);
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme',
+      session: 'acme',
+      root,
+      roster: [{ agent: 'agt_d18cddafed22', seat: 'orchestrator', role: 'orchestrator', nickname: 'Atlas' }],
+      at: '2026-10-04T09:00:00.000Z',
+    });
+    const recordPath = plantRecord(home, root, 'acme', 'lead', D_RECORD, 'the record body', {
+      from: 'orchestrator',
+      from_id: 'agt_d18cddafed22',
+      rule: "a seat to its own team's orchestrator",
+    });
+    // The signed record on disk still carries the registry id; only the headline a person reads
+    // changes.
+    const record = JSON.parse(readFileSync(recordPath, 'utf8')) as { payload: { from: string; from_id: string } };
+    expect(record.payload.from).toBe('orchestrator');
+    expect(record.payload.from_id).toBe('agt_d18cddafed22');
+    const table = await run();
+    expect(table.code).toBe(0);
+    expect(table.out).toContain('Atlas');
+    expect(table.out).not.toContain('orchestrator');
+    expect(table.out).not.toContain('agt_');
+    // `--json` stays the record's own reading: the registry id rides the payload, and the display
+    // word never reaches the machine shape.
+    const json = await run(['--json']);
+    const parsed = assertMatchesOutputSchema<{ drops: { from: string | null; path: string }[] }>(json.out, DROPS_OUTPUT_SCHEMA);
+    expect(parsed.drops.map((row) => ({ from: row.from, path: row.path }))).toEqual([{ from: 'orchestrator', path: recordPath }]);
+  });
+
   test('--follow prints only the drops that appear while it runs, one line each, and exits 0', async () => {
     const before = drop(D_OWNER, `${OWNER_HEADER}\n\nalready waiting\n`);
     let polls = 0;
@@ -325,10 +363,12 @@ describe('team drops', () => {
     expect(result.err).toStartWith('team drops: ');
   });
 
-  test('senderOf reads the three sender headers and refuses to guess at anything else', () => {
+  test('senderOf reads every sender header an older or this build wrote, and refuses to guess at anything else', () => {
     expect(senderOf(OWNER_HEADER)).toBe('the owner');
     expect(senderOf(FILE_SEAT_HEADER)).toBe('worker');
     expect(senderOf(AGENT_HEADER)).toBe('orchestrator');
+    expect(senderOf(READABLE_HEADER)).toBe('orchestrator@acme');
+    expect(senderOf(NICKNAME_HEADER)).toBe('Iris');
     expect(senderOf('a body with no header')).toBeNull();
     expect(senderOf('from  — admitted by: the owner')).toBeNull();
   });

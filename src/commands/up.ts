@@ -76,6 +76,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { registerRun } from '../registry/sync.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -417,6 +418,13 @@ function seatPlan(
     // An option seat's launch line and a message seat's rules file both come from the live
     // file. A stored copy is not the text a seat is told to obey.
     rules: rulesOf(team, seat, root),
+    sessionName: sessionDisplayName({
+      seat: seat.name,
+      nickname: seat.nickname ?? null,
+      team: teamIdOf(root),
+      teamName: team.project,
+      mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+    }),
     ...seatDeliveryOf(standing, team, seat, root, home, liveRules),
   };
   const known = agents ?? [];

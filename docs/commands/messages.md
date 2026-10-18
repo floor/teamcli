@@ -33,7 +33,9 @@ The reading opens with the context line (`team <project>, session "<session>"`) 
 table `ID  FROM  TO  SENT  STATUS`, one row per waiting record; each verified body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
-carries the exact ISO string as `sent`.
+carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
+[`sender_name`](../team-file.md#sender_name) word asks; `--json` carries the record's own `from`,
+and the signed record keeps the sender's registry id apart from it.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |

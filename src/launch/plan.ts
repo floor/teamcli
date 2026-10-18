@@ -180,6 +180,13 @@ export interface UpSeat {
   human?: true;
   /** The seat's rules, as one text: what a launch option embeds and what its file holds. */
   rules: string;
+  /**
+   * The display name the seat's session carries, when its CLI takes one (Claude Code's `--name`):
+   * the seat's readable name under the project's `sender_name` word (`src/send/names.ts`), so a
+   * person reading the session sees whom it belongs to. Absent leaves the launch line as the file
+   * wrote it.
+   */
+  sessionName?: string;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
    *  one line typed in its pane. Absent when the path can't be typed safely. */
   rulesFile?: { path: string; line: string };
@@ -610,7 +617,7 @@ export function upPlan(input: UpInput): Step[] {
       seat: seat.name,
       session,
       ...selfRunner(),
-    });
+    }, seat.sessionName);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {

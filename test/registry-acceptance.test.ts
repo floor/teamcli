@@ -289,7 +289,7 @@ function boxCli(swallow: number, after: 'empty' | 'suggestion' = 'empty'): BoxCl
 }
 
 describe('an agy seat sends to the main coordinator', () => {
-  test('the drop it is pointed at names its agent id, and the admitting rule, before the body', async () => {
+  test('the drop record carries its agent id, and its headline the readable name, before the body', async () => {
     const world = sendWorld({
       floor: {
         project: 'floor',
@@ -330,14 +330,18 @@ describe('an agy seat sends to the main coordinator', () => {
     expect(typed.pane).toBe('pane-coordinator');
     const drop = dropOf(typed.text);
     expect(AGENT_ID.test(agy.id)).toBe(true);
+    // The registry id rides the signed payload's `from_id`; the headline a person reads names
+    // the seat, and opens the body.
     expect(drop.text).toContain(agy.id);
     expect(drop.text).toContain(BODY);
-    expect(drop.text.indexOf(agy.id)).toBeLessThan(drop.text.indexOf(BODY));
+    expect(drop.text.indexOf('from agy-seat — admitted by:')).toBeGreaterThanOrEqual(0);
+    expect(drop.text.indexOf('from agy-seat — admitted by:')).toBeLessThan(drop.text.indexOf(BODY));
     const admitted = admitSend(agy, coordinator, readTeams(world.home));
     if (!admitted.ok) throw new Error(`the agy seat's send is not admitted: ${admitted.why}`);
     expect(drop.text).toContain(admitted.rule);
     const header = senderHeader(agy, admitted.rule);
-    expect(header).toContain(agy.id);
+    expect(header).toContain(agy.reach.seat);
+    expect(header).not.toContain(agy.id);
     expect(header).toContain(admitted.rule);
   });
 });
@@ -389,7 +393,10 @@ describe('an orchestrator reaches another team by name', () => {
     const drop = dropOf(typed.text);
     expect(drop.text).toContain(alpha.id);
     expect(drop.text).toContain(BODY);
-    expect(drop.text.indexOf(alpha.id)).toBeLessThan(drop.text.indexOf(BODY));
+    // Another team: the headline gives the sender's address, because a bare seat name would read
+    // as the receiving team's own.
+    expect(drop.text.indexOf('from lead@alpha — admitted by:')).toBeGreaterThanOrEqual(0);
+    expect(drop.text.indexOf('from lead@alpha — admitted by:')).toBeLessThan(drop.text.indexOf(BODY));
     const admitted = admitSend(alpha, beta, readTeams(world.home));
     if (!admitted.ok) throw new Error(`orchestrator to orchestrator is not admitted: ${admitted.why}`);
     expect(drop.text).toContain(admitted.rule);

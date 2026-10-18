@@ -29,7 +29,9 @@ import {
   writeJsonError,
   type OutputDifference,
 } from '../output/index.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { compareSeatNames } from '../seat-names.ts';
+import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
@@ -347,7 +349,7 @@ export function plantRecord(
 
 type Problem = { kind: 'shape' | 'id' | 'seat' | 'root' | 'session' | 'signature'; text: string };
 
-type Verified = { from: string; to: string; at: string; body: string };
+type Verified = { from: string; from_id: string | null; to: string; at: string; body: string };
 
 function recordProblem(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
   const where = `${candidate.seat}/${candidate.id}`;
@@ -369,7 +371,7 @@ function recordProblem(candidate: Candidate, root: string, session: string, key:
   if (!verifyRecord(record, key)) {
     return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
   }
-  return { from: payload.from, to: payload.to, at: payload.at, body: payload.body };
+  return { from: payload.from, from_id: payload.from_id, to: payload.to, at: payload.at, body: payload.body };
 }
 
 function problemOf(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
@@ -393,7 +395,8 @@ function problemOf(candidate: Candidate, root: string, session: string, key: Key
   if (!verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature as string, key)) {
     return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
   }
-  return payload;
+  // The older store never carried the sender's registry id.
+  return { from: payload.from, from_id: null, to: payload.to, at: payload.at, body: payload.body };
 }
 
 /**
@@ -439,6 +442,9 @@ type MailboxRow = {
   id: string;
   seat: string;
   from: string | null;
+  /** The sender's registry id, when the record carries one. The table resolves it to the
+   *  project's readable name; the JSON row keeps the record's own `from`. */
+  from_id: string | null;
   to: string | null;
   sent: string | null;
   sent_display: string;
@@ -541,6 +547,9 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   }
   const root = loaded.root;
   const session = loaded.team.session;
+  // The table's FROM cell is the readable name the project's `sender_name` asks for; the row's
+  // `from` stays the record's own value, which is what `--json` carries.
+  const naming = namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team });
   const state = messageKeyState(sources.home);
   const waiting = candidates(root, session).filter((candidate) => {
     if (state.kind !== 'key') return true;
@@ -563,7 +572,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         counts: { messages: 0, shown: 0, refused: 0 },
       });
     } else {
-      io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], [], ['nothing is waiting'], ttyStyle(io)));
+      io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], [], ['nothing is waiting'], ttyStyle(io), naming));
     }
     // exit: messages.none
     return 0;
@@ -596,6 +605,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         id: candidate.id,
         seat: candidate.seat,
         from: parsedLike?.from ?? null,
+        from_id: parsedLike !== null && 'from_id' in parsedLike ? (parsedLike.from_id as string | null) : null,
         to: parsedLike?.to ?? null,
         sent: parsedLike?.at ?? null,
         sent_display: formatRelativeTime(parsedLike?.at, now),
@@ -620,6 +630,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       id: candidate.id,
       seat: candidate.seat,
       from: result.from,
+      from_id: result.from_id,
       to: result.to,
       sent: result.at,
       sent_display: formatRelativeTime(result.at, now),
@@ -658,7 +669,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       },
     });
   } else {
-    io.stdout(renderMailbox(loaded.team.project, session, rows, verified.map((one) => ({ candidate: one.candidate, body: one.payload.body })), differences, [], ttyStyle(io)));
+    io.stdout(renderMailbox(loaded.team.project, session, rows, verified.map((one) => ({ candidate: one.candidate, body: one.payload.body })), differences, [], ttyStyle(io), naming));
   }
   // The receipt means the body was shown. `io.stdout` returning is that boundary: a throw leaves
   // no receipt, and the record stays unacked.
@@ -689,12 +700,15 @@ function renderMailbox(
   differences: readonly OutputDifference[],
   notes: readonly string[],
   style: ReturnType<typeof ttyStyle>,
+  naming: SenderNaming,
 ): string {
   const lines = [contextLine(project, session)];
+  const readableFrom = (row: MailboxRow): string | null =>
+    row.from === null ? null : senderDisplayName({ seat: row.from, id: row.from_id }, naming);
   lines.push(
     ...renderTable({
       headers: ['ID', 'FROM', 'TO', 'SENT', 'STATUS'],
-      rows: rows.map((row) => [row.id, row.from, row.to, row.sent_display, row.status]),
+      rows: rows.map((row) => [row.id, readableFrom(row), row.to, row.sent_display, row.status]),
       indent: '  ',
       style,
     }),

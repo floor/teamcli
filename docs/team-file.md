@@ -466,6 +466,54 @@ delivery_order: [typed]
   one is tried — is [team send](commands/send.md)'s. A `--wait` send walks the same order and
   then awaits a reply record on the thread.
 
+## `sender_name`
+
+How a sender from this team reads in TeamCLI's own headlines: the first line of a drop file
+(`from <name> — admitted by: <rule>`), the `FROM` cells of [`team drops`](commands/drops.md) and
+[`team messages`](commands/messages.md), the `SEAT` cell of [`team feed`](commands/feed.md), and
+the display name a seat's own CLI session is launched with where the CLI takes one
+(`claude`'s `--name`). It is not an owner section: writing or changing it is an ordinary change,
+and a file that writes none reads as `auto`. It changes presentation only: every signed record
+keeps the seat in `from` and the registry id in `from_id`, and the `--json` readings keep the
+record's own fields.
+
+The four words:
+
+- `auto` — the sender's nickname inside its own team, and `seat@team` from another, because a
+  nickname is unique only inside one team. A seat whose file writes no nickname reads as its seat
+  name.
+- `nickname` — the nickname wherever the sender is, or the seat name when the file writes none.
+- `seat` — the seat name, always.
+- `seat@team` — the address, `helper@labs`; the seat alone only when no team record names one.
+
+```yaml
+sender_name: nickname
+```
+
+- The word is one of `auto`, `nickname`, `seat` and `seat@team`. Any other word is
+  `sender_name must be one of: auto, nickname, seat, seat@team`.
+- The word in force is read nearest first: the reading seat's own `sender_name` key, then this
+  file's key, then the project's record in `projects.yaml`, then `auto`. The reading team's word
+  decides — for a send, the receiving team's file and seat — so one team's file decides how senders
+  read to it. A seat's word is written on the seat and is part of its digest, like every other
+  field of the seat:
+
+  ```yaml
+  seats:
+    - role: implementer
+      name: helper
+      cli: claude-code
+      vendor: anthropic
+      model: Claude Sonnet
+      version: "5.5"
+      launch: claude --model claude-sonnet-5-5
+      sender_name: seat@team
+  ```
+
+- A sender's team is resolved from the record: the registry id names the roster line, and that
+  line gives the nickname and the team's own name. A team no registry record holds is no answer,
+  so the nickname — or the seat name when the file writes none — stands.
+
 ## `grant`
 
 Records the grant the owner gives the orchestrator's seat. It is an owner section: only the owner

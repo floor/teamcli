@@ -3,7 +3,7 @@ import { CLIS } from '../../clis.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
 import { displayEffort } from '../../profiles/profile.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
-import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, type LivenessThresholds } from '../../settings/inherit.ts';
+import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -14,6 +14,7 @@ import type { LeadMark, Section } from './section.ts';
 import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
 import { readDeliveryOrder } from './delivery_order.ts';
+import { readSenderName } from './sender_name.ts';
 import { MODES } from './workspace.ts';
 
 export type DraftSeat = Omit<Seat, 'mode'> & { mode?: Mode };
@@ -72,6 +73,10 @@ export const seats: Section = {
           items: { enum: DELIVERY_LEGS },
           $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame',
         },
+        sender_name: {
+          enum: [...SENDER_NAME_MODES],
+          $comment: 'how a sender reads in this seat\'s headlines: auto, nickname, seat or seat@team; presentation only, and the registry id stays in every record',
+        },
         liveness: {
           type: 'object',
           additionalProperties: false,
@@ -129,7 +134,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'reach', 'delivery_order', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -216,6 +221,10 @@ function readSeats(
     // seat like `effort`, so it is part of the seat's digest and omitted when the file omits the
     // key — every file that writes none keeps the digest it had.
     const deliveryOrder = readDeliveryOrder(fields.get('delivery_order'), `${at}: delivery_order`, check);
+    // The seat's own word on how a sender reads in its headlines, when the file writes one. A
+    // field of the built seat like `effort`, so it is part of the seat's digest and omitted when
+    // the file omits the key — every file that writes none keeps the digest it had.
+    const senderName = readSenderName(fields.get('sender_name'), `${at}: sender_name`, check);
     // The seat's own word on the liveness defaults. A field of the built seat like `effort`, so
     // it is part of the seat's digest and omitted when the file omits the key — every file that
     // writes none keeps the digest it had.
@@ -248,6 +257,8 @@ function readSeats(
         ...(effort ? { effort } : {}),
         // Omitted when the file declares no order, for the same reason.
         ...(deliveryOrder ? { deliveryOrder } : {}),
+        // Omitted when the file writes no sender-name word, for the same reason.
+        ...(senderName ? { senderName } : {}),
         // Omitted when the file writes no liveness word, for the same reason.
         ...(liveness ? { liveness } : {}),
         // Omitted when the file marks no assistant, so every file that writes none keeps its digest.

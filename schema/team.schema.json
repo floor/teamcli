@@ -545,6 +545,15 @@
             },
             "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame"
           },
+          "sender_name": {
+            "enum": [
+              "auto",
+              "nickname",
+              "seat",
+              "seat@team"
+            ],
+            "$comment": "how a sender reads in this seat's headlines: auto, nickname, seat or seat@team; presentation only, and the registry id stays in every record"
+          },
           "liveness": {
             "type": "object",
             "additionalProperties": false,
@@ -661,6 +670,15 @@
         ]
       },
       "$comment": "the legs a send may walk: native, mcp-inbox, typed, drop; the order in force when nothing declares one is mcp-inbox, drop, typed, and a level may drop or reorder those legs and may add only native"
+    },
+    "sender_name": {
+      "enum": [
+        "auto",
+        "nickname",
+        "seat",
+        "seat@team"
+      ],
+      "$comment": "how a sender reads in TeamCLI headlines: auto (the nickname inside its own team, seat@team from another), nickname, seat, or seat@team; the registry id stays in every record, and the default is auto"
     },
     "policies": {
       "type": "object",

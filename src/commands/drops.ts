@@ -30,6 +30,7 @@ import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { listUnread, readMessage } from '../mcp/inbox.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import {
   contextLine,
   hasJsonFlag,
@@ -39,6 +40,7 @@ import {
   writeJson,
   writeJsonError,
 } from '../output/index.ts';
+import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { isRead, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
@@ -80,6 +82,9 @@ folder is neither a checkout nor a team root.
 export type DropRow = {
   id: string;
   from: string | null;
+  /** The sender's registry id when the drop is a signed record; the table resolves it to the
+   *  project's readable name. A raw drop has no id, and its first line is already a headline. */
+  from_id: string | null;
   received: string;
   path: string;
 };
@@ -146,10 +151,11 @@ const ADMITTED = ' — admitted by: ';
 
 /**
  * The sender a drop's first line names, in the forms `team send` writes (`senderHeader`):
- * `the owner`, `the file's seat <seat> (no registry record yet)`, or
- * `<agent id> (<name>, <seat>@<team>)`, each followed by ` — admitted by: <rule>`. A line in no
- * known form is read as whatever stands between `from ` and the admission, and an empty one is
- * null.
+ * `the owner`, `the file's seat <name> (no registry record yet)`, or the sender's readable name —
+ * the project's `sender_name` word decides it, and the registry id stays in the record — each
+ * followed by ` — admitted by: <rule>`. A drop an older build wrote can still name the agent as
+ * `<agent id> (<name>, <seat>@<team>)`, and that form is read too. A line in no known form is
+ * read as whatever stands between `from ` and the admission, and an empty one is null.
  */
 export function senderOf(header: string): string | null {
   if (!header.startsWith('from ')) return null;
@@ -208,6 +214,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     // a file there that the message key did not sign proves nothing and leaves the drop waiting.
     if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key)) continue;
     let from: string | null = null;
+    let fromId: string | null = null;
     try {
       const text = readFileSync(path, 'utf8');
       const record = signedRecordOf(parsedJson(text));
@@ -215,14 +222,17 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
         // The record names its sender in the payload. The key that verified it is the message
         // key; when the folder is read with no key at all, the payload is still what is shown —
         // a record that fails the key it was checked with leaves the sender unknown.
-        from = key === undefined || verifyRecord(record, key) ? record.payload.from : null;
+        if (key === undefined || verifyRecord(record, key)) {
+          from = record.payload.from;
+          fromId = record.payload.from_id;
+        }
       } else {
         from = senderOf(text.split('\n', 1)[0] ?? '');
       }
     } catch {
       // The file is still a drop; its sender is unknown.
     }
-    rows.push({ id: name, from, received: stat.mtime.toISOString(), path });
+    rows.push({ id: name, from, from_id: fromId, received: stat.mtime.toISOString(), path });
   }
   return {
     kind: 'ok',
@@ -230,9 +240,15 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
   };
 }
 
+/** The row's sender as the project's `sender_name` asks for. A record's `from` is the seat, and
+ *  its registry id lets the name resolve; a raw drop's first line is already a headline. */
+function readableFrom(row: DropRow, naming: SenderNaming): string | null {
+  return row.from === null ? null : senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+}
+
 /** `from <sender> — <path>`, the one line `--follow` prints per new drop. */
-function followLine(row: DropRow): string {
-  return `from ${row.from ?? 'unknown'} — ${row.path}\n`;
+function followLine(row: DropRow, naming: SenderNaming): string {
+  return `from ${readableFrom(row, naming) ?? 'unknown'} — ${row.path}\n`;
 }
 
 /** The folder was read: the listing printed, or the turn's records were handed over. One exit,
@@ -378,6 +394,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const keyState = messageKeyState(sources.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
   const context: StatusContext = { to: seat, root: loaded.root, session };
+  // The FROM column and `--follow`'s line carry the project's readable sender name; `--json`
+  // keeps each row's own `from`.
+  const naming = namingFor({ home: sources.home, root: loaded.root, viewerTeam: teamIdOf(loaded.root), seat, file: loaded.team });
   const first = listDrops(dropDir, key, context);
   let unreadable: string | null = first.kind === 'unreadable' ? first.reason : null;
   const rows = first.kind === 'ok' ? first.rows : [];
@@ -396,7 +415,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       for (const row of next.rows) {
         if (seen.has(row.id)) continue;
         seen.add(row.id);
-        io.stdout(followLine(row));
+        io.stdout(followLine(row, naming));
       }
     }
   }
@@ -425,7 +444,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         contextLine(loaded.team.project, session),
         ...renderTable({
           headers: ['FROM', 'PATH'],
-          rows: rows.map((row) => [row.from ?? 'unknown', row.path]),
+          rows: rows.map((row) => [readableFrom(row, naming) ?? 'unknown', row.path]),
           indent: '  ',
           style: ttyStyle(io),
         }),

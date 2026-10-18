@@ -21,6 +21,7 @@
 import type { Agent } from '../registry/agents.ts';
 import { declarationsOf, type SettingLevel, type SettingSpec } from '../settings/inherit.ts';
 import { resolveSetting, seatsCrossTeams } from '../settings/resolve.ts';
+import { defaultNaming, senderDisplayName, type SenderIdentity, type SenderNaming } from './names.ts';
 
 /** What admission needs of a team: its identity and its roster. The team registry's own record
  *  is wider, and satisfies this shape as it stands. */
@@ -312,19 +313,27 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
 /**
  * The line a message's body opens with: who wrote it, and the rule or grant that admitted the
  * write. The body follows one empty line under it, so a reader sees the sender before the message;
- * the signed record carries the same facts in its payload, which is what a reader verifies.
+ * the signed record carries the same facts in its payload — the seat's name and the registry id —
+ * which is what a reader verifies. The headline itself carries no id: it reads the project's
+ * `sender_name` word (`src/send/names.ts`), so a person sees a nickname or `seat@team` where an
+ * earlier build printed `agt_…`.
  */
-export function senderHeader(caller: SendSide | 'owner', rule: string): string {
+export function senderHeader(caller: SendSide | 'owner', rule: string, naming: SenderNaming = defaultNaming()): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
+  const readable = senderDisplayName(senderIdentityOf(caller), naming);
   // A declared seat: the id the receiver would judge by is the one the registry has not written
   // yet, so the header says whose seat it is instead of an id.
   if ('declared' in caller && caller.declared) {
-    return `from the file's seat ${caller.seat} (no registry record yet) — admitted by: ${rule}\n`;
+    return `from the file's seat ${readable} (no registry record yet) — admitted by: ${rule}\n`;
   }
-  const id = 'reach' in caller ? caller.id : '';
-  const name = 'reach' in caller ? caller.name : caller.seat;
-  const who = id === '' ? `${name}, ${seatAt(caller)}` : `${id} (${name}, ${seatAt(caller)})`;
-  return `from ${who} — admitted by: ${rule}\n`;
+  return `from ${readable} — admitted by: ${rule}\n`;
+}
+
+/** A side as the naming rule reads it: the seat, the team, and the registry id when one is held. */
+function senderIdentityOf(side: SendSide): SenderIdentity {
+  return 'reach' in side
+    ? { seat: side.reach.seat, team: side.reach.team, id: side.id }
+    : { seat: side.seat, team: side.team };
 }
 
 /** The seat a side sits in. */

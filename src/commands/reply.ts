@@ -39,6 +39,7 @@ import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts'
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderHeader } from '../send/admit.ts';
+import { namingFor } from '../send/names.ts';
 import { appendHistory } from '../send/history.ts';
 import {
   closeFile,
@@ -477,7 +478,10 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
 
   const replyId = host.newId?.() ?? randomUUID();
   const thread = state.open ? answered.thread : replyId;
-  const body = `${senderHeader(admission.sender, admission.rule)}\n${text}`;
+  // A reply goes back to a seat of this file, so the headline reads this team's word on how a
+  // sender reads — the same line a send would write into that seat's folder.
+  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat: target, file: team });
+  const body = `${senderHeader(admission.sender, admission.rule, naming)}\n${text}`;
   const payload: RecordPayload = {
     kind: 'message',
     id: replyId,
