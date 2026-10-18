@@ -392,6 +392,43 @@ describe('the watch `up` starts', () => {
     expect(state?.watch?.pid).toBeUndefined();
   });
 
+  test('a file in the `.agents` subfolder is read through the record, from the start folder above it', async () => {
+    const { home } = fresh();
+    const root = join(base, 'acme');
+    mkdirSync(root);
+    git(root, 'init', '-q', '-b', 'main');
+    // The team file is in the subfolder `up` starts the watch above, under a name a flagless
+    // watch would not read there, and no `team.yaml` stands beside it. `up` writes the state
+    // beside the file it loaded and starts the watch in `root`, one folder up.
+    const custom = join(root, '.agents', 'ops.yaml');
+    approve(root, custom, home, teamText(root));
+
+    const made = world();
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(['--file', custom], io, upSources(home, made));
+    expect(code, io.out + io.err).toBe(0);
+    expect(made.creates[2]?.cwd).toBe(root);
+    expect(readState(join(root, '.agents')).sessions[SESSION]?.watchdog).toEqual({ file: custom, pane: 'w3:p1' });
+    expect(readState(root).sessions[SESSION]?.watchdog).toBeUndefined();
+
+    // The recorded pane's own call starts in `root` — a different folder from the team file's —
+    // and finds the file the record names. Only that file can load: no `team.yaml` is in
+    // `.agents`, so a run reading `root` alone would stop at "no team file here".
+    let held: { pid?: number; pane?: string; workspace?: string } | undefined;
+    const pane = testIo(root, { kind: 'pane', pane: 'w3:p1' });
+    const ran = await runWatch(['--session', SESSION], pane, watchSources(home, {
+      ownPane: () => ({ pane: 'w3:p1', workspace: 'w3' }),
+      wait: async () => {
+        held = readState(join(root, '.agents')).sessions[SESSION]?.watch;
+        return false;
+      },
+    }));
+    expect(ran, pane.err + pane.out).toBe(0);
+    expect(pane.err).toBe('');
+    // Its pass writes where `up` wrote: the team file's folder, the state the record came from.
+    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w3:p1', workspace: 'w3' });
+  });
+
   test('a watch whose pid is alive is never started over', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');

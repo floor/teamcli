@@ -2018,7 +2018,8 @@ scene('watch.file-owner', async (place) => {
   return show(await watched(place, ['--file', '.agents/team.yaml'], other), "--file is the owner's");
 });
 scene('watch.watchdog', async (place) => {
-  updateState(place.root, (state) => {
+  // Beside the team file, where `up` writes it — the watch reads that state, not its start folder.
+  updateState(join(place.root, '.agents'), (state) => {
     const session = (state.sessions.acme ??= emptySession());
     session.watchdog = { file: join(place.root, 'custom', 'team.yaml'), pane: 'w2:p1' };
   });

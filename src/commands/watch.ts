@@ -184,8 +184,9 @@ the invocation or team file can't be read.
 `;
 
 /** The file `up` recorded for this session's watch, or a refusal for any other non-owner.
- *  Absent when this folder records none: a flagless watch then reads what it always did.
- *  `'wait'` is a file recorded and a pid not written yet: the process `up` just spawned. */
+ *  Absent when neither folder a team file can sit in records one: a flagless watch then reads
+ *  what it always did. `'wait'` is a file recorded and a pid not written yet: the process `up`
+ *  spawned. */
 function watchdogGrant(
   cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
 ): { file: string } | { refuse: string } | { wait: true } | undefined {
@@ -194,7 +195,9 @@ function watchdogGrant(
   if (!recorded) return undefined;
   if (recorded.pane && caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
   if (isOwner(caller)) return undefined;
-  const watchPid = readState(cwd).sessions[name]?.watch?.pid;
+  // The pid that owns the record is read from the record's own state: the team file's folder,
+  // never this process's start folder when the two differ.
+  const watchPid = readState(recorded.dir).sessions[name]?.watch?.pid;
   if (watchPid === process.pid) return { file: recorded.file };
   if (watchPid === undefined && !recorded.pane) return { wait: true };
   // The hand-over window: the file and the pane are recorded, and the watch's first pass — the
@@ -209,8 +212,23 @@ function watchdogGrant(
   };
 }
 
-function recordedWatchdog(cwd: string, session: string): { file: string; pane?: string } | undefined {
-  return readState(cwd).sessions[session]?.watchdog;
+/** The folders a team file can sit in, seen from the folder the watch starts in: this one (a
+ *  team file named directly there) and its `.agents` folder (the layout `up` starts the watch
+ *  from). `up` writes `team.state.json` beside the file it loaded, so the record, its pane and
+ *  its pid are read from the team file's folder — the same state `up` wrote — whichever of the
+ *  two it is. */
+function stateDirsOf(cwd: string): string[] {
+  return [cwd, join(cwd, '.agents')];
+}
+
+function recordedWatchdog(
+  cwd: string, session: string,
+): { file: string; pane?: string; dir: string } | undefined {
+  for (const dir of stateDirsOf(cwd)) {
+    const recorded = readState(dir).sessions[session]?.watchdog;
+    if (recorded) return { ...recorded, dir };
+  }
+  return undefined;
 }
 
 /** The grant, waiting out the moment between spawn and the pid landing in the state. */
