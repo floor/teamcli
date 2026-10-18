@@ -97,7 +97,8 @@ while a regular file at the name that proves nothing for this message — unsign
 message's, another seat's, session's or checkout's — is replaced by the signed receipt, never
 trusted and never left to block it; a name held by a link, a folder or a FIFO is refused instead.
 Its signature is the procedural evidence: a file at that name this key did not sign, or one naming
-another message, seat, checkout or session, proves nothing and leaves the message waiting. Nothing it says is ever derived from pane text or a status.
+another message, seat, checkout or session, proves nothing; the read that finds it replaces it with
+the signed receipt, and until that read the message is still waiting. Nothing it says is ever derived from pane text or a status.
 
 ## Checking a build
 
