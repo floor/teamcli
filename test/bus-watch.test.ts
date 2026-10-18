@@ -16,6 +16,8 @@ import { runBus } from '../src/commands/bus.ts';
 import { publishWatchReportsToBus, syncWatchBus } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
+import { registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession } from '../src/state.ts';
 import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
 import { attention as checkAttention } from '../src/watch/checks/attention.ts';
@@ -142,6 +144,77 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       expect(subOp.events.length).toBe(0);
       expect(subOp.cursor).toBe(1);
     }
+  });
+
+  test('a subscription resolves an agent registry id to its seat and binds a claimed pane, and a routing recipient named by id reaches that seat', async () => {
+    const { root, home } = makeScratch();
+    const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const agent = registerAgent(home, {
+      name: 'worker-1',
+      signing: { model: 'claude', version: '4.6', role: 'worker' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamIdOf(root), seat: 'worker-1', session: 'acme', pane: 's1:p3', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'owner',
+    });
+
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      // A routing word that names a seat by its registry id, as a stored declaration may.
+      additiveRouting: { 'message.delivered': [agent.id] },
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    handles.push(started.handle);
+
+    const published = await publishToBus(root, {
+      ts: '2026-10-18T12:00:00.000Z',
+      kind: 'message.delivered',
+      session: 'acme',
+      record_id: 'd-1',
+      from: 'clerk',
+      to: 'worker-1',
+    });
+    expect(published.kind).toBe('published');
+
+    // Subscribing by the agent id, with the pane the registry holds, reaches the agent's seat.
+    const byId = await subscribeBusOnce(root, { seat: agent.id, pane: 's1:p3', cursor: 0 });
+    expect(byId.kind).toBe('events');
+    if (byId.kind === 'events') expect(byId.events.map((e) => e.payload.record_id)).toEqual(['d-1']);
+
+    // By plain name it is the same subscription.
+    const byName = await subscribeBusOnce(root, { seat: 'worker-1', cursor: 0 });
+    expect(byName.kind).toBe('events');
+    if (byName.kind === 'events') expect(byName.events.map((e) => e.payload.record_id)).toEqual(['d-1']);
+
+    // A pane that contradicts the registry, and an id no agent of this team holds, are refused at
+    // the caller before any event is read.
+    const stalePane = await subscribeBusOnce(root, { seat: agent.id, pane: 's9:p9', cursor: 0 });
+    expect(stalePane.kind).toBe('refused');
+    if (stalePane.kind === 'refused') expect(stalePane.at).toBe('caller');
+
+    const unknownId = await subscribeBusOnce(root, { seat: 'agt_000000000000', cursor: 0 });
+    expect(unknownId.kind).toBe('refused');
+    if (unknownId.kind === 'refused') expect(unknownId.at).toBe('caller');
+
+    // A retired agent no longer holds its seat: its id is refused, and the plain name still works.
+    updateAgent(home, agent.id, { lifecycle: 'retired' });
+    const retiredId = await subscribeBusOnce(root, { seat: agent.id, cursor: 0 });
+    expect(retiredId.kind).toBe('refused');
+    const stillByName = await subscribeBusOnce(root, { seat: 'worker-1', cursor: 0 });
+    expect(stillByName.kind).toBe('events');
   });
 
   test('refuses privileged self-subscription by a worker, logs the refusal, and raises team.policy-refused to the owner only', async () => {

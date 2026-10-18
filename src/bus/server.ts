@@ -30,6 +30,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import { logLine } from '../log.ts';
+import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import {
   checkPrivilegedSelfSubscription,
   DEFAULT_RECONCILE_INTERVAL_SECONDS,
@@ -51,6 +53,8 @@ import {
   type SignedEventRecord,
 } from './log.ts';
 import { reconcilePass } from './reconcile.ts';
+import { readSeatResolver } from './seats.ts';
+import type { SeatRecipientResolver } from './kinds.ts';
 
 export function busSocket(root: string): string {
   return join(root, '.agents', 'bus.sock');
@@ -438,12 +442,55 @@ type LiveSubscriber = {
   bufferLimit: number;
 };
 
+type SubscriberClaim = { kind: 'seat'; seat: string } | { kind: 'refused'; message: string };
+
+/** The seat a subscribe request claims. A registry id resolves to the seat that agent holds in
+ *  this team, so a caller that knows its agent id subscribes by it; a plain seat name stands as
+ *  written. A request that names a pane must name the pane the registry holds for that agent, so
+ *  a stale or borrowed pane cannot subscribe under a live seat. */
+function resolveSubscriber(request: BusSubscribeRequest, home: string, root: string): SubscriberClaim {
+  const teamId = teamIdOf(root);
+  if (isAgentId(request.seat)) {
+    const agent = getAgent(home, request.seat);
+    if (agent === null || agent.lifecycle === 'retired' || agent.reach.team !== teamId) {
+      return {
+        kind: 'refused',
+        message:
+          'no agent of this team holds that id; subscribe with the agent id the registry holds or with the seat name',
+      };
+    }
+    if (!paneAgrees(request.pane, agent.reach.pane)) {
+      return {
+        kind: 'refused',
+        message: `the registry holds pane ${agent.reach.pane} for ${agent.reach.seat}, not ${request.pane}`,
+      };
+    }
+    return { kind: 'seat', seat: agent.reach.seat };
+  }
+  if (request.pane !== undefined) {
+    const agent = findAgent(home, { team: teamId, seat: request.seat });
+    if (agent !== null && !paneAgrees(request.pane, agent.reach.pane)) {
+      return {
+        kind: 'refused',
+        message: `the registry holds pane ${agent.reach.pane} for ${request.seat}, not ${request.pane}`,
+      };
+    }
+  }
+  return { kind: 'seat', seat: request.seat };
+}
+
+/** An agent with no pane on record does not contradict a claimed one; a pane on record must match. */
+function paneAgrees(claimed: string | undefined, held: string | null): boolean {
+  return claimed === undefined || held === null || claimed === held;
+}
+
 function matchesSubscriber(
   record: SignedEventRecord,
   seat: string,
   selfKinds: ReadonlySet<EventKind> | null,
   team: TeamFile,
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>,
+  resolveSeat?: SeatRecipientResolver,
 ): boolean {
   const { payload } = record;
   // `watch` observes all session events so it can wake seats and report problems without polling.
@@ -451,7 +498,7 @@ function matchesSubscriber(
   if (selfKinds !== null && selfKinds.has(payload.kind)) {
     return true;
   }
-  const recipients = recipientsForEvent(payload, team, additiveRouting);
+  const recipients = recipientsForEvent(payload, team, additiveRouting, [], resolveSeat);
   return recipients.has(seat);
 }
 
@@ -469,6 +516,9 @@ export async function startBus(input: StartBusInput): Promise<StartBusResult> {
 async function startBusWalk(input: StartBusInput, path: string): Promise<StartBusResult> {
   const home = input.home ?? homedir();
   const now = input.now ?? (() => new Date());
+  // A routing word may name a seat by its registry id; resolve it against the registry on disk so
+  // that `{ seat: agt_… }` reaches the seat that holds it, while plain names stand as written.
+  const resolveSeat = readSeatResolver(home, teamIdOf(input.root));
   const bufferLimit = input.bufferLimit ?? DEFAULT_SUBSCRIBER_BUFFER_LIMIT;
   const reconcileIntervalMs = input.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_SECONDS * 1000;
 
@@ -506,7 +556,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     const fanOut = (record: SignedEventRecord): void => {
       for (const sub of subscribers) {
-        if (!matchesSubscriber(record, sub.seat, sub.kinds, input.team, input.additiveRouting)) continue;
+        if (!matchesSubscriber(record, sub.seat, sub.kinds, input.team, input.additiveRouting, resolveSeat)) continue;
         if (sub.queue.length >= sub.bufferLimit) {
           // Bounded per-subscriber buffer overflow: send `gap` so the subscriber resyncs from
           // durable records rather than dropping an event silently (Amendment 01 §4.2, R1-C3/C4).
@@ -550,7 +600,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     const server = createServer((socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));
-      serveBusConnection(socket, input, home, now, bufferLimit, subscribers, fanOut);
+      serveBusConnection(socket, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat);
     });
 
     const failure = await new Promise<{ code?: string } | null>((done) => {
@@ -622,6 +672,7 @@ function serveBusConnection(
   bufferLimit: number,
   subscribers: Set<LiveSubscriber>,
   fanOut: (record: SignedEventRecord) => void,
+  resolveSeat: SeatRecipientResolver,
 ): void {
   socket.on('error', () => socket.destroy());
   socket.setTimeout(REQUEST_IDLE_MS, () => socket.destroy());
@@ -643,7 +694,7 @@ function serveBusConnection(
     const line = buffer.slice(0, at);
     buffer = '';
     socket.setTimeout(0);
-    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut);
+    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat);
   });
 }
 
@@ -656,6 +707,7 @@ function dispatchBusRequest(
   bufferLimit: number,
   subscribers: Set<LiveSubscriber>,
   fanOut: (record: SignedEventRecord) => void,
+  resolveSeat: SeatRecipientResolver,
 ): void {
   const request = parseBusRequest(line);
   if (!request) {
@@ -685,8 +737,14 @@ function dispatchBusRequest(
     return;
   }
 
-  // `subscribe`: validate seat identity and check privileged self-subscription ban (§4.4).
-  const seat = request.seat;
+  // `subscribe`: resolve the claimed identity against the registry, then validate the seat and
+  // check the privileged self-subscription ban (§4.4).
+  const claimed = resolveSubscriber(request, home, input.root);
+  if (claimed.kind === 'refused') {
+    answerOnce(socket, { ok: false, at: 'caller', message: claimed.message });
+    return;
+  }
+  const seat = claimed.seat;
   const leads = leadSeatsOf(input.team);
   const isOwner = seat === 'owner' || seat === 'watch';
   const isLead = leads.has(seat);
@@ -767,7 +825,7 @@ function dispatchBusRequest(
 
   const selfKinds = request.kinds !== undefined ? new Set<EventKind>(request.kinds) : null;
   const matching = fromCursor.events.filter((rec) =>
-    matchesSubscriber(rec, seat, selfKinds, input.team, input.additiveRouting),
+    matchesSubscriber(rec, seat, selfKinds, input.team, input.additiveRouting, resolveSeat),
   );
 
   if (matching.length > bufferLimit) {
