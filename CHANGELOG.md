@@ -27,16 +27,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ring there, giving a held drop up with the reason instead.
 
 - **`team drops`.** The receiving seat reads its own folder under
-  `.agents/send-drops/<session>/<seat>`: one row per waiting drop, the sender read from the file's
-  first line — `the owner`, a seat's name, the name in the header's parentheses, or `unknown` when
-  that line is no sender header — and the file's absolute path. A drop with an `<id>.read` receipt
-  beside it is read, and is not listed; a name with a dot in it is a sidecar, never a drop. The
+  `.agents/send-drops/<session>/<seat>`: one row per waiting drop, the sender the record's payload
+  names — `the owner`, a seat's name, or a registered name — or, in a raw body file an earlier
+  build wrote, the sender its first line names; `unknown` when there is neither, and when a record
+  does not verify against the message key. A drop with the signed `<id>.read.json` receipt beside
+  it is read, and is not listed — a receipt the key did not sign, or one naming another message,
+  seat, checkout or session, proves nothing and the drop is still listed; a name with a dot in it
+  is a sidecar, never a drop. The
   command only reads: it moves, deletes and marks nothing, and a folder that does not exist yet is
   an empty one. Only the seat itself, on the pane the state records for it, may run it; the owner,
   another seat and a seat on another pane are refused. `--follow` prints
   `from <sender> — <path>` for each drop that appears while it runs — the drops already on disk
   are waiting, not new — flushed per line for a Monitor in the receiving seat, and Ctrl-C stops it
   with exit 0. `--json` prints one `team.drops` document; it and `--follow` cannot be combined.
+
+- **The message record, threads, and `team reply`.** A plain send writes the message whole as one
+  signed record — the body, the sender, the rule that admitted the send, and the thread — into
+  the recipient's folder at `.agents/send-drops/<session>/<seat>/<id>`, mode 0600, by renaming a
+  temporary file into place, before the delivery leg runs; the record is the message, and the
+  typed, drop and mcp-inbox legs all carry it. `team messages` reads every record still waiting,
+  verifies its signature with the checkout's message key, prints the body and writes the signed
+  read receipt `<id>.read.json` in that one step; the seat's inbox server writes the same receipt
+  for each message it returns, and verifies the record before anything is shown, so an unsigned
+  or tampered file prints no body and leaves no receipt. The history keeps the conversation:
+  every line carries `thread`, the first message's id, a reply also carries `in-reply-to`, the
+  feed's DETAIL opens a reply with `re <id>: `, and its `--json` event carries a `status` derived
+  from the outcome — `sent`, `held`, `delivered`, `read` or `replied` — never a stored one.
+  `team reply <id> <text>` answers the sender of a record on its thread: one signed reply record,
+  delivered as the drop leg delivers — left in the sender's folder, nothing typed, no frame sent
+  — and the signed `<id>.replied.json` receipt beside the record it answers. `team reply <id>
+  --close` writes a signed `<id>.closed.json` instead; a thread also ends when its newest record
+  is 24 hours old or when it reaches 50 records, and a reply on a closed thread opens a new
+  thread that cites the record it answers. A reply goes only to the sender, admitted by
+  `reply-on-open-thread`; a record the owner sent has no seat to answer, so a reply to it is
+  refused before anything is written.
 
 - **The native leg, as a handoff.** When the recipient's CLI carries the cross-session channel and
   the sender's own file declares `cli: claude-code`, a send to the native leg becomes a handoff:
