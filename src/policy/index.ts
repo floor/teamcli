@@ -20,6 +20,24 @@ export {
 } from './types.ts';
 
 export {
+  EVENT_KINDS,
+  EVENT_ROUTING_DEFAULTS,
+  EVENT_ROUTING_LEVELS,
+  EVENT_ROUTING_SETTING,
+  EVENT_THRESHOLDS,
+  PRIVILEGED_KINDS,
+  PRIVILEGED_KINDS_SETTING,
+  growPrivilegedKinds,
+  isPrivilegedKind,
+  type EventRouting,
+  type EventThreshold,
+  type RoutingChange,
+  type RoutingPosition,
+  type RoutingRecipient,
+  type RoutingWord,
+} from './events.ts';
+
+export {
   resolvePolicy,
   resolvePolicyChain,
   type EffectivePolicy,
