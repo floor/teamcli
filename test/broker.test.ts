@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, connect, type Socket } from 'node:net';
-import { tmpdir } from 'node:os';
+import { cpus, loadavg, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
@@ -580,6 +580,13 @@ async function claimSelftest(candidate: string): Promise<{ ok: boolean; line: st
 const CLAIM_ROUNDS = 413;
 /** The pin's own budget floor, from CI's ≈0.23 s/round pace. */
 const CLAIM_STEP_FLOOR_MS = 10_000;
+/** The ready step's ceiling: even an overloaded machine may not stretch one round's boot step
+ *  further. The release step stays fixed, so a broker that is slow where the claim path runs
+ *  still fails there. */
+const CLAIM_STEP_CAP_MS = 120_000;
+/** The load term's own bound: a run queue eight deep per core is already an overloaded machine,
+ *  and the step budget stops growing there rather than tracking an unbounded average. */
+const CLAIM_LOAD_CAP = 8;
 const CLAIM_RUN_FLOOR_MS = 300_000;
 const CLAIM_RUN_CAP_MS = 2_400_000;
 /** The outcomes step is fixed, never scaled: released together on a dead start's lock, the six
@@ -592,17 +599,30 @@ const CLAIM_OUTCOMES_STEP_MS = 10_000;
  *  per-round step round after round, without failing a merely loaded machine. */
 const CLAIM_OUTCOMES_TOTAL_MS = CLAIM_ROUNDS * 2_000;
 
-/** The budgets, computed from the BOOT pace alone — round start → every start's `ready`, plus
- *  its reap — never from the release window where `startBroker` runs: a broker that slowed
- *  would inflate a pace that included it and scale the very budget meant to catch it. The step
- *  deadline is twice the boot pace (never under the pin's original ten seconds); the run budget
- *  is twice the extrapolated 413-round total, floored at the pin's original five minutes and
- *  capped at forty. */
-function claimBudgets(bootPaceMs: number): { stepMs: number; runBudgetMs: number } {
-  return {
-    stepMs: Math.max(CLAIM_STEP_FLOOR_MS, Math.ceil(bootPaceMs * 2)),
-    runBudgetMs: Math.min(CLAIM_RUN_CAP_MS, Math.max(CLAIM_RUN_FLOOR_MS, Math.ceil(bootPaceMs * CLAIM_ROUNDS * 2))),
-  };
+/** The run budget, computed from the BOOT pace alone — round start → every start's `ready`, plus
+ *  its reap — never from the release window where `startBroker` runs: a broker that slowed would
+ *  inflate a pace that included it and scale the very budget meant to catch it. It is twice the
+ *  extrapolated 413-round total, floored at the pin's original five minutes and capped at forty. */
+function claimRunBudgetMs(bootPaceMs: number): number {
+  return Math.min(CLAIM_RUN_CAP_MS, Math.max(CLAIM_RUN_FLOOR_MS, Math.ceil(bootPaceMs * CLAIM_ROUNDS * 2)));
+}
+
+/** The 1-minute run-queue length per core: the load term's measure. */
+function claimLoadPerCore(): number {
+  return Math.max(0, loadavg()[0] ?? 0) / Math.max(1, cpus().length);
+}
+
+/** The ready step's budget for one round, sampled at the round's start: the greater of twice the
+ *  warm-up BOOT pace and the pin's ten-second floor scaled by 1 + the 1-minute load per core,
+ *  capped at two minutes. The load term is measured per round rather than frozen after the
+ *  warm-up: a sibling heavy suite landing late in the run stretches each start's boot with the
+ *  run queue, and rounds 94–322 of a loaded run have overrun a flat ten seconds while a round at
+ *  the same load finished in ≈3 s. The release window still feeds neither term, so a broker that
+ *  regressed cannot inflate the budget meant to catch it; a machine that cannot finish inside
+ *  the run budget still stops with the round and step named and every start reaped. */
+function claimStepMs(bootPaceMs: number, loadPerCore: number): number {
+  const loadScaled = Math.ceil(CLAIM_STEP_FLOOR_MS * (1 + Math.min(loadPerCore, CLAIM_LOAD_CAP)));
+  return Math.min(CLAIM_STEP_CAP_MS, Math.max(CLAIM_STEP_FLOOR_MS, Math.ceil(bootPaceMs * 2), loadScaled));
 }
 
 /** The two burst scenes' budgets, from the same BOOT pace the claim lane uses — round start →
@@ -1485,11 +1505,12 @@ describe('the start protocol', () => {
     // `touched ≥ rounds` carries the zero. The detector rides the first route that proves
     // itself on this runner (a canary import's own call must fire the wrap before any round is
     // scored); where no route arms, the tuples are pinned and the unlink event is unasserted,
-    // loudly. The timeout is the pin's own: 413 rounds of six real processes, with the step
-    // and run budgets scaled from a warm-up's measured BOOT pace (on a loaded laptop the six
-    // child boots, not the broker, set that pace; the release window is excluded so a
-    // regressed broker cannot inflate the budget meant to catch it) and the outcomes step
-    // fixed at ten seconds. Each round is a bounded step: its six starts are
+    // loudly. The timeout is the pin's own: 413 rounds of six real processes, with the run
+    // budget scaled from a warm-up's measured BOOT pace and the ready step from that pace or
+    // the live 1-minute load per core, whichever is greater (on a loaded laptop the six child
+    // boots, not the broker, set that pace; the release window is excluded so a regressed
+    // broker cannot inflate the budget meant to catch it) and the outcomes step fixed at ten
+    // seconds. Each round is a bounded step: its six starts are
     // killed and reaped before the next round begins, the live set may never pass the six a
     // round holds, and a step that outlives its budget tears its own round down at once and
     // fails naming the step. A run that cannot finish inside its budget stops with the round
@@ -1511,15 +1532,17 @@ describe('the start protocol', () => {
     // so the budgets come from the pace the run actually finds — the BOOT pace alone, round
     // start to every start's `ready` plus its reap, never the release window where
     // `startBroker` runs: a broker that regressed must not inflate the budget meant to catch
-    // it. The first ten rounds are a warm-up; after them the step deadline is twice the boot
-    // pace (never under the pin's original ten seconds), the run budget is twice the
+    // it. The first ten rounds are a warm-up; after them the run budget is twice the
     // extrapolated total from that same pace (between the pin's original five minutes and a
-    // forty-minute cap), and the outcomes step stays a fixed ten seconds. A machine that
+    // forty-minute cap). The ready step is twice the boot pace or the pin's ten-second floor
+    // scaled by 1 + the 1-minute load per core, sampled at each round's start (so a sibling
+    // heavy run's load gets a matching budget instead of the warm-up's stale estimate), never
+    // past two minutes; the outcomes step stays a fixed ten seconds. A machine that
     // cannot finish 413 rounds inside the cap still stops with the round and step named and
     // every start reaped; what the budgets never do is let a slow machine pass as a broken
     // broker.
     const WARMUP_ROUNDS = 10;
-    let stepMs = CLAIM_STEP_FLOOR_MS;
+    let warmupPaceMs = 0;
     let runBudgetMs = CLAIM_RUN_FLOOR_MS;
     const breaches: string[] = [];
     const live = new Set<ClaimChild>();
@@ -1546,6 +1569,8 @@ describe('the start protocol', () => {
         if (Date.now() - runStart > runBudgetMs) {
           throw new Error(`the claim lane: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
         }
+        // Sampled before this round's six starts exist, so the term is the machine's other load.
+        const stepMs = claimStepMs(warmupPaceMs, claimLoadPerCore());
         const bootStart = Date.now();
         const roundRoot = join(base, `claimburst-${round}`);
         mkdirSync(join(roundRoot, '.agents'), { recursive: true });
@@ -1584,7 +1609,10 @@ describe('the start protocol', () => {
         const reapStart = Date.now();
         await reap(roundKids);
         if (round < WARMUP_ROUNDS) warmupBootMs += bootMs + (Date.now() - reapStart);
-        if (round === WARMUP_ROUNDS - 1) ({ stepMs, runBudgetMs } = claimBudgets(warmupBootMs / WARMUP_ROUNDS));
+        if (round === WARMUP_ROUNDS - 1) {
+          warmupPaceMs = warmupBootMs / WARMUP_ROUNDS;
+          runBudgetMs = claimRunBudgetMs(warmupPaceMs);
+        }
       }
     } catch (error) {
       failure = error;
@@ -1615,13 +1643,15 @@ describe('the start protocol', () => {
 
   test('the claim lane, a stalled broker: a release stalled past the fixed outcomes step fails, and the boot pace never scales that step', async () => {
     // The regression the budgets must not hide: a broker whose start path slows down. The pin
-    // measures its budgets from the BOOT pace (round start → every start's `ready`, plus reap)
-    // and holds the outcomes step fixed at ten seconds — the release path measured 130–260 ms
-    // at load 9–14 — so a stalled release fails the step instead of inflating a budget scaled
-    // from it. This scene stubs exactly that: six real starts on the dead-lock shape, released
-    // together, each sitting STALL_MS before it answers. The step must fail at ten seconds
-    // naming itself, and the budgets from this round's boot pace must stay far under the
-    // stall — proof the slower release never entered them.
+    // measures its run budget from the BOOT pace (round start → every start's `ready`, plus
+    // reap) and holds the outcomes step fixed at ten seconds — the release path measured
+    // 130–260 ms at load 9–14 — so a stalled release fails the step instead of inflating a
+    // budget scaled from it. The ready step's other term is the machine's 1-minute load, which
+    // the release cannot inflate either; passing zero load isolates the pace term here. This
+    // scene stubs exactly that: six real starts on the dead-lock shape, released together, each
+    // sitting STALL_MS before it answers. The step must fail at ten seconds naming itself, and
+    // the pace term from this round's boot pace must stay far under the stall — proof the
+    // slower release never entered it.
     project();
     record();
     const STALL_MS = 12_000;
@@ -1640,12 +1670,12 @@ describe('the start protocol', () => {
       const bootStart = Date.now();
       await Promise.all(kids.map((kid) => readyOf(kid, 60_000)));
       const bootPaceMs = Date.now() - bootStart;
-      const budgets = claimBudgets(bootPaceMs);
+      const pacedStepMs = claimStepMs(bootPaceMs, 0);
       // The pace the budgets are taken from is the boot alone, and it sits under the stall; the
       // old whole-round pace included the release by construction, so it would have measured at
       // least the stall and doubled it into the step — the regression scaling its own budget.
       expect(bootPaceMs).toBeLessThan(STALL_MS);
-      expect(budgets.stepMs).toBeLessThan(STALL_MS);
+      expect(pacedStepMs).toBeLessThan(STALL_MS);
       writeFileSync(go, 'go\n');
       const releaseStart = Date.now();
       const failure = await withinStep('the claim lane: round stall: outcomes', kids, CLAIM_OUTCOMES_STEP_MS, () =>
