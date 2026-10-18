@@ -56,7 +56,7 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 | [`team up`](https://github.com/floor/teamcli/blob/main/docs/commands/up.md) / [`team down`](https://github.com/floor/teamcli/blob/main/docs/commands/down.md) | starts or stops the session and its seats |
 | [`team status`](https://github.com/floor/teamcli/blob/main/docs/commands/status.md) | the file against the running session, each difference with its repair |
 | [`team seats`](https://github.com/floor/teamcli/blob/main/docs/commands/seats.md) | each seat's state, and where it was read |
-| [`team send`](https://github.com/floor/teamcli/blob/main/docs/commands/send.md) | one message to one seat, confirming `delivered` (or `delivered (read)`), `sent (unconfirmed)`, `answered`, `held`, `not-submitted`, `timeout`, `unreachable` or `refused` |
+| [`team send`](https://github.com/floor/teamcli/blob/main/docs/commands/send.md) | one message to one seat, with a delivery report |
 | [`team drops`](https://github.com/floor/teamcli/blob/main/docs/commands/drops.md) | the drop files waiting for this seat |
 | [`team watch`](https://github.com/floor/teamcli/blob/main/docs/commands/watch.md) | reports idle seats and nudges the operator |
 | [`team register`](https://github.com/floor/teamcli/blob/main/docs/commands/register.md) | writes the record for a seat that is already running |
