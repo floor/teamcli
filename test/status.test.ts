@@ -1318,7 +1318,7 @@ describe('the rules files of message seats', () => {
     // The repair names `team reload`, a grant scope: the owner or an approved grant holder may
     // run it, and no `owner: true` narrows the row to the owner alone — the summary does not
     // count it among the owner's differences.
-    expect(out).toContain('1 difference(s)\n');
+    expect(out).toContain('1 difference\n');
     expect(out).not.toContain('for the owner');
     expect(code).toBe(1);
   });
