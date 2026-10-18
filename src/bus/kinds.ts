@@ -1,5 +1,6 @@
-// Closed event kinds table, default recipient positions, privileged kinds, owner-at-once set
-// (OD-20261018-05), and owner-sovereign threshold constants (RFC 002 Amendment 01 §4.3, §4.4, §10),
+// Closed event kinds table, default recipient positions, privileged kinds, the owner's
+// immediacy list (the kinds pushed at once rather than batched), and owner-sovereign threshold
+// constants (RFC 002 Amendment 01 §4.3, §4.4, §10),
 // wired to the B2 routing settings in `src/policy/events.ts` and `src/bus/routing.ts`.
 //
 // An event says what happened, when, and to which record; it carries no body and instructs nobody.
@@ -107,7 +108,7 @@ export type OwnerPromptKind = (typeof OWNER_PROMPT_KINDS)[number];
 
 const OWNER_PROMPT_SET: ReadonlySet<string> = new Set<string>(OWNER_PROMPT_KINDS);
 
-/** Built-in privileged event kinds (Amendment 01 §4.4, Q12): `team.grant-*`, `team.policy-*`,
+/** Built-in privileged event kinds (Amendment 01 §4.4): `team.grant-*`, `team.policy-*`,
  *  and `seat.at-prompt`. The owner may grow this set via `privileged-kinds`; no level below
  *  the owner may remove any of them or self-subscribe to one. */
 export const DEFAULT_PRIVILEGED_KINDS: readonly EventKind[] = [
@@ -124,9 +125,9 @@ export function isPrivilegedKind(kind: EventKind, extraPrivileged?: readonly str
   return isPolicyPrivilegedKind(kind, patterns);
 }
 
-/** Events delivered to the owner at once rather than batched into a summary (OD-20261018-05,
- *  Amendment 01 §10): `seat.at-prompt` of the owner's kinds, `seat.unreachable` and `seat.done`
- *  of the lead's seat, and every roster, grant and policy event. */
+/** Events delivered to the owner at once rather than batched into a summary (Amendment 01 §10):
+ *  `seat.at-prompt` of the owner's kinds, `seat.unreachable` and `seat.done` of the lead's seat,
+ *  and every roster, grant and policy event. */
 export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
   'seat.unreachable',
@@ -144,7 +145,7 @@ export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
 const OWNER_AT_ONCE_SET: ReadonlySet<EventKind> = new Set<EventKind>(DEFAULT_OWNER_AT_ONCE_KINDS);
 
 /**
- * The owner's immediacy list as a setting (OD-20261018-05, Amendment 01 §10): the kinds the
+ * The owner's immediacy list as a setting (Amendment 01 §10): the kinds the
  * Runtime pushes at once, while everything else is batched into the pass's summary. It is the
  * owner's and no other level may write it. The release default is the reviewed list; the build
  * carries the descriptor, and the policy layer reads the value in force, as it does for the event

@@ -155,7 +155,7 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 ## 6. Same-user (`M`-not-`A`) boundary
 
 Every seat runs as the same OS user (`owner-user`), and the checkout's message key sits on disk
-where every seat can read it. As stated in `SECURITY.md` (OD-20261018-03) and RFC 002 Amendment 01
+where every seat can read it. As stated in `SECURITY.md` and RFC 002 Amendment 01
 §7, the signature and the bus socket are integrity controls against a mistaken agent, not
 containment against a hostile same-user process. Because events carry no body, instruct nobody, and
 are derived from durable records (which the reconciliation pass re-scans), losing or forging an

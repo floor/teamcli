@@ -133,7 +133,7 @@ describe('the event thresholds', () => {
   });
 });
 
-describe("the owner's immediacy list (OD-20261018-05, Amendment 01 §10)", () => {
+describe("the owner's immediacy list (Amendment 01 §10)", () => {
   test('is a setting: named, at every level, owner-sovereign, with the reviewed release default', () => {
     expect(OWNER_AT_ONCE_SETTING.name).toBe('owner-at-once');
     expect(OWNER_AT_ONCE_SETTING.levels).toEqual(['entity', 'project', 'team', 'seat']);

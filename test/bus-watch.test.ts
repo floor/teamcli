@@ -309,7 +309,8 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     expect(teamLog).toContain(PRIVILEGED_SELF_SUBSCRIPTION_RULE);
     expect(teamLog).toContain('worker-1');
 
-    // `owner` receives the `team.policy-refused` event (Q12 / `EVENT_ROUTING_DEFAULTS`); seats do not.
+    // `owner` receives the `team.policy-refused` event (a privileged kind routed to the owner
+    // by default, `EVENT_ROUTING_DEFAULTS`); seats do not.
     const ownerSub = await subscribeBusOnce(root, { seat: 'owner', cursor: 0 });
     expect(ownerSub.kind).toBe('events');
     if (ownerSub.kind === 'events') {

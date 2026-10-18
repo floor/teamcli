@@ -599,7 +599,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         if (!matchesSubscriber(record, sub.seat, sub.kinds, input.team, input.additiveRouting, resolveSeat)) continue;
         if (sub.queue.length >= sub.bufferLimit) {
           // Bounded per-subscriber buffer overflow: send `gap` so the subscriber resyncs from
-          // durable records rather than dropping an event silently (Amendment 01 §4.2, R1-C3/C4).
+          // durable records rather than dropping an event silently (Amendment 01 §4.2).
           subscribers.delete(sub);
           try {
             sub.socket.end(
@@ -814,7 +814,7 @@ function dispatchBusRequest(
       const moment = now();
       const record = refusalRecord(check.refusal, moment);
       const shaped = policyRefusedEvent(check.refusal, moment);
-      // Operational log refusal + visible `team.policy-refused` event to owner (§4.4, Q12).
+      // Operational log refusal + visible `team.policy-refused` event to owner (§4.4).
       logLine(join(input.root, '.agents'), 'bus', seat, `${record.rule}: ${record.detail}`, moment);
       const refusalEvent = appendEvent(
         input.team.project,
