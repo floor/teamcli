@@ -145,6 +145,11 @@ export type PendingNative = {
   /** The receiving project and root: the store the history line goes to, across teams too. */
   project: string;
   root: string;
+  /** The address as the caller wrote it (`@<nickname>`, `<seat>@<team>`, `lead@<team>`, or agent
+   *  id) and the registry id it resolved to, when the caller wrote a form rather than the seat's
+   *  own name. */
+  spec?: string;
+  resolved?: string;
   /** The whole body the sender was told to send, sender header included. */
   body: string;
 };
@@ -310,6 +315,13 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
   if (flat.to_id !== null && typeof flat.to_id !== 'string') return null;
   if (fields.some((field) => (flat[field] as string) === '')) return null;
   if (!Number.isFinite(Date.parse(flat.ts as string))) return null;
+  let sentAs: { spec: string; resolved: string } | undefined;
+  if (flat.spec !== undefined || flat.resolved !== undefined) {
+    if (typeof flat.spec !== 'string' || flat.spec === '' || typeof flat.resolved !== 'string' || flat.resolved === '') {
+      return null;
+    }
+    sentAs = { spec: flat.spec, resolved: flat.resolved };
+  }
   return {
     v: 1,
     id,
@@ -326,6 +338,7 @@ function shapeOf(value: unknown, id: string): PendingNative | null {
     rule: flat.rule as string,
     project: flat.project as string,
     root: flat.root as string,
+    ...(sentAs ?? {}),
     body: flat.body as string,
   };
 }

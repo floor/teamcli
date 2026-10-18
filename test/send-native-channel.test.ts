@@ -7,6 +7,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
+import { lobbyDir } from '../src/lobby/gate.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
 import { pendingPath } from '../src/send/pending.ts';
 import { updateState } from '../src/state.ts';
@@ -247,6 +250,61 @@ test('a handoff with no socket falls back to the typed drop and records the skip
         `native: no socket was found for its pane's processes (looked in ${made.sockets})`,
         'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
       ],
+    },
+  ]);
+});
+
+test('a registry-resolved spec keeps to_id, spec and resolved through the handoff and confirm', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const teamId = teamIdOf(made.root);
+  const leadAgent = registerAgent(made.home, {
+    name: 'lead',
+    signing: { model: 'Test', version: '1', role: 'coordinator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamId, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(made.home, teamId, {
+    project: 'acme',
+    entity: 'acme',
+    session: 'acme',
+    root: made.root,
+    lobby: lobbyDir(made.home),
+    roster: [{ agent: leadAgent.id, seat: 'lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+
+  const host = fake(made, { native: scripted(['idle', 'working']), newId: () => ID });
+  expect(await runSend(['lead@acme', 'hello'], helperCaller(made.root), host)).toBe(0);
+
+  const record = JSON.parse(readFileSync(pending(made), 'utf8')) as Record<string, unknown>;
+  expect(record.to_id).toBe(leadAgent.id);
+  expect(record.spec).toBe('lead@acme');
+  expect(record.resolved).toBe(leadAgent.id);
+
+  expect(await runSend(['--confirm', ID], helperCaller(made.root), host)).toBe(0);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      spec: 'lead@acme',
+      resolved: leadAgent.id,
+      body: HELPER_BODY,
+      id: ID,
+      outcome: 'delivered',
+      ms: 0,
+      via: 'native',
     },
   ]);
 });
