@@ -11,7 +11,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { listDrops } from '../src/commands/drops.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -30,7 +31,7 @@ import {
 import { signRecord } from '../src/send/record.ts';
 import { readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
 import type { Live } from '../src/status/compare.ts';
-import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage } from '../src/mcp/inbox.ts';
+import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { promoteInboxDrops, retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
 import { claudeBox, recordBody, testIo } from './helpers.ts';
@@ -43,6 +44,7 @@ const INBOX_B = 'bbbbbbbb-0000-4000-8000-000000000002';
 const INBOX_C = 'cccccccc-0000-4000-8000-000000000003';
 const INBOX_D = 'dddddddd-0000-4000-8000-000000000004';
 const INBOX_W = 'eeeeeeee-0000-4000-8000-000000000005';
+const INBOX_E = 'ffffffff-0000-4000-8000-000000000006';
 const raw = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 // A question the agent asked: the classifier's last-line footer makes it a dialog, never a box
 // the send may type into or press Enter on.
@@ -507,6 +509,35 @@ describe('promoteInboxDrops', () => {
     expect(readHistory('acme', made.root, made.home)).toMatchObject({ ok: true, entries: [{ id: INBOX_A }] });
   });
 
+  test('a read through the inbox hides the drop from team drops, and the watch then promotes it', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const body = 'from the owner\n\nread, and no longer waiting';
+    const dropDir = seedInbox(made, 'acme', 'lead', INBOX_E, body);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    // Waiting, the drop is what team drops lists.
+    const waiting = listDrops(dropDir);
+    expect(waiting.kind === 'ok' && waiting.rows.map((row) => row.id)).toEqual([INBOX_E]);
+
+    // The inbox read writes the one receipt both readings know by name: the drop is no longer
+    // waiting for the seat, and the watch turns the same receipt into the sender's history line.
+    readInbox(made, INBOX_E, 'lead', 'acme');
+    expect(listDrops(dropDir)).toEqual({ kind: 'ok', rows: [] });
+
+    promoteInboxDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: { running: true, agents: [], workspaces: [], screens: {} } as Live,
+      ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(readPending(dropDir)).toEqual([]);
+    expect(recordBody(join(dropDir, INBOX_E))).toBe(body);
+    expect(said).toEqual(['lead: an inbox send from owner was read in its inbox']);
+  });
+
   test('a receipt that names another seat proves nothing', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
@@ -516,7 +547,7 @@ describe('promoteInboxDrops', () => {
 
     // The receipt exists under the same id, but its record names another seat's read. It is not
     // this inbox's own proof, so the marker stands and nothing is written down.
-    dropMessage(dropDir, `${INBOX_B}.read`, `${JSON.stringify({
+    dropMessage(dropDir, basename(receiptPath(dropDir, INBOX_B)), `${JSON.stringify({
       v: 1, id: INBOX_B, seat: 'helper', session: 'acme', tool: 'inbox_read', ts: NOW.toISOString(), pid: 4242,
     })}\n`);
     promoteInboxDrops({

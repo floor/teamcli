@@ -4,7 +4,7 @@
 // launch's and never a tool argument's. It writes `.inbox-listener` into the seat's drop folder
 // while it runs, serves two tools (`inbox_check`, `inbox_read`), and removes the marker when its
 // stdin closes. A read verifies the record's signature with the message key before it shows the
-// body, and writes `<id>.read` before the body is returned; that receipt is the only proof of
+// body, and writes `<id>.read.json` before the body is returned; that receipt is the only proof of
 // delivery this leg has, and it means the message was read, not acted on.
 //
 // Nothing here is a push: MCP is client-pull, so the seat notices a message when it calls

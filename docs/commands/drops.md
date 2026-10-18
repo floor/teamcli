@@ -9,8 +9,8 @@ runs, one line per file, so a Claude Code Monitor in the receiving seat can turn
 into a notification.
 
 A receipt beside a drop says it was handed over, and a drop with one is read and not listed:
-`team messages` writes `<id>.read.json` when it shows a record, and the planned inbox listener's
-older `<id>.read` is read the same way.
+the seat's inbox server writes `<id>.read.json` when an `inbox_read` call returns the message,
+the same sidecar name `team messages` gives its read receipt.
 
 ## Synopsis
 
@@ -31,7 +31,7 @@ older `<id>.read` is read the same way.
 Reads `.agents/team.yaml` to resolve the project, the session, and the calling seat, then reads
 `.agents/send-drops/<session>/<seat>/`. A drop's file name is the send's id. A record's payload
 names its sender; a raw body file an earlier build wrote still names one on its first line.
-Names with a dot in them — `<id>.pending`, `<id>.taken`, `<id>.read`, `<id>.read.json`,
+Names with a dot in them — `<id>.pending`, `<id>.taken`, `<id>.read.json`,
 `<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. Nothing is written
 or removed, and the folder is not created: a folder that does not exist yet is an empty one.
 

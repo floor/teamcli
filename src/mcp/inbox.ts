@@ -2,8 +2,8 @@
 //
 // `team send` writes one message per file, whole and 0600, into
 // `<root>/.agents/send-drops/<session>/<seat>/<uuid>`. The MCP inbox adds nothing to the message:
-// a listener marker says a server is there, and one receipt `<id>.read` says a message was read
-// by an `inbox_read` call. The drop file is still the message; both sidecars are conveniences
+// a listener marker says a server is there, and one receipt `<id>.read.json` says a message was
+// read by an `inbox_read` call. The drop file is still the message; both sidecars are conveniences
 // written with the same atomic 0600 rename the drop gets. A read parses the record and verifies
 // its signature with the checkout's message key before it writes the receipt or shows a body: a
 // tampered or unsigned file is refused, so the receipt never proves a read of something the
@@ -14,18 +14,15 @@
 // session or the seat refuses service; an id is a lowercase UUID and nothing else, so no id can
 // name a path; a drop or receipt that is a link is refused, never followed.
 import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
-import { readRecord, verifyRecord } from '../send/record.ts';
+import { readRecord, receiptFile, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
-
-/** What a read appends to the message's own name. */
-export const RECEIPT_SUFFIX = '.read';
 
 /** The only names the server serves: the ids `team send` writes (`randomUUID`, lowercase). */
 export const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -82,8 +79,10 @@ export function listenerPath(dropDir: string): string {
   return join(dropDir, LISTENER_FILE);
 }
 
+/** The read receipt's path: the record spine's status-in-the-name sidecar (`<id>.read.json`),
+ *  so a drop's read receipt has one name everywhere — the inbox, `team drops` and the watch. */
 export function receiptPath(dropDir: string, id: string): string {
-  return join(dropDir, `${id}${RECEIPT_SUFFIX}`);
+  return receiptFile(dropDir, id, 'read');
 }
 
 /**
@@ -318,7 +317,7 @@ export function readMessage(target: InboxTarget, id: string, pid: number, home: 
   }
   const record: InboxReceipt = { v: 1, id, seat: target.seat, session: target.session, tool: 'inbox_read', ts: new Date().toISOString(), pid };
   try {
-    dropMessage(target.dropDir, `${id}${RECEIPT_SUFFIX}`, `${JSON.stringify(record)}\n`);
+    dropMessage(target.dropDir, basename(receiptPath(target.dropDir, id)), `${JSON.stringify(record)}\n`);
   } catch {
     return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
   }
@@ -326,7 +325,7 @@ export function readMessage(target: InboxTarget, id: string, pid: number, home: 
 }
 
 /**
- * Whether `<id>.read` is there and names this id, seat and session: the receipt an `inbox_read`
+ * Whether `<id>.read.json` is there and names this id, seat and session: the receipt an `inbox_read`
  * call wrote before it returned the body. A link is never followed, and a receipt that does not
  * parse or does not name this message proves nothing — the send must not report a read it cannot
  * point at.

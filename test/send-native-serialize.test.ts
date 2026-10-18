@@ -2,9 +2,10 @@
 // typed. This checks the drop files: the body that was written stays whole, and the other
 // body is not spliced in. No live pane.
 import { afterEach, expect, test } from 'bun:test';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
+import { recordBody } from './helpers.ts';
 import { dropDir, fake, filed, owner, world } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
@@ -49,7 +50,7 @@ test('an overlapping send leaves the first drop whole and writes no second body'
   const during = readdirSync(drops);
   expect(during.filter((name) => name.endsWith('.tmp'))).toEqual([]);
   expect(during.length).toBe(1);
-  const stored = readFileSync(join(drops, during[0] as string), 'utf8');
+  const stored = recordBody(join(drops, during[0] as string));
   expect(stored).toBe(filed('ALPHA-ONE'));
   expect(stored).not.toContain('BETA-TWO');
   expect(second).toBe(1);
@@ -59,7 +60,7 @@ test('an overlapping send leaves the first drop whole and writes no second body'
   expect(await first).toBe(0);
   const after = readdirSync(drops);
   expect(after).toEqual(during);
-  expect(readFileSync(join(drops, after[0] as string), 'utf8')).toBe(filed('ALPHA-ONE'));
+  expect(recordBody(join(drops, after[0] as string))).toBe(filed('ALPHA-ONE'));
   expect(typed.length).toBe(1);
   expect(typed[0]).not.toContain('ALPHA-ONE');
   expect(typed[0]).not.toContain('BETA-TWO');

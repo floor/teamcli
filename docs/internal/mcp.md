@@ -31,7 +31,7 @@ file declares, `--session` (when given) must be the team's own session, and the 
 seat's folder or a path: a message id must be a lowercase UUID, and a string that is anything else
 never reaches the filesystem.
 
-`inbox_read` writes `<id>.read` beside the message **before** it returns the body — a read that
+`inbox_read` writes `<id>.read.json` beside the message **before** it returns the body — a read that
 cannot leave that receipt is refused, so the server never hands over a body it did not record. The
 receipt holds `{v, id, seat, session, tool, ts, pid}`. That receipt is the whole evidence this leg
 produces, and it says the seat *read* the message, not that it acted on it: the status a send can

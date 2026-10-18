@@ -40,7 +40,7 @@ and types nothing. It takes the send only when a server is serving that inbox: a
 still running. A marker that is absent, malformed, dead, or names another seat, session or root
 is no listener: the leg is recorded `mcp-inbox: no live inbox listener` and the walk moves on. A
 live listener gets the message and a short wait — two seconds — for the receipt its `inbox_read`
-call leaves at `<id>.read`. The receipt is `delivered (read)`: the seat read the message, and
+call leaves at `<id>.read.json`. The receipt is `delivered (read)`: the seat read the message, and
 the words claim nothing about what it did with it. A wait that ends without the receipt is
 `sent (unconfirmed)`, exit 0 — the record is the message, safely on disk, and the walk ends rather
 than typing into a pane the inbox was chosen over. A record beside the drop says which leg left

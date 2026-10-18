@@ -10,7 +10,7 @@ import { registerAgent } from '../../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { readSendGrants } from '../../src/send/grants.ts';
 import { updateState } from '../../src/state.ts';
-import { testIo } from '../helpers.ts';
+import { recordBody, testIo } from '../helpers.ts';
 import { dropDir, fake, scripted, world, type World } from '../send-native-fixtures.ts';
 
 const made: World[] = [];
@@ -47,7 +47,7 @@ describe("team send: the file's seat, before its record", () => {
     // What this file judges is the header the receiver reads.
     expect(io.out, `outcome line: ${io.out}`).toBe('team acme, session "acme"\nlead: delivered\n');
     const drops = dropDir(one.dir, 'lead');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
       "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
     );
   });
@@ -64,7 +64,7 @@ describe("team send: the file's seat, before its record", () => {
     expect(io.err).toBe('');
     expect(io.out, `outcome line: ${io.out}`).toBe('team acme, session "acme"\nnative: delivered\n');
     const drops = dropDir(one.dir, 'native');
-    expect(readFileSync(join(drops, readdirSync(drops)[0] as string), 'utf8')).toBe(
+    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
       "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team\n\na note",
     );
   });
