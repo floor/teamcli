@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  checkPrivilegedKindsWrite,
   checkRoutingWrite,
   policyRefusedEvent,
   refusalRecord,
@@ -12,9 +13,11 @@ import {
   EVENT_KINDS,
   EVENT_ROUTING_DEFAULTS,
   EVENT_THRESHOLDS,
+  EVENT_THRESHOLDS_SETTING,
   PRIVILEGED_KINDS,
   growPrivilegedKinds,
   isPrivilegedKind,
+  type EventRouting,
 } from '../src/policy/events.ts';
 import type { PolicyLevel } from '../src/policy/types.ts';
 
@@ -111,6 +114,18 @@ describe('the event thresholds', () => {
     expect(EVENT_THRESHOLDS.thread_cap).toBe(1_000);
     expect(EVENT_THRESHOLDS.retention_days).toBe(30);
   });
+
+  test("carry a descriptor, the numbers staying the owner's to set", () => {
+    expect(EVENT_THRESHOLDS_SETTING.name).toBe('event-thresholds');
+    expect(EVENT_THRESHOLDS_SETTING.levels).toEqual(['entity', 'project', 'team', 'seat']);
+    expect(EVENT_THRESHOLDS_SETTING.ownerSovereign).toBe(true);
+    expect(EVENT_THRESHOLDS_SETTING.defaults).toBe(EVENT_THRESHOLDS);
+    expect(EVENT_THRESHOLDS_SETTING.shortenOnly).toEqual([
+      'held_threshold_seconds',
+      'unreachable_threshold_seconds',
+      'idle_threshold_seconds',
+    ]);
+  });
 });
 
 describe('the privileged self-subscription refusal', () => {
@@ -131,6 +146,20 @@ describe('the privileged self-subscription refusal', () => {
     expect(decision.level).toBe('team');
     expect(decision.detail).toContain('privileged kind');
     expect(decision.detail).toContain('agt_seat1');
+  });
+
+  test('the plain name is matched too, so neither form can self-add', () => {
+    const named: RoutingActor = { kind: 'seat', seat: 'worker', registryId: 'agt_seat1' };
+    const decision = checkRoutingWrite(
+      write({
+        kind: 'team.grant-issued',
+        actor: named,
+        change: { add: [{ seat: 'worker' }] },
+      }),
+    );
+    expect(decision.ok).toBe(false);
+    if (decision.ok) throw new Error('unreachable');
+    expect(decision.rule).toBe('privileged-self-subscription');
   });
 
   test('the refusal holds at the seat level, where a writer would naturally sit', () => {
@@ -240,6 +269,77 @@ describe('who may route a privileged kind', () => {
   });
 });
 
+describe("the privileged-kinds list is the owner's", () => {
+  test('the owner may grow it at any scope', () => {
+    expect(checkPrivilegedKindsWrite({ actor: { kind: 'owner' }, level: 'seat' })).toEqual({ ok: true });
+    expect(checkPrivilegedKindsWrite({ actor: { kind: 'owner' }, level: 'entity' })).toEqual({ ok: true });
+  });
+
+  test('a seat may not add to it or change it', () => {
+    const decision = checkPrivilegedKindsWrite({ actor: seat('agt_seat1'), level: 'team' });
+    expect(decision.ok).toBe(false);
+    if (decision.ok) throw new Error('unreachable');
+    expect(decision.rule).toBe('privileged-kinds-owner-only');
+    expect(decision.requester).toBe('agt_seat1');
+    expect(decision.kind).toBe('privileged-kinds');
+    expect(decision.level).toBe('team');
+    expect(decision.detail).toContain('owner');
+  });
+
+  test('a grant holder may not, whatever its grant names', () => {
+    const decision = checkPrivilegedKindsWrite({
+      actor: holder('agt_operator', ['team.grant-*', 'team.policy-*']),
+      level: 'project',
+    });
+    expect(decision.ok).toBe(false);
+    if (decision.ok) throw new Error('unreachable');
+    expect(decision.rule).toBe('privileged-kinds-owner-only');
+  });
+
+  test('its refusal is the same shape, carried by the same record and event', () => {
+    const decision = checkPrivilegedKindsWrite({ actor: seat('agt_seat1'), level: 'seat' });
+    if (decision.ok) throw new Error('unreachable');
+    const at = new Date('2026-10-18T12:00:00.000Z');
+    expect(refusalRecord(decision, at).kind).toBe('privileged-kinds');
+    expect(policyRefusedEvent(decision, at).recipients).toEqual(['owner']);
+  });
+});
+
+describe("a grant holder's ordinary routing writes sit at project or team", () => {
+  const nonPrivileged = (level: PolicyLevel) =>
+    write({
+      level,
+      kind: 'work.gate',
+      actor: holder('agt_operator', ['team.grant-*']),
+      change: { add: [{ seat: 'agt_seat2' }] },
+      inherited: ['lead'],
+    });
+
+  test('the entity level is outside the grant', () => {
+    const decision = checkRoutingWrite(nonPrivileged('entity'));
+    expect(decision.ok).toBe(false);
+    if (decision.ok) throw new Error('unreachable');
+    expect(decision.rule).toBe('grant-holder-scope');
+    expect(decision.level).toBe('entity');
+    expect(decision.detail).toContain('project or team');
+  });
+
+  test('the seat level is outside the grant', () => {
+    const decision = checkRoutingWrite(nonPrivileged('seat'));
+    expect(decision.ok).toBe(false);
+    if (decision.ok) throw new Error('unreachable');
+    expect(decision.rule).toBe('grant-holder-scope');
+  });
+
+  test('the project level is allowed', () => {
+    expect(checkRoutingWrite(nonPrivileged('project')).ok).toBe(true);
+  });
+
+  test('the team level is allowed', () => {
+    expect(checkRoutingWrite(nonPrivileged('team')).ok).toBe(true);
+  });
+});
+
 describe('an ordinary seat writes only itself, at its own level', () => {
   test('a seat adding itself at the seat level is approved', () => {
     const decision = checkRoutingWrite(
@@ -266,6 +366,14 @@ describe('an ordinary seat writes only itself, at its own level', () => {
     expect(decision.ok).toBe(false);
     if (decision.ok) throw new Error('unreachable');
     expect(decision.rule).toBe('seat-adds-itself-only');
+  });
+
+  test('a seat adding itself under its plain name is approved', () => {
+    const named: RoutingActor = { kind: 'seat', seat: 'worker', registryId: 'agt_seat1' };
+    const decision = checkRoutingWrite(
+      write({ kind: 'work.gate', level: 'seat', actor: named, change: { add: [{ seat: 'worker' }] } }),
+    );
+    expect(decision.ok).toBe(true);
   });
 
   test('a seat adding a position is not adding itself either', () => {
@@ -353,12 +461,46 @@ describe('the chain grows and nothing standing above a level is removed', () => 
     );
     expect(decision.ok).toBe(true);
   });
+
+  test('the check reads the default table the caller will fold with', () => {
+    const defaults: EventRouting = { 'team.policy-refused': ['operator'] };
+    const stands = checkRoutingWrite(
+      write({
+        kind: 'team.policy-refused',
+        actor: { kind: 'owner' },
+        change: { remove: ['operator'] },
+        inherited: ['operator'],
+        defaults,
+      }),
+    );
+    expect(stands.ok).toBe(false);
+    if (stands.ok) throw new Error('unreachable');
+    expect(stands.rule).toBe('privileged-default-stands');
+
+    const aboveOnly = checkRoutingWrite(
+      write({
+        kind: 'team.policy-refused',
+        actor: { kind: 'owner' },
+        change: { remove: ['owner'] },
+        inherited: ['owner', 'operator'],
+        defaults,
+      }),
+    );
+    expect(aboveOnly.ok).toBe(false);
+    if (aboveOnly.ok) throw new Error('unreachable');
+    expect(aboveOnly.rule).toBe('routing-removes-inherited');
+  });
 });
 
 describe('the routing fold', () => {
   test('with no word, the defaults stand', () => {
     expect(resolveRouting('message.held', [])).toEqual(['sender', 'lead']);
     expect(resolveRouting('seat.working', [])).toEqual([]);
+  });
+
+  test('the fold reads the default table it is handed', () => {
+    const defaults: EventRouting = { 'team.policy-refused': ['operator'] };
+    expect(resolveRouting('team.policy-refused', [], { defaults })).toEqual(['operator']);
   });
 
   test('a level adds beside the defaults and the levels nest', () => {
