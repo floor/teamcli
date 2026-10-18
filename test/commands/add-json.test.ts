@@ -203,14 +203,14 @@ describe('team add --json', () => {
     const made = world();
     const path = join(project, '.agents', 'send-drops', 'acme', 'worker', generalBriefId());
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, 'not a record\n');
+    mkdirSync(path);
     const io = testIo(project, owner);
     expect(await runAdd(['worker', '--json'], io, sources(made))).toBe(0);
     expect(io.err).toBe('');
     const doc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(io.out, ADD_OUTPUT_SCHEMA);
     expect(doc.status).toBe('ready');
     expect(doc.notes).toEqual([
-      'team add: worker: the general seat brief was not delivered (a file that is not a record already holds that id)',
+      'team add: worker: the general seat brief was not delivered (the record path is a folder)',
     ]);
   });
 

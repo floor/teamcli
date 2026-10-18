@@ -312,6 +312,48 @@ export function ensureRecord(dropDir: string, record: SignedRecord): RecordWrite
 
 export type RecordRead = { ok: true; record: SignedRecord | null } | { ok: false; reason: string };
 
+/**
+ * Writes the record whole, replacing a regular file already at its name. This is the writer for
+ * a record whose name is derived from its content (the general seat brief): a file there that is
+ * not that record would otherwise keep the seat from ever receiving it. A name held by a link, a
+ * folder or a FIFO is refused and never replaced — writing there would either follow it or take a
+ * name this key does not own.
+ */
+export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWrite {
+  const id = record.payload.id;
+  if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
+  const path = recordFile(dropDir, id);
+  const held = heldAt(path);
+  if (held.kind === 'link') return { ok: false, reason: 'a symbolic link was found and not followed' };
+  if (held.kind === 'fifo') return { ok: false, reason: 'a FIFO was found and not followed' };
+  if (held.kind === 'folder') return { ok: false, reason: 'the record path is a folder' };
+  if (held.kind === 'other') return { ok: false, reason: 'the record path is not a regular file' };
+  try {
+    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+  } catch {
+    return { ok: false, reason: 'the record could not be written' };
+  }
+  return { ok: true, path };
+}
+
+/**
+ * Whether the record at `path` is the one `expected` names: every field but `at` is the same —
+ * `at` is the record's own time, so a re-run at a later clock leaves a delivered record as it
+ * is — the checkout folders resolve to one, and this checkout's message key signed it. A link,
+ * a folder or another user's file is not a record and never verifies.
+ */
+export function recordHolds(path: string, expected: RecordPayload, home: string): boolean {
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return false;
+  const read = readRecord(path, expected.id);
+  if (!read.ok || read.record === null) return false;
+  const held = read.record.payload;
+  const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'in_reply_to'] as const;
+  for (const field of fields) if (held[field] !== expected[field]) return false;
+  if (!sameFolder(held.root, expected.root)) return false;
+  return verifyRecord(read.record, key.key);
+}
+
 /** One record by path, or why it cannot be read. A missing file is `record: null`. */
 export function readRecord(path: string, expectedId?: string): RecordRead {
   const held = heldAt(path);

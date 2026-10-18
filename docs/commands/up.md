@@ -12,8 +12,10 @@ it is — and it does not count as short of ready.
 Before the plan types anything, the run delivers the general seat brief: TeamCLI's built-in
 default, the first text every seat gets, written into each declared seat's drop folder as a signed
 message record — human seats included — and recorded in the session's state. It travels the drop
-leg and is never typed; a seat that already holds this text's record is left as it is, and
-[`team check`](check.md) names a seat the session launched without a delivery record.
+leg and is never typed; a seat that already holds this brief's verified record is left as it is,
+a file planted at the brief's id is replaced by the signed record, and a link or a folder there is
+refused, never followed. [`team check`](check.md) names a seat the session launched without a
+verified delivery record.
 
 ## Synopsis
 

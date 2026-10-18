@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { briefOf, textModuleOf } from '../scripts/brief.ts';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../src/approve/command.ts';
@@ -24,9 +24,10 @@ import {
   deliverGeneralBrief,
   generalBriefBody,
   generalBriefId,
+  generalBriefRecord,
 } from '../src/launch/general-brief.ts';
 import { MESSAGE_ID, receiptHeld } from '../src/mcp/inbox.ts';
-import { readRecord } from '../src/send/record.ts';
+import { readRecord, recordHolds } from '../src/send/record.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
@@ -166,6 +167,41 @@ describe('the delivery', () => {
     const second = deliverGeneralBrief({ dir, root, session: 'acme', seats: ['lead'], home, at: later });
     expect(second.deliveries[0]).toMatchObject({ ok: true, existing: true, at: NOW_ISO });
     expect(readState(dir).sessions.acme?.briefs?.lead).toEqual({ id: generalBriefId(), at: NOW_ISO });
+  });
+
+  test('a planted unsigned file at the brief id is replaced by the signed record', async () => {
+    mkdirSync(dropDir('lead'), { recursive: true });
+    const planted = { payload: generalBriefRecord({ to: 'lead', root, session: 'acme', at: NOW_ISO }), signature: 'not-a-signature' };
+    const path = join(dropDir('lead'), generalBriefId());
+    writeFileSync(path, `${JSON.stringify(planted, null, 2)}\n`);
+
+    const report = deliverGeneralBrief({ dir, root, session: 'acme', seats: ['lead'], home, at: NOW_ISO });
+    expect(report).toEqual({ deliveries: [{ seat: 'lead', ok: true, id: generalBriefId(), at: NOW_ISO }] });
+    // The name now holds this brief, signed by this checkout's key, and the session records it.
+    expect(recordHolds(path, generalBriefRecord({ to: 'lead', root, session: 'acme', at: NOW_ISO }), home)).toBe(true);
+    expect(readState(dir).sessions.acme?.briefs?.lead).toEqual({ id: generalBriefId(), at: NOW_ISO });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runDrops(['--read', '--seat', 'lead'], io, { home })).toBe(0);
+    expect(io.out).toBe(`${generalBriefBody()}\n`);
+  });
+
+  test('a symbolic link at the brief id is refused and never followed', () => {
+    mkdirSync(dropDir('lead'), { recursive: true });
+    const target = join(base, 'planted.json');
+    const planted = { payload: generalBriefRecord({ to: 'lead', root, session: 'acme', at: NOW_ISO }), signature: 'not-a-signature' };
+    writeFileSync(target, `${JSON.stringify(planted, null, 2)}\n`);
+    const before = readFileSync(target, 'utf8');
+    const path = join(dropDir('lead'), generalBriefId());
+    symlinkSync(target, path);
+
+    const report = deliverGeneralBrief({ dir, root, session: 'acme', seats: ['lead'], home, at: NOW_ISO });
+    expect(report).toEqual({
+      deliveries: [{ seat: 'lead', ok: false, reason: 'a symbolic link was found and not followed' }],
+    });
+    // Neither the link nor its target was touched, and nothing was recorded as delivered.
+    expect(lstatSync(path).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe(before);
+    expect(readState(dir).sessions.acme).toBeUndefined();
   });
 });
 
@@ -318,12 +354,14 @@ describe('team check', () => {
   });
 
   test('a delivered seat is not named, and the human seat reads as delivered too', () => {
+    // The deliveries are real here: the check opens each record and verifies it, so a state
+    // entry alone is not a delivery.
+    deliverGeneralBrief({ dir, root, session: 'acme', seats: ['lead', 'desk'], home, at: NOW_ISO });
     updateState(dir, (state) => {
       state.sessions.acme = {
+        ...state.sessions.acme,
         seats: { lead: { stage: 'ready' as const, pane: 'w1:p1', workspace: 'w1' } },
         worktrees: {},
-        briefs: { lead: { id: generalBriefId(), at: NOW_ISO }, desk: { id: generalBriefId(), at: NOW_ISO } },
-        watch: { pid: 1, heartbeat: NOW_ISO },
       };
     });
     const io = testIo(root, { kind: 'owner' });
@@ -335,5 +373,33 @@ describe('team check', () => {
       home,
     });
     expect(`${io.out}${io.err}`).not.toContain('general seat brief');
+  });
+
+  test('a recorded delivery whose record does not verify is named with the repair', () => {
+    updateState(dir, (state) => {
+      state.sessions.acme = {
+        seats: { lead: { stage: 'ready' as const, pane: 'w1:p1', workspace: 'w1' } },
+        worktrees: {},
+        briefs: { lead: { id: generalBriefId(), at: NOW_ISO } },
+        watch: { pid: 1, heartbeat: NOW_ISO },
+      };
+    });
+    // The state says delivered; the file at the id is a planted envelope the message key never
+    // signed, so the seat would be handed nothing it could read.
+    mkdirSync(dropDir('lead'), { recursive: true });
+    const planted = { payload: generalBriefRecord({ to: 'lead', root, session: 'acme', at: NOW_ISO }), signature: 'not-a-signature' };
+    writeFileSync(join(dropDir('lead'), generalBriefId()), `${JSON.stringify(planted, null, 2)}\n`);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+      live: () => live(),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, home),
+      now: () => NOW,
+      home,
+    });
+    expect(`${io.out}${io.err}`).toContain(
+      "difference: lead: the general seat brief's delivery record does not verify\n  repair: team reload lead or team up\n",
+    );
+    expect(code).toBe(1);
   });
 });

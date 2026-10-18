@@ -94,8 +94,13 @@ The general seat brief is checked against the state's `briefs` too. A seat the s
 one whose record the state's `seats` hold, and a human's once the session has launched anything —
 with no delivery record is `<seat>: the general seat brief has not been delivered`, repaired with
 `team reload <seat> or team up`, or with `team up` alone when the seat is a human's, since
-`team reload` refuses that pane. The repair is a reload or an up, never `--repair`: the difference
-is advice, and the delivery is the launch's own act.
+`team reload` refuses that pane. The state entry is a claim about a file, so the check verifies the
+file rather than the claim: the record at the current brief's id must hold this brief's text and
+this checkout's message key must have signed it (`recordHolds`, `src/send/record.ts`). An entry
+naming another id, or a file there that is missing, unsigned, foreign or another body, is
+`<seat>: the general seat brief's delivery record does not verify`, with the same repair. The
+repair is a reload or an up, never `--repair`: the difference is advice, and the delivery is the
+launch's own act.
 
 ## Who the check answers
 

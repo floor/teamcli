@@ -579,7 +579,7 @@ describe('team reload', () => {
     remember('worker', 'high');
     const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, 'not a record\n');
+    mkdirSync(path);
     const { sources } = harness();
     const io = testIo(root, OWNER);
     const code = await runReload(['worker', '--json'], io, sources);
@@ -588,7 +588,7 @@ describe('team reload', () => {
     const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
     expect(doc).toMatchObject({ status: 'same', seat: 'worker' });
     expect(doc.notes).toEqual([
-      'worker: the general seat brief was not delivered (a file that is not a record already holds that id)',
+      'worker: the general seat brief was not delivered (the record path is a folder)',
     ]);
     expect(logText()).toContain('worker: the general seat brief was not delivered');
   });
