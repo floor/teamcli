@@ -175,6 +175,7 @@ commands read them.
   `cursor` and `antigravity`, each with its own screen reading, unattended flags, login check
   where the CLI offers one, and tested range. The Claude Code profile is tested with CLI
   2.1.288 to 2.1.302. The Antigravity profile is tested with CLI 1.2.16 to 1.4.1.
+  The Codex profile is tested with CLI 0.157.0 to 0.161.0.
 
 - **Jules as a pane seat.** `jules` joins the profiles with its 0.1.42 CLI: a send to a jules seat
   still writes its drop file, and the body is typed through the CLI's own screens, so a new
