@@ -241,7 +241,7 @@ function receiptSoon(w: { root: string; home: string }, over: { seat?: string; s
       session: over.session ?? 'acme',
       at: NOW.toISOString(),
     }, w.home);
-    writeReceipt(dir, receipt);
+    writeReceipt(dir, receipt, w.home);
     clearInterval(timer);
   }, 2);
   return () => clearInterval(timer);

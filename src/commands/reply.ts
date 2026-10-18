@@ -482,7 +482,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     // message it answers. The reply record is the message; a receipt that cannot be written is
     // an annotation missing, not a reply lost, so it changes no exit.
     const receipt = signReceiptPayload({ kind: 'receipt', status: 'replied', id: answered.id, to: me, root, session, at }, host.home);
-    writeReceipt(recordDir(root, session, me), receipt);
+    writeReceipt(recordDir(root, session, me), receipt, host.home);
   } finally {
     lock.release();
   }

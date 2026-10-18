@@ -412,7 +412,7 @@ function writeReadReceipt(home: string, candidate: Candidate, payload: Verified,
       at,
     };
     const signed = signReceiptPayload(receipt, home);
-    const written = writeReceipt(recordDir(root, candidate.session ?? session, candidate.seat), signed);
+    const written = writeReceipt(recordDir(root, candidate.session ?? session, candidate.seat), signed, home);
     if (!written.ok) throw new Error('the read receipt could not be written');
     return;
   }

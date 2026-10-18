@@ -144,7 +144,7 @@ describe('team drops', () => {
       root,
       session: 'acme',
       at: '2026-10-04T09:00:00.000Z',
-    }, home));
+    }, home), home);
     expect(handedOver.ok).toBe(true);
     // A file whose first line is no sender header is still a drop, and its sender is unknown.
     const headlessPath = drop(D_HEADLESS, 'a body with no sender line\n');
@@ -165,7 +165,7 @@ describe('team drops', () => {
       session: 'acme',
       at: '2026-10-04T09:00:00.000Z',
     };
-    const written = writeReceipt(dropDir, signReceiptPayload(receipt, home));
+    const written = writeReceipt(dropDir, signReceiptPayload(receipt, home), home);
     expect(written.ok).toBe(true);
     expect(readRecorded.endsWith(D_RECORD_READ)).toBe(true);
 

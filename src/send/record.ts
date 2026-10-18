@@ -24,7 +24,7 @@ import { type KeyObject } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
-import { messageKeyOf, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
+import { messageKeyOf, messageKeyState, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
 
@@ -436,23 +436,48 @@ export function isRead(dropDir: string, id: string, context: StatusContext, key:
 }
 
 /**
- * Writes one status receipt beside its message. Receipts are write-once: a status already
- * recorded is not rewritten (`held` again is not a new fact), and an existing file at the path
- * is left untouched. Every status has its own name, so a later writer can never overwrite a
- * receipt with a lower status: a second reader of a message that was already read, or answered,
- * adds nothing and the derived status never moves backward.
+ * Writes one status receipt beside its message. Receipts are write-once: a signed receipt that
+ * verifies for this message and status is left as the read that happened first, and is never
+ * rewritten. A file at the name that does not verify — unsigned, unreadable, another message's,
+ * a link — proves nothing, so the signed receipt replaces it; otherwise a planted file could
+ * keep the status at `sent` forever. Every status has its own name, so a later writer can never
+ * overwrite a receipt with a lower status: a second reader of a message that was already read,
+ * or answered, adds nothing and the derived status never moves backward.
  */
-export function writeReceipt(dropDir: string, receipt: SignedReceipt): RecordWrite {
+export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: string): RecordWrite {
   const id = receipt.payload.id;
+  const status = receipt.payload.status;
   if (!recordNameOk(id)) return { ok: false, reason: 'the receipt id cannot be a file name' };
-  const path = receiptFile(dropDir, id, receipt.payload.status);
-  if (heldAt(path).kind !== 'missing') return { ok: true, path, existing: true };
+  const path = receiptFile(dropDir, id, status);
+  if (receivedAt(path, id, status, home)) return { ok: true, path, existing: true };
   try {
-    dropMessage(dropDir, `${id}.${receipt.payload.status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+    dropMessage(dropDir, `${id}.${status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the receipt could not be written' };
   }
   return { ok: true, path };
+}
+
+/** Whether the file at a receipt's name is the signed receipt it claims to be, for this message
+ *  and status: the message key signed it, and it names the same id and status. A link, a file of
+ *  another owner, a file that does not parse and a signature the key refuses are all `false`. */
+function receivedAt(path: string, id: string, status: ReceiptStatus, home: string): boolean {
+  const held = heldAt(path);
+  if (held.kind !== 'file') return false;
+  if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
+  const text = readNoFollow(path);
+  if (text === null) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const existing = signedReceiptOf(parsed);
+  if (existing === null) return false;
+  if (existing.payload.id !== id || existing.payload.status !== status) return false;
+  const key = messageKeyState(home);
+  return key.kind === 'key' && verifyReceipt(existing, key.key);
 }
 
 /**
