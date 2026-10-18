@@ -242,6 +242,29 @@ describe('a delegate entry naming approve', () => {
     expect(io.out).toContain('no differences\n');
   });
 
+  test("a human seat's drop-only word under a team order that lacks drop is no difference: human wins", () => {
+    // The seat walks `drop` alone because it is a person's pane, whatever the inherited order
+    // says, so the resolver's set-aside verdict does not describe its delivery.
+    const humanDrop = [
+      ...HEAD.trimEnd().split('\n'),
+      '    human: true',
+      '    delivery_order: [drop]',
+      'delivery_order: [typed]',
+      '',
+    ].join('\n');
+    const root = place(humanDrop);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({}, io, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('difference:');
+    expect(io.out).toContain('no differences\n');
+  });
+
   test('--json invocation refusals (--json --nope, --nope --json, --json extra, --json=1) emit team.error on stdout', async () => {
     const root = place(CLEAN);
     const cases: Array<[string[], string]> = [
