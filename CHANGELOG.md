@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the JSON channel is `drop`; the leg joins the vocabulary and the default order after
   `typed`, so any level may name it and a seat that declares nothing is typed exactly as before.
   The typed leg stays terminal, and the watch's drop-folder readers follow only typed-leg markers,
-  so a drop-leg file is never typed, retried or announced. A dry run names only the legs it can
+  so a drop-leg file is never typed or retried; `team drops` reads the receiver's own folder, and
+  its `--follow` prints each drop that arrives. A dry run names only the legs it can
   reach: the phrase stops at the first terminal typed leg, and names only the drop channel when
   `drop` leads. A seat the team file marks `human: true` walks no typing leg at all: the typed
   trigger and the native frame are skipped with each one's reason recorded, the walk falls to the
@@ -24,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arrives in the drop file and the pane is never touched; `--wait` is refused for such a seat, and
   the watch types no retry, nudge, work drop or ring there, giving a held drop up with the reason
   instead.
+
+- **`team drops`.** The receiving seat reads its own folder under
+  `.agents/send-drops/<session>/<seat>`: one row per waiting drop, the sender read from the file's
+  first line — `the owner`, a seat's name, the name in the header's parentheses, or `unknown` when
+  that line is no sender header — and the file's absolute path. A drop with an `<id>.read` receipt
+  beside it is read, and is not listed; a name with a dot in it is a sidecar, never a drop. The
+  command only reads: it moves, deletes and marks nothing, and a folder that does not exist yet is
+  an empty one. Only the seat itself, on the pane the state records for it, may run it; the owner,
+  another seat and a seat on another pane are refused. `--follow` prints
+  `from <sender> — <path>` for each drop that appears while it runs — the drops already on disk
+  are waiting, not new — flushed per line for a Monitor in the receiving seat, and Ctrl-C stops it
+  with exit 0. `--json` prints one `team.drops` document; it and `--follow` cannot be combined.
 
 - **The native leg, as a handoff.** When the recipient's CLI carries the cross-session channel and
   the sender's own file declares `cli: claude-code`, a send to the native leg becomes a handoff:
@@ -75,6 +88,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `inbox_read` for each message, then act on what it read.
 
 ### Changed
+
+- **A human seat's pane is never touched, whichever command reaches it.** `up` skips the seat in
+  its plan — no workspace, no launch line, no key — says why, and does not count it short of
+  ready; `down` leaves it running, types no exit line and closes no workspace, even with
+  `--abandon`; `add` and `restart` name one seat and refuse with that reason. `remove` takes the
+  seat out of the file (or marks it stopped under `--keep`) without typing the exit line,
+  pressing a key or closing the pane, which keeps running, and its closing line says why in
+  `down`'s words. `reload` refuses with the reason before the launch record is read; `answer`
+  refuses after the caller admission and before the seat's lock, state or screen is read, and
+  names the spare; `register` adopts the pane as before but writes no rules file and types no
+  rules line, even when a record written before the mark says a trust dialog is waiting. The
+  send daemon refuses a human seat at its own queue — the CLI's walk keeps its typing legs out
+  earlier — so no trigger is typed, no frame is sent and no worker is started.
 
 - The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
   unsent, working, question, permission and exit — are captured as fixtures, the trust dialog is
