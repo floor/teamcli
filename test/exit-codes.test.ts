@@ -3447,13 +3447,14 @@ scene('send.confirmed', async (place) => {
   const host = sendHost(place);
   host.agents = () => [{ name: 'worker', pane: 'w2:p1', cli: 'claude' }];
   host.newId = () => SEND_NATIVE_ID;
+  host.native.paneText = () => `nv-${SEND_NATIVE_ID.replace(/-/g, '').slice(0, 8)}`;
   expect((await sent(place, ['worker', 'hello'], leadSeat, host)).code).toBe(0);
   const ran = await sent(place, ['--confirm', SEND_NATIVE_ID], leadSeat, host);
   expect(ran.code).toBe(0);
   const history = readHistory('acme', place.root, place.home);
   expect(history.ok && history.entries.map((entry) => [entry.outcome, entry.via, entry.ms])).toEqual([['delivered', 'native', 0]]);
   expect(existsSync(pendingPath('acme', place.root, place.home, SEND_NATIVE_ID))).toBe(false);
-  return show(ran, 'worker: confirmed (native, 0 ms)');
+  return show(ran, 'worker: delivered (native, 0 ms)');
 });
 
 async function fed(place: Place, argv: string[]): Promise<Ran> {

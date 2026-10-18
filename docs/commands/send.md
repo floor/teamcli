@@ -284,10 +284,16 @@ delivered`, `via: native`, the span from the handoff to the confirm) and clears 
 Nothing was delivered by the handoff itself, so it exits 0 with status `native`, and the confirm
 is the receipt. A confirm is judged as the handoff was: the pair, the body and the address are
 the record's own, only the sender that printed it may confirm it, and the record is taken before
-the line is written, so a second confirm finds none. A handoff that cannot resolve the
-recipient's live pane or its socket falls back to the typed drop like any other miss, and the
-history line names `native: <reason>` among the failed legs; a pending record that cannot be
-written is a refusal, so an unrecorded native send is never the easy path.
+the line is written, so a second confirm finds none. The confirm reads the visible 40 lines of
+the recipient's pane for the handoff's nonce (`nv-<8 hex>`): when that window shows the nonce it
+records `delivered`, and when the nonce is absent — or has already scrolled off that 40-line
+window — it records `sent (unconfirmed)`. A handoff that goes unconfirmed past ten minutes is
+expired by a running `team watch` on the sender's team, which claims the pending record and walks
+the remaining legs of the recipient's `delivery_order` (`native: unconfirmed after 10m`); without
+a running watch, an unconfirmed record does not fall back and is swept after 24 hours. A handoff
+that cannot resolve the recipient's live pane or its socket falls back to the typed drop like any
+other miss, and the history line names `native: <reason>` among the failed legs; a pending record
+that cannot be written is a refusal, so an unrecorded native send is never the easy path.
 
 [team route](route.md) answers the same pair's rule and the recipient's live pane, and records
 that it handed the address out. Its `session` line is the herdr session the seat runs in — never
