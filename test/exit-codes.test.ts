@@ -2131,7 +2131,10 @@ scene('worktree.default-session', async (place) => {
 });
 scene('worktree.never-approved', async (place) => {
   write(place, worktreeText());
-  return show(await worktree(place, ['new', 'task']), 'never approved');
+  return show(await worktree(place, ['new', 'task'], owner, {
+    ...worktreeSources(place),
+    standing: () => ({ kind: 'refused', why: 'the record cannot be verified' }),
+  }), 'cannot be verified');
 });
 scene('worktree.task', async (place) => {
   approve(place, worktreeText());

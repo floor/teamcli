@@ -3771,7 +3771,7 @@
       "code": 1,
       "command": "worktree",
       "id": "worktree.never-approved",
-      "meaning": "the file was never approved",
+      "meaning": "the standing approval record is legacy or cannot be verified",
       "trigger": "team worktree new task"
     },
     {

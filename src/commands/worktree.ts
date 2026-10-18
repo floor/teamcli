@@ -193,7 +193,10 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     // exit: worktree.default-session
     return 1;
   }
-  if (standing.kind !== 'verified') {
+  // The live file is the record: no stored approval is what every team made after `approve` was
+  // removed has, and it runs (as up, remove and down do). A stored record that is legacy or
+  // cannot be verified still refuses.
+  if (standing.kind !== 'verified' && standing.kind !== 'none') {
     refuse(io, json, 'worktree', { id: 'worktree.never-approved', message: notInForce(standing), repair: null });
     // exit: worktree.never-approved
     return 1;

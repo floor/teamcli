@@ -124,7 +124,6 @@ text — and stderr stays empty. The exit code is the same as without `--json`.
 | ``team worktree: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up` `` | 1 |
 | ``team worktree: the state records pane <pane> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`) `` | 1 |
 | `team worktree: session can't be "default", herdr's own session` | 1 |
-| ``team worktree: the file was never approved on this machine `` | 1 |
 | ``team worktree: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify | 1 |
 | ``team worktree: the approval record cannot be read (<store>/approval.json: "file" is not a string)`` — the record's `file` is not a string; the store refuses it before this command reads a copy | 1 |
 | ``team worktree: the stored copy can't be read `` — a verified record whose stored copy this version can't read, whether or not the fingerprints match | 1 |

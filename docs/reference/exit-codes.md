@@ -544,7 +544,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.kind-required` | `worktree` | 1 | --kind is required | `team worktree new task` |
 | `worktree.limit` | `worktree` | 1 | the worktree limit is reached | `team worktree new task --kind fix` |
 | `worktree.missing` | `worktree` | 1 | no worktree with that name is recorded | `team worktree remove task` |
-| `worktree.never-approved` | `worktree` | 1 | the file was never approved | `team worktree new task` |
+| `worktree.never-approved` | `worktree` | 1 | the standing approval record is legacy or cannot be verified | `team worktree new task` |
 | `worktree.no-pane` | `worktree` | 1 | the state records no pane for the caller's seat | `team worktree new task` |
 | `worktree.occupied` | `worktree` | 1 | a seat is recorded in the worktree | `team worktree remove task` |
 | `worktree.path-kind` | `worktree` | 1 | workspace.path must not contain {kind} | `team worktree new task` |
