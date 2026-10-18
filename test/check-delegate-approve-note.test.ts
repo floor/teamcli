@@ -153,7 +153,7 @@ describe('a delegate entry naming approve', () => {
     expect(code).toBe(1);
   });
 
-  test('a set-aside delivery_order in .agents/team.yaml is reported as a difference for the owner (D4) and validates under --json', () => {
+  test("a set-aside delivery_order in .agents/team.yaml is reported as the lead's difference (D4) and validates under --json", () => {
     const withSetAside = [
       ...HEAD.trimEnd().split('\n'),
       '    delivery_order: [native, typed]',
@@ -171,8 +171,8 @@ describe('a delegate entry naming approve', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('difference: lead: delivery_order [native, typed] in .agents/team.yaml is set aside; [typed] stands\n');
     expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in .agents/team.yaml\n');
-    expect(io.out).toContain('  who: the owner\n');
-    expect(io.out).toContain('1 difference, 1 for the owner\n');
+    expect(io.out).toContain("  who: the team's lead\n");
+    expect(io.out).toContain('1 difference\n');
     expect(io.out).not.toContain('(s)');
 
     const withTwoExtraLegs = [
@@ -217,8 +217,8 @@ describe('a delegate entry naming approve', () => {
     expect(doc.project).toBe('acme');
     expect(doc.session).toBe('acme');
     expect(doc.differences).toHaveLength(1);
-    expect(doc.differences[0]?.who).toBe('the owner');
-    expect(doc.summary).toEqual({ differences: 1, owner_differences: 1 });
+    expect(doc.differences[0]?.who).toBe("the team's lead");
+    expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
   });
 
   test('--json invocation refusals (--json --nope, --nope --json, --json extra, --json=1) emit team.error on stdout', async () => {

@@ -157,7 +157,7 @@ line moves to `warn` when it does not:
 
 Every `warn` is a `warn` and never a `MISS`: it blocks `team answer` and every key `team` could
 send, and leaves the owner's own path through `team up` open. A seat in `trust-sent-recovery` is a
-`warn` with its repair — `warn  <seat>: trust sent; recovery required; the owner runs team up` —
+`warn` with its repair — `warn  <seat>: trust sent; recovery required; a lead runs team up` —
 and the line never claims a trust dialog is still on screen. A seat waiting at any other
 classification prints nothing new here: [team status](status.md) carries it.
 

@@ -949,7 +949,6 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
       out.push({
         what: `delivery_order [${team.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
         repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order in .agents/team.yaml`,
-        owner: true,
       });
     }
   }
@@ -968,7 +967,6 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
       out.push({
         what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
         repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order for ${seat.name} in .agents/team.yaml`,
-        owner: true,
       });
     }
   }

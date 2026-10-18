@@ -449,7 +449,7 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
     const waiting = recorded.waiting;
     if (!waiting) continue;
     if (waiting.state === 'trust-sent-recovery') {
-      findings.push({ level: 'warn', text: `${name}: trust sent; recovery required; the owner runs team up` });
+      findings.push({ level: 'warn', text: `${name}: trust sent; recovery required; a lead runs team up` });
       continue;
     }
     if (waiting.state !== 'waiting-owner' || waiting.classification !== 'trust') continue;

@@ -143,13 +143,13 @@ difference: <what>
 
 The `who` value comes from the closed four-value vocabulary `DIFFERENCE_WHO_VALUES` (`src/output/text.ts`):
 
-- `'the owner'`: only the machine owner at an interactive terminal may run the repair (`team init`, `team add` when gated owner-only, `team grant`, `team delegate`, `team revoke`, `team check --repair`, `team reload` on rules drift, a set-aside `delivery_order` setting in `.agents/team.yaml`, or any pane/file action marked `owner: true` or `approval: true`).
+- `'the owner'`: only the machine owner at an interactive terminal may run the repair (`team init`, `team add` when gated owner-only, `team grant`, `team delegate`, `team revoke`, `team check --repair`, `team reload` on rules drift, or any pane/file action marked `owner: true` or `approval: true`).
 - `"the team's lead"`: the owner or the seat holding `leads: true` on the team (by the `leads` capability, never a role word) may run the repair (`team up`, `team down`, `team restart`, `team remove`, `team answer`, `team watch`, `team worktree`).
 - `'a grant holder'`: the owner or a seat/team holding an active signed grant covering the capability or grant scope (`write`, `read`, `review`, `gate`, `merge`, `deploy`, `act-as`, `use-broker`, or grant scopes `reload`, `swap`, `approve`).
 - `'any seat'`: any registered seat of the team (or the owner) may run the repair (`team register`, `team send`, or seat-record read surfaces `status`, `check`, `messages`, `feed`, `list`, `usage`, `next`).
 
 **Set-aside `delivery_order` settings (`team check`, scene D4)**:
-- When a `delivery_order` / delivery-order setting in `.agents/team.yaml` (at the team, role, or pair level) is set aside because it holds an illegal or empty word (leaving the inherited delivery order in force), `team check` reports it as a `difference:` naming the invalid setting and the standing inherited order, with `repair:` pointing to fixing the `delivery_order` value in `.agents/team.yaml` and `who: the owner`.
+- When a `delivery_order` / delivery-order setting in `.agents/team.yaml` (at the team, role, or pair level) is set aside because it holds an illegal or empty word (leaving the inherited delivery order in force), `team check` reports it as a `difference:` naming the invalid setting and the standing inherited order, with `repair:` pointing to fixing the `delivery_order` value in `.agents/team.yaml` and `who: "the team's lead"` — the repair is a plain file edit that a lead may make, so the repair names no command and the map falls back to the lead.
 
 **Deterministic resolution rule (`whoOfDifference(diff)` and `whoFromCommand(command)`)**:
 The repair names the **first** authority tier that applies:
