@@ -25,10 +25,15 @@ afterEach(() => {
 
 /** The id the fake host mints, so the printed confirm line is exact. */
 const ID = '11111111-1111-4111-8111-111111111111';
+const NONCE = 'nv-11111111';
 
 /** The body a declared seat's send files: its header, then the text. */
 const HELPER_HEADER = "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\n";
 const HELPER_BODY = `${HELPER_HEADER}hello`;
+
+/** The body a native handoff prints and stores: the sender header carries `[nv-<8 hex>]`. */
+const HANDOFF_HEADER = `from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator [${NONCE}]\n\n`;
+const HANDOFF_BODY = `${HANDOFF_HEADER}hello`;
 
 /** A seat caller placed where the state records it: helper on w1:p1 of session acme. */
 function helperCaller(root: string): TestIo {
@@ -110,7 +115,7 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     channel: 'native',
     to: address,
     confirm: `team send --confirm ${ID}`,
-    message: HELPER_BODY,
+    message: HANDOFF_BODY,
     ids: { sent: ID, reply: null },
   });
   // Nothing was delivered by the handoff: no frame, no trigger, no drop file.
@@ -125,7 +130,8 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
   expect(record.from).toBe('helper');
   expect(record.to).toBe('lead');
   expect(record.address).toBe(address);
-  expect(record.body).toBe(HELPER_BODY);
+  expect(record.body).toBe(HANDOFF_BODY);
+  expect(record.nonce).toBe(NONCE);
   expect(record.rule).toBe("a seat to its own team's orchestrator");
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([]);
@@ -139,32 +145,32 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     'team acme, session "acme"\n' +
       'lead: native: nothing was sent; make the call with your own SendMessage, then record it\n' +
       `to: ${address}\n` +
-      `message:\n${HELPER_BODY}\n` +
+      `message:\n${HANDOFF_BODY}\n` +
       `team send --confirm ${ID}\n`,
   );
   expect(existsSync(path)).toBe(true);
 });
 
-test('the confirm writes the one history line and clears the record; a second confirm is refused', async () => {
+test('the confirm with the nonce in the fake transcript records delivered and clears the record; a second confirm is refused', async () => {
   const made = world();
   cleanup = made.cleanup;
   placeHelper(made);
   writeFileSync(join(made.sockets, '222.sock'), '');
-  const pane = scripted(['idle', 'working']);
+  const pane = scripted(['idle', 'working'], `Cross-session message [${NONCE}]: hello`);
   const host = fake(made, { native: pane, newId: () => ID });
 
   expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: confirmed (native, 0 ms)\n');
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: delivered (native, 0 ms)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
       ts: NOW.toISOString(),
       from: 'helper',
       to: 'lead',
-      body: HELPER_BODY,
+      body: HANDOFF_BODY,
       id: ID,
       outcome: 'delivered',
       ms: 0,
@@ -180,7 +186,7 @@ test('the confirm writes the one history line and clears the record; a second co
   const after = readHistory('acme', made.root, made.home);
   expect(after.ok && after.entries.length).toBe(1);
 
-  // Under --json, --confirm emits the team.send action document.
+  // Under --json, --confirm with nonce evidence emits status: "delivered".
   expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
   const confirmJsonIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID, '--json'], confirmJsonIo, host)).toBe(0);
@@ -188,14 +194,88 @@ test('the confirm writes the one history line and clears the record; a second co
     schema: { name: 'team.send', version: 1 },
     format: 1,
     dry_run: false,
-    status: 'confirmed',
-    action_summary: 'lead: confirmed (native, 0 ms)',
+    status: 'delivered',
+    action_summary: 'lead: delivered (native, 0 ms)',
     project: 'acme',
     session: 'acme',
     seat: 'lead',
     channel: 'native',
     ids: { sent: ID, reply: null },
   });
+});
+
+test('confirm without the nonce in the recipient transcript records sent (unconfirmed), never delivered', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working'], 'idle prompt with no cross-session frame');
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+
+  const confirmIo = helperCaller(made.root);
+  expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms)\n');
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      outcome: 'sent (unconfirmed)',
+      ms: 0,
+      via: 'native',
+    },
+  ]);
+
+  // Under --json, --confirm without nonce evidence emits status: "sent (unconfirmed)".
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  const confirmJsonIo = helperCaller(made.root);
+  expect(await runSend(['--confirm', ID, '--json'], confirmJsonIo, host)).toBe(0);
+  expect(JSON.parse(confirmJsonIo.out)).toEqual({
+    schema: { name: 'team.send', version: 1 },
+    format: 1,
+    dry_run: false,
+    status: 'sent (unconfirmed)',
+    action_summary: 'lead: sent (unconfirmed) (native, 0 ms)',
+    project: 'acme',
+    session: 'acme',
+    seat: 'lead',
+    channel: 'native',
+    ids: { sent: ID, reply: null },
+  });
+});
+
+test('a nonce from another handoff in the recipient transcript does not count as evidence for this confirm', async () => {
+  const made = world();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  // Transcript shows another handoff's nonce (nv-99999999), not this handoff's (nv-11111111).
+  const pane = scripted(['idle', 'working'], 'Cross-session message [nv-99999999]: earlier message');
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+
+  const confirmIo = helperCaller(made.root);
+  expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms)\n');
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      outcome: 'sent (unconfirmed)',
+      ms: 0,
+      via: 'native',
+    },
+  ]);
 });
 
 test('only the sender that printed the handoff confirms it, and a dry run writes nothing', async () => {
@@ -283,7 +363,7 @@ test('a registry-resolved spec keeps to_id, spec and resolved through the handof
     lifecycle: 'running',
   });
 
-  const host = fake(made, { native: scripted(['idle', 'working']), newId: () => ID });
+  const host = fake(made, { native: scripted(['idle', 'working'], NONCE), newId: () => ID });
   expect(await runSend(['lead@acme', 'hello'], helperCaller(made.root), host)).toBe(0);
 
   const record = JSON.parse(readFileSync(pending(made), 'utf8')) as Record<string, unknown>;
@@ -300,7 +380,7 @@ test('a registry-resolved spec keeps to_id, spec and resolved through the handof
       to: 'lead',
       spec: 'lead@acme',
       resolved: leadAgent.id,
-      body: HELPER_BODY,
+      body: HANDOFF_BODY,
       id: ID,
       outcome: 'delivered',
       ms: 0,

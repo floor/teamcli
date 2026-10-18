@@ -330,14 +330,14 @@ line on stderr and has none.
 
 | Outcome | Exit | Printed |
 | --- | --- | --- |
-| delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (taken, not yet confirmed)` when the box cleared before the seat showed it acted |
+| delivered | 0 | `<seat>: delivered` on stdout, `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript, or `<seat>: delivered (taken, not yet confirmed)` when the box cleared before the seat showed it acted |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
 | listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat` or `<n> seats` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | native | 0 | `<seat>: native: nothing was sent; make the call with your own SendMessage, then record it`, then the `to:` target, the body and the `team send --confirm <id>` line, on stdout, for a handoff |
-| confirmed | 0 | `<seat>: confirmed (native, <n> ms)` on stdout, for a `--confirm` run |
+| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (native, <n> ms)` on stdout, when `--confirm` runs before the recipient's transcript shows the handoff's nonce |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply within <s>s; a seat which does not accept messages from other sessions holds the frame until a person lets it through` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
 | refused | 1 | `team send: refused: <reason>` on stderr |
@@ -476,20 +476,22 @@ team beacon, session "beacon"
 claude-scribe: native: nothing was sent; make the call with your own SendMessage, then record it
 to: uds:~/cc-socks/4200.sock
 message:
-from the file's seat claude-keeper (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team
+from the file's seat claude-keeper (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team [nv-22222222]
 
 the draft is ready for review
 team send --confirm 22222222-2222-4222-8222-222222222222
 exit 0
 ```
 
-The confirm writes the one history line for the delivery the sender's own call made, with the
-span from the handoff to the confirm, and clears the pending record. A second confirm finds none:
+The confirm checks the recipient's transcript for the handoff's nonce (`nv-22222222`), writes the
+one history line (`delivered` when the transcript shows the nonce, `sent (unconfirmed)` otherwise)
+with the span from the handoff to the confirm, and clears the pending record. A second confirm
+finds none:
 
 ```console caller=claude-keeper
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team beacon, session "beacon"
-claude-scribe: confirmed (native, 0 ms)
+claude-scribe: delivered (native, 0 ms)
 exit 0
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team send: refused: 22222222-2222-4222-8222-222222222222: no pending native record holds that id; nothing was recorded

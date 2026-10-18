@@ -52,7 +52,7 @@
             "answered",
             "recorded",
             "native",
-            "confirmed",
+            "sent (unconfirmed)",
             "dry-run"
           ]
         },

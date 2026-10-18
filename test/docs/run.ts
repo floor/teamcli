@@ -368,6 +368,7 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
         return true;
       },
       status: () => (working ? 'working' : 'idle'),
+      paneText: () => `nv-${SEND_NATIVE_ID.replace(/-/g, '').slice(0, 8)}`,
       wait: async () => {},
     },
     deliver: async () => {
