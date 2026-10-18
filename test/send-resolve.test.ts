@@ -225,6 +225,24 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     }
   });
 
+  test('a roster written before the `leads` capability reaches the lead its file names', () => {
+    // An upgraded 0.3.5/0.4 team: the file names its lead with the legacy `coordinator:` key and
+    // no `leads: true`, and the registry roster written then carries no capability on any line.
+    // The address reads the file's own lead — the seat, never the role word — so the send works
+    // without the role rename.
+    const w = world('alpha', 'alpha', 'steward', [seatBlock('coordinator', 'steward', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'steward', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'steward', session: 'alpha', pane: 'pane-alpha-lead' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [{ agent: lead.id, seat: 'steward', role: 'coordinator', leads: false }]);
+    const never = (): LiveAgent[] => {
+      throw new Error('the live read must not be asked when the record carries a pane');
+    };
+
+    const target = resolveTarget(w.home, 'lead@alpha', { cwd: w.root }, never);
+    if ('error' in target) throw new Error(`lead@alpha did not resolve: ${target.error}`);
+    expect(target.agent.id).toBe(lead.id);
+    expect(target.pane).toBe('pane-alpha-lead');
+  });
+
   test('a nickname answers at a team, and bare in the caller\'s own team; a plain seat still answers', () => {
     const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });

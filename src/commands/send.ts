@@ -1555,7 +1555,7 @@ export function admissionOf(
   // A declared sender's judgement stops at its own team: with no record there is no identity for
   // a rule that crosses teams to read, so a send that would leave stays refused.
   if (record === null && teamOf(judged) !== fileTeamId) return { ok: false, why: noAgentRecord(caller, declared) };
-  const records = admitRecordsOf(home, team, ownTeam);
+  const records = admitRecordsOf(home, team, ownTeam, target);
   // The project level `admitSend` reads: the registered projects, which decide the pairs a
   // project's own rules admit, and the asker's `seats_cross_teams` chain, entity → project →
   // team → seat, which `admitSend` resolves itself (`seatsCrossTeams`). No level's record
@@ -1645,12 +1645,39 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
 }
 
 /** The admission records a send is judged against: every registered team — so a target in another
- *  team is judged by that team's own record — and, over it, this run's team from the live file,
- *  which is the seed the registry projects. The file's project, entity, lead and operator, with
- *  the roster the store holds for that team and the file's own seats behind it; a file seat the
- *  file names as its coordinator carries the `leads` capability there, so the project rules read
- *  the file's own lead off the line the file declares it on. */
-function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeams {
+ *  team is judged by that team's own record — and, over it, the live file of each team of the pair,
+ *  which is the seed the registry projects. The file's project, entity, lead and operator, with the
+ *  roster the store holds for that team and the file's own seats behind it; a file seat the file
+ *  names as its lead carries the `leads` capability there, so the rules read the file's own lead off
+ *  the line the file declares it on, whichever spelling — the `leads` mark, or the legacy
+ *  `coordinator:` key a 0.3.5/0.4 file still uses — named it. The receiving team's file is read for
+ *  the same reason: its registry roster may have been written before the `leads` capability existed,
+ *  so the record alone cannot say who leads it, and a send keyed on the record would refuse a lead
+ *  whose file names one. The role is never read on either side.
+ */
+function admitRecordsOf(home: string, team: TeamFile, teamId: string, target: Target | null): AdmitTeams {
+  const records = readTeams(home);
+  overlayTeam(home, records, team, teamId);
+  if (target !== null) {
+    // The key is the spelling the target's own record uses, exactly as `teamOf` reads it — that is
+    // the record `admitSend` asks for. The caller's team is overlaid above already.
+    const receivingId = target.agent.reach.team;
+    if (receivingId !== teamId) {
+      const receiving = loadTeamFile(target.team.root, { home });
+      if (receiving.ok) overlayTeam(home, records, receiving.team, receivingId);
+    }
+  }
+  return records;
+}
+
+/** One team's live file, laid over the registry's record: the file's project, entity, lead and
+ *  operator, and the roster — the store's agent lines for the team, with the file's own seats
+ *  behind them. A file seat carries `leads` where the file resolved it as the lead (from the
+ *  `leads` mark or the legacy `coordinator:` key alike), so the project rules and the lead rule
+ *  read the file's own place in the chain, never a role's word. An `entity:` the file names wins;
+ *  a file that names none keeps the entity the registry recorded, the precedence the listing and
+ *  the nickname scope read — a key left out of the seed never erases a recorded entity. */
+function overlayTeam(home: string, records: AdmitTeams, team: TeamFile, teamId: string): void {
   // The file's own assistant, by the place the file gives it: the capability rides the seat's
   // line, whether the line comes from the registry or from the file's seats below it.
   const assistantSeat = team.seats.find((seat) => seat.assistant === true)?.name;
@@ -1670,9 +1697,12 @@ function admitRecordsOf(home: string, team: TeamFile, teamId: string): AdmitTeam
       });
     }
   }
-  return {
-    ...readTeams(home),
-    [teamId]: { project: team.project, entity: team.entity, orchestrator: team.orchestrator, operator: team.operator, roster },
+  records[teamId] = {
+    project: team.project,
+    entity: team.entity ?? records[teamId]?.entity ?? null,
+    orchestrator: team.orchestrator,
+    operator: team.operator,
+    roster,
   };
 }
 
