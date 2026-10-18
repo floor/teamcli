@@ -414,7 +414,7 @@ describe('the watch `up` starts', () => {
     // The recorded pane's own call starts in `root` — a different folder from the team file's —
     // and finds the file the record names. Only that file can load: no `team.yaml` is in
     // `.agents`, so a run reading `root` alone would stop at "no team file here".
-    let held: { pid?: number; pane?: string; workspace?: string } | undefined;
+    let held: { pid?: number; heartbeat?: string; pane?: string; workspace?: string } | undefined;
     const pane = testIo(root, { kind: 'pane', pane: 'w3:p1' });
     const ran = await runWatch(['--session', SESSION], pane, watchSources(home, {
       ownPane: () => ({ pane: 'w3:p1', workspace: 'w3' }),
