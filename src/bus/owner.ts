@@ -39,6 +39,17 @@ export const OWNER_MAILBOX = 'owner';
 /** The writer the record names: the Runtime, never a seat. */
 export const OWNER_RECORD_FROM = 'runtime';
 
+/** The shape `ownerDigestId` writes. A digest is a summary of events already delivered, not a
+ *  message: it must never raise `message.arrived` or be batched into a later digest. */
+const OWNER_DIGEST_ID = /^digest-[0-9a-f]{16}$/;
+
+/** Whether a record is one of the Runtime's own owner delivery summaries. The writer is part of
+ *  the identity: a message a seat happens to name `digest-…` still names its seat as `from`, so it
+ *  stays a message. */
+export function isOwnerDigestRecord(id: unknown, from?: unknown): boolean {
+  return typeof id === 'string' && from === OWNER_RECORD_FROM && OWNER_DIGEST_ID.test(id);
+}
+
 const MAX_OWNER_LINE = 500;
 
 export type OwnerDeliveryInput = {
@@ -87,6 +98,11 @@ export class OwnerDelivery {
   onEvent(event: EventPayload): OwnerDeliveryOutcome {
     if (!isOwnerAddressed(event, this.input.team, this.input.chain, this.resolveSeat)) {
       return { addressed: false, notified: false, recorded: false };
+    }
+    // The Runtime's own summaries of earlier deliveries are not news: a rescan of the mailbox (or
+    // a replay of a log that still carries them) must not batch a digest into a digest of itself.
+    if (isOwnerDigestRecord(event.record_id, event.from)) {
+      return { addressed: true, notified: false, recorded: false };
     }
     const text = ownerDeliveryText(event);
     if (!this.atOnce(event)) {

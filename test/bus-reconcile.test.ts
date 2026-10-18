@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readEvents } from '../src/bus/log.ts';
+import { readEvents, type EventPayload } from '../src/bus/log.ts';
+import { OWNER_MAILBOX, OwnerDelivery } from '../src/bus/owner.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { appendHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { markPending } from '../src/send/pending.ts';
@@ -12,6 +14,31 @@ import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
 const dirs: string[] = [];
+
+const SAMPLE_TEAM_YAML = `format: 1
+project: acme
+coordinator: clerk
+operator: op-1
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: clerk
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "4.6"
+    launch: claude
+    leads: true
+  - role: worker
+    name: op-1
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "4.6"
+    launch: claude
+`;
 
 function makeScratch(): { root: string; home: string } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-bus-reconcile-')));
@@ -188,5 +215,92 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.raised.length).toBe(0);
+  });
+
+  test('a digest record raises no message.arrived, so repeated passes over one owner record write exactly one digest', () => {
+    const { root, home } = makeScratch();
+    const parsed = validateTeamFile(SAMPLE_TEAM_YAML);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    // One signed message in the owner's mailbox, written by another seat.
+    plantMessage(home, root, OWNER_MAILBOX, 'msg-owner-1', {
+      kind: 'message',
+      id: 'msg-owner-1',
+      from: 'clerk',
+      to: OWNER_MAILBOX,
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:00:00.000Z',
+      body: 'one note for the owner',
+    });
+    const ownerDir = join(root, '.agents', 'messages', OWNER_MAILBOX);
+    const digests = () => readdirSync(ownerDir).filter((file) => /^digest-[0-9a-f]{16}\.json$/.test(file));
+
+    // Pass one raises the owner message; delivery batches it into the pass's one digest.
+    const first = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:01:00.000Z'),
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.raised.map((r) => `${r.payload.kind}:${r.payload.record_id}`)).toEqual([
+      'message.arrived:msg-owner-1',
+    ]);
+    const notes: string[] = [];
+    const delivery = new OwnerDelivery({
+      root,
+      session: 'acme',
+      team: parsed.team,
+      home,
+      notify: (text) => notes.push(text),
+    });
+    for (const record of first.raised) delivery.onEvent(record.payload);
+    expect(delivery.flush()).toEqual({ addressed: true, notified: false, recorded: true });
+    expect(notes).toEqual([]);
+    expect(digests()).toHaveLength(1);
+
+    // Pass two rescans the mailbox, the digest record included: it raises nothing new, so the
+    // owner's pass has nothing to batch and no second digest appears.
+    const second = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:02:00.000Z'),
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.raised).toHaveLength(0);
+    const replay = new OwnerDelivery({
+      root,
+      session: 'acme',
+      team: parsed.team,
+      home,
+      notify: (text) => notes.push(text),
+    });
+    for (const record of second.raised) replay.onEvent(record.payload);
+    expect(replay.flush()).toBeUndefined();
+    expect(notes).toEqual([]);
+    expect(digests()).toHaveLength(1);
+
+    // A log written before this guard still carries the digest's own `message.arrived`: delivery
+    // drops it rather than summarizing the summary.
+    const stale: EventPayload = {
+      v: 1,
+      seq: 99,
+      ts: '2026-10-18T12:01:00.000Z',
+      session: 'acme',
+      kind: 'message.arrived',
+      record_id: digests()[0]!.replace(/\.json$/, ''),
+      to: OWNER_MAILBOX,
+      from: 'runtime',
+    };
+    expect(replay.onEvent(stale)).toEqual({ addressed: true, notified: false, recorded: false });
+    expect(replay.flush()).toBeUndefined();
+    expect(digests()).toHaveLength(1);
   });
 });

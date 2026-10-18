@@ -50,7 +50,9 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   1. `.agents/send-drops/<session>/<seat>` for drop files (`message.arrived`), `.pending` markers
      (`message.held`), and `.delivered`/`.read`/`.replied` receipts;
   2. `.agents/messages/<seat>` for signed message records (`message.arrived`) and `.read.json`
-     receipts (`message.read`);
+     receipts (`message.read`); an owner digest record the Runtime itself wrote (`from: runtime`,
+     id `digest-<16 hex>`) summarizes events already in the log, so it raises nothing and is never
+     batched into a later digest;
   3. `<storeDir>/messages.jsonl` for message deliveries, reads, replies, holds, and failures;
   4. `.agents/team.state.json` for seat state transitions newer than the seat's last event.
 - Appends any missing event idempotently (keyed by `(kind, record_id, session)`) and fans newly
