@@ -19,12 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a drop-leg file is never typed or retried; `team drops` reads the receiver's own folder, and
   its `--follow` prints each drop that arrives. A dry run names only the legs it can
   reach: the phrase stops at the first terminal typed leg, and names only the drop channel when
-  `drop` leads. A seat the team file marks `human: true` walks no typing leg at all: the typed
-  trigger and the native frame are skipped with each one's reason recorded, the walk falls to the
-  drop leg — added to the walk when the order in force leaves it out — so the message still
-  arrives in the drop file and the pane is never touched; `--wait` is refused for such a seat, and
-  the watch types no retry, nudge, work drop or ring there, giving a held drop up with the reason
-  instead.
+  `drop` leads. A seat the team file marks `human: true` walks the drop leg alone, whatever its
+  order or the default says: the typed trigger, the native frame and the seat's own inbox are
+  kept out, each one's reason recorded on the history line, so the message arrives in the drop
+  file and nothing reaches a pane or an inbox; an expired handoff's fallback walks the same one
+  leg. `--wait` is refused for such a seat, and the watch types no retry, nudge, work drop or
+  ring there, giving a held drop up with the reason instead.
 
 - **`team drops`.** The receiving seat reads its own folder under
   `.agents/send-drops/<session>/<seat>`: one row per waiting drop, the sender read from the file's
@@ -99,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses after the caller admission and before the seat's lock, state or screen is read, and
   names the spare; `register` adopts the pane as before but writes no rules file and types no
   rules line, even when a record written before the mark says a trust dialog is waiting. The
-  send daemon refuses a human seat at its own queue — the CLI's walk keeps its typing legs out
+  send daemon refuses a human seat at its own queue — the CLI's walk takes the drop leg alone
   earlier — so no trigger is typed, no frame is sent and no worker is started.
 
 - The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
