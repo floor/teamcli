@@ -214,6 +214,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity under the seat's lock and refuses the same state the typed leg and the daemon refuse —
   no line typed, no Enter, the reason said — and the drop file stays for a person to send again.
 
+### Known limits
+
+- The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
+  0.5.2.
+
 ## [0.5.0] - 2026-10-18
 
 The first release since 0.3.5, and the first on npm since it. The file in the clone is the
