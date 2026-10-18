@@ -193,11 +193,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they act on and refuse a human pane, so a human seat's record comes from `up` alone. Nothing is
   typed into any pane. The text is the package's own, embedded from its accepted source; the
   record's id is derived from the text, so the same brief has one id in every seat's folder and a
-  second run leaves the first record and its time as they are. The session's state records each
-  delivery, and `team check` names a launched seat with no delivery record, with its repair.
+  second run leaves a verified record and its time as they are. A file already at that id that
+  does not verify is replaced through the signed record writer, and a link, a folder or a FIFO
+  there is refused, never followed. The session's state records each delivery, and `team check`
+  opens and verifies the delivered record, naming a launched seat whose record is missing or does
+  not verify, with its repair.
   `bun run brief:check` fails unless the embedded text still hashes to its pinned value, and given
   the source it compares the two byte for byte and names the first line that differs; CI runs the
   pin.
+
+- **The command guard a `claude-code` seat carries.** The per-launch settings file a claude-code
+  seat loads now carries a shipped `PreToolUse` hook, run by this install's own interpreter
+  before every `Bash` tool call, that denies a conservative set of commands and hands the model
+  one line of guidance back instead: `chmod` and `chown`, `sudo`, a recursive `rm`, `pkill`,
+  `killall` and a `kill` that asks for `SIGKILL`, a `curl` or `wget` download piped into a shell,
+  a forced git push (`--force`, `-f`, a `+` refspec), `git reset --hard`, a destructive `git
+  clean` (`-f` with `-x` or `-d`), a forced branch deletion (`-D`, or `-d -f`), `dd` and `mkfs`,
+  `shutdown`, `reboot`, `launchctl`, `crontab` and `npm publish`. It judges commands, never
+  words: a sentence in a quote, a heredoc body and a send body are arguments to the command that
+  carries them, while unquoted `;`, `&`, newlines and pipes separate a line into commands judged
+  one by one; a leading assignment and the prefixes that run another command (`env`, `command`,
+  `exec`, `nohup`, `nice`, `time`, `timeout`, `stdbuf`) are read through to it, and `xargs` and
+  `find -exec` are judged as the command they carry. `command -v` asks where a name is and
+  passes, and a payload the hook cannot read is left to the CLI, so a CLI that changes its
+  payload never freezes a seat. The hook never asks — it allows a command or denies it — and a
+  deny wins over the owner's user-wide ask, measured on Claude Code 2.1.302, so an unattended
+  seat does not freeze at a permission prompt it cannot answer. A human seat carries no guard,
+  because a human's pane is never launched into, and neither does a seat whose launch line names
+  its own settings file: the guard rides the one TeamCLI writes. Each deny raises
+  `security.refused` with the command's class as the rule and the seat as the object, never the
+  command line, which may hold a secret. It is a best-effort net against an unattended prompt,
+  not a sandbox: a shell can always reach a command another way, deliberate evasions are out of
+  scope, and the climb of an unanswered prompt to the lead and the owner is the backstop.
+
+- **Readable sender names.** A team file or a seat may write `sender_name` — `auto`, `nickname`,
+  `seat` or `seat@team` — and every sender headline TeamCLI prints by hand reads by the word in
+  force: the first line of a drop file, the FROM cell of `team drops` and `team messages`, the
+  SEAT cell of `team feed`, and the display name a claude-code seat's session is launched with
+  (`--name`). The default, `auto`, reads a sender inside its own team as its nickname (the seat
+  name when the file writes none) and one from another team as `seat@team`, because a nickname is
+  unique only inside one team; `nickname` always reads the nickname, `seat` always the seat name,
+  and `seat@team` always the address. The word is read nearest first — the reading seat's own
+  word, then the team file's, then the project's registry record, then `auto` — so one team's
+  file decides how senders read to it. It changes presentation only: every signed record keeps
+  the seat in `from` and the registry id in `from_id`, and the `--json` readings keep the
+  record's own fields. A feed line records the sender's team with the send, so a sender from
+  another team reads by its address and never as a local nickname of the same name; a line
+  written before that field reads as the plain seat name. A registry that cannot answer is no
+  answer: the seat name stands.
 
 ### Changed
 
