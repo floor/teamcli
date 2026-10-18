@@ -79,12 +79,17 @@ describe('senderDisplayName', () => {
     expect(senderDisplayName({ seat: 'helper', id: 'agt_2b3c4d5e6f70' }, naming('auto'))).toBe('helper@labs');
   });
 
-  test('an unregistered team is no answer, and the sender reads inside the reader’s team', () => {
-    // The fixture's records can carry a `reach.team` that names a project the registry does not
-    // hold; a roster line, when one answers, is the reading that stands — here the sender's own
-    // team's line, so the nickname (or the seat name) is what a person reads.
-    const stray = { seat: 'builder', team: 'unheard-of', id: 'agt_1a2b3c4d5e6f' };
-    expect(senderDisplayName(stray, naming('auto'))).toBe('builder');
+  test('an unregistered team is no answer, and the id’s roster line is the team that stands', () => {
+    // The record can carry a team id this machine's registry does not hold (a `reach.team` naming
+    // a project, say). The registry id is unique across the registry, so its roster line names
+    // both the team and the nickname — the stale team field does not hide it. The fixture's line
+    // carries a nickname, so the two orders read differently and the scene proves which one wins.
+    const stray = { seat: 'orchestrator', team: 'unheard-of', id: 'agt_0f1e2d3c4b5a' };
+    expect(senderDisplayName(stray, naming('auto'))).toBe('Atlas');
+    // The same sender read from another team is its address, resolved through the id's team.
+    expect(senderDisplayName(stray, naming('auto', LABS))).toBe('orchestrator@floor');
+    // A sender the id answers for in no roster falls back to its own team field, as before.
+    expect(senderDisplayName({ seat: 'builder', team: 'unheard-of', id: 'agt_ffffffffffff' }, naming('auto'))).toBe('builder');
   });
 
   test('a seat name two teams hold and no id to tell them apart reads as the seat alone', () => {

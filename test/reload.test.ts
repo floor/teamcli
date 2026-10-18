@@ -457,6 +457,22 @@ describe('team reload', () => {
     expect(logText()).toContain('grant [grant] lead reload: worker model');
   });
 
+  test('a relaunch names the seat\'s claude session the way up, add and restart do', async () => {
+    remember('worker', 'low');
+    const { sources, closed, commands } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code, io.err).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    expect(commands).toHaveLength(1);
+    // The file's own launch line, with the seat's readable name appended: a session reloaded by
+    // this command shows the same name in its prompt box and on the messages it receives that a
+    // fresh `up` would have given it. The fixture's seat writes no nickname, so `auto` reads the
+    // seat name.
+    expect(commands[0]).toContain('--model claude-opus-5-5');
+    expect(commands[0]).toContain('--name worker');
+  });
+
   test('a granted reload of another seat logs the grant and the difference', async () => {
     remember('lead', 'low');
     remember('worker', 'low');

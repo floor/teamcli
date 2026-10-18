@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import {
   daemonDropDir,
   startSendDaemon,
@@ -195,6 +196,8 @@ describe('the send daemon\'s boundaries', () => {
         id: expect.any(String),
         outcome: 'unreachable',
         ms: expect.any(Number),
+        // The line names the team the send left, so a feed can read the sender across teams.
+        from_team: teamIdOf(world.root),
         // The walk reached the typed leg through the inbox ahead of it, and the history line
         // carries what that leg said: no inbox server is listening for the seat. The native leg
         // is never part of an order in force, so it is not walked and nothing about it is said.

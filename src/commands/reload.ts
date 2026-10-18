@@ -51,6 +51,8 @@ import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
@@ -509,6 +511,20 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
       rules: rulesOf(team, seat, root),
+      // The same session display name a fresh `up` gives the seat: a relaunched claude session
+      // reads its sender like every other surface, and a reload is how most seats get relaunched.
+      sessionName: sessionDisplayName({
+        seat: seat.name,
+        nickname: seat.nickname ?? null,
+        team: teamIdOf(root),
+        teamName: team.project,
+        mode: senderNameModeFor({
+          ...(home === undefined ? {} : { home }),
+          root,
+          seat: seat.name,
+          file: team,
+        }),
+      }),
       // The same delivery a fresh `up` gives the seat: a message seat needs its per-seat file
       // and the one line to read, written and typed by the host below; an option seat needs
       // nothing here (its rules ride the launch line).

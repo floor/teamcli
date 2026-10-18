@@ -831,6 +831,10 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
           // record it answers. Present on every line a send of this version writes.
           thread: { type: 'string' },
           in_reply_to: { type: 'string' },
+          // The team the sender stood in, by team id, on a line a send of this version wrote: the
+          // feed reads a cross-team sender by its address from it, and prints the plain seat name
+          // for a line without one.
+          from_team: { type: 'string' },
           // Present only on a line the sender measured, as the history log writes it.
           ms: { type: 'number' },
           via: { type: 'string' },

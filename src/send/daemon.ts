@@ -35,6 +35,7 @@ import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
@@ -808,8 +809,14 @@ async function executeQueuedSend(
   const body = request.body;
   const msgId = request.id ?? randomUUID();
   // The address as written and the id it resolved to, when the caller wrote a form rather than
-  // the seat's own name: every history line this send writes keeps them beside `to`.
-  const sentAs: Pick<HistoryEntry, 'spec' | 'resolved'> = { spec: request.spec, resolved: request.resolved };
+  // the seat's own name: every history line this send writes keeps them beside `to`. The
+  // sender's team rides with them — the daemon serves the caller's own team, so the root it was
+  // started under is where the sender stands.
+  const sentAs: Pick<HistoryEntry, 'spec' | 'resolved' | 'from_team'> = {
+    spec: request.spec,
+    resolved: request.resolved,
+    from_team: teamIdOf(root),
+  };
   // Send to outcome is measured from here: the daemon's own handling, not the requester's wait.
   const startedAt = Date.now();
   const configured = team.seats.find((s) => s.name === seatName);
@@ -1127,7 +1134,7 @@ async function executeSocketSend(
   host: DaemonHost,
   alive: (pid: number) => boolean,
   /** The address as written, when it was a form: every history line carries it beside the seat. */
-  sentAs: Pick<HistoryEntry, 'spec' | 'resolved'>,
+  sentAs: Pick<HistoryEntry, 'spec' | 'resolved' | 'from_team'>,
 ): Promise<DaemonSendResponse> {
   // While SOCKET_SEND is off, the daemon serves no waited send: the frame the reply would ride
   // is one this build does not write, and a caller asking for one anyway — an older CLI — is

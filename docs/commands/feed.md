@@ -9,28 +9,33 @@ Each completed `team send` run (`delivered`, `delivered (read)`, `sent (unconfir
 `answered`, `held`, `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
 line to `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
 
-The last eight fields are optional. `thread` is the first message's id, carried on every line of
-one conversation; `in_reply_to` is the id of the record a reply answers, absent on the message
-that opened the thread. `spec` is the address the sender wrote when it was a form
-rather than the seat's own name — a `@<nickname>`, a `<seat|nickname>@<team>`, `lead@<team>`, or
-an agent id — and `resolved` is the registry id (`agt_…`) that address resolved to; the two are written
-together, and `to` is that seat either way. `ms` is the whole milliseconds from send to outcome,
-written when the send measured it, and `via` is the path the message actually travelled — `typed`
-(a composer trigger), `socket` (a frame), or `mcp-inbox` (the seat's own inbox, where the message
-is still the signed record) — absent when it never left the sender. `failed` names
-the delivery legs a send walked past, each as `<leg>: <reason>`: the legs of the seat's delivery
-order that definitely could not take the send — the ones a walk passed before the leg that took
-it, or every leg that failed on a walk that ran out of legs — `native` (recorded `unavailable`
-while no socket write is made) or `mcp-inbox` (recorded `no live inbox listener` when no server
-is serving that seat's inbox, and `no receipt within 10m` on the watch's later typed line for a
-message the seat's client left unread past the fallback window) in this
-build. It is absent when no leg failed, and a line that has none of the six, from a build older
-than these fields, carries the six required fields alone. `note` is the short qualifier the
-outcome word cannot carry alone: a delivered send whose box cleared before herdr's status or the
-transcript showed the seat act reads `taken, not yet confirmed`, and the sign that the seat acted
-is read later — a later line for the same id reads `taken but never acted on` when that sign
+The fields after `outcome` are optional. `from_team` is the sending team's registry id, written by
+the send run (and by `--record`, `--confirm`, `reply` and the daemon) on the line it appends; a
+receipt line for the same id that carries none takes it from the send's own line when the feed
+merges them. It is what lets the SEAT cell tell a sender from another team apart from a local seat
+of the same name, and a line written by a build before this field carries none. `thread` is the
+first message's id, carried on every line of one conversation; `in_reply_to` is the id of the
+record a reply answers, absent on the message that opened the thread. `spec` is the address the
+sender wrote when it was a form rather than the seat's own name — a `@<nickname>`, a
+`<seat|nickname>@<team>`, `lead@<team>`, or an agent id — and `resolved` is the registry id
+(`agt_…`) that address resolved to; the two are written together, and `to` is that seat either
+way. `ms` is the whole milliseconds from send to outcome, written when the send measured it, and
+`via` is the path the message actually travelled — `typed` (a composer trigger), `socket` (a
+frame), or `mcp-inbox` (the seat's own inbox, where the message is still the signed record) —
+absent when it never left the sender. `failed` names the delivery legs a send walked past, each as
+`<leg>: <reason>`: the legs of the seat's delivery order that definitely could not take the send —
+the ones a walk passed before the leg that took it, or every leg that failed on a walk that ran
+out of legs — `native` (recorded `unavailable` while no socket write is made) or `mcp-inbox`
+(recorded `no live inbox listener` when no server is serving that seat's inbox, and `no receipt
+within 10m` on the watch's later typed line for a message the seat's client left unread past the
+fallback window) in this build. It is absent when no leg failed, and a line that has none of
+these fields, from a build older than them, carries the six required fields alone. `note` is the
+short qualifier the outcome word cannot carry alone: a delivered send whose box cleared before
+herdr's status or the transcript showed the seat act reads `taken, not yet confirmed`, and the
+sign that the seat acted is read later — a later line for the same id reads `taken but never
+acted on` when that sign
 never came. The table shows `ms` and `via` with the outcome in the KIND column, `delivered (via
 socket in 812 ms)`, and carries `spec`, `resolved`, `failed`, `note`, `thread` and `in_reply_to`
 in the `--json` event, since the plain row keeps the channel that took the send.
@@ -83,7 +88,7 @@ summary line, `<n> event` or `<n> events`. The table's columns are:
 | --- | --- |
 | TIME | when the entry was written, `HH:MM:SS` |
 | KIND | the send outcome, with `via <path>` and `in <n> ms` when the send measured them |
-| SEAT | `<from> -> <to>`; the sender reads as the project's [`sender_name`](../team-file.md#sender_name) word asks, and `--json` keeps the line's own `from` |
+| SEAT | `<from> -> <to>`; the sender reads as the project's [`sender_name`](../team-file.md#sender_name) word asks, resolved through the team the line records for it, and `--json` keeps the line's own `from`. A line that records no sender team — one a build before this field wrote — reads as the plain seat name, never as a local nickname for a sender that was not local |
 | DETAIL | the body, folded to one line; a reply opens with `re <id>: `, the record it answers |
 
 An empty history prints the context line and `0 events` — no table. `--follow` prints one
@@ -106,14 +111,14 @@ prints the update when it arrives, because it is new information.
 
 With `--json` the run prints one pretty-printed `team.feed` document:
 
-    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","status":"<sent|held|delivered|read|replied>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>"],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}]}
+    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","status":"<sent|held|delivered|read|replied>","spec":"<address as written>","resolved":"<agt-id>","from_team":"<team-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>"],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}]}
 
 `project` and `session` are `null` when the run names no single team. `status` is derived from the
 outcome, never stored: `delivered (read)` is `read`, `delivered` is `delivered`, `held` is `held`,
 `answered` is `replied`, and every other outcome — a `sent (unconfirmed)` send, a `timeout`, a
-`not-submitted`, an `unreachable`, a `refused` — is `sent`. `ms`, `via`, `failed`, `note`, `thread`
-and `in_reply_to` appear on an event only when the history line carries them. The schema is
-published at `schema/feed.schema.json`.
+`not-submitted`, an `unreachable`, a `refused` — is `sent`. `spec`, `resolved`, `from_team`, `ms`,
+`via`, `failed`, `note`, `thread` and `in_reply_to` appear on an event only when the history line
+carries them. The schema is published at `schema/feed.schema.json`.
 
 ## Examples
 
