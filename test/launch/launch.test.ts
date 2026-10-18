@@ -91,7 +91,6 @@ describe('the rules of a seat', () => {
     expect(seatRules(rulesInput)).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
-      'If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.',
       'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
       'In a protected checkout, never switch the branch, reset or commit.',
       'Run the tests your change touches, not the whole suite.',
@@ -102,19 +101,33 @@ describe('the rules of a seat', () => {
     ]);
   });
 
+  test('the inbox sentence is asked only of a seat whose CLI registers the inbox', () => {
+    const withInbox = seatRules({ ...rulesInput, inbox: true });
+    expect(withInbox.slice(0, 4)).toEqual([
+      'End every commit message and every pull request body with your signature, given below.',
+      'Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
+      'If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.',
+      'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
+    ]);
+    // A seat whose CLI carries no measured route is asked for nothing: its rules are the ones
+    // earlier builds wrote, byte for byte.
+    expect(seatRules(rulesInput)).toEqual(seatRules({ ...rulesInput, inbox: false }));
+    expect(seatRules(rulesInput).some((line) => line.includes('inbox_check'))).toBe(false);
+  });
+
   test('a shared seat gets no worktree rule, and the position is said as the file has it', () => {
     const rules = seatRules({
       ...rulesInput,
       signature: { ...rulesInput.signature, commitPosition: 'last-line' },
       workspace: { mode: 'shared', protected: [] },
     });
-    expect(rules).toHaveLength(8);
-    expect(rules[6]).toStartWith('Your signature in a commit message, as its last line: ');
+    expect(rules).toHaveLength(7);
+    expect(rules[5]).toStartWith('Your signature in a commit message, as its last line: ');
   });
 
   test('are one text, a rule per line', () => {
     const text = rulesText(rulesInput, 'message');
-    expect(text.split('\n')).toHaveLength(12);
+    expect(text.split('\n')).toHaveLength(11);
     expect(text).toStartWith('Rules for this session, from the team file:\n- End every commit');
   });
 
