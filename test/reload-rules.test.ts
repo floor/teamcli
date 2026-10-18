@@ -120,16 +120,27 @@ function driftRules(): string {
   return path;
 }
 
-function harness(options: { recordedText?: string; recordedStatus?: string } = {}): {
+/** The state folder's log, or empty when this run wrote none. */
+function logText(): string {
+  try {
+    return readFileSync(join(dir, 'team.log'), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function harness(options: { recordedText?: string; recordedStatus?: string; readback?: 'mismatch' } = {}): {
   sources: ReloadSources;
   closed: string[];
   commands: string[];
   typed: string[];
+  keys: string[];
 } {
   const panes = new Map<string, string>([['worker-pane', options.recordedText ?? GEMINI_IDLE]]);
   const closed: string[] = [];
   const commands: string[] = [];
   const typed: string[] = [];
+  const keys: string[] = [];
   let clock = NOW.getTime();
   let status = options.recordedStatus ?? 'idle';
   let n = 0;
@@ -165,7 +176,14 @@ function harness(options: { recordedText?: string; recordedStatus?: string } = {
     paneText: (_session, pane) => panes.get(pane) ?? null,
     typeText(_session, pane, text) {
       typed.push(pane);
-      panes.set(pane, geminiTyped(text));
+      // The box the pane draws after the typing: the exact echo, or one character off — the
+      // read-back stop the delivery refuses on, then clears with the profile's one key.
+      panes.set(pane, geminiTyped(options.readback === 'mismatch' ? `${text.slice(0, -1)}!` : text));
+      return true;
+    },
+    sendKey(_session, pane, key) {
+      keys.push(key);
+      panes.set(pane, GEMINI_IDLE);
       return true;
     },
     pressEnter(_session, pane) {
@@ -181,7 +199,7 @@ function harness(options: { recordedText?: string; recordedStatus?: string } = {
     },
     now: () => new Date(clock),
   };
-  return { sources: { launch, home, now: () => new Date(clock) }, closed, commands, typed };
+  return { sources: { launch, home, now: () => new Date(clock) }, closed, commands, typed, keys };
 }
 
 beforeEach(() => {
@@ -272,5 +290,41 @@ describe('team reload and a drifted rules file', () => {
     expect({ code, err: io.err }).toEqual({ code: 1, err: 'team reload: worker is working; nothing closed\n' });
     expect(closed).toEqual([]);
     expect(typed).toEqual([]);
+  });
+
+  test('a failed read-back prints and logs the refusal, and clears the line it typed', async () => {
+    forget('worker');
+    driftRules();
+    // The replacement pane draws the typed line one character off: the delivery withholds Enter
+    // by design, and this run must say so, log it, and clear what it typed.
+    const { sources, closed, keys } = harness({ readback: 'mismatch' });
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    const refusal = 'worker: left out: rules typed, not sent: the read-back didn\'t match; '
+      + 'the line team typed was cleared (Ctrl-C); run up again';
+    expect(code).toBe(1);
+    // The record reaches the terminal in up's own words, and the run keeps its own refusal too.
+    expect(io.out).toContain(`${refusal}\n`);
+    expect(io.err).toContain('team reload: the close happened and the new launch did not reach ready\n');
+    // The profile's one clearing key went out, once, into the pane this run typed into.
+    expect(keys).toEqual(['ctrl+c']);
+    expect(closed).toEqual(['worker-ws']);
+    // The log keeps the same words the terminal was given.
+    expect(logText()).toContain(`reload [owner] ${refusal}`);
+    // The seat is left out at its name: no ready record was written for it.
+    expect(readState(dir).sessions.alpha?.seats.worker).toMatchObject({ stage: 'named' });
+  });
+
+  test('a delivery that reads back is unchanged: no refusal is said or logged', async () => {
+    forget('worker');
+    driftRules();
+    const { sources, keys } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect({ code, err: io.err }).toEqual({ code: 0, err: '' });
+    expect(io.out).not.toContain('left out');
+    expect(keys).toEqual([]);
+    expect(readState(dir).sessions.alpha?.seats.worker).toMatchObject({ stage: 'ready' });
+    expect(logText()).not.toContain('left out');
   });
 });

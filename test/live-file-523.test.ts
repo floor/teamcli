@@ -263,7 +263,16 @@ describe('reload preserves work without an approved copy', () => {
       expect(made.commands).toEqual([]);
       expect(readFileSync(file, 'utf8')).toBe(before);
       expect(readState(dir)).toEqual(state);
-      expect(existsSync(join(dir, 'team.log'))).toBe(false);
+      if (late) {
+        // The close path's refusal is said and logged, the way `up` says a seat it leaves out.
+        const record = kind === 'working' || status === 'working'
+          ? 'worker: left out: is working; nothing closed'
+          : 'worker: left out: holds unsent text; nothing closed';
+        expect(io.out).toContain(`${record}\n`);
+        expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain(`reload [owner] ${record}`);
+      } else {
+        expect(existsSync(join(dir, 'team.log'))).toBe(false);
+      }
       noApproval();
     });
   }

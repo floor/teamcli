@@ -281,7 +281,9 @@ describe('the close re-reads herdr', () => {
     expect(code, io.out + io.err).toBe(1);
     expect(io.err).toContain('the seat changed before it closed');
     expect(closed).toEqual([]);
-    expect(logText()).toBe('');
+    // The refusal is said and logged, the way `up` says a seat it leaves out.
+    expect(io.out).toContain('worker: left out: is working; nothing closed\n');
+    expect(logText()).toContain('reload [owner] worker: left out: is working; nothing closed');
     expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
   });
 
@@ -293,7 +295,8 @@ describe('the close re-reads herdr', () => {
     expect(code, io.out + io.err).toBe(1);
     expect(io.err).toContain('the seat changed before it closed');
     expect(closed).toEqual([]);
-    expect(logText()).toBe('');
+    expect(io.out).toContain('worker: left out: the process in its pane is not the one team launched; nothing closed\n');
+    expect(logText()).toContain('reload [owner] worker: left out: the process in its pane is not the one team launched; nothing closed');
     expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
   });
 });

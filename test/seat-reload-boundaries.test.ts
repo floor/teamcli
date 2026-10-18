@@ -199,7 +199,9 @@ describe('team reload boundaries', () => {
       expect(code).toBe(1);
       expect(io.err).toBe('team reload: the seat changed before it closed; nothing relaunched\n');
       expect(closed).toEqual([]);
-      expect(logText()).toBe('');
+      // The refusal is said and logged, the way `up` says a seat it leaves out.
+      expect(io.out).toContain('worker: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status\n');
+      expect(logText()).toContain('reload [owner] worker: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status');
       const stored = readState(dir).sessions.alpha?.seats.worker;
       expect({ stage: stored?.stage, effort: stored?.effort }).toEqual({ stage: 'ready', effort: 'low' });
     }
@@ -218,7 +220,9 @@ describe('team reload boundaries', () => {
     expect(code).toBe(1);
     expect(io.err).toBe('team reload: the seat changed before it closed; nothing relaunched\n');
     expect(closed).toEqual([]);
-    expect(logText()).toBe('');
+    // The refusal is said and logged, the way `up` says a seat it leaves out.
+    expect(io.out).toContain('worker: left out: is working; nothing closed\n');
+    expect(logText()).toContain('reload [owner] worker: left out: is working; nothing closed');
     const stored = readState(dir).sessions.alpha?.seats.worker;
     expect({ stage: stored?.stage, effort: stored?.effort }).toEqual({ stage: 'ready', effort: 'low' });
   });
