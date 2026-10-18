@@ -3401,6 +3401,26 @@ scene('send.listed', async (place) => {
   write(place, TEAM);
   return show(await sent(place, ['--list'], owner, sendHost(place)), '  lead  -         coordinator  acme     socket');
 });
+scene('send.answered', async (place) => {
+  write(place, TEAM);
+  const sentId = '44444444-4444-4444-8444-444444444444';
+  plantRecord(place.home, place.root, 'acme', 'owner', 'reply-1', 'the answer', {
+    from: 'lead',
+    at: NOW.toISOString(),
+    thread: sentId,
+    in_reply_to: sentId,
+  });
+  const host = sendHost(place);
+  host.sendId = () => sentId;
+  host.waitMs = 0;
+  return show(await sent(place, ['lead', 'hello', '--wait'], owner, host), 'lead: answered\nthe answer');
+});
+scene('send.timeout', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  host.waitMs = 0;
+  return show(await sent(place, ['lead', 'hello', '--wait', '--timeout', '10'], owner, host), 'lead: timeout: sent, no reply on the thread within 10s; the thread stays open');
+});
 
 /** The file's lead seat, registered and rostered: `route` hands out addresses from the registry
  *  only, so its scenes give the registry the record `up` would have written. */
@@ -4285,12 +4305,7 @@ for (const [name, command, args, invalidArgs] of [
   scene('reply.usage', async (place) => show(await replied(place, []), '<id> is required'));
 }
 
-// Ids whose site is reachable but whose scene no longer is: send.answered and send.timeout sit
-// behind the socket leg, which no path dials while SOCKET_SEND (src/send/uds.ts) is off — the
-// --wait refusal in front of them returns first, so no scene can produce their codes. Their rows
-// and sites stay for the native leg's return; when it lands, un-defensive them and restore the
-// scenes beside send.listed.
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'send.answered', 'send.timeout']);
+const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
 
 const contract = loadContract();
 if (wanted !== null) {

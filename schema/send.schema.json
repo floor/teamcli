@@ -124,6 +124,12 @@
             }
           }
         },
+        "thread": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reply": {
           "type": "string"
         },

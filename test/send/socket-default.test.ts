@@ -215,21 +215,19 @@ describe('team send: a typed send with no socket at all', () => {
   });
 });
 
-describe('team send: --wait to a Claude Code seat is refused', () => {
-  test('the refusal comes first, and nothing is typed or dialed', async () => {
+describe('team send: --wait to a Claude Code seat never dials the socket', () => {
+  test('the send walks the delivery order, dials no socket, and waits on the thread', async () => {
     const { root, sockets } = world();
-    const host = claudeHost(sockets, ['idle', 'working']);
+    const host = { ...claudeHost(sockets, ['idle', 'working']), waitMs: 0 };
     const io = owner(root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
-    // The frame a --wait waits on is the socket's, and this build writes none: the run is
-    // refused before any socket or pane is touched, and it is never rerouted to the typed
-    // trigger — a typed fallback could deliver a message no reply can come back from.
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg first, and its delivery order is mcp-inbox, typed; nothing was sent\n');
+    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.socketsTried).toEqual([]);
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
+    expect(host.frames).toEqual([]);
+    expect(host.pane.typed.length).toBe(1);
+    expect(host.pane.enters).toBe(1);
   });
 });

@@ -150,28 +150,24 @@ function claudeHost(sockets: string, samples: string[], screens?: string[]): Fak
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
 describe('team send: a --wait frame cannot land at a dialog', () => {
-  test('--wait is refused before the frame: the pane is never read for the dialog', async () => {
+  test('--wait never sends a socket frame while SOCKET_SEND is off: it walks the typed leg and waits on the thread', async () => {
     const { root, sockets, home } = world();
-    // A plain file at the measured name stands in for the live socket, and the pane would hold
-    // the held-message dialog on its second read: with the socket off, neither is consulted.
     writeFileSync(join(sockets, '222.sock'), '');
-    const host = claudeHost(sockets, ['idle'], [QUIET, HELD_WRAPPED]);
+    const host = { ...claudeHost(sockets, ['idle', 'working'], [QUIET, QUIET]), waitMs: 0 };
     const io = owner(root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg first, and its delivery order is mcp-inbox, typed; nothing was sent\n');
-    expect(io.err).not.toContain('held');
+    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.frames.length).toBe(0);
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
     const read = readHistory('acme', root, home);
-    // A refusal writes nothing down: no held frame exists, so the history has no line for one.
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.entries).toEqual([]);
+    expect(read.entries).toHaveLength(1);
+    expect(read.entries[0]?.outcome).toBe('timeout');
+    expect(read.entries[0]?.via).toBe('typed');
   });
 });
 

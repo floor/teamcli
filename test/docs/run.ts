@@ -3,7 +3,7 @@
 // home. A `$ ` line is run, the lines under it must match byte for byte — so a fixture value
 // derived from a path's length (a size, a count, a width) must canonicalize the path first: the
 // temp home differs in length macOS vs Linux (TMPDIR=<short dir> reproduces ubuntu locally).
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,7 @@ import { runRename } from '../../src/commands/rename.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
+import { signRecord } from '../../src/send/record.ts';
 import { runList } from '../../src/commands/list.ts';
 import { runSeats } from '../../src/commands/seats.ts';
 import { runStatus } from '../../src/commands/status.ts';
@@ -276,11 +277,19 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRestart(rest, io, world.restartSources());
     case 'send': {
       // Every seat of the page's file is a live agent, so a native-CLI example resolves.
-      // `reply="…"` on the fence is the fake seat's answer: a `--wait` example with it would
-      // print a reply. No page uses it while SOCKET_SEND (src/send/uds.ts) is off — a waited
-      // send is refused before a frame exists — so it stands for the socket leg's return.
+      // `reply="…"` on the fence is the fake seat's answer on the thread: a `--wait` example with
+      // it finds a signed reply record on that thread and prints the reply.
       const seats = page.team?.seats.map((seat) => seat.name) ?? ['claude-keeper'];
-      return runSend(rest, io, sendHost(fixture, seats, spec.now, reply));
+      const replyPath = reply !== undefined
+        ? writeDocReply(fixture.root, fixture.home, page.session, seats[0] ?? 'claude-keeper', spec.now, reply)
+        : null;
+      try {
+        return await runSend(rest, io, sendHost(fixture, seats, spec.now, reply));
+      } finally {
+        if (replyPath !== null) {
+          try { unlinkSync(replyPath); } catch {}
+        }
+      }
     }
     case 'pr':
       return pr(rest, io, (cwd, file) => loadConfig(cwd, file, fixture.home));
@@ -353,15 +362,39 @@ function answerHost(home: string): AnswerHost {
 }
 
 /** The docs page's send: a fake seat whose pane reports one process with a file at the socket's
- *  measured name, and a deliver that accepts. With `reply`, the delivery answers too: a
- *  connection back to the sender's own measured `cc-socks/<pid>.sock` — the frame a replying
- *  session writes — so a `--wait` example prints what the seat said; without it, the seat stays silent and the wait times out. No path calls this
- *  deliver while SOCKET_SEND (src/send/uds.ts) is off, so `reply` stands unused until the
- *  native leg returns. No session is read and no pane is touched. */
+ *  measured name, and a deliver that accepts. With `reply`, a signed reply record on the thread
+ *  is written before the run and `waitMs` is 0, so `--wait` examples never sleep. */
 const SEND_PID = 4200;
 
 /** The id a page's native handoff prints, so its `--confirm` line is exact. */
 const SEND_NATIVE_ID = '22222222-2222-4222-8222-222222222222';
+const SEND_WAIT_ID = '44444444-4444-4444-8444-444444444444';
+
+function writeDocReply(root: string, home: string, session: string, fromSeat: string, now: string, body: string): string {
+  const dir = join(root, '.agents', 'send-drops', session, 'owner');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'reply-1');
+  const signed = signRecord(
+    {
+      kind: 'message',
+      id: 'reply-1',
+      to: 'owner',
+      to_id: null,
+      root,
+      session,
+      at: now,
+      body,
+      from: fromSeat,
+      from_id: null,
+      rule: 'reply-on-open-thread',
+      thread: SEND_WAIT_ID,
+      in_reply_to: SEND_WAIT_ID,
+    },
+    home,
+  );
+  writeFileSync(path, `${JSON.stringify(signed)}\n`, { mode: 0o600 });
+  return path;
+}
 
 function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string): SendHost {
   const sockets = join(fixture.home, 'cc-socks');
@@ -403,6 +436,8 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
     },
     now: () => new Date(now),
     newId: () => SEND_NATIVE_ID,
+    ...(reply !== undefined ? { sendId: () => SEND_WAIT_ID } : {}),
+    waitMs: 0,
     home: fixture.home,
     // The roster's project column reads the fixture's own registry: a page that seeds
     // `~/.config/team/projects.yaml` shows the registry's grouping, one that does not shows
