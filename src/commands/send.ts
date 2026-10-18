@@ -1020,7 +1020,7 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   const { caller } = judged;
   const who = logTag(caller);
   const from = caller.kind === 'seat' ? caller.name : 'owner';
-  const read = readPending(team.project, root, host.home, id);
+  const read = readPending(team.project, root, host.home, id, host.now());
   if (!read.ok) return refuse(io, dir, who, `${id}: the pending record cannot be read (${read.reason}); nothing was recorded`, host, report);
   if (read.record === null) return refuse(io, dir, who, `${id}: no pending native record holds that id; nothing was recorded`, host, report);
   const record = read.record;

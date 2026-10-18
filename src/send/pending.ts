@@ -118,6 +118,10 @@ export const PENDING_DIR = 'pending';
 /** The id shape a handoff prints: a UUID, the name of its one file. */
 export const PENDING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** How long an unconfirmed native handoff record is kept before the sweep deletes it: 24 hours.
+ *  A record younger than (or at) 24 hours is never deleted by the sweep. */
+export const PENDING_NATIVE_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** One handoff, exactly as the sender's own call will make it: the target's address and the
  *  body, and the pair's own record — the receiving project, team and rule the confirm writes
  *  the history line for. */
@@ -181,6 +185,118 @@ function folderProblem(at: string): string | null {
   return null;
 }
 
+function defaultPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+const TAKEN_FILE = /^\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(\d+)\.taken$/;
+
+/**
+ * Sweeps `<project state folder>/pending`:
+ * 1. Recovers `.${id}.${pid}.taken` files left behind by a process `<pid>` that is no longer
+ *    alive (restoring to `${id}.json` when still within the 24h window, or unlinking if expired).
+ * 2. Deletes any `${id}.json` pending record strictly older than 24 hours
+ *    (`nowMs - Date.parse(record.ts) > PENDING_NATIVE_TTL_MS`). A record younger than 24h (or at
+ *    the exact 24h boundary) is never deleted.
+ */
+export function sweepPendingNative(
+  project: string,
+  root: string,
+  home: string,
+  now: Date = new Date(),
+  isPidAlive: (pid: number) => boolean = defaultPidAlive,
+): void {
+  const dir = pendingDir(project, root, home);
+  if (folderProblem(dir) !== null) return;
+  sweepPendingDir(dir, now.getTime(), isPidAlive);
+}
+
+function sweepPendingDir(
+  dir: string,
+  nowMs: number,
+  isPidAlive: (pid: number) => boolean = defaultPidAlive,
+): void {
+  if (!Number.isFinite(nowMs)) return;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const takenMatch = TAKEN_FILE.exec(name);
+    if (takenMatch !== null) {
+      const id = takenMatch[1] as string;
+      const pid = Number(takenMatch[2]);
+      if (isPidAlive(pid)) continue;
+      const takenPath = join(dir, name);
+      if (heldAt(takenPath).kind !== 'file') continue;
+      const text = readNoFollow(takenPath);
+      let record: PendingNative | null = null;
+      if (text !== null) {
+        try {
+          record = shapeOf(JSON.parse(text), id);
+        } catch {
+          record = null;
+        }
+      }
+      const targetPath = join(dir, `${id}.json`);
+      if (
+        record !== null &&
+        nowMs - Date.parse(record.ts) <= PENDING_NATIVE_TTL_MS &&
+        heldAt(targetPath).kind === 'missing'
+      ) {
+        try {
+          renameSync(takenPath, targetPath);
+          continue;
+        } catch {
+          // fall through to best-effort unlink if rename failed
+        }
+      }
+      try {
+        unlinkSync(takenPath);
+      } catch {
+        // best-effort cleanup of dead-process taken file
+      }
+    }
+  }
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -'.json'.length);
+    if (!PENDING_ID.test(id)) continue;
+    const filePath = join(dir, name);
+    if (heldAt(filePath).kind !== 'file') continue;
+    const text = readNoFollow(filePath);
+    if (text === null) continue;
+    let record: PendingNative | null = null;
+    try {
+      record = shapeOf(JSON.parse(text), id);
+    } catch {
+      continue;
+    }
+    if (record === null) continue;
+    const recordedAt = Date.parse(record.ts);
+    if (Number.isFinite(recordedAt) && nowMs - recordedAt > PENDING_NATIVE_TTL_MS) {
+      try {
+        unlinkSync(filePath);
+      } catch {
+        // best-effort cleanup of expired pending record
+      }
+    }
+  }
+}
+
 /** Writes one pending record whole: the project ladder, then the pending folder at 0700, then a
  *  temporary file at 0600 renamed to the id's own name. An existing file at that path is never
  *  replaced — ids are never reused, so a file there is not this handoff's. */
@@ -199,6 +315,7 @@ export function writePending(project: string, root: string, home: string, record
   } catch {
     return { ok: false, reason: 'the pending folder could not be created' };
   }
+  sweepPendingDir(dir, Date.parse(record.ts));
   const path = pendingPath(project, root, home, record.id);
   if (heldAt(path).kind !== 'missing') return { ok: false, reason: 'a pending record already holds that id' };
   const temporary = join(dir, `.${record.id}.${String(process.pid)}.tmp`);
@@ -219,21 +336,24 @@ export function writePending(project: string, root: string, home: string, record
 
 /** The held drops in one seat's directory, oldest first; or one pending native record by id. */
 export function readPending(dropDir: string): PendingDrop[];
-export function readPending(project: string, root: string, home: string, id: string): PendingRead;
-export function readPending(first: string, root?: string, home?: string, id?: string): PendingDrop[] | PendingRead {
+export function readPending(project: string, root: string, home: string, id: string, now?: Date): PendingRead;
+export function readPending(first: string, root?: string, home?: string, id?: string, now?: Date): PendingDrop[] | PendingRead {
   if (root === undefined || home === undefined || id === undefined) {
     return readPendingDrops(first);
   }
-  return readPendingNative(first, root, home, id);
+  return readPendingNative(first, root, home, id, now);
 }
 
 /** One record, or why it cannot be read. A missing file is `record: null` — the confirm's own
  *  refusal, not a fault; anything that is not the record this version writes is a fault named. */
-function readPendingNative(project: string, root: string, home: string, id: string): PendingRead {
+function readPendingNative(project: string, root: string, home: string, id: string, now?: Date): PendingRead {
   if (!PENDING_ID.test(id)) return { ok: true, record: null };
   const dir = pendingDir(project, root, home);
   const problem = folderProblem(dir);
   if (problem !== null) return { ok: false, reason: problem };
+  if (now !== undefined && heldAt(dir).kind === 'folder') {
+    sweepPendingDir(dir, now.getTime());
+  }
   const path = pendingPath(project, root, home, id);
   const held = heldAt(path);
   if (held.kind === 'missing') return { ok: true, record: null };
