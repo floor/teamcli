@@ -1,0 +1,17 @@
+agy --dangerously-skip-permissions
+❯ agy --dangerously-skip-permissions
+
+      ▄▀▀▄        Antigravity CLI 1.4.2
+     ▀▀▀▀▀▀       <account>            
+    ▀▀▀▀▀▀▀▀      Gemini 4 Argon (Medium)
+   ▄▀▀    ▀▀▄     <workspace>                     
+  ▄▀▀      ▀▀▄
+
+──────────────────────────────────────────────────
+> Reply with exactly the word hello and nothing
+  else.
+⢿  Generating...
+─────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────
+esc to cancel                 Gemini 4 Argon · medium

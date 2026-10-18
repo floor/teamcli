@@ -32,7 +32,8 @@ describe('Antigravity launch and captured screens', () => {
     expect(versionVerdict('1.3.5', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.4.0', antigravity.tested)).toBe('tested');
     expect(versionVerdict('1.4.1', antigravity.tested)).toBe('tested');
-    expect(versionVerdict('1.4.2', antigravity.tested)).toBe('newer');
+    expect(versionVerdict('1.4.2', antigravity.tested)).toBe('tested');
+    expect(versionVerdict('1.4.3', antigravity.tested)).toBe('newer');
     expect(versionVerdict('1.2.10', antigravity.tested)).toBe('older');
   });
 
@@ -139,9 +140,25 @@ describe('Antigravity launch and captured screens', () => {
     expect(readScreen('antigravity', current('question')).kind).toBe('question');
     expect(readScreen('antigravity', current('permission')).kind).toBe('permission');
     expect(readScreen('antigravity', current('exit')).kind).toBe('unknown');
-    // The folder is the profile's ceiling, and its footer still names the running model.
-    expect(profileFor('antigravity')?.tested.to).toBe('1.4.1');
+    // Its footer still names the running model.
     expect(runningModel('antigravity', current('idle'))).toEqual({ model: 'Gemini Argon', version: '4' });
+  });
+
+  test('1.4.2 captures keep the same dialog kinds and the model row a turn leaves', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/antigravity/1.4.2/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('antigravity', current('trust')).kind).toBe('trust');
+    expect(readScreen('antigravity', current('idle')).kind).toBe('idle');
+    expect(readScreen('antigravity', current('unsent')).kind).toBe('unsent');
+    expect(readScreen('antigravity', current('working')).kind).toBe('working');
+    expect(readScreen('antigravity', current('question')).kind).toBe('question');
+    expect(readScreen('antigravity', current('permission')).kind).toBe('permission');
+    expect(readScreen('antigravity', current('exit')).kind).toBe('unknown');
+    // The folder is the profile's ceiling. As on 1.4.0, the fresh idle footer carries no model
+    // row; the model row appears under the box once a turn has run.
+    expect(profileFor('antigravity')?.tested.to).toBe('1.4.2');
+    expect(runningModel('antigravity', current('idle'))).toBeNull();
+    expect(runningModel('antigravity', current('unsent'))).toEqual({ model: 'Gemini Argon', version: '4' });
+    expect(runningModel('antigravity', current('working'))).toEqual({ model: 'Gemini Argon', version: '4' });
   });
 
   test('the plan delivers the one line through the guarded path, never a config file', () => {

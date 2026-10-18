@@ -26,27 +26,27 @@
   "cells": {
     "antigravity": {
       "idle": {
-        "real": 5,
+        "real": 6,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 4,
+        "real": 5,
         "constructed": 0,
         "undocumented": 0
       },
       "unsent": {
-        "real": 6,
+        "real": 7,
         "constructed": 0,
         "undocumented": 0
       },
       "permission": {
-        "real": 6,
+        "real": 7,
         "constructed": 2,
         "undocumented": 0
       },
       "question": {
-        "real": 5,
+        "real": 6,
         "constructed": 0,
         "undocumented": 0
       },
@@ -56,7 +56,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 5,
+        "real": 6,
         "constructed": 0,
         "undocumented": 0
       },
@@ -76,7 +76,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 4,
+        "real": 5,
         "constructed": 1,
         "undocumented": 0
       }
@@ -728,6 +728,48 @@
     },
     {
       "file": "antigravity/1.4.1/working.txt",
+      "cli": "antigravity",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/exit.txt",
+      "cli": "antigravity",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/idle.txt",
+      "cli": "antigravity",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/permission.txt",
+      "cli": "antigravity",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/question.txt",
+      "cli": "antigravity",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/trust.txt",
+      "cli": "antigravity",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/unsent.txt",
+      "cli": "antigravity",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/working.txt",
       "cli": "antigravity",
       "kind": "working",
       "provenance": "capture"

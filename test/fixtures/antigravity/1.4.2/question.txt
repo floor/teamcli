@@ -1,0 +1,23 @@
+
+  Antigravity CLI 1.4.2
+  <account>             (<plan>         )
+  Gemini 4 Argon (Medium)
+  <workspace>                     
+
+──────────────────────────────────────────────────
+> Use your question tool to ask me whether I prefer
+  alpha or beta, with those two as the options.
+
+? Do you prefer alpha or beta?
+
+Question
+─────────────────────────────────────────────────────
+
+Question 1/1: Do you prefer alpha or beta?
+
+> 1. alpha
+  2. beta
+  3. Write-in...
+
+  ↑/↓ Navigate · enter Select · esc Skip
+esc to cancel                 Gemini 4 Argon · medium
