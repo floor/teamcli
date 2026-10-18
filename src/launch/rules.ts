@@ -37,7 +37,7 @@ export function seatRules(input: RulesInput): string[] {
   const own = [
     'End every commit message and every pull request body with your signature, given below.',
     `Never stop at a question: tell the orchestrator (${input.orchestrator}) in one line and keep working.`,
-    'Never run `team trust` or `team approve`, and never edit `trust:` in the team file.',
+    'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     'In a protected checkout, never switch the branch, reset or commit.',
   ];
   const signing = [
