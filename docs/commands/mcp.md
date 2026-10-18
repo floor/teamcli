@@ -18,7 +18,9 @@ launch line carries the registration itself — two `-c` values naming the serve
 install's runner, and no file written into the seat's folder. A gemini or grok seat's launch
 runs that CLI's own `mcp add -s project` in the seat's folder, naming the same runner, and the
 file the command writes is the CLI's own project settings (`.gemini/settings.json`,
-`.grok/config.toml`). The server names the seat it launched for;
+`.grok/config.toml`). A cursor seat's launch merges the server into the seat's own
+`.cursor/mcp.json` and carries `--approve-mcps`, so the CLI loads the server team registered
+for it. The server names the seat it launched for;
 the session it serves is the team file's in the seat's folder, read the way a sender reads it.
 Where the seat's folder is a git work tree that does not ignore a file the registration would
 write, team refuses to register: the seat stays on its drop and typed legs, and its line
