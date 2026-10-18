@@ -64,6 +64,12 @@ export type AdmitProjects = Record<string, AdmitProject>;
 export type AdmitContext = {
   projects: AdmitProjects;
   crossTeams?: Partial<Record<SettingLevel, boolean | undefined>>;
+  /**
+   * Set to `open-thread` by a reply alone, and only after the caller has verified the record it
+   * answers and the thread it sits on: the rule `reply-on-open-thread` then admits the pair when
+   * no other rule does. A send never sets it.
+   */
+  reply?: 'open-thread';
 };
 
 export type SendVerdict = { ok: true; rule: string } | { ok: false; why: string };
@@ -111,6 +117,15 @@ export const RULE_SUMMARY = [
   'an owner-signed grant naming send',
 ].join('; ');
 
+/**
+ * The rule a reply is admitted by when no rule above admits its pair — draft 3 §7's
+ * `reply-on-open-thread`: the reply's record verified, its thread open, neither seat removed and
+ * no revocation or deny on the pair, all of which the caller checked before handing in the
+ * context. Named in the same words as the rules above, so the record, the refusal and the docs
+ * read alike.
+ */
+export const REPLY_RULE = 'a reply to the sender of a record on an open thread';
+
 /** The project rules, in the order they are asked — ahead of the team rules above — and each
  *  names itself in the verdict as those do. All three are decided by the project record and the
  *  `leads` capability, and none of them ever crosses projects. */
@@ -124,20 +139,29 @@ export const PROJECT_RULE_SUMMARY = PROJECT_RULES.join('; ');
 
 /**
  * The verdict for one send. `caller` is the sender's registry record, or the literal `owner`;
- * `target` is the receiver's record, or the seat it resolved to; `teams` is the team registry.
+ * `target` is the receiver's record, the seat it resolved to, or the literal `owner` on a reply
+ * whose answer goes back to the owner; `teams` is the team registry.
  * `grant` is given only after the caller has verified an owner-signed grant naming `send`:
  * admission never reads the grant store itself, it names the grant in the rule it returns.
  * `context` is the project level: given when the caller's records know their projects, absent
- * when they do not — and the project rules are then simply not in play.
+ * when they do not — and the project rules are then simply not in play. Its `reply` field is a
+ * reply's own word that its record and thread were verified; only then is the reply rule asked.
  */
 export function admitSend(
   caller: SendSide | 'owner',
-  target: SendSide,
+  target: SendSide | 'owner',
   teams: AdmitTeams,
   grant?: SendGrant,
   context?: AdmitContext,
 ): SendVerdict {
   if (caller === 'owner') return { ok: true, rule: 'the owner' };
+  // The owner as the receiver is admitted by the reply rule alone: a message to the owner is
+  // delivered by the runtime, not by a seat's write into a folder, and this rule is the one
+  // pair whose answer comes back on the thread it was asked on.
+  if (target === 'owner') {
+    if (context?.reply === 'open-thread') return { ok: true, rule: REPLY_RULE };
+    return { ok: false, why: `${seatAt(caller)} may not send to the owner: no rule admits it (${summaryFor(context)})` };
+  }
 
   const callerTeamId = teamOf(caller);
   const callerTeam = teams[callerTeamId];
@@ -203,12 +227,21 @@ export function admitSend(
     return { ok: true, rule: "a seat to its own team's orchestrator" };
   }
   if (grant !== undefined) return { ok: true, rule: `an owner-signed grant naming send (${grant.name})` };
+  // Asked last: a reply to a record on an open thread, when every rule above leaves the pair
+  // unadmitted. The caller has already verified the record and the thread.
+  if (context?.reply === 'open-thread') return { ok: true, rule: REPLY_RULE };
 
-  const summary = context === undefined ? RULE_SUMMARY : `${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY}`;
   return {
     ok: false,
-    why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${summary})`,
+    why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${summaryFor(context)})`,
   };
+}
+
+/** The rules a refusal names, in the order they were asked: every rule above, and the reply rule
+ *  only when the context asked it. A send's refusal names exactly the rules a send is judged by. */
+function summaryFor(context: AdmitContext | undefined): string {
+  const summary = context === undefined ? RULE_SUMMARY : `${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY}`;
+  return context?.reply === undefined ? summary : `${summary}; ${REPLY_RULE}`;
 }
 
 /**

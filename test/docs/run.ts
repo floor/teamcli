@@ -23,6 +23,7 @@ import { runHold } from '../../src/commands/hold.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
 import { runRegister } from '../../src/commands/register.ts';
+import { runReply } from '../../src/commands/reply.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRename } from '../../src/commands/rename.ts';
 import { runRestart } from '../../src/commands/restart.ts';
@@ -244,6 +245,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runHold(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'messages':
       return runMessages(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'reply':
+      // The page's clock is pinned, so thread-ttl is read against it, not against today.
+      return runReply(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'issues':
       return runIssues(rest, io, { home: fixture.home });
     case 'next':

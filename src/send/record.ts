@@ -15,6 +15,11 @@
 // the one order the status moves — `held`, `delivered`, `read`, `replied` — and a late receipt
 // changes nothing. The attempt outcomes (`not-submitted`, `timeout`, `unreachable`, `refused`)
 // are outcomes, never statuses, and are not read here.
+//
+// A thread's close is a third file, beside the record it answers: `<id>.closed.json`, written by
+// `team reply --close` and signed with `RECEIPT_DOMAIN` like a receipt, since it is derived state
+// beside a message. It is not a message and carries no body: it names the record, the thread and
+// the side that closed it, and `team reply` reads it before a reply is admitted.
 import { type KeyObject } from 'node:crypto';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
@@ -22,8 +27,12 @@ import { messageKeyOf, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain,
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
 
-/** The `kind` a message record's payload carries. A receipt carries `receipt`. */
+/** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
+ *  `thread-close`. */
 export const RECORD_KIND = 'message';
+
+/** The `kind` a thread's close carries. A close is not a message and never carries a body. */
+export const CLOSE_KIND = 'thread-close';
 
 /**
  * One message record's signed payload. The two registry ids are `null` only where the registry
@@ -74,6 +83,27 @@ export type ReceiptPayload = {
 };
 
 export type SignedReceipt = { payload: ReceiptPayload; signature: string };
+
+/**
+ * One thread's close: the record it answers (`id`), the thread it ends, and the side that closed
+ * it. A close is a claim `team reply` reads before admitting a reply, so it is signed like a
+ * receipt — the two sides here differ from a receipt's: `to` is the folder the close sits in and
+ * `root`/`session` bind it to one checkout, exactly as a record's do.
+ */
+export type ClosePayload = {
+  kind: typeof CLOSE_KIND;
+  /** The id of the record this close answers; the close is written beside it. */
+  id: string;
+  /** The thread's id — the first record's id. */
+  thread: string;
+  /** The side that closed it: a seat's name, or `owner`. */
+  by: string;
+  root: string;
+  session: string;
+  at: string;
+};
+
+export type SignedClose = { payload: ClosePayload; signature: string };
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -161,6 +191,34 @@ export function signedReceiptOf(value: unknown): SignedReceipt | null {
   return { payload, signature: value.signature };
 }
 
+/** The close payload, or null when the value is not one this version writes. */
+export function closePayloadOf(value: unknown): ClosePayload | null {
+  if (!isRecordValue(value)) return null;
+  if (value.kind !== CLOSE_KIND) return null;
+  for (const field of ['id', 'thread', 'by', 'root', 'session', 'at'] as const) {
+    if (!nonEmpty(value[field])) return null;
+  }
+  if (!recordNameOk(value.id as string) || !recordNameOk(value.thread as string)) return null;
+  if (!Number.isFinite(Date.parse(value.at as string))) return null;
+  return {
+    kind: CLOSE_KIND,
+    id: value.id as string,
+    thread: value.thread as string,
+    by: value.by as string,
+    root: value.root as string,
+    session: value.session as string,
+    at: value.at as string,
+  };
+}
+
+export function signedCloseOf(value: unknown): SignedClose | null {
+  if (!isRecordValue(value)) return null;
+  if (!nonEmpty(value.signature)) return null;
+  const payload = closePayloadOf(value.payload);
+  if (payload === null) return null;
+  return { payload, signature: value.signature };
+}
+
 /** The record's path: the folder `team send` writes to, and the id as the file's name. */
 export function recordFile(dropDir: string, id: string): string {
   return join(dropDir, id);
@@ -169,6 +227,11 @@ export function recordFile(dropDir: string, id: string): string {
 /** A receipt's path beside its message: `<id>.<status>.json`. */
 export function receiptFile(dropDir: string, id: string, status: ReceiptStatus): string {
   return join(dropDir, `${id}.${status}.json`);
+}
+
+/** A close's path beside the record it answers: `<id>.closed.json`. */
+export function closeFile(dropDir: string, id: string): string {
+  return join(dropDir, `${id}.closed.json`);
 }
 
 /** Signs a payload with the checkout's message key. The key is created on the first sign. */
@@ -188,6 +251,17 @@ export function signReceiptPayload(payload: ReceiptPayload, home: string): Signe
 
 export function verifyReceipt(receipt: SignedReceipt, key: KeyObject): boolean {
   return verifyDomain(RECEIPT_DOMAIN, receipt.payload as unknown as Json, receipt.signature, key);
+}
+
+/** Signs a close with the checkout's message key, under the receipt domain: a close is derived
+ *  state beside a message, not a message. */
+export function signClose(payload: ClosePayload, home: string): SignedClose {
+  const key = messageKeyOf(home);
+  return { payload, signature: signDomain(RECEIPT_DOMAIN, payload as unknown as Json, key) };
+}
+
+export function verifyClose(close: SignedClose, key: KeyObject): boolean {
+  return verifyDomain(RECEIPT_DOMAIN, close.payload as unknown as Json, close.signature, key);
 }
 
 export type RecordWrite = { ok: true; path: string; existing?: true } | { ok: false; reason: string };
@@ -263,6 +337,33 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
 
 export type StatusContext = { to: string; root: string; session: string };
 
+export type CloseRead = { ok: true; close: SignedClose | null } | { ok: false; reason: string };
+
+/** One close by path, or why it cannot be read. A missing file is `close: null`; the checks are
+ *  `readRecord`'s, since a close is a JSON envelope signed by the message key. */
+export function readClose(path: string, expectedId?: string): CloseRead {
+  const held = heldAt(path);
+  if (held.kind === 'missing') return { ok: true, close: null };
+  if (held.kind === 'link') return { ok: false, reason: 'a symbolic link was found and not followed' };
+  if (held.kind === 'fifo') return { ok: false, reason: 'a FIFO was found and not followed' };
+  if (held.kind !== 'file') return { ok: false, reason: 'the close is not a regular file' };
+  if (process.getuid !== undefined && held.uid !== process.getuid()) return { ok: false, reason: "another user's file" };
+  const text = readNoFollow(path);
+  if (text === null) return { ok: false, reason: 'the close could not be read' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, reason: 'the close is not JSON' };
+  }
+  const close = signedCloseOf(parsed);
+  if (close === null) return { ok: false, reason: 'the close is not one this version wrote' };
+  if (expectedId !== undefined && close.payload.id !== expectedId) {
+    return { ok: false, reason: `the close's id is ${close.payload.id}, not ${expectedId}` };
+  }
+  return { ok: true, close };
+}
+
 /**
  * Whether the receipt at `path` is this message's `status` receipt: the id, seat, checkout and
  * session on it match, and the message key signed it. A receipt for another message or checkout
@@ -322,6 +423,24 @@ export function writeReceipt(dropDir: string, receipt: SignedReceipt): RecordWri
     dropMessage(dropDir, `${id}.${receipt.payload.status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the receipt could not be written' };
+  }
+  return { ok: true, path };
+}
+
+/**
+ * Writes a thread's close beside the record it answers. Also write-once: a close already at the
+ * path is left untouched, and a second close is not a new fact — the first side that closed the
+ * thread is the one that stands.
+ */
+export function writeClose(dropDir: string, close: SignedClose): RecordWrite {
+  const id = close.payload.id;
+  if (!recordNameOk(id)) return { ok: false, reason: 'the close id cannot be a file name' };
+  const path = closeFile(dropDir, id);
+  if (heldAt(path).kind !== 'missing') return { ok: true, path, existing: true };
+  try {
+    dropMessage(dropDir, `${id}.closed.json`, `${JSON.stringify(close, null, 2)}\n`);
+  } catch {
+    return { ok: false, reason: 'the close could not be written' };
   }
   return { ok: true, path };
 }

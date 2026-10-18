@@ -1145,6 +1145,32 @@ export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team reply` (`schema/reply.schema.json`): one record
+ *  written on a thread (`replied`), or a close beside the record it ends (`closed`). */
+export const REPLY_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.reply',
+  fileName: 'reply.schema.json',
+  title: 'team reply --json output',
+  required: ['format', 'status', 'action_summary', 'project', 'session', 'record', 'thread', 'in_reply_to', 'to', 'rule', 'reply', 'at'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    status: { type: 'string', enum: ['replied', 'closed'] },
+    action_summary: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    // The reply record's id; null on a close, which writes no record.
+    record: { type: ['string', 'null'] },
+    thread: { type: 'string', minLength: 1 },
+    in_reply_to: { type: 'string', minLength: 1 },
+    // The seat a reply goes to; null on a close.
+    to: { type: ['string', 'null'] },
+    // The rule that admitted the reply; null on a close.
+    rule: { type: ['string', 'null'] },
+    reply: { type: ['string', 'null'] },
+    at: { type: 'string', minLength: 1 },
+  },
+};
+
 /** Published `--json` output schema for `team route` (`schema/route.schema.json`): the action
  *  surface, then the answered address. `session` is the caller's team session; the recipient's
  *  session travels as `recipient_session`. */
@@ -1743,6 +1769,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DROPS_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
+  REPLY_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
   MCP_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,

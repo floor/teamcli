@@ -2747,6 +2747,34 @@
     },
     {
       "code": 0,
+      "command": "reply",
+      "id": "reply.replied",
+      "meaning": "the reply record was written on its thread, or its thread was closed",
+      "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
+    },
+    {
+      "code": 1,
+      "command": "reply",
+      "id": "reply.refused",
+      "meaning": "the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team",
+      "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
+    },
+    {
+      "code": 2,
+      "command": "reply",
+      "id": "reply.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
+    },
+    {
+      "code": 2,
+      "command": "reply",
+      "id": "reply.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team reply"
+    },
+    {
+      "code": 0,
       "command": "restart",
       "id": "restart.dry-run",
       "meaning": "the stop and launch plan was printed and nothing was touched",

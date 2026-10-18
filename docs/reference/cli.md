@@ -1031,6 +1031,31 @@ Usage:
 | `seat` | yes | no |
 | `new-seat` | yes | no |
 
+## `reply`
+
+Hidden: no
+
+Usage:
+
+    team reply <id> [<text>] [--close] [--json]
+    team reply <id> --close
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--close` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+| `text` | yes | no |
+
 ## `restart`
 
 Hidden: no

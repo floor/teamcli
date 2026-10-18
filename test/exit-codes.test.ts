@@ -29,7 +29,7 @@ import { runInit } from '../src/commands/init.ts';
 import { runRoute } from '../src/commands/route.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { pendingPath } from '../src/send/pending.ts';
-import { plantMessage, runMessages, type MessagePayload } from '../src/commands/messages.ts';
+import { plantMessage, plantRecord, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
@@ -46,6 +46,7 @@ import { pr } from '../src/commands/pr.ts';
 import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
+import { runReply } from '../src/commands/reply.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
@@ -4250,6 +4251,32 @@ for (const [name, command, args, invalidArgs] of [
     write(place, TWO);
     return show(await renameRun(place, ['worker', 'builder-1']), 'renamed worker -> builder-1');
   });
+}
+
+
+{
+  const SENT = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  // The file declares the seat the planted record comes from, so a reply reaches it.
+  const FILE = TWO.replace('workspace:', 'session: acme\nworkspace:');
+  async function replied(place: Place, argv: readonly string[]): Promise<Ran> {
+    const io = testIo(place.root, owner);
+    return { code: await runReply([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('reply.replied', async (place) => {
+    write(place, FILE);
+    plantRecord(place.home, place.root, 'acme', 'owner', SENT, "from the file's seat worker (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\nquestion", { from: 'worker', at: NOW.toISOString() });
+    return show(await replied(place, [SENT, 'the answer']), 'worker: replied');
+  });
+  scene('reply.refused', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(await replied(place, [SENT, 'the answer']), 'no record named');
+  });
+  scene('reply.configuration', async (place) => {
+    write(place, 'format: [\n');
+    return show(await replied(place, [SENT, 'the answer']), 'team reply:');
+  });
+  scene('reply.usage', async (place) => show(await replied(place, []), '<id> is required'));
 }
 
 // Ids whose site is reachable but whose scene no longer is: send.answered and send.timeout sit
