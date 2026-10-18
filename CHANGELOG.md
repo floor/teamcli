@@ -294,6 +294,10 @@ commands read them.
   with `Team: run team messages`; it reports a seat stopped on its provider's connection error or
   at a rate limit, naming the account and the reset time, and types into neither screen; a
   temporary seat is left as it is for the owner to remove.
+- **A report meant for the operator stays out of the panes.** `team watch` writes it to
+  `.agents/team.log` and the desktop notification, never typing it into a free seat; the only
+  lines it types are a work drop's line naming its file and the message ring, and an attention
+  report a flickering screen shows is said once, not every other pass.
 - `team add` takes `--model` and `--effort` (the owner's, on a declared seat) and starts a
   temporary seat from `--temporary --like <seat> --until <end>`; `team remove <lead> --keep` then
   `team add <lead>` replaces the agent on a lead's seat without stopping the team, and a removal
