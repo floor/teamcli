@@ -401,7 +401,12 @@ describe('a pass of the watch', () => {
     const stuck = live({ 'deepseek-acme': { status: 'idle', screen: permission } });
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 0, memory });
     expect(first.reports).toEqual([{ key: 'blocked:deepseek-acme', text: 'deepseek-acme waits at a permission prompt: its owner\'s to answer', to: 'owner' }]);
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 30 * MIN, memory }).reports).toEqual([]);
+    // The promise behind the report: a prompt nobody clears does not stay one line. The lead's
+    // window runs out, and the climb is raised — once, and to the owner at once.
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 30 * MIN, memory }).reports).toEqual([
+      { key: 'prompt-escalated:deepseek-acme', text: "deepseek-acme is still at a permission prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told", to: 'owner' },
+    ]);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 60 * MIN, memory }).reports).toEqual([]);
   });
 
   test.each(['idle', 'working'])('a captured Codex permission goes to its owner when herdr says %s', (status) => {
@@ -410,7 +415,9 @@ describe('a pass of the watch', () => {
     const stuck = live({ 'codex-acme': { status, screen } });
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 0, memory });
     expect(first.reports).toEqual([{ key: 'blocked:codex-acme', text: "codex-acme waits at a permission prompt: its owner's to answer", to: 'owner' }]);
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 30 * MIN, memory }).reports).toEqual([]);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: stuck, machine: fine, now: 30 * MIN, memory }).reports).toEqual([
+      { key: 'prompt-escalated:codex-acme', text: "codex-acme is still at a permission prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told", to: 'owner' },
+    ]);
   });
 
   test('a quiet seat on a screen no profile reads is reported, not taken for a free one', () => {
@@ -434,7 +441,9 @@ describe('a pass of the watch', () => {
     const first = pass({ team: team(), watch: team().watch, state: emptySession(), live: update, machine: fine, now: 0, memory });
     // Its owner's to act on — never a question the operator nudges, and never an idle seat.
     expect(first.reports).toEqual([{ key: 'vendor notice:codex-acme', text: "codex-acme shows a vendor notice: its owner's to act on", to: 'owner' }]);
-    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: update, machine: fine, now: 30 * MIN, memory }).reports).toEqual([]);
+    expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: update, machine: fine, now: 30 * MIN, memory }).reports).toEqual([
+      { key: 'prompt-escalated:codex-acme', text: "codex-acme is still at a vendor notice prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told", to: 'owner' },
+    ]);
   });
 
   test('a question is the operator\'s', () => {

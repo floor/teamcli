@@ -65,6 +65,7 @@ export const EVENT_KINDS = [
   'seat.idle-timeout',
   'seat.blocked',
   'seat.at-prompt',
+  'seat.prompt-escalated',
   'seat.unreachable',
   'seat.done',
   // Work & tasks
@@ -120,6 +121,7 @@ const OWNER_PROMPT_SET: ReadonlySet<string> = new Set<string>(OWNER_PROMPT_KINDS
  *  `privileged-kinds`; no level below the owner may remove any of them or self-subscribe to one. */
 export const DEFAULT_PRIVILEGED_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
+  'seat.prompt-escalated',
   'team.grant-issued',
   'team.grant-revoked',
   'team.grant-expired',
@@ -141,6 +143,7 @@ export function isPrivilegedKind(kind: EventKind, extraPrivileged?: readonly str
  *  two refusals. */
 export const DEFAULT_OWNER_AT_ONCE_KINDS: readonly EventKind[] = [
   'seat.at-prompt',
+  'seat.prompt-escalated',
   'seat.unreachable',
   'seat.done',
   'team.seat-added',
@@ -197,6 +200,7 @@ export const DEFAULT_EVENT_RETENTION_SECONDS = EVENT_THRESHOLDS.retention_days *
 export const DEFAULT_HELD_THRESHOLD_SECONDS = EVENT_THRESHOLDS.held_threshold_seconds;
 export const DEFAULT_UNREACHABLE_THRESHOLD_SECONDS = EVENT_THRESHOLDS.unreachable_threshold_seconds;
 export const DEFAULT_IDLE_THRESHOLD_SECONDS = EVENT_THRESHOLDS.idle_threshold_seconds;
+export const DEFAULT_PROMPT_ESCALATION_SECONDS = EVENT_THRESHOLDS.prompt_escalation_seconds;
 export const DEFAULT_SUBSCRIBER_BUFFER_LIMIT = 256;
 
 export const PRIVILEGED_SELF_SUBSCRIPTION_RULE = 'privileged-self-subscription' as const;
@@ -262,6 +266,10 @@ export type TeamRoutingRoles = {
   orchestrator?: string;
   operator?: string;
   seats?: readonly { name: string; leads?: boolean }[];
+  /** The lead of the entity's own team — the seat above this team in the entity's chain
+   *  (`src/bus/seats.ts` resolves it from the registry). Absent when the registry names no such
+   *  team or its roster marks no lead; the `entity` position then resolves to nobody. */
+  entityOrchestrator?: string;
 };
 
 export function leadSeatsOf(team: TeamRoutingRoles): Set<string> {
@@ -282,7 +290,10 @@ export function leadSeatsOf(team: TeamRoutingRoles): Set<string> {
 export type SeatRecipientResolver = (entry: string) => string | undefined;
 
 function toRoutingRecipient(entry: string): RoutingRecipient {
-  if (entry === 'lead' || entry === 'operator' || entry === 'sender' || entry === 'subject' || entry === 'owner') {
+  if (
+    entry === 'lead' || entry === 'operator' || entry === 'sender' || entry === 'subject'
+    || entry === 'entity' || entry === 'owner'
+  ) {
     return entry;
   }
   return { seat: entry };
@@ -341,6 +352,10 @@ export function recipientsForEvent(
       for (const lead of leads) out.add(lead);
     } else if (recipient === 'operator') {
       if (team.operator !== undefined && team.operator !== '') out.add(team.operator);
+    } else if (recipient === 'entity') {
+      if (team.entityOrchestrator !== undefined && team.entityOrchestrator !== '') {
+        out.add(team.entityOrchestrator);
+      }
     } else if (recipient === 'sender') {
       if (event.from !== undefined && event.from !== '') out.add(event.from);
     } else if (recipient === 'subject') {
@@ -349,8 +364,16 @@ export function recipientsForEvent(
     }
   }
 
-  if (event.kind === 'seat.at-prompt' && event.prompt !== undefined && OWNER_PROMPT_SET.has(event.prompt)) {
-    out.add('owner');
+  if (event.kind === 'seat.at-prompt') {
+    if (event.prompt !== undefined && OWNER_PROMPT_SET.has(event.prompt)) out.add('owner');
+    if (event.seat !== undefined && leads.has(event.seat)) {
+      // A team's own lead at a prompt is the climb's first rung skipped: nobody below the lead
+      // can clear it, so the event goes to the entity's lead and to the owner from the start.
+      out.add('owner');
+      if (team.entityOrchestrator !== undefined && team.entityOrchestrator !== '') {
+        out.add(team.entityOrchestrator);
+      }
+    }
   } else if (
     (event.kind === 'seat.unreachable' || event.kind === 'seat.done') &&
     event.seat !== undefined &&

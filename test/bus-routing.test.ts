@@ -79,7 +79,7 @@ describe('the default routing table', () => {
     for (const recipients of Object.values(EVENT_ROUTING_DEFAULTS)) {
       for (const recipient of recipients) {
         if (typeof recipient === 'string') {
-          expect(['lead', 'operator', 'sender', 'subject', 'owner']).toContain(recipient);
+          expect(['lead', 'operator', 'sender', 'subject', 'entity', 'owner']).toContain(recipient);
         } else {
           expect(recipient.seat.startsWith('agt_')).toBe(true);
         }
@@ -90,7 +90,7 @@ describe('the default routing table', () => {
 
 describe('privileged kinds', () => {
   test('the release kinds cover grant and policy records, a seat at a prompt, and the two refusals', () => {
-    expect(PRIVILEGED_KINDS).toEqual(['team.grant-*', 'team.policy-*', 'seat.at-prompt', 'record.invalid', 'security.refused']);
+    expect(PRIVILEGED_KINDS).toEqual(['team.grant-*', 'team.policy-*', 'seat.at-prompt', 'seat.prompt-escalated', 'record.invalid', 'security.refused']);
     expect(isPrivilegedKind('team.grant-issued')).toBe(true);
     expect(isPrivilegedKind('team.policy-changed')).toBe(true);
     expect(isPrivilegedKind('team.policy-refused')).toBe(true);
@@ -139,6 +139,7 @@ describe('the event thresholds', () => {
       'held_threshold_seconds',
       'unreachable_threshold_seconds',
       'idle_threshold_seconds',
+      'prompt_escalation_seconds',
     ]);
   });
 });
@@ -154,6 +155,7 @@ describe("the owner's immediacy list (Amendment 01 §10)", () => {
   test('holds the kinds the amendment fixes, and its prompt and lead conditions narrow them', () => {
     expect([...DEFAULT_OWNER_AT_ONCE_KINDS]).toEqual([
       'seat.at-prompt',
+      'seat.prompt-escalated',
       'seat.unreachable',
       'seat.done',
       'team.seat-added',

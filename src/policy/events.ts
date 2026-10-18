@@ -16,9 +16,10 @@ export const EVENT_ROUTING_LEVELS: readonly PolicyLevel[] = ['entity', 'project'
 /**
  * A recipient the bus resolves against the event it is delivering: `lead` is the seat whose role
  * holds `leads`, `operator` the file's operator seat, `sender` and `subject` the record's own
- * fields, and `owner` the owner's own runtime — never a seat.
+ * fields, `entity` the lead of the entity's own team — the seat above the team in the entity's
+ * chain (`src/bus/seats.ts` reads it) — and `owner` the owner's own runtime, never a seat.
  */
-export type RoutingPosition = 'lead' | 'operator' | 'sender' | 'subject' | 'owner';
+export type RoutingPosition = 'lead' | 'operator' | 'sender' | 'subject' | 'entity' | 'owner';
 
 /** One recipient: a position, or a seat by its registry id (`agt_…`), the draft's own two forms. */
 export type RoutingRecipient = RoutingPosition | { seat: string };
@@ -64,6 +65,10 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   'seat.idle-timeout': ['lead'],
   'seat.blocked': ['lead', 'operator'],
   'seat.at-prompt': ['lead', 'operator'],
+  // A prompt the watch climbs: its lead's window ran out (or the prompt is the lead's own), so
+  // the event reaches the entity's own lead and the owner at once. The owner stands even when
+  // the registry names no entity lead, so a climb is never silent.
+  'seat.prompt-escalated': ['entity', 'owner'],
   'seat.unreachable': ['lead', 'operator'],
   'seat.done': ['lead', 'operator'],
   'work.claimed': ['lead'],
@@ -108,6 +113,7 @@ export const PRIVILEGED_KINDS: readonly string[] = [
   'team.grant-*',
   'team.policy-*',
   'seat.at-prompt',
+  'seat.prompt-escalated',
   'record.invalid',
   'security.refused',
 ];
@@ -145,6 +151,9 @@ export const EVENT_THRESHOLDS = {
   unreachable_threshold_seconds: 600,
   /** How long a seat may be `idle` before `seat.idle-timeout` reaches the lead. */
   idle_threshold_seconds: 300,
+  /** How long a team's lead has to clear a seat's prompt before `seat.prompt-escalated` climbs
+   *  to the entity's lead and the owner. A lead's own prompt climbs at once. */
+  prompt_escalation_seconds: 300,
   /** How often the bus reconciles records against the log. */
   reconcile_interval_seconds: 120,
   /** How long an unanswered thread stays open before `thread-ttl` closes it. */
@@ -170,7 +179,12 @@ export const EVENT_THRESHOLDS_SETTING = {
   ownerSovereign: true,
   defaults: EVENT_THRESHOLDS,
   /** The delay thresholds, the fields bound to move in one direction only: shorter. */
-  shortenOnly: ['held_threshold_seconds', 'unreachable_threshold_seconds', 'idle_threshold_seconds'],
+  shortenOnly: [
+    'held_threshold_seconds',
+    'unreachable_threshold_seconds',
+    'idle_threshold_seconds',
+    'prompt_escalation_seconds',
+  ],
 } as const;
 
 /**
