@@ -333,6 +333,62 @@ describe('team drops', () => {
   });
 });
 
+describe('team drops in a folder that is not a git repository', () => {
+  // A team whose `.agents/team.yaml` lives at its entity root: the root is not a checkout, and
+  // the shared team-file resolution still reads it. The three modes resolve it the same way.
+  function plainRoot(): void {
+    rmSync(join(root, '.git'), { recursive: true, force: true });
+  }
+
+  test('the listing reads the plain team root', async () => {
+    plainRoot();
+    const path = drop(D_OWNER, `${OWNER_HEADER}\n\nthe owner's words\n`);
+    const result = await run();
+    expect(result).toEqual({
+      code: 0,
+      out: `team acme, session "acme"\n  FROM       PATH\n  the owner  ${path}\n\n1 drop\n`,
+      err: '',
+    });
+  });
+
+  test('--follow watches the plain team root', async () => {
+    plainRoot();
+    drop(D_OWNER, `${OWNER_HEADER}\n\nalready waiting\n`);
+    let polls = 0;
+    const sources: DropsSources = {
+      home,
+      poll: async () => {
+        polls += 1;
+        if (polls === 1) {
+          drop(D_AGENT, `${AGENT_HEADER}\n\nfresh\n`);
+          return true;
+        }
+        return false;
+      },
+    };
+    const result = await run(['--follow'], seatCaller('lead', 'w1:p1'), sources);
+    expect(result).toEqual({
+      code: 0,
+      out: `from orchestrator — ${join(dropDir, D_AGENT)}\n`,
+      err: '',
+    });
+    expect(polls).toBe(2);
+  });
+
+  test('--read hands a record over and receipts it against the plain root', async () => {
+    plainRoot();
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the root');
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({ code: 0, out: 'hello from the root\n', err: '' });
+    const at = receiptPath(dropDir, D_RECORD);
+    const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
+    const key = messageKeyState(home);
+    if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
+    expect(verifyReceipt(receipt, key.key)).toBe(true);
+    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id: D_RECORD, to: 'lead', root, session: 'acme' });
+  });
+});
+
 describe('team drops --read', () => {
   /** The signed read receipt beside a message: verified against the checkout's message key,
    *  bound to this message, seat, checkout and session, and 0600. */
