@@ -175,6 +175,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reads its drops at each turn start`, `reads its drops through its MCP inbox`, or `watches
   nothing: a drop sent here is never read`.
 
+- **A general seat brief, delivered first.** `up`, `add`, `restart` and `reload` write TeamCLI's
+  built-in general brief into each seat's drop folder as one signed message record before the
+  seat's rules land, and type nothing into any pane — human seats receive it the same way. The
+  text is the package's own, embedded from its accepted source; the record's id is derived from
+  the text, so the same brief has one id in every seat's folder and a second run leaves the first
+  record and its time as they are. The session's state records each delivery, and `team check`
+  names a launched seat with no delivery record, with its repair. `bun run brief:check` fails
+  unless the embedded text still hashes to its pinned value, and given the source it compares the
+  two byte for byte and names the first line that differs; CI runs the pin.
+
 ### Changed
 
 - **The default delivery order, and the words a level may add.** A send whose receiving seat
@@ -273,6 +283,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
   0.5.2.
+
+- No team can override the general seat brief yet: it is TeamCLI's built-in default, shipped in
+  the package, and every team receives that text. A registry-held definition, overridable by an
+  entity or a project, is deferred to 0.5.2.
 
 ## [0.5.0] - 2026-10-18
 
