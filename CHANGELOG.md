@@ -187,15 +187,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reads its drops at each turn start`, `reads its drops through its MCP inbox`, or `watches
   nothing: a drop sent here is never read`.
 
-- **A general seat brief, delivered first.** `up`, `add`, `restart` and `reload` write TeamCLI's
-  built-in general brief into each seat's drop folder as one signed message record before the
-  seat's rules land, and type nothing into any pane — human seats receive it the same way. The
-  text is the package's own, embedded from its accepted source; the record's id is derived from
-  the text, so the same brief has one id in every seat's folder and a second run leaves the first
-  record and its time as they are. The session's state records each delivery, and `team check`
-  names a launched seat with no delivery record, with its repair. `bun run brief:check` fails
-  unless the embedded text still hashes to its pinned value, and given the source it compares the
-  two byte for byte and names the first line that differs; CI runs the pin.
+- **A general seat brief, delivered first.** `up` writes TeamCLI's built-in general brief into
+  every declared seat's drop folder as one signed message record before the plan types a rules
+  line into any pane, human seats included; `add`, `restart` and `reload` write it to the one seat
+  they act on and refuse a human pane, so a human seat's record comes from `up` alone. Nothing is
+  typed into any pane. The text is the package's own, embedded from its accepted source; the
+  record's id is derived from the text, so the same brief has one id in every seat's folder and a
+  second run leaves the first record and its time as they are. The session's state records each
+  delivery, and `team check` names a launched seat with no delivery record, with its repair.
+  `bun run brief:check` fails unless the embedded text still hashes to its pinned value, and given
+  the source it compares the two byte for byte and names the first line that differs; CI runs the
+  pin.
 
 ### Changed
 
@@ -254,8 +256,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lead-marked seat of the team whose project is the entity — that team's roster, root and
   session — and the climb is left there as one signed runtime record in that lead's mailbox,
   where that team's watch rings it as a message. The team's own orchestrator keeps no clock: its
-  `seat.at-prompt` already routes to the entity's lead and the owner, and the same mailbox
-  record is left. A watch that restarts mid-spell starts the clock again, so a prompt held
+  `seat.at-prompt` reaches the routing table's lead and operator, and because the prompted seat is
+  the lead, it also reaches the entity's lead and the owner; the same mailbox record is left. A
+  watch that restarts mid-spell starts the clock again, so a prompt held
   across a restart can climb once more. Nothing is typed into any pane — a climb is an event
   and a record, never a keystroke — so a human seat's prompt climbs the same way. The check is
   one of the five the watch file cannot turn off.
