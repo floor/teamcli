@@ -9,11 +9,14 @@ import { fileURLToPath } from 'node:url';
 import { runMcp } from '../src/commands/mcp.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
-import { testIo } from './helpers.ts';
+import { signRecord } from '../src/send/record.ts';
+import { recordBody, testIo } from './helpers.ts';
 
 const SESSION = 'acme';
 const LEAD_ID = '0b7c4f4e-3c4a-4f6e-9a2b-5d1c7e8f9a01';
 const WORKER_ID = '1c8d5a5f-4d5b-4a7f-8b3c-6e2d8f9a0b12';
+const TAMPERED_ID = '2d9e6b60-5e6c-4b80-9c4d-7f3e9a0b1c23';
+const UNSIGNED_ID = '3eaf7c71-6f7d-4c91-8d5e-8a4fab1c2d34';
 
 function teamText(seats: readonly string[]): string {
   const rows = seats.map((name, at) => `  - role: ${at === 0 ? 'coordinator' : 'worker'}
@@ -35,14 +38,17 @@ ${rows}
 `;
 }
 
-type Place = { root: string; dropDir(name: string): string; cleanup(): void };
+type Place = { root: string; home: string; dropDir(name: string): string; cleanup(): void };
 
 function place(seats: readonly string[] = ['lead', 'worker']): Place {
   const root = mkdtempSync(join(tmpdir(), 'team-inbox-'));
   mkdirSync(join(root, '.agents'));
+  // The message key lives under this home, never the one of the machine running the suite.
+  mkdirSync(join(root, 'home'), { mode: 0o700 });
   writeFileSync(join(root, '.agents', 'team.yaml'), teamText(seats));
   return {
     root,
+    home: join(root, 'home'),
     dropDir: (name) => join(root, '.agents', 'send-drops', SESSION, name),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
@@ -53,6 +59,25 @@ function drop(at: string, id: string, body: string): string {
   const path = join(at, id);
   writeFileSync(path, body, { mode: 0o600 });
   return path;
+}
+
+/** The record a send writes: one signed envelope under the id's own name, in `to`'s folder. */
+function signed(at: Place, to: string, id: string, body: string): string {
+  const record = signRecord({
+    kind: 'message',
+    id,
+    to,
+    to_id: null,
+    root: realpathSync(at.root),
+    session: SESSION,
+    at: '2026-10-17T12:00:00.000Z',
+    body,
+    from: 'worker',
+    from_id: null,
+    rule: 'the owner',
+    thread: id,
+  }, at.home);
+  return drop(at.dropDir(to), id, `${JSON.stringify(record, null, 2)}\n`);
 }
 
 /** A stream the test feeds: `push` one line, `end` closes it, `replies` collects what was written. */
@@ -99,7 +124,7 @@ function queue(): {
   };
 }
 
-async function preloaded(root: string, lines: readonly string[], seat = 'lead', session: string | undefined = SESSION) {
+async function preloaded(root: string, home: string, lines: readonly string[], seat = 'lead', session: string | undefined = SESSION) {
   const io = testIo(root);
   const replies: string[] = [];
   const code = await runMcpServe({ seat, session }, io, {
@@ -107,7 +132,7 @@ async function preloaded(root: string, lines: readonly string[], seat = 'lead', 
       for (const line of lines) yield line;
     })(),
     write: (line) => replies.push(line),
-  });
+  }, { home });
   return { code, io, replies: replies.map((line) => JSON.parse(line) as Record<string, any>) };
 }
 
@@ -119,7 +144,7 @@ describe('team mcp serve', () => {
   test('the handshake names the tools, and stdin closing removes the marker', async () => {
     const at = place();
     try {
-      const { code, io, replies } = await preloaded(at.root, [
+      const { code, io, replies } = await preloaded(at.root, at.home, [
         JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } }),
         JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
         JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
@@ -144,7 +169,7 @@ describe('team mcp serve', () => {
     try {
       const io = testIo(at.root);
       const feed = queue();
-      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed);
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
       for (let wait = 0; wait < 200 && !existsSync(listenerPath(at.dropDir('lead'))); wait++) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
@@ -165,7 +190,7 @@ describe('team mcp serve', () => {
       const elsewhere = join(at.root, 'elsewhere');
       mkdirSync(elsewhere);
       symlinkSync(elsewhere, join(at.root, '.agents', 'send-drops'));
-      const { code, io } = await preloaded(at.root, []);
+      const { code, io } = await preloaded(at.root, at.home, []);
       expect(code).toBe(2);
       expect(io.err).toContain('not a real folder');
       expect(readdirSync(elsewhere)).toEqual([]);
@@ -188,7 +213,7 @@ describe('team mcp serve', () => {
             // no lines
           })(),
           write: () => {},
-        });
+        }, { home: at.home });
         expect(code).toBe(2);
         expect(io.err).toContain(needle);
       }
@@ -200,13 +225,13 @@ describe('team mcp serve', () => {
   test('a seat sees its own inbox and never another seat’s', async () => {
     const at = place();
     try {
-      drop(at.dropDir('lead'), LEAD_ID, 'for lead');
-      drop(at.dropDir('worker'), WORKER_ID, 'for worker');
-      const { replies } = await preloaded(at.root, [call('1', 'inbox_check'), call('2', 'inbox_read', { id: WORKER_ID })]);
+      const leadPath = signed(at, 'lead', LEAD_ID, 'for lead');
+      signed(at, 'worker', WORKER_ID, 'for worker');
+      const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_check'), call('2', 'inbox_read', { id: WORKER_ID })]);
       expect(replies).toHaveLength(2);
       const listed = JSON.parse(replies[0]!.result.content[0].text) as { unread: { id: string; bytes: number }[] };
       expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
-      expect(listed.unread[0]!.bytes).toBe(Buffer.byteLength('for lead'));
+      expect(listed.unread[0]!.bytes).toBe(Buffer.byteLength(readFileSync(leadPath, 'utf8')));
       expect(replies[1]!.result.isError).toBe(true);
       expect(replies[1]!.result.content[0].text).toContain('no message');
       expect(existsSync(receiptPath(at.dropDir('worker'), WORKER_ID))).toBe(false);
@@ -219,15 +244,15 @@ describe('team mcp serve', () => {
   test('a read writes its receipt before the body leaves, and the message then leaves the list', async () => {
     const at = place();
     try {
-      drop(at.dropDir('lead'), LEAD_ID, 'the body');
-      const { replies } = await preloaded(at.root, [call('1', 'inbox_read', { id: LEAD_ID }), call('2', 'inbox_check')]);
+      signed(at, 'lead', LEAD_ID, 'the body');
+      const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID }), call('2', 'inbox_check')]);
       expect(replies[0]!.result).toEqual({ content: [{ type: 'text', text: 'the body' }] });
       const receipt = JSON.parse(readFileSync(receiptPath(at.dropDir('lead'), LEAD_ID), 'utf8')) as Record<string, unknown>;
       expect(receipt).toMatchObject({ v: 1, id: LEAD_ID, seat: 'lead', session: SESSION, tool: 'inbox_read', pid: process.pid });
       const listed = JSON.parse(replies[1]!.result.content[0].text) as { unread: unknown[] };
       expect(listed.unread).toEqual([]);
-      // The message itself is untouched: the inbox marks, it never moves the file.
-      expect(readFileSync(join(at.dropDir('lead'), LEAD_ID), 'utf8')).toBe('the body');
+      // The record itself is untouched: the inbox marks, it never moves or rewrites the file.
+      expect(recordBody(join(at.dropDir('lead'), LEAD_ID))).toBe('the body');
     } finally {
       at.cleanup();
     }
@@ -236,13 +261,13 @@ describe('team mcp serve', () => {
   test('an id is a UUID and never a path, and a symlinked drop is not served', async () => {
     const at = place();
     try {
-      drop(at.dropDir('lead'), LEAD_ID, 'real');
+      signed(at, 'lead', LEAD_ID, 'real');
       const outside = join(at.root, 'outside');
       writeFileSync(outside, 'target', { mode: 0o600 });
       symlinkSync(outside, join(at.dropDir('lead'), WORKER_ID));
       const outsideReceipt = join(at.root, 'outside.read');
       symlinkSync(outsideReceipt, receiptPath(at.dropDir('lead'), LEAD_ID + ''));
-      const { replies } = await preloaded(at.root, [
+      const { replies } = await preloaded(at.root, at.home, [
         call('1', 'inbox_read', { id: `../../worker/${WORKER_ID}` }),
         call('2', 'inbox_read', { id: LEAD_ID }),
         call('3', 'inbox_check'),
@@ -261,7 +286,7 @@ describe('team mcp serve', () => {
   test('tool faults are results, parse errors and unknown methods are protocol errors', async () => {
     const at = place();
     try {
-      const { replies } = await preloaded(at.root, [
+      const { replies } = await preloaded(at.root, at.home, [
         'not json',
         JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'nope' }),
         call('3', 'frobnicate'),
@@ -301,6 +326,61 @@ describe('team mcp serve', () => {
       for (const line of lines) expect(() => JSON.parse(line) as unknown).not.toThrow();
       expect(JSON.parse(lines[0]!) as Record<string, any>).toMatchObject({ id: 1, result: { serverInfo: { name: 'team-inbox' } } });
       expect(existsSync(listenerPath(at.dropDir('lead')))).toBe(false);
+    } finally {
+      at.cleanup();
+    }
+  });
+});
+
+describe('an inbox read serves only a record it verified', () => {
+  test('a signed record returns its body, and the receipt is written', async () => {
+    const at = place();
+    try {
+      signed(at, 'lead', LEAD_ID, 'the draft is ready');
+      const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID })]);
+      expect(replies[0]!.result.isError).toBeUndefined();
+      expect(replies[0]!.result.content[0].text).toBe('the draft is ready');
+      const receipt = JSON.parse(readFileSync(receiptPath(at.dropDir('lead'), LEAD_ID), 'utf8')) as Record<string, unknown>;
+      expect(receipt).toMatchObject({ v: 1, id: LEAD_ID, seat: 'lead', session: SESSION, tool: 'inbox_read' });
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a tampered record is refused with the reason, and no receipt is written', async () => {
+    const at = place();
+    try {
+      const path = signed(at, 'lead', LEAD_ID, 'the body the sender wrote');
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { payload: { body: string }; signature: string };
+      parsed.payload.body = 'the body a tamperer wants';
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+      const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID }), call('2', 'inbox_check')]);
+      expect(replies[0]!.result.isError).toBe(true);
+      expect(replies[0]!.result.content[0].text).toContain('does not verify');
+      expect(replies[0]!.result.content[0].text).not.toContain('the body a tamperer wants');
+      expect(existsSync(receiptPath(at.dropDir('lead'), LEAD_ID))).toBe(false);
+      // Nothing was shown, so the message is still unread and the check still names it.
+      const listed = JSON.parse(replies[1]!.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('an unsigned record is refused with the reason, and no receipt is written', async () => {
+    const at = place();
+    try {
+      const path = signed(at, 'lead', UNSIGNED_ID, 'the body nobody signed');
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { payload: unknown; signature?: string };
+      delete parsed.signature;
+      writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+      const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: UNSIGNED_ID }), call('2', 'inbox_check')]);
+      expect(replies[0]!.result.isError).toBe(true);
+      expect(replies[0]!.result.content[0].text).toContain('not a signed record');
+      expect(replies[0]!.result.content[0].text).not.toContain('the body nobody signed');
+      expect(existsSync(receiptPath(at.dropDir('lead'), UNSIGNED_ID))).toBe(false);
+      const listed = JSON.parse(replies[1]!.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([UNSIGNED_ID]);
     } finally {
       at.cleanup();
     }

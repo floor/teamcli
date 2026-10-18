@@ -3,11 +3,13 @@
 // The server is started by the seat's own launch line, so the seat, session and root are the
 // launch's and never a tool argument's. It writes `.inbox-listener` into the seat's drop folder
 // while it runs, serves two tools (`inbox_check`, `inbox_read`), and removes the marker when its
-// stdin closes. A read writes `<id>.read` before the body is returned; that receipt is the only
-// proof of delivery this leg has, and it means the message was read, not acted on.
+// stdin closes. A read verifies the record's signature with the message key before it shows the
+// body, and writes `<id>.read` before the body is returned; that receipt is the only proof of
+// delivery this leg has, and it means the message was read, not acted on.
 //
 // Nothing here is a push: MCP is client-pull, so the seat notices a message when it calls
 // `inbox_check`. The drop-folder watch is the bounded fall-back, not this process.
+import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { loadTeamFile } from '../file/load.ts';
 import type { Io } from '../io.ts';
@@ -39,7 +41,13 @@ export type ServeStreams = {
 
 export type ServeOptions = { seat: string | undefined; session: string | undefined };
 
-type Serving = { seat: string; session: string; root: string; dropDir: string };
+/** Where the server reads the message key. The launch uses the process's home; a test pins its
+ *  own, so no read can reach the home of the machine running the suite. */
+export type ServeHost = { home: string };
+
+export const realServeHost: ServeHost = { home: homedir() };
+
+type Serving = { seat: string; session: string; root: string; dropDir: string; home: string };
 type RequestId = string | number | null;
 
 /** The process's stdin and stdout, framed the way MCP's stdio transport reads them. */
@@ -119,7 +127,12 @@ function callTool(params: unknown, serving: Serving): unknown {
     if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
       return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
     }
-    const read = readMessage(serving.dropDir, id, serving.seat, serving.session, process.pid);
+    const read = readMessage(
+      { dropDir: serving.dropDir, root: serving.root, seat: serving.seat, session: serving.session },
+      id,
+      process.pid,
+      serving.home,
+    );
     if (!read.ok) return toolError(read.reason);
     return toolText(read.body);
   }
@@ -174,14 +187,19 @@ export function handleLine(line: string, serving: Serving): string | null {
  * team file declares, and `--session`, when given, must be the team's own session: the server
  * serves exactly one inbox. Exit 0 when stdin closes; 2 when it cannot start.
  */
-export async function runMcpServe(options: ServeOptions, io: Io, streams: ServeStreams = processStreams()): Promise<number> {
+export async function runMcpServe(
+  options: ServeOptions,
+  io: Io,
+  streams: ServeStreams = processStreams(),
+  host: ServeHost = realServeHost,
+): Promise<number> {
   const refuse = (message: string): number => {
     io.stderr(`team mcp serve: ${message}\n`);
     // exit: mcp.serve-refused
     return 2;
   };
   if (options.seat === undefined || options.seat === '') return refuse('--seat <seat> is required');
-  const loaded = loadTeamFile(io.cwd);
+  const loaded = loadTeamFile(io.cwd, { home: host.home });
   if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
   const team = loaded.team;
   const session = options.session ?? team.session;
@@ -204,7 +222,7 @@ export async function runMcpServe(options: ServeOptions, io: Io, streams: ServeS
     ts: new Date().toISOString(),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
-  const serving: Serving = { seat: seat.name, session: team.session, root: loaded.root, dropDir };
+  const serving: Serving = { seat: seat.name, session: team.session, root: loaded.root, dropDir, home: host.home };
   try {
     for await (const line of streams.lines) {
       const reply = handleLine(line, serving);

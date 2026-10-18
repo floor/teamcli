@@ -77,7 +77,10 @@ report — replaces the earlier outcome, and a `--follow` pass prints the update
 ## The evidence rule
 
 The receipt is the only evidence this leg produces, and it is written by `inbox_read` before the
-body is returned. It says the seat *read* the message, not that it acted on it. So:
+body is returned, once the record's signature has been checked against the checkout's message
+key. A file that is not a signed record, or whose signature does not verify, is refused with a
+tool error and no receipt: a receipt never proves a read of something the server could not
+authenticate. It says the seat *read* the message, not that it acted on it. So:
 
 - a receipt is `delivered (read)`, in the console, the JSON, the history and `team feed`;
 - no receipt is `sent (unconfirmed)`, with the drop kept;
