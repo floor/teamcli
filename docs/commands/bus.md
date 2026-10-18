@@ -3,8 +3,11 @@
 Runs the foreground process that owns the project's event log (`events.jsonl`), runs the periodic
 reconciliation pass over durable message and seat records, and serves `publish` and `subscribe`
 over `.agents/bus.sock`. The owner starts it, in a terminal outside herdr, one per clone. Ctrl-C
-stops it. Nothing starts it for you in 0.5.1; when no bus is running, `team watch` and `team send`
-fall back cleanly to polling and direct delivery.
+stops it. Nothing starts it for you in 0.5.1; when no bus is running, `team watch` falls back
+cleanly to polling, and on a sequence `gap` it resets its cursor and clears its active-condition
+set so the next pass re-announces any still-true reports while a subscriber's message projection
+rebuilds from the durable records (`team send` writes those records directly and never uses the
+bus in this build; the bus picks up message and receipt records through its reconciliation pass).
 
 ## Synopsis
 

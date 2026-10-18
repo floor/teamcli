@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PRIVILEGED_SELF_SUBSCRIPTION_RULE } from '../src/bus/kinds.ts';
 import { createSequenceTracker, type SignedEventRecord } from '../src/bus/log.ts';
+import { reconcilePass } from '../src/bus/reconcile.ts';
 import {
   busSocket,
   publishToBus,
@@ -21,6 +22,7 @@ import { attention as checkAttention } from '../src/watch/checks/attention.ts';
 import { missing as checkMissing } from '../src/watch/checks/missing.ts';
 import { providerError as checkProviderError } from '../src/watch/checks/provider-error.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
+import { readScreen } from '../src/watch/screen.ts';
 
 const dirs: string[] = [];
 const handles: BusHandle[] = [];
@@ -373,26 +375,60 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     expect(nextSync).toBe(true);
     expect(seenEvents.length).toBe(7);
 
-    // 4. On `gap`, syncWatchBus resets the tracker to `newest_seq` and the same pass's poll
-    //    rebuilds watch state identically from the durable session records (N6).
-    const gapTracker = createSequenceTracker(1);
-    const gapSync = await syncWatchBus(root, gapTracker, {
-      busSubscribe: async () => ({ kind: 'gap', oldest_seq: 4, newest_seq: 7 }),
-      onBusGap: (oldest, newest) => seenGaps.push({ oldest, newest }),
+    // 4. Pin the gap rebuild end-to-end (N6):
+    //    - `gapFollower` and `fullReplayFollower` both observe `t0` (state before the gap).
+    //    - During `t1` and `t2`, `fullReplayFollower` subscribes after each pair of events (staying
+    //      within `bufferLimit: 2`, so it replays every event without a gap) while `gapFollower` misses
+    //      both steps: `m-1` advances to `read`, `worker-1` clears its permission prompt across two
+    //      passes, `m-2` arrives for `op-1`, and `op-1` hits a question prompt.
+    //    - At `t2`, `gapFollower` subscribes from its pre-gap cursor (`2`), receives a real `gap`
+    //      (`oldest_seq: 3, newest_seq: 6`), resets its tracker + clears `memory.active` so the pass
+    //      re-announces still-true reports, rebuilds its message projection from the durable
+    //      drop/receipt records on disk, and runs `pass()`.
+    //    - Verify `stateBeforeGap` differs from `fullReplayState`, and `rebuiltState` equals `fullReplayState`.
+    const { root: gapRoot, home: gapHome } = makeScratch();
+    const gapBus = await startBus({
+      root: gapRoot,
+      team: parsed.team,
+      home: gapHome,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      bufferLimit: 2,
     });
-    expect(gapSync).toBe(true);
-    expect(gapTracker.cursor).toBe(7);
-    expect(seenGaps).toEqual([{ oldest: 4, newest: 7 }]);
+    expect(gapBus.kind).toBe('serving');
+    if (gapBus.kind !== 'serving') return;
+    handles.push(gapBus.handle);
 
-    const liveWorld = {
-      running: true,
-      agents: [
-        { name: 'clerk', pane: 's1:p1', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
-        { name: 'op-1', pane: 's1:p2', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
-      ],
-      workspaces: [{ id: 'w1', label: 'acme' }],
-      screens: {},
+    const dropDirWorker1 = join(gapRoot, '.agents', 'send-drops', 'acme', 'worker-1');
+    const dropDirOp1 = join(gapRoot, '.agents', 'send-drops', 'acme', 'op-1');
+    mkdirSync(dropDirWorker1, { recursive: true });
+    mkdirSync(dropDirOp1, { recursive: true });
+
+    const foldMessageEvent = (messages: Record<string, string>, ev: SignedEventRecord): void => {
+      const id = ev.payload.record_id?.replace(/:(delivered|read|replied|held)$/, '');
+      if (!id) return;
+      if (ev.payload.kind === 'message.arrived' && !messages[id]) messages[id] = 'arrived';
+      if (ev.payload.kind === 'message.delivered' && messages[id] !== 'read') messages[id] = 'delivered';
+      if (ev.payload.kind === 'message.read') messages[id] = 'read';
     };
+
+    const rebuildMessagesFromDisk = (r: string): Record<string, string> => {
+      const rebuilt: Record<string, string> = {};
+      const sessionDir = join(r, '.agents', 'send-drops', 'acme');
+      for (const seat of ['clerk', 'op-1', 'worker-1']) {
+        const dir = join(sessionDir, seat);
+        if (!existsSync(dir)) continue;
+        const files = readdirSync(dir).sort();
+        for (const f of files) {
+          if (f.includes('.')) continue;
+          rebuilt[f] = 'arrived';
+          if (existsSync(join(dir, `${f}.delivered`))) rebuilt[f] = 'delivered';
+          if (existsSync(join(dir, `${f}.read`))) rebuilt[f] = 'read';
+        }
+      }
+      return rebuilt;
+    };
+
     const machineWorld = {
       loadPerCore: 1,
       memoryFree: 50,
@@ -401,25 +437,132 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       swapFree: 7e9,
       swapUsed: 1e9,
     };
-    const afterGapPass = pass({
-      team: parsed.team,
-      state: emptySession(),
-      live: liveWorld,
-      machine: machineWorld,
-      now: Date.parse('2026-10-18T12:16:00.000Z'),
+
+    const makeFollower = () => ({
+      tracker: createSequenceTracker(0),
       memory: newMemory(),
-      watch: parsed.team.watch,
+      messages: {} as Record<string, string>,
+      gaps: [] as Array<{ oldest: number; newest: number }>,
     });
-    const directPollPass = pass({
-      team: parsed.team,
-      state: emptySession(),
-      live: liveWorld,
-      machine: machineWorld,
-      now: Date.parse('2026-10-18T12:16:00.000Z'),
-      memory: newMemory(),
-      watch: parsed.team.watch,
+
+    const gapFollower = makeFollower();
+    const fullReplayFollower = makeFollower();
+
+    const stepFollower = async (
+      follower: ReturnType<typeof makeFollower>,
+      nowMs: number,
+      screens: Record<string, string>,
+    ) => {
+      const ok = await syncWatchBus(
+        gapRoot,
+        follower.tracker,
+        {
+          busSubscribe: (r, cursor) => subscribeBusOnce(r, { seat: 'watch', cursor }, { deadlineMs: 500 }),
+          onBusEvent: (ev) => foldMessageEvent(follower.messages, ev),
+          onBusGap: (oldest, newest) => {
+            follower.gaps.push({ oldest, newest });
+            follower.messages = rebuildMessagesFromDisk(gapRoot);
+          },
+        },
+        follower.memory,
+      );
+      expect(ok).toBe(true);
+      const liveWorld = {
+        running: true,
+        agents: [
+          { name: 'clerk', pane: 's1:p1', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
+          { name: 'op-1', pane: 's1:p2', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
+          { name: 'worker-1', pane: 's1:p3', workspace: 'w1', status: 'idle', agent: 'claude', cwd: null },
+        ],
+        workspaces: [{ id: 'w1', label: 'acme' }],
+        screens,
+      };
+      const result = pass({
+        team: parsed.team,
+        state: emptySession(),
+        live: liveWorld,
+        machine: machineWorld,
+        now: nowMs,
+        memory: follower.memory,
+        watch: parsed.team.watch,
+        readScreen: (cli, raw) => (raw === undefined ? { kind: 'idle' } : readScreen(cli, raw)),
+      });
+      return {
+        cursor: follower.tracker.cursor,
+        active: [...follower.memory.active].sort(),
+        grace: [...follower.memory.grace].sort(),
+        messages: { ...follower.messages },
+        reports: result.reports.map((rep) => rep.key),
+      };
+    };
+
+    // t0 (before the gap): m-1 arrives for worker-1, and worker-1 is at a permission prompt (seq 1..2).
+    const t0Iso = '2026-10-18T12:16:00.000Z';
+    writeFileSync(join(dropDirWorker1, 'm-1'), 'from clerk\n\ntask 1\n', { mode: 0o600 });
+    reconcilePass({ project: 'acme', root: gapRoot, session: 'acme', home: gapHome, now: new Date(t0Iso) });
+    await publishWatchReportsToBus(
+      gapRoot,
+      'acme',
+      checkAttention.run(makeSeatObs({ name: 'worker-1', attention: 'permission', prompt: true }), ctx),
+      t0Iso,
+      (r, ev) => publishToBus(r, ev),
+    );
+    const screensAtT0 = { 's1:p3': 'Do you want to proceed?\n❯ 1. Yes\n  2. No' };
+    const stateBeforeGap = await stepFollower(gapFollower, Date.parse(t0Iso), screensAtT0);
+    const fullAtT0 = await stepFollower(fullReplayFollower, Date.parse(t0Iso), screensAtT0);
+    expect(stateBeforeGap).toEqual(fullAtT0);
+    expect(stateBeforeGap).toEqual({
+      cursor: 2,
+      active: ['blocked:worker-1'],
+      grace: [],
+      messages: { 'm-1': 'arrived' },
+      reports: ['blocked:worker-1'],
     });
-    expect(afterGapPass.reports).toEqual(directPollPass.reports);
+
+    // t1 (during the gap): m-1 gets delivered + read receipts (seq 3..4), and worker-1 returns to idle.
+    // `fullReplayFollower` steps at t1 (2 new events <= bufferLimit 2, so no gap); `gapFollower` misses t1.
+    const t1Iso = '2026-10-18T12:17:00.000Z';
+    writeFileSync(join(dropDirWorker1, 'm-1.delivered'), '2026-10-18T12:16:20.000Z\n', { mode: 0o600 });
+    writeFileSync(join(dropDirWorker1, 'm-1.read'), '2026-10-18T12:16:40.000Z\n', { mode: 0o600 });
+    reconcilePass({ project: 'acme', root: gapRoot, session: 'acme', home: gapHome, now: new Date(t1Iso) });
+    const fullAtT1 = await stepFollower(fullReplayFollower, Date.parse(t1Iso), {});
+    expect(fullAtT1).toEqual({
+      cursor: 4,
+      active: ['blocked:worker-1'],
+      grace: ['blocked:worker-1'],
+      messages: { 'm-1': 'read' },
+      reports: [],
+    });
+
+    // t2 (end of gap): m-2 arrives for op-1 and op-1 hits a question prompt (seq 5..6).
+    // `fullReplayFollower` steps at t2 (seq 5..6 <= bufferLimit 2, no gap; `blocked:worker-1` clears after
+    // its second quiet pass). `gapFollower` now syncs from its pre-gap cursor (2), hits the real gap
+    // (6 - 2 = 4 > bufferLimit 2), resets its tracker + stale flicker memory, rebuilds from disk, and runs pass().
+    const t2Iso = '2026-10-18T12:18:00.000Z';
+    writeFileSync(join(dropDirOp1, 'm-2'), 'from clerk\n\ntask 2\n', { mode: 0o600 });
+    reconcilePass({ project: 'acme', root: gapRoot, session: 'acme', home: gapHome, now: new Date(t2Iso) });
+    await publishWatchReportsToBus(
+      gapRoot,
+      'acme',
+      checkAttention.run(makeSeatObs({ name: 'op-1', attention: 'question', prompt: true }), ctx),
+      t2Iso,
+      (r, ev) => publishToBus(r, ev),
+    );
+    const screensAtT2 = { 's1:p2': '? Which branch should we target?\n❯ 1. main\n  2. int/0.5.1\nEnter to select · ↑/↓ to navigate' };
+    const fullReplayState = await stepFollower(fullReplayFollower, Date.parse(t2Iso), screensAtT2);
+    const rebuiltState = await stepFollower(gapFollower, Date.parse(t2Iso), screensAtT2);
+
+    expect(fullReplayFollower.gaps).toEqual([]);
+    expect(gapFollower.gaps).toEqual([{ oldest: 3, newest: 6 }]);
+    expect(stateBeforeGap).not.toEqual(fullReplayState);
+    expect(rebuiltState).toEqual(fullReplayState);
+    expect(rebuiltState).toEqual({
+      cursor: 6,
+      active: ['question:op-1'],
+      grace: [],
+      messages: { 'm-1': 'read', 'm-2': 'arrived' },
+      reports: ['question:op-1'],
+    });
   });
 
   test('runBus command enforces usage (2), detached/non-owner refusal (1), and clean start/stop (0)', async () => {
