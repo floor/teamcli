@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
+import { standingOf } from '../src/caller.ts';
+import { runTeamCheck } from '../src/check/team.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
 import { runRestart, USAGE, type RestartSources } from '../src/commands/restart.ts';
@@ -14,7 +16,10 @@ import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { readAgents } from '../src/registry/agents.ts';
+import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
+import { approvalStanding } from '../src/store/store.ts';
+import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -367,6 +372,74 @@ describe('team restart <seat>', () => {
 
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(0);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(1);
+  });
+
+  test('check names the lead for the restart it prints, and the restart gate admits that lead', async () => {
+    // The missing-seat line prints `team restart <seat>` with `who: the team's lead`. That is the
+    // map's own row (`restart: owner-or-leads`) answered by the function `restart.ts` calls, so a
+    // lead must be able to run the line as printed. `team add` is the owner's alone — the owner
+    // writes a seat into the file — and the check names it nowhere: the two acts are different
+    // rows, and a lead reading the line is handed the one it can run. The team is registered with
+    // its roster, the shape a launched team has on this machine, not the file-declaration fallback
+    // the test above reads.
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    const id = teamIdOf(fixture.root);
+    upsertTeam(fixture.home, id, { project: 'acme', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    setRoster(fixture.home, id, [
+      { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+    ]);
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const opsCaller: Caller = { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' };
+
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const checkIo = testIo(fixture.root, leadCaller);
+    const code = runTeamCheck({}, checkIo, {
+      live: () => ({
+        running: true,
+        agents: [
+          { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: fixture.root },
+          { name: 'ops', agent: 'claude-code', pane: 'pane-ops', workspace: 'ws-ops', status: 'idle', cwd: fixture.root },
+        ],
+        workspaces: [
+          { id: 'ws-lead', label: 'lead' },
+          { id: 'ws-ops', label: 'ops' },
+        ],
+        screens: { 'pane-lead': CLAUDE_IDLE, 'pane-ops': CLAUDE_IDLE },
+      }),
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, fixture.home),
+      now: () => NOW,
+      home: fixture.home,
+    });
+    expect(code).toBe(1);
+    expect(checkIo.out).toContain(
+      'difference: worker is in the file and is not running\n  repair: team restart worker\n  who: the team\'s lead\n',
+    );
+    expect(checkIo.out).not.toContain('team add');
+
+    // The gate behind the printed command, in the registry-listed shape: the roster's `leads`
+    // mark admits the lead, the map refuses a plain seat, and `team add` stays the owner's.
+    const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+    if (!loaded.ok) throw new Error('fixture team does not validate');
+    const standingOfLead = standingOf(fixture.dir, 'acme', leadCaller);
+    const standingOfOps = standingOf(fixture.dir, 'acme', opsCaller);
+    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfLead, () => NOW)).toEqual({ kind: 'ok' });
+    expect(gateVerdict(opsCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfOps, () => NOW)).toEqual({ kind: 'refused' });
+    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'add', standingOfLead, () => NOW)).toEqual({ kind: 'refused' });
+    expect(gateVerdict({ kind: 'owner' }, loaded.team, fixture.root, fixture.home, 'add', { session: 'acme' }, () => NOW)).toEqual({ kind: 'ok' });
+
+    // And the lead runs the line as printed: the seat starts where nothing was closed.
+    const io = testIo(fixture.root, leadCaller);
+    expect(await runRestart(['worker'], io, sources)).toBe(0);
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(1);
