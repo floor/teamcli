@@ -166,7 +166,7 @@ describe('team status', () => {
     live = { running: false, agents: [], workspaces: [], screens: {} };
     const { code, out } = await status();
     expect(out).toContain('note: the herdr session "acme-web" is not running');
-    expect(out).toContain('repair: the team\'s lead runs team up');
+    expect(out).toContain('repair: the owner runs team up');
     expect(out).not.toContain('grok-acme is in the file');
     expect(out).toContain('4 differences');
     expect(code).toBe(1);
@@ -744,13 +744,13 @@ describe('team status', () => {
     const approveRun = await status();
     expect(approveRun.out).toContain('repair: the live file is what the commands read');
 
-    // 2. the team's lead runs team up
+    // 2. the owner runs team up: with the session down a lead cannot prove its pane
     const validTeam = validateTeamFile(example);
     if (!validTeam.ok) throw new Error('invalid example');
     standing = verifiedOf(validTeam.team, example, dir, NOW);
     live = { running: false, agents: [], workspaces: [], screens: {} };
     const upRun = await status();
-    expect(upRun.out).toContain('repair: the team\'s lead runs team up');
+    expect(upRun.out).toContain('repair: the owner runs team up');
 
     // 3. the team's lead runs team up (it resumes the launch): the map's `up` row admits a
     // lead, so no owner count
@@ -928,7 +928,7 @@ describe('team status', () => {
         '  repair: the owner answers it in the pane\n' +
         '  who: the owner\n',
     );
-    expect(trustRes.out).toContain('1 difference(s), 1 for the owner\n');
+    expect(trustRes.out).toContain('1 difference, 1 for the owner\n');
   });
 
   test('D: summary line: with and without an owner repair', async () => {

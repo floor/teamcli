@@ -425,9 +425,10 @@ export function compare(
       // With the session up, `team restart <seat>` is the per-seat repair the map admits to the
       // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
       // this line must be handed a command it can run. With nothing running the session itself is
-      // down, a lead cannot prove its pane, and `team up` is what starts it.
-      repair: anyRunning ? `team restart ${seat.name}` : "the team's lead runs team up",
+      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
+      repair: anyRunning ? `team restart ${seat.name}` : 'the owner runs team up',
       needs: 'approve',
+      ...(anyRunning ? {} : { owner: true as const }),
     });
   }
 

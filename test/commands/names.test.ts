@@ -159,9 +159,9 @@ describe('the old spelling is the new run, one notice line first', () => {
         'team acme-web, session "acme-web"\n' +
           'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
           'difference: lead is in the file and is not running\n' +
-          '  repair: the team\'s lead runs team up\n' +
-          '  who: the team\'s lead\n' +
-          '1 difference\n',
+          '  repair: the owner runs team up\n' +
+          '  who: the owner\n' +
+          '1 difference, 1 for the owner\n',
       );
       expect(ran.stderr).toBe('');
       // A standing that still says something keeps its row first, and the row marks the repairs
@@ -181,9 +181,9 @@ describe('the old spelling is the new run, one notice line first', () => {
           '  repair: the live file is what the commands read\n' +
           '  who: the owner\n' +
           'difference: lead is in the file and is not running\n' +
-          '  repair: the team\'s lead runs team up (after: the live file is what the commands read)\n' +
-          '  who: the team\'s lead\n' +
-          '2 differences, 1 for the owner\n',
+          '  repair: the owner runs team up (after: the live file is what the commands read)\n' +
+          '  who: the owner\n' +
+          '2 differences, 2 for the owner\n',
       );
       expect(refused.stderr).toBe('');
     } finally {
