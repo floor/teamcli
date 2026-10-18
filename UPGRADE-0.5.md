@@ -12,7 +12,7 @@ the record, `team check` reads it against what is running, and `team up` admits 
 
 1. **`team check`**. It reads the file, the state, herdr, the registries and the agents' records,
    and reports the differences alone, each with its repair. What it finds depends on what is
-   running; in the upgrade acceptance run, with the team not started yet, it answered:
+   running; with the team not started yet, it answers:
 
    ```
    difference: orchestrator is in the file and is not running
@@ -75,7 +75,7 @@ block in `team doctor` is the honest list of what those rights are not.
 
 The file stays at `format: 1`, and the install does not rewrite it — header comment and schema
 URL included. Only a file that `team init` writes now carries the new schema URL
-(`floor/teamcli/v0.5.0-rc.5` where 0.3.5 wrote `floor/team/v0.3.5`); no command reads it. A file
+(`floor/teamcli/v0.5.0` where 0.3.5 wrote `floor/team/v0.3.5`); no command reads it. A file
 written by 0.3.5's own `init` already has `leads: true` and absolute trust entries, so a team that
 never hand-edited its file has nothing to change here. The deprecated keys, and what to do with
 each, are next.
