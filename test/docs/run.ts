@@ -277,8 +277,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRestart(rest, io, world.restartSources());
     case 'send': {
       // Every seat of the page's file is a live agent, so a native-CLI example resolves.
-      // `reply="…"` on the fence is the fake seat's answer on the thread: a `--wait` example with
-      // it finds a signed reply record on that thread and prints the reply.
+      // `reply="…"` on the fence is the fake seat's answer on the thread: with it, the wait
+      // finds a signed reply record on that thread and prints the reply;
+      // without it, the seat stays silent and the wait times out.
       const seats = page.team?.seats.map((seat) => seat.name) ?? ['claude-keeper'];
       const replyPath = reply !== undefined
         ? writeDocReply(fixture.root, fixture.home, page.session, seats[0] ?? 'claude-keeper', spec.now, reply)
