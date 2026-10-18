@@ -8,6 +8,10 @@
 // wrote is still a drop, and its first line names the sender. A `<id>.read.json` receipt beside
 // it — the sidecar the seat's inbox server writes when it hands the drop over, the same name the
 // record spine gives a read receipt — means the drop was read, and it is not listed.
+//
+// `team drops --read` is the same folder, served to the launch's turn-start hook: the launch
+// names the seat and session, each waiting record is verified and receipted through the inbox's
+// own read (`readMessage`), and only then is its body printed. The hook takes no placed caller.
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -23,6 +27,8 @@ import {
 } from '../caller.ts';
 import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
+import { heldAt } from '../launch/rules-file.ts';
+import { listUnread, readMessage } from '../mcp/inbox.ts';
 import {
   contextLine,
   hasJsonFlag,
@@ -36,6 +42,7 @@ import { isRead, signedRecordOf, verifyRecord, type StatusContext } from '../sen
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
+       team drops --read --seat <seat> [--session <session>]
 
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
@@ -49,10 +56,20 @@ Options:
              with exit 0. Drops already on disk when it starts are not printed.
   --json     one team.drops document ({format, project, session, seat, drops, counts});
              it and --follow can't be used together
+  --read     hand the seat's waiting messages to a turn: each record is
+             verified with the message key, its signed <id>.read.json receipt
+             is written before its body is printed, and at most ten are read a
+             run. The seat and session are the launch's, as with
+             \`team mcp serve\`: --seat is required and --session, when given,
+             must be the team file's. The launch's turn-start hook runs this,
+             so it takes no placed caller.
+  --seat     the seat whose folder --read serves
+  --session  the launch's session, which must be the team file's own
 
 Exits 0 when the folder is read, 1 when the caller is not a placed seat of this
-team, the team file can't be read, or the drop folder can't be read, 2 when the
-invocation can't be read or this folder is not a git repository.
+team, the team file can't be read, or the drop folder can't be read or a
+waiting message cannot be read, 2 when the invocation can't be read or this
+folder is not a git repository.
 `;
 
 /** One waiting drop: its file name (the send's id), the sender the message record names (or, in
@@ -99,6 +116,27 @@ function defaultPoll(): Promise<boolean> {
 }
 
 export const realSources: DropsSources = { home: homedir(), poll: () => defaultPoll() };
+
+/** How many messages one `--read` hands over. A bounded batch keeps a turn from carrying an
+ *  unbounded folder; whatever is left waits for the next turn, oldest first. */
+export const DROP_READ_BATCH = 10;
+
+/** Whether every step down to the seat's drop folder is a real folder of this user's. A step
+ *  that is missing is no fault — no send has written yet, and the read is empty; anything else
+ *  at a step (a link, a file) refuses the read rather than reading through it. */
+function dropFolderReadable(dir: string, session: string, seat: string): boolean {
+  const ours = (held: { uid: number }): boolean => process.getuid === undefined || held.uid === process.getuid();
+  const agents = heldAt(dir);
+  if (agents.kind !== 'folder' || !ours(agents)) return false;
+  let at = dir;
+  for (const part of ['send-drops', session, seat]) {
+    at = join(at, part);
+    const held = heldAt(at);
+    if (held.kind === 'missing') return true;
+    if (held.kind !== 'folder' || !ours(held)) return false;
+  }
+  return true;
+}
 
 export const drops: Command = (argv, io) => runDrops(argv, io, realSources);
 export default drops;
@@ -196,6 +234,13 @@ function followLine(row: DropRow): string {
   return `from ${row.from ?? 'unknown'} — ${row.path}\n`;
 }
 
+/** The folder was read: the listing printed, or the turn's records were handed over. One exit,
+ *  `drops.ok`, whether the caller was a placed seat or the launch's own read. */
+function readOk(): number {
+  // exit: drops.ok
+  return 0;
+}
+
 /** The refusal every caller that is not a placed seat of this team gets. */
 function refuse(io: Io, json: boolean, message: string): number {
   if (json) writeJsonError(io, 'drops.refused', message, null);
@@ -211,14 +256,24 @@ function refuse(io: Io, json: boolean, message: string): number {
  * the ones already there, so a Monitor starts quiet.
  */
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, [], ['follow', 'json']);
+  const args = readArgs(argv, ['seat', 'session'], ['follow', 'json', 'read']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
   const follow = args.flags.has('follow');
-  if (args.error || args.rest.length || (follow && json)) {
+  const read = args.flags.has('read');
+  // A launch option names a seat without the reading that serves one: no `--read` uses it, so it
+  // is an invocation error rather than a silent no-op.
+  const stray = !read && args.values.seat !== undefined ? 'seat' : !read && args.values.session !== undefined ? 'session' : null;
+  if (args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null) {
     const problem = args.error
-      ?? (args.rest.length ? `unexpected "${args.rest[0] ?? ''}"` : "--follow and --json can't be used together");
+      ?? (args.rest.length ? `unexpected "${args.rest[0] ?? ''}"`
+        : stray !== null ? `unknown option --${stray}`
+          : read
+            ? (follow ? '--read and --follow cannot be used together'
+              : json ? '--read and --json cannot be used together'
+                : '--read needs --seat <seat>')
+            : "--follow and --json can't be used together");
     if (json) {
       writeJsonError(io, 'drops.invocation', problem, null);
     } else {
@@ -250,6 +305,41 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   }
   const dir = dirname(loaded.path);
   const session = loaded.team.session;
+  if (read) {
+    // A launch's own invocation, as `team mcp serve` is: the seat and session are the launch
+    // line's, never a tool argument's, and the read serves exactly one folder. No placed caller
+    // is asked for — a CLI's turn-start hook runs outside any pane.
+    const readSession = args.values.session ?? session;
+    if (readSession !== session) {
+      return refuse(io, json, `the team's session is ${JSON.stringify(session)}, not ${JSON.stringify(readSession)}`);
+    }
+    const seatName = args.values.seat as string;
+    if (!loaded.team.seats.some((one) => one.name === seatName)) {
+      return refuse(io, json, `the team file declares no seat ${JSON.stringify(seatName)}`);
+    }
+    if (!dropFolderReadable(dir, readSession, seatName)) {
+      return refuse(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
+    }
+    const dropDir = join(dir, 'send-drops', readSession, seatName);
+    const context: StatusContext = { to: seatName, root: loaded.root, session: readSession };
+    const waiting = listUnread(dropDir, context, sources.home);
+    const bodies: string[] = [];
+    let refusal: string | null = null;
+    for (const message of waiting.slice(0, DROP_READ_BATCH)) {
+      const got = readMessage({ dropDir, root: loaded.root, seat: seatName, session: readSession }, message.id, sources.home);
+      if (got.ok) bodies.push(got.body);
+      else refusal ??= got.reason;
+    }
+    if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
+    if (bodies.length === 0 && refusal !== null) {
+      // A message is waiting and none could be verified and receipted: the read leaves no
+      // unproven body behind, and says why. With at least one body printed the run served the
+      // turn; the rest wait for the next. The refusal is the folder's own: the same exit the
+      // listing answers with, marked once by `refuse`.
+      return refuse(io, json, refusal);
+    }
+    return readOk();
+  }
   const { caller, shown } = judgeCallerOf(io, session);
   const named = caller.kind === 'seat' && loaded.team.seats.some((seat) => seat.name === caller.name) ? caller : null;
   if (named === null) {
@@ -323,6 +413,5 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       io.stdout(`${lines.join('\n')}\n`);
     }
   }
-  // exit: drops.ok
-  return 0;
+  return readOk();
 }

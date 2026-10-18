@@ -5,11 +5,14 @@
 // are keyed by session as well as seat: two sessions may each hold a seat of the same name, and
 // neither session's file may answer for the other's seat.
 //
-// The turn-start hook is also the seat's watcher for the drop leg: it reads the seat's own drop
-// folder (`.agents/send-drops/<session>/<seat>`) before the turn begins and prints each waiting
-// message, writing the read receipt first (tool `drop_read`) so the sender's side has proof
-// beside the message. The receipt's path is `receiptPath`, the one name the inbox server and
-// the watch also use, so no module here names the sidecar itself.
+// The turn-start hook is also the seat's watcher for the drop leg: it runs this install's
+// `team drops --read --seat <seat> --session <session>` before the turn begins and prints what
+// that command prints as the turn's context. The read verifies each signed record with the
+// message key, writes the signed `<id>.read.json` status receipt through the one receipt module
+// (`src/send/record.ts`) before any body is shown, and prints the bodies; the hook only escapes
+// them into the `additionalContext` object the CLI reads, so no receipt is ever written by the
+// shell. The seat and session are the launch's, written into this settings file at install time —
+// the same rule as `team mcp serve`.
 // A CLI whose launch installs this hook takes the drop leg; one whose launch installs neither
 // this hook nor an MCP inbox is a CLI that watches nothing (`cliWatcher`).
 //
@@ -21,10 +24,10 @@ import {
   closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync,
   writeSync, type Stats,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import type { CliHookReading } from '../labels/state.ts';
-import { receiptPath } from '../mcp/inbox.ts';
 import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 
 /** `O_NOFOLLOW` is POSIX: a platform without it gets 0, and the `lstat` checks above every open
@@ -116,21 +119,17 @@ function hookCommand(statePath: string, state: 'working' | 'idle'): string {
   return `umask 077; f=$(mktemp ${shellQuote(`${statePath}.new.XXXXXX`)}) && printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f" && mv -f "$f" ${shellQuote(statePath)}`;
 }
 
-/** The drop folder one seat is sent to: `<dir>/send-drops/<session>/<seat>`, the tree
- *  `team send` writes and `team drops` reads. The session is the file's own word, not the
- *  encoded folder the hooks live under: the sender knows only that spelling. */
-export function dropFolder(dir: string, session: string, seat: string): string {
-  return join(dir, 'send-drops', session, seat);
+/**
+ * The command the hook runs to read the seat's drops: this install's own CLI, the way
+ * `watchCommand` builds the watchdog's line, so `team` need not be on the CLI's PATH. The seat
+ * and session are appended by `dropReadCommand`; the read itself is `team drops --read`, the one
+ * place a record is verified and its signed receipt written.
+ */
+export function dropReadRunner(): string {
+  const here = fileURLToPath(import.meta.url);
+  const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  return `${shellQuote(process.execPath)} ${shellQuote(cli)} drops --read`;
 }
-
-/** The only names the read serves: the ids `team send` writes (`randomUUID`, lowercase). The
- *  MCP inbox serves the same set (`MESSAGE_ID` in `src/mcp/inbox.ts`); the rule is restated here
- *  as a shell glob because this command cannot import it. */
-const DROP_GLOB = `${'[0-9a-f]'.repeat(8)}-${'[0-9a-f]'.repeat(4)}-${'[0-9a-f]'.repeat(4)}-${'[0-9a-f]'.repeat(4)}-${'[0-9a-f]'.repeat(12)}`;
-
-/** How many messages one turn-start read prints. A bounded batch keeps a turn from carrying an
- *  unbounded folder; whatever is left waits for the next turn, in name order. */
-export const DROP_READ_BATCH = 10;
 
 /**
  * The awk program that makes one body safe inside `additionalContext`: a JSON string may hold any
@@ -174,53 +173,20 @@ const LANDING_ESCAPER = (() => {
   return `function esc(s,   out, i, c) { out = ""; for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); ${branches}; else out = out c } return out } { printf "%s%s", (NR > 1 ? "\\\\n" : ""), esc($0) }`;
 })();
 
-/** The read receipt's suffix, taken from `receiptPath` so the hook writes the sidecar the inbox
- *  server writes and the watch promotes on; the sentinel id only names the suffix. */
-const RECEIPT_SUFFIX = basename(receiptPath('', '0')).slice(1);
-
 /**
- * The turn-start command that reads the seat's drop folder. It hands each waiting message to the
- * turn in name order, at most `DROP_READ_BATCH` a turn, with the same path rules the MCP inbox
- * keeps: only a lowercase-UUID name, never a link, never a directory, and never a message that
- * already has its read receipt. The body is read and escaped first, the receipt is written
- * whole by `mktemp` + `mv -f` at the hook's own umask (0600 under `umask 077`), and only then does
- * the message join the one `additionalContext` object the command prints: a read that cannot
- * leave proof says nothing, exactly as `inbox_read` refuses a body whose receipt did not land. A
- * receipt is never removed, and a message beside one is never handed over twice. The seat and
- * session reach the receipt JSON encoded at install time, so a session name holding quotes or a
- * newline cannot break the command or the record.
+ * The turn-start command that hands the seat's waiting drops to the turn. `team drops --read`
+ * does the work — it lists the seat's folder, verifies each signed record with the message key,
+ * writes the signed `<id>.read.json` receipt before returning a body, and prints at most
+ * `DROP_READ_BATCH` bodies; this command only turns that text into the one
+ * `additionalContext` object the CLI reads. A read that fails or finds nothing prints no object
+ * at all. The body is read from the runner's stdout and escaped here, so a body holding quotes,
+ * backslashes or control bytes cannot break the JSON; a pipe that fails still prints nothing.
  */
-function dropReadCommand(dropDir: string, seat: string, session: string): string {
-  // `$$` is the hook shell's own pid and must expand, so it stands outside the quoted format.
-  const head = shellQuote(
-    `{"v":1,"id":"%s","seat":${JSON.stringify(seat)},"session":${JSON.stringify(session)},"tool":"drop_read","ts":"%s","pid":`,
-  );
-  const receipt = `${head}$$${shellQuote('}\\n')}`;
+function dropReadCommand(seat: string, session: string): string {
   const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
   return [
-    'umask 077',
-    `d=${shellQuote(dropDir)}`,
-    'if [ -L "$d" ] || [ ! -d "$d" ]; then exit 0; fi',
-    'n=0',
-    'got=0',
-    'ctx=',
-    'for p in "$d"/*; do',
-    `[ "$n" -ge ${String(DROP_READ_BATCH)} ] && break`,
-    'b=${p##*/}',
-    `case "$b" in ${DROP_GLOB}) ;; *) continue ;; esac`,
-    '[ -L "$p" ] && continue',
-    '[ -f "$p" ] || continue',
-    `if [ -e "\${p}${RECEIPT_SUFFIX}" ] || [ -L "\${p}${RECEIPT_SUFFIX}" ]; then continue; fi`,
-    `e=$(awk ${shellQuote(LANDING_ESCAPER)} "$p" 2>/dev/null) || continue`,
-    'r=$(mktemp "$d/.receipt.XXXXXX" 2>/dev/null) || continue',
-    `if ! printf ${receipt} "$b" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$r" 2>/dev/null; then rm -f "$r"; continue; fi`,
-    `if ! mv -f "$r" "\${p}${RECEIPT_SUFFIX}" 2>/dev/null; then rm -f "$r"; continue; fi`,
-    'if [ "$got" = 1 ]; then ctx="$ctx\\n\\n"; fi',
-    'ctx="$ctx$e"',
-    'got=1',
-    'n=$((n+1))',
-    'done',
-    `if [ "$got" = 1 ]; then printf ${envelope} "$ctx"; fi`,
+    `ctx=$(${dropReadRunner()} --seat ${shellQuote(seat)} --session ${shellQuote(session)} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
+    `if [ -n "$ctx" ]; then printf ${envelope} "$ctx"; fi`,
   ].join('\n');
 }
 
@@ -228,13 +194,13 @@ function dropReadCommand(dropDir: string, seat: string, session: string): string
  *  when the seat has a drop folder, the turn-start read of it. Two commands share
  *  `UserPromptSubmit`: the state word first, so a read that takes a moment still leaves the seat
  *  reading `working`, then the folder read whose stdout the CLI adds to the turn. */
-export function cliHookSettings(statePath: string, drops?: { dropDir: string; seat: string; session: string }): string {
+export function cliHookSettings(statePath: string, drops?: { seat: string; session: string }): string {
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
   const start: unknown[] = [hook('working')];
   if (drops) {
-    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.dropDir, drops.seat, drops.session) }] });
+    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session) }] });
   }
   return `${JSON.stringify({
     hooks: { UserPromptSubmit: start, Stop: [hook('idle')] },
@@ -324,7 +290,7 @@ export function installCliHooks(dir: string, session: string, seats: readonly Cl
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
     if (statePath === null) continue;
-    const drops = { dropDir: dropFolder(dir, session, seat), seat, session };
+    const drops = { seat, session };
     if (!writeSettings(settingsPath, cliHookSettings(statePath, drops))) continue;
     landed[seat] = settingsPath;
   }
