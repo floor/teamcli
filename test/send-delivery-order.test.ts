@@ -680,6 +680,7 @@ describe('a human seat is never typed into', () => {
   const HUMAN = '    human: true\n';
   const TYPED_SKIP = "typed: the pane is a human's, and nothing is typed into it";
   const NATIVE_SKIP_HUMAN = "native: the pane is a human's, and no frame is sent";
+  const INBOX_SKIP_HUMAN = "mcp-inbox: the pane is a human's, and the drop leg is the only one walked";
 
   test('typed-only walks no typing leg: drop takes it and the reason is recorded', async () => {
     const w = world({ lead: `${HUMAN}    delivery_order: [typed]\n` });
@@ -721,6 +722,68 @@ describe('a human seat is never typed into', () => {
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
     expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, TYPED_SKIP]);
+  });
+
+  test('the default order walks the drop file alone and records every leg kept out', async () => {
+    const w = world({ lead: HUMAN });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, INBOX_SKIP_HUMAN, TYPED_SKIP]);
+  });
+
+  test('an order led by the inbox leg still walks only the drop file', async () => {
+    const w = world({ lead: `${HUMAN}    delivery_order: [mcp-inbox, typed]\n` });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
+  });
+
+  test('an order that names the drop leg among others walks it alone', async () => {
+    const w = world({ lead: `${HUMAN}    delivery_order: [native, typed, drop]\n` });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (dropped)\n');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+    expect(readFileSync(dropped(w.root, 'lead'), 'utf8')).toBe(`${HEADER}hello`);
+    expect(lastEntry(w.root, w.home).failed).toEqual([NATIVE_SKIP_HUMAN, TYPED_SKIP]);
+  });
+
+  test('the dry run names only the drop leg, whatever the order holds', async () => {
+    const w = world({ lead: HUMAN });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
+
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: dry-run: claude-code via a 0600 drop file with nothing typed into the pane; nothing was written\n',
+    );
+    expect(host.typed).toEqual([]);
+    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
   test('the dry run names the drop file, never a typing channel', async () => {
