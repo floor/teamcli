@@ -16,7 +16,7 @@ import {
 import { dirname, join } from 'node:path';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import type { CliHookReading } from '../labels/state.ts';
-import { shellQuote, supportsCliHook } from '../profiles/profile.ts';
+import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 
 /** `O_NOFOLLOW` is POSIX: a platform without it gets 0, and the `lstat` checks above every open
  *  still refuse a link. */
@@ -75,6 +75,19 @@ function legacyStatePath(dir: string, seat: string): string | null {
  *  and no flag appended. `--settings <file>` and `--settings=<file>` both count. */
 function setsSettings(launch: string): boolean {
   return /(^|\s)--settings(=|\s|$)/.test(launch);
+}
+
+/** How a seat's CLI learns that a drop is waiting for it: the start-of-turn hook this module
+ *  installs, the MCP inbox server the launch registers where the CLI has an MCP front, or
+ *  nothing. A launch line that sets its own settings gets no hook from this run, so that seat is
+ *  served by its MCP inbox when it has one; a CLI with neither route watches nothing, and the
+ *  send side leaves the drop leg out of its order (`src/send/delivery.ts`). */
+export type CliWatcher = 'hook' | 'inbox' | 'none';
+
+export function cliWatcher(cli: string, launch: string): CliWatcher {
+  if (supportsCliHook(cli) && !setsSettings(launch)) return 'hook';
+  const inbox = profileFor(cli)?.mcpInbox ?? null;
+  return inbox === null ? 'none' : 'inbox';
 }
 
 /** One hook command: the state file, replaced whole. The word goes to a temp file beside it and
