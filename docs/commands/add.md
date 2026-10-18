@@ -3,7 +3,8 @@
 Starts one seat of a running team: a seat the file declares but nothing runs for — `team up` started
 the others — or a temporary seat beside the team, which the file does not declare at all. A declared
 seat the file marks `stopped: true` starts again, its mark cleared first. It never touches the seats
-that are already running.
+that are already running. A seat the file marks `human: true` is refused before anything is
+launched or typed: nothing is typed into it or launched over it; left as it is.
 
 The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
 the project folder, every other seat in the team's lobby outside repositories, verified by the

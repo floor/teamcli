@@ -5,7 +5,8 @@ differs from the model, version and effort recorded at its last launch — or wh
 takes its rules as a first message has a per-seat rules file that no longer holds the rules
 text the live team file gives it. `team up` leaves a seat that is already ready as it is, so a
 later edit of the model, the effort or the rules never reaches that seat. This command names
-one seat and does only that swap.
+one seat and does only that swap. A seat the file marks `human: true` is refused before the launch
+record is read: nothing is typed into it or launched over it; left as it is.
 
 The close happens at an idle prompt. A seat that is working, a seat whose input box holds
 unsent text, and a seat whose screen is not an idle prompt are left as they are: nothing is

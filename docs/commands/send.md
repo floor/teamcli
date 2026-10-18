@@ -75,7 +75,8 @@ drop leg — added to the walk when the order in force leaves it out — so the 
 in the drop file and the pane is never touched.
 `--wait` is refused for such a seat, since it rides the native leg. The watch types no retry or
 nudge into a human's pane either: a held send's marker is given up on with the reason, and its
-message waits in the drop file.
+message waits in the drop file. A caller that reaches the send daemon directly is refused at its
+queue for such a seat: no trigger is typed, no frame is sent, and no worker is started.
 
 `team send --wait` needs the native leg's socket frame — the reply comes back on the caller's
 own `SendMessage` — and this build does not ship it. A waited send is
