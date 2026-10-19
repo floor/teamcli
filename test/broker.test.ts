@@ -612,15 +612,33 @@ async function claimSelftest(candidate: string): Promise<{ ok: boolean; line: st
   return { ok: false, line: 'no selftest line' };
 }
 
+/** A child fixture's boot is the one wait a memory-starved machine stretches without bound:
+ *  measured here at a 1-minute load of ≈16–17 per ten cores, a fixture stayed alive and silent
+ *  past twenty seconds and six claim children past sixty, with no output at all. Boot waits are
+ *  floored at thirty seconds and capped at two minutes, raised by the same bounded load term as
+ *  every other wait here; every fixture prints `ready` before any broker work, so a boot wait
+ *  can never hide a slow broker. */
+const BOOT_WAIT_FLOOR_MS = 30_000;
+const BOOT_WAIT_CAP_MS = 120_000;
+/** How many times one round whose starts never booted may be handed back. A boot that never
+ *  said `ready` measured nothing about the broker; each hand-back is logged as unscored, never
+ *  silently skipped, and a run whose unscored boot steps pass a third of its rounds fails — a
+ *  machine that cannot boot the starts cannot pass itself off as a broker that answered. */
+const READY_RETRIES_PER_ROUND = 2;
+
 /** The claim pin's rounds: the pre-registered 413 (ceil(ln 0.01 / ln(1 − p̂)) on the pooled
  *  1.111%/round) — never resized after seeing a result. */
 const CLAIM_ROUNDS = 413;
-/** The pin's own budget floor, from CI's ≈0.23 s/round pace. */
-const CLAIM_STEP_FLOOR_MS = 10_000;
+/** The ready step's floor. The pin's own pace is ≈0.23 s/round on CI, but the step waits on
+ *  six child fixtures' BOOT, and a memory-starved machine stretches that alone past ten
+ *  seconds (measured here at load ≈1.6 per core: a claim round's six starts stayed alive and
+ *  silent past 25 s). The shared boot floor applies; the bounded load term raises it. The
+ *  release step is untouched — it stays fixed at ten seconds. */
+const CLAIM_STEP_FLOOR_MS = BOOT_WAIT_FLOOR_MS;
 /** The ready step's ceiling: even an overloaded machine may not stretch one round's boot step
- *  further. The release step stays fixed, so a broker that is slow where the claim path runs
- *  still fails there. */
-const CLAIM_STEP_CAP_MS = 120_000;
+ *  further than the shared boot cap. The release step stays fixed, so a broker that is slow
+ *  where the claim path runs still fails there. */
+const CLAIM_STEP_CAP_MS = BOOT_WAIT_CAP_MS;
 /** The load term's own bound, shared by every budget below: a run queue eight deep per core is
  *  already an overloaded machine, and a budget stops growing there rather than tracking an
  *  unbounded average. */
@@ -692,12 +710,15 @@ function outcomesFallbackMs(stepMs: number): number {
 /** The two burst scenes' budgets, from the same BOOT pace the claim lane uses — round start →
  *  every start's `ready`, plus its reap — never from the release window, so a regressed broker
  *  cannot inflate the budget meant to catch it. The ready step is the greater of twice the pace
- *  and the pin's ten seconds raised by the bounded load term, never past its two-minute cap,
- *  sampled at each round's start; the release step stays fixed at ten seconds (the claim lane's
- *  stall scene pins that the release path cannot raise any budget); the run budget is twice the
- *  extrapolated total, floored, raised by the same load term and capped by a cap that is itself
- *  raised by it between the unloaded cap and the scene's hard cap. The cap's margin is not
- *  decoration: bun 1.4.2 does not cancel a timed-out test body, so a body that outlived its
+ *  and the shared thirty-second boot floor raised by the bounded load term, never past its
+ *  two-minute cap, sampled at each round's start; a round whose starts never said `ready` may
+ *  be handed back READY_RETRIES_PER_ROUND times, logged as unscored, and a run with more than
+ *  a third of its boot steps unscored fails; the release step stays fixed at ten seconds (the
+ *  claim lane's stall scene pins that the release path cannot raise any budget); the run budget
+ *  is twice the extrapolated total, floored, raised by the same load term and capped by a cap
+ *  that is itself raised by it between the unloaded cap and the scene's hard cap. The cap's
+ *  margin is not decoration: bun 1.4.2 does not cancel a timed-out test body, so a body that
+ *  outlived its
  *  test runs on against the fixture world the after-each has already removed, and its later
  *  rejection surfaces as an unhandled error between tests (probe on bun 1.4.2: a 100 ms test
  *  whose body awaits a waiter that throws at 650 ms, with a later test holding the runner open,
@@ -706,8 +727,8 @@ function outcomesFallbackMs(stepMs: number): number {
  *  inside a thirty-minute test; six: forty-five inside fifty — the claim lane's own margins.
  *  Each body therefore ends inside its timeout by construction, and a machine that cannot
  *  finish stops first, naming its round and step — never at the timeout with no name. */
-const BURST_STEP_FLOOR_MS = 10_000;
-const BURST_STEP_CAP_MS = 120_000;
+const BURST_STEP_FLOOR_MS = BOOT_WAIT_FLOOR_MS;
+const BURST_STEP_CAP_MS = BOOT_WAIT_CAP_MS;
 const BURST_OUTCOMES_STEP_MS = 10_000;
 const BURST4_RUN_FLOOR_MS = 120_000;
 const BURST4_RUN_CAP_MS = 900_000;
@@ -736,6 +757,13 @@ async function withinStep<T>(label: string, roundKids: FixtureChild[], budgetMs:
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The one failure a sized round may hand back: its ready step outlived its budget. A fixture
+ *  prints `ready` before any broker work begins, so a timeout here measured the machine's boot
+ *  and nothing about the broker; every other failure is the run's own and is rethrown. */
+function readyStepTimedOut(error: unknown): boolean {
+  return /^step "[^"]+: ready" outlived its \d+ ms budget/.test(String((error as Error | undefined)?.message ?? ''));
 }
 
 /** While a writer holds inside its create, watch one path: every sighting of the file present
@@ -773,10 +801,11 @@ function newResidue(): string[] {
 }
 
 /** A fixture's `ready`, with the deadline failing the pin on what the child has said so far
- *  instead of hanging the suite. The default is eight seconds raised by the bounded load term —
- *  a fixture child boots in well under a second unloaded, but a loaded machine's fork+exec can
- *  overrun a flat eight — and a caller with its own step budget passes a larger deadline. */
-async function readyOf(fixture: FixtureChild, deadlineMs = loadBoundedMs(8_000, 60_000)): Promise<void> {
+ *  instead of hanging the suite. The default is the shared boot floor raised by the bounded
+ *  load term — a fixture child boots in well under a second unloaded, but a memory-starved
+ *  machine's fork+exec was measured silent past twenty seconds — and a caller with its own
+ *  step budget passes a larger deadline. */
+async function readyOf(fixture: FixtureChild, deadlineMs = loadBoundedMs(BOOT_WAIT_FLOOR_MS, BOOT_WAIT_CAP_MS)): Promise<void> {
   const until = Date.now() + deadlineMs;
   while (Date.now() < until) {
     if (fixture.said.includes('ready')) return;
@@ -787,7 +816,7 @@ async function readyOf(fixture: FixtureChild, deadlineMs = loadBoundedMs(8_000, 
 }
 
 /** A fixture's outcome line, with the same deadline and the same failure message. */
-async function outcomeOf(fixture: FixtureChild, deadlineMs = loadBoundedMs(8_000, 60_000)): Promise<FixtureOutcome> {
+async function outcomeOf(fixture: FixtureChild, deadlineMs = loadBoundedMs(BOOT_WAIT_FLOOR_MS, BOOT_WAIT_CAP_MS)): Promise<FixtureOutcome> {
   const until = Date.now() + deadlineMs;
   while (Date.now() < until) {
     if (fixture.outcome) return fixture.outcome;
@@ -1398,9 +1427,11 @@ describe('the start protocol', () => {
     // breach this pin names.
     //
     // The body is bounded the way the claim lane's below is: each round is two steps with
-    // their own budgets (the ready step twice the measured boot pace or the floor raised by the
-    // machine's bounded 1-minute load per core, sampled at each round's start; the release step
-    // fixed at ten seconds), its starts are killed and reaped before the next round begins,
+    // their own budgets (the ready step twice the measured boot pace or the shared boot floor
+    // raised by the machine's bounded 1-minute load per core, sampled at each round's start; a
+    // round whose starts never booted is handed back within the same logged, bounded contract
+    // the claim lane states; the release step fixed at ten seconds), its starts are killed and
+    // reaped before the next round begins,
     // the live set never passes the four a round holds, and the run's own budget stops a
     // machine that cannot finish with the round and step named. The test timeout's margin
     // over the run cap is the other half of that bound: a body bun abandons at the timeout
@@ -1428,6 +1459,8 @@ describe('the start protocol', () => {
     let warmupPaceMs = 0;
     let runBudgetMs = BURST4_RUN_FLOOR_MS;
     let warmupBootMs = 0;
+    const unscoredCap = Math.floor(ROUNDS / 3);
+    let unscored = 0;
     let failure: unknown;
     const runStart = Date.now();
     try {
@@ -1440,21 +1473,41 @@ describe('the start protocol', () => {
         // Sampled before this round's starts exist, so the load term is the machine's other
         // load; the warm-up rounds run on the load-scaled floor alone.
         const stepMs = loadedStepMs(BURST_STEP_FLOOR_MS, BURST_STEP_CAP_MS, warmupPaceMs);
-        const bootStart = Date.now();
-        const roundRoot = join(base, `burst-${round}`);
-        mkdirSync(join(roundRoot, '.agents'), { recursive: true });
-        writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
-        const at = brokerSocket(roundRoot);
-        leaveStaleSocket(at);
-        const dead = spawnSync(process.execPath, ['-e', '']);
-        if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
-        writeFileSync(`${at}.lock`, `${dead.pid}\n`);
-        const go = join(base, `go-${round}`);
-        const roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
-        if (live.size > ROUND_SIZE) {
-          throw new Error(`the four-start burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        let roundKids: FixtureChild[] = [];
+        let go = '';
+        let bootStart = 0;
+        for (let attempt = 0; ; attempt++) {
+          // Same contract as the other sized pins: a round whose starts never said `ready`
+          // measured nothing about the broker, so a machine stall hands it back — logged as
+          // unscored, never silently skipped — up to READY_RETRIES_PER_ROUND times; past that,
+          // or past a third of the rounds, the run fails.
+          const roundRoot = join(base, `burst-${round}-${attempt}`);
+          mkdirSync(join(roundRoot, '.agents'), { recursive: true });
+          writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
+          const at = brokerSocket(roundRoot);
+          leaveStaleSocket(at);
+          const dead = spawnSync(process.execPath, ['-e', '']);
+          if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
+          writeFileSync(`${at}.lock`, `${dead.pid}\n`);
+          go = join(base, `go-${round}-${attempt}`);
+          roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
+          if (live.size > ROUND_SIZE) {
+            throw new Error(`the four-start burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+          }
+          bootStart = Date.now();
+          try {
+            await withinStep(`the four-start burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+            break;
+          } catch (error) {
+            if (attempt >= READY_RETRIES_PER_ROUND || !readyStepTimedOut(error)) throw error;
+            unscored += 1;
+            console.log(`the four-start burst: round ${round}: boot step unscored (${String((error as Error).message)}); retry ${attempt + 1}/${READY_RETRIES_PER_ROUND}`);
+            if (unscored > unscoredCap) {
+              throw new Error(`the four-start burst: ${unscored} boot steps unscored, past the ${unscoredCap} a run may hand back (a third of ${ROUNDS}); the machine is not booting the starts`);
+            }
+            rmSync(roundRoot, { recursive: true, force: true });
+          }
         }
-        await withinStep(`the four-start burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
         const outcomes = await withinStep(`the four-start burst: round ${round}: outcomes`, roundKids, BURST_OUTCOMES_STEP_MS, () =>
@@ -1537,6 +1590,8 @@ describe('the start protocol', () => {
     let warmupPaceMs = 0;
     let runBudgetMs = BURST6_RUN_FLOOR_MS;
     let warmupBootMs = 0;
+    const unscoredCap = Math.floor(ROUNDS / 3);
+    let unscored = 0;
     let failure: unknown;
     const runStart = Date.now();
     try {
@@ -1549,20 +1604,41 @@ describe('the start protocol', () => {
         // Sampled before this round's starts exist, so the load term is the machine's other
         // load; the warm-up rounds run on the load-scaled floor alone.
         const stepMs = loadedStepMs(BURST_STEP_FLOOR_MS, BURST_STEP_CAP_MS, warmupPaceMs);
-        const bootStart = Date.now();
-        const roundRoot = join(base, `lockburst-${round}`);
-        mkdirSync(join(roundRoot, '.agents'), { recursive: true });
-        writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
-        const at = brokerSocket(roundRoot);
-        const dead = spawnSync(process.execPath, ['-e', '']);
-        if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
-        writeFileSync(`${at}.lock`, `${dead.pid}\n`);
-        const go = join(base, `lockgo-${round}`);
-        const roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
-        if (live.size > ROUND_SIZE) {
-          throw new Error(`the dead-lock burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        let roundKids: FixtureChild[] = [];
+        let go = '';
+        let bootStart = 0;
+        for (let attempt = 0; ; attempt++) {
+          // A round whose starts never said `ready` measured nothing about the broker (the
+          // fixture prints `ready` before startBroker runs), so a machine stall hands the round
+          // back — logged as unscored, never silently skipped — up to READY_RETRIES_PER_ROUND
+          // times. Past that, or past a third of the rounds, the run fails, so a machine that
+          // cannot boot the starts cannot pass as a broker that answered.
+          const roundRoot = join(base, `lockburst-${round}-${attempt}`);
+          mkdirSync(join(roundRoot, '.agents'), { recursive: true });
+          writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
+          const at = brokerSocket(roundRoot);
+          const dead = spawnSync(process.execPath, ['-e', '']);
+          if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
+          writeFileSync(`${at}.lock`, `${dead.pid}\n`);
+          go = join(base, `lockgo-${round}-${attempt}`);
+          roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
+          if (live.size > ROUND_SIZE) {
+            throw new Error(`the dead-lock burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+          }
+          bootStart = Date.now();
+          try {
+            await withinStep(`the dead-lock burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+            break;
+          } catch (error) {
+            if (attempt >= READY_RETRIES_PER_ROUND || !readyStepTimedOut(error)) throw error;
+            unscored += 1;
+            console.log(`the dead-lock burst: round ${round}: boot step unscored (${String((error as Error).message)}); retry ${attempt + 1}/${READY_RETRIES_PER_ROUND}`);
+            if (unscored > unscoredCap) {
+              throw new Error(`the dead-lock burst: ${unscored} boot steps unscored, past the ${unscoredCap} a run may hand back (a third of ${ROUNDS}); the machine is not booting the starts`);
+            }
+            rmSync(roundRoot, { recursive: true, force: true });
+          }
         }
-        await withinStep(`the dead-lock burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
         const outcomes = await withinStep(`the dead-lock burst: round ${round}: outcomes`, roundKids, BURST_OUTCOMES_STEP_MS, () =>
@@ -1665,6 +1741,8 @@ describe('the start protocol', () => {
     const WARMUP_ROUNDS = 10;
     let warmupPaceMs = 0;
     let runBudgetMs = CLAIM_RUN_FLOOR_MS;
+    const unscoredCap = Math.floor(CLAIM_ROUNDS / 3);
+    let unscored = 0;
     const breaches: string[] = [];
     const live = new Set<ClaimChild>();
     /** A start joins the live set on spawn and leaves it when it is reaped. */
@@ -1694,22 +1772,42 @@ describe('the start protocol', () => {
         }
         // Sampled before this round's six starts exist, so the term is the machine's other load.
         const stepMs = loadedStepMs(CLAIM_STEP_FLOOR_MS, CLAIM_STEP_CAP_MS, warmupPaceMs);
-        const bootStart = Date.now();
-        const roundRoot = join(base, `claimburst-${round}`);
-        mkdirSync(join(roundRoot, '.agents'), { recursive: true });
-        writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
-        const at = brokerSocket(roundRoot);
-        const dead = spawnSync(process.execPath, ['-e', '']);
-        if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
-        writeFileSync(`${at}.lock`, `${dead.pid}\n`);
-        const go = join(base, `claimgo-${round}`);
-        const roundKids = Array.from({ length: ROUND_SIZE }, () =>
-          track(spawnClaimKid(['run', roundRoot, go, join(import.meta.dir, '..')], route ? { DS_DETECT: '1', DS_ROUTE: route, DS_PARENT: String(process.pid) } : {})),
-        );
-        if (live.size > ROUND_SIZE) {
-          throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        let roundKids: ClaimChild[] = [];
+        let go = '';
+        let bootStart = 0;
+        for (let attempt = 0; ; attempt++) {
+          // Same contract as the burst above: a round whose starts never said `ready` measured
+          // nothing about the broker, so a machine stall hands it back, logged as unscored, up
+          // to READY_RETRIES_PER_ROUND times; past that, or past a third of the rounds, the run
+          // fails rather than let a machine pass as a broker that answered.
+          const roundRoot = join(base, `claimburst-${round}-${attempt}`);
+          mkdirSync(join(roundRoot, '.agents'), { recursive: true });
+          writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
+          const at = brokerSocket(roundRoot);
+          const dead = spawnSync(process.execPath, ['-e', '']);
+          if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
+          writeFileSync(`${at}.lock`, `${dead.pid}\n`);
+          go = join(base, `claimgo-${round}-${attempt}`);
+          roundKids = Array.from({ length: ROUND_SIZE }, () =>
+            track(spawnClaimKid(['run', roundRoot, go, join(import.meta.dir, '..')], route ? { DS_DETECT: '1', DS_ROUTE: route, DS_PARENT: String(process.pid) } : {})),
+          );
+          if (live.size > ROUND_SIZE) {
+            throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+          }
+          bootStart = Date.now();
+          try {
+            await withinStep(`the claim lane: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+            break;
+          } catch (error) {
+            if (attempt >= READY_RETRIES_PER_ROUND || !readyStepTimedOut(error)) throw error;
+            unscored += 1;
+            console.log(`the claim lane: round ${round}: boot step unscored (${String((error as Error).message)}); retry ${attempt + 1}/${READY_RETRIES_PER_ROUND}`);
+            if (unscored > unscoredCap) {
+              throw new Error(`the claim lane: ${unscored} boot steps unscored, past the ${unscoredCap} a run may hand back (a third of ${CLAIM_ROUNDS}); the machine is not booting the starts`);
+            }
+            rmSync(roundRoot, { recursive: true, force: true });
+          }
         }
-        await withinStep(`the claim lane: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
         const outcomesStart = Date.now();
@@ -1779,10 +1877,12 @@ describe('the start protocol', () => {
     // slower release never entered it.
     project();
     record();
-    // The stall is raised by the same bounded load term as every wait here: the discriminator
-    // needs the boot pace to stay under it (a loaded machine's six child boots stretch), and
-    // the fixed ten-second outcomes step it must overrun is never scaled.
-    const STALL_MS = loadBoundedMs(12_000, 60_000);
+    // The stall stands far above twice the boot wait's cap (2 × 120 s < 600 s), so the
+    // discriminator holds even when a memory-starved machine stretches the six boots to that
+    // cap: the boot pace derived from the wave must stay under the stall, and the fixed
+    // ten-second outcomes step it must overrun is never scaled. The stall itself never
+    // elapses — the step fires at ten seconds and kills the starts there.
+    const STALL_MS = 600_000;
     const roundRoot = join(base, 'claimstall-0');
     mkdirSync(join(roundRoot, '.agents'), { recursive: true });
     writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
@@ -1796,7 +1896,7 @@ describe('the start protocol', () => {
     );
     try {
       const bootStart = Date.now();
-      await Promise.all(kids.map((kid) => readyOf(kid, 60_000)));
+      await Promise.all(kids.map((kid) => readyOf(kid, loadBoundedMs(BOOT_WAIT_FLOOR_MS, BOOT_WAIT_CAP_MS))));
       const bootPaceMs = Date.now() - bootStart;
       const pacedStepMs = loadedStepMs(CLAIM_STEP_FLOOR_MS, CLAIM_STEP_CAP_MS, bootPaceMs, 0);
       // The pace the budgets are taken from is the boot alone, and it sits under the stall; the
@@ -1821,7 +1921,7 @@ describe('the start protocol', () => {
       for (const kid of kids) kid.kill();
       await Promise.all(kids.map((kid) => kid.exited));
     }
-  });
+  }, 360_000);
 
   scene('a start that waits out the lock deadline refuses with the one line and touches nothing', async () => {
     // A live holder — a real start, held pre-listen for a minute — keeps the lock past every
