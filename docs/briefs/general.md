@@ -28,7 +28,12 @@ unclear, ask your lead before you start.
 - Keep messages short, because the team shares budgets.
 - Run scripts with their interpreter (`bash x.sh`). Never `chmod`, `sudo`, `rm -rf` or `pkill -f`. If a command is refused, do it the allowed way; never wait for approval.
 
-**You reach other seats only with `team send` and files.** Never through their screens.
+**Answer every message with `team send`, never your CLI's cross-session SendMessage.** You reach
+other seats only with `team send` and files, never through their screens. A message that arrives
+through your CLI's socket ends with `Reply with: team send <sender>@<team> "…"`: that address is
+where your answer goes, and `team send` writes the signed record the team can read and verify.
+Your CLI's own SendMessage delivers to another session outside TeamCLI and leaves nothing the team
+can see.
 
 **Never:**
 - type text, send keys or press Enter in any screen but your own, by any tool (herdr or another), even your own team's: a person may be typing there;
