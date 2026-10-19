@@ -72,6 +72,24 @@ async function run(
   return { code, out: io.out, err: io.err };
 }
 
+describe('a seat the launcher selects the model for', () => {
+  test('the model reads unset, because the file does not decide it', async () => {
+    writeFileSync(
+      join(root, '.agents', 'team.yaml'),
+      TEAM.replace('    name: lead\n    nickname: Atlas', '    name: lead\n    model_from: launcher\n    nickname: Atlas'),
+    );
+    const result = await run(['lead', '--json']);
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out) as { settings: Record<string, unknown>[] };
+    expect(doc.settings.find((entry) => entry.key === 'model')).toEqual({
+      key: 'model',
+      value: null,
+      source: 'none',
+      applies: 'restart-resume',
+    });
+  });
+});
+
 describe('a seat that writes every setting', () => {
   test('prints the five keys and where each comes from', async () => {
     const result = await run(['lead']);
