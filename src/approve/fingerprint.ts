@@ -101,9 +101,9 @@ export function legacyLabelDigests(team: Approvable): { named: Record<string, st
 
 /**
  * A watch section digest as computed before `idle_repeat` defaulted to off — when the key was
- * not set in the file, its value was filled in as 1200 seconds — and before `idle_owner` and
- * `blind_after` joined the section. `omittedIdleFirst` says the approved text wrote no
- * `idle_first`, so the reader then took the ten minutes the section shipped.
+ * not set in the file, its value was filled in as 1200 seconds — and before `idle_owner`,
+ * `blind_after` and `unread_after` joined the section. `omittedIdleFirst` says the approved text
+ * wrote no `idle_first`, so the reader then took the ten minutes the section shipped.
  */
 export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): string | null {
   const watch = team.watch as Record<string, unknown> | null | undefined;
@@ -112,15 +112,16 @@ export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): s
   delete rest.checks;
   delete rest.idleOwner;
   delete rest.blindAfter;
+  delete rest.unreadAfter;
   if (omittedIdleFirst && rest.idleFirst === 300) rest.idleFirst = 600;
   return digest(rest);
 }
 
 /**
  * Every earlier spelling of the `watch` digest a record may carry: the current shape without
- * `idle_owner` and `blind_after`, with or without the `idle_repeat` fill-in, and, when the file
- * wrote no `idle_first`, with the ten-minute default it shipped then. A stored digest equal to
- * one of these was not edited by the arrival — it is adopted as the current one.
+ * `idle_owner`, `blind_after` and `unread_after`, with or without the `idle_repeat` fill-in, and,
+ * when the file wrote no `idle_first`, with the ten-minute default it shipped then. A stored
+ * digest equal to one of these was not edited by the arrival — it is adopted as the current one.
  */
 export function legacyWatchDigests(team: Approvable, omittedIdleFirst: boolean): string[] {
   const watch = team.watch as Record<string, unknown> | null | undefined;
@@ -129,6 +130,7 @@ export function legacyWatchDigests(team: Approvable, omittedIdleFirst: boolean):
   delete rest.checks;
   delete rest.idleOwner;
   delete rest.blindAfter;
+  delete rest.unreadAfter;
   if (omittedIdleFirst && rest.idleFirst === 300) rest.idleFirst = 600;
   const out = [digest(rest)];
   if (rest.idleRepeat === undefined) out.push(digest({ ...rest, idleRepeat: 1200 }));
