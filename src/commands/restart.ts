@@ -20,7 +20,7 @@ import {
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode, type DevModeRun } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
@@ -174,9 +174,6 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // Collapsed notes: what plain output writes to stdout while it works (the pre-close readings,
   // the stop's own lines) ride on the document instead.
   const notes: string[] = [];
-  const noteIo: Io = json
-    ? { ...out, stdout: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
-    : out;
 
   const walked = walkCaller(io);
   const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
@@ -295,41 +292,190 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     return notReadyRefused(out, json, `${name} is a human's pane: nothing is typed into it or launched over it; left as it is`);
   }
 
+  const performed = await performRestart({
+    out,
+    json,
+    notes,
+    dir,
+    root,
+    home,
+    path,
+    team,
+    session,
+    name,
+    declared,
+    recorded: recordedSeat,
+    agents,
+    abandon,
+    owner: caller.kind === 'owner',
+    callerText: describeCaller(caller),
+    standing,
+    ceilings,
+    dev,
+    devFolded,
+    command: 'restart',
+    endReason: 'restart',
+    dry,
+    now: sources.now,
+    sources,
+  });
+  switch (performed.kind) {
+    case 'dry':
+      return dryRunExit(out, json, performed.text, {
+        project: team.project,
+        session,
+        seat: name,
+        plan: performed.plan,
+        notes,
+      });
+    case 'replaced':
+      return replacedRefused(out, json, name);
+    case 'abandon-working':
+      return abandonWorkingRefused(out, json, name);
+    case 'busy':
+      return busyRefused(out, json, performed.message);
+    case 'not-ready':
+      return notReadyRefused(out, json, performed.message);
+    case 'herdr':
+      return herdrRefused(out, json);
+    case 'run-lock':
+      return runLockRefused(out, json, performed.held, session, dir);
+    case 'ready':
+      return readyExit(
+        out,
+        json,
+        dir,
+        describeCaller(caller),
+        name,
+        performed.oldPane,
+        performed.pane,
+        sources.now(),
+        team.project,
+        session,
+        notes,
+      );
+    default: {
+      // Every result the launch sequence returns is handled above. This arm is the contract the
+      // exit gate reads: a run that ends in a shape this version does not know can only be a bug.
+      const unknown: never = performed;
+      throw new Error(`restart: unhandled result ${JSON.stringify(unknown)}`);
+    }
+  }
+}
+
+/** Which command runs the shared launch sequence: the word its log lines carry, and the reason
+ *  the old session's record ends with. */
+export type PerformCommand = 'restart' | 'swap';
+
+/** What the shared launch sequence is handed: the seat as the file now declares it, the world it
+ *  was inspected in, and the caller's own words. `restart` and the swap's run both call it, so
+ *  there is one stop-and-launch sequence in the tool. */
+export type PerformInput = {
+  out: Io;
+  json: boolean;
+  /** The plain output's working lines, collapsed onto the document under `--json`. */
+  notes: string[];
+  dir: string;
+  root: string;
+  home: string;
+  path: string;
+  team: TeamFile;
+  session: string;
+  name: string;
+  declared: Seat;
+  recorded: SeatState | undefined;
+  agents: readonly HerdrAgent[];
+  abandon: boolean;
+  owner: boolean;
+  callerText: string;
+  standing: Standing;
+  ceilings: Ceilings;
+  dev: DevModeRun;
+  devFolded: boolean;
+  command: PerformCommand;
+  endReason: 'restart' | 'swap';
+  /** The dry run: preflight, then the plan, and nothing stopped or launched. */
+  dry: boolean;
+  now(): Date;
+  sources: RestartSources;
+};
+
+export type PerformResult =
+  | { kind: 'dry'; text: string; plan: PlanStep[] }
+  | { kind: 'replaced' }
+  | { kind: 'abandon-working' }
+  | { kind: 'busy'; message: string }
+  | { kind: 'not-ready'; message: string }
+  | { kind: 'herdr' }
+  | { kind: 'run-lock'; held: number }
+  | { kind: 'ready'; oldPane: string; pane: string };
+
+export async function performRestart(input: PerformInput): Promise<PerformResult> {
+  const {
+    out,
+    json,
+    notes,
+    dir,
+    root,
+    home,
+    path,
+    team,
+    session,
+    name,
+    declared,
+    agents,
+    abandon,
+    owner,
+    callerText,
+    standing,
+    ceilings,
+    dev,
+    devFolded,
+    dry,
+    now,
+    sources,
+  } = input;
+  const recordedSeat = input.recorded;
+  const recordedSession = readState(dir).sessions[session] ?? emptySession();
+  const noteIo: Io = json
+    ? { ...out, stdout: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
+    : out;
+
   // Inspect the target seat's current pane before any preflight or stop.
-  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, caller.kind === 'owner', sources);
-  if (inspected.kind === 'replaced') return replacedRefused(out, json, name);
-  if (inspected.kind === 'abandon-working') return abandonWorkingRefused(out, json, name);
-  if (inspected.kind === 'busy') return busyRefused(out, json, inspected.message);
+  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources);
+  if (inspected.kind === 'replaced') return { kind: 'replaced' };
+  if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
+  if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
 
   // Preflight the relaunch before stopping the seat so a preflight refusal leaves the seat running.
   const profile = profileFor(declared.cli);
   if (!profile) {
-    return notReadyRefused(out, json, `no launch profile for \`${plainLine(declared.cli)}\` in this version`);
+    return { kind: 'not-ready', message: `no launch profile for \`${plainLine(declared.cli)}\` in this version` };
   }
-  for (const problem of placedProblems(team, root, sources.home, undefined, session)) {
-    return notReadyRefused(out, json, problem.message);
+  for (const problem of placedProblems(team, root, home, undefined, session)) {
+    return { kind: 'not-ready', message: problem.message };
   }
-  const start = seatStart({ ...team, session }, declared, root, sources.home);
+  const start = seatStart({ ...team, session }, declared, root, home);
   if ('problem' in start) {
-    return notReadyRefused(out, json, start.problem);
+    return { kind: 'not-ready', message: start.problem };
   }
   const doctorTeam = { ...team, seats: [declared] };
   for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team)) {
     if (blocksLaunch(finding)) {
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       if (finding.text.includes(' is read at start by ')) continue;
-      return notReadyRefused(out, json, finding.text);
+      return { kind: 'not-ready', message: finding.text };
     }
   }
   const samples: SwapSample[] = [];
   const machineNow = sources.machine?.(root);
   const machineProblem = machineNow ? launchLimit(machineNow, team.machine, samples, sources.now().getTime()) : null;
-  if (machineProblem) return notReadyRefused(out, json, machineProblem);
+  if (machineProblem) return { kind: 'not-ready', message: machineProblem };
 
   const remainingAgents = agents.filter((agent) => agent.name !== name);
   const runningSeats = runningOf(remainingAgents, team, recordedSession);
   const room = ceilingProblem(ceilings, runningSeats, declared);
-  if (room) return notReadyRefused(out, json, room);
+  if (room) return { kind: 'not-ready', message: room };
 
   const budgets = budgetsInForceOf(standing, team);
   const budgetDecision = (sources.seatBudget ?? seatBudget)(
@@ -340,11 +486,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     loadSpendReadings(dir),
   );
   if (budgetDecision.kind === 'refuse') {
-    return notReadyRefused(out, json, budgetDecision.why);
+    return { kind: 'not-ready', message: budgetDecision.why };
   }
 
-  const liveRules = standing.kind !== 'verified' || caller.kind === 'owner';
-  const planSeat = buildUpSeat(standing, team, declared, start, root, sources.home, liveRules);
+  const liveRules = standing.kind !== 'verified' || owner;
+  const planSeat = buildUpSeat(standing, team, declared, start, root, home, liveRules);
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -368,30 +514,28 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const stopPlan: PlanStep[] = inspected.agent
       ? [{ step: 'stop', seat: name, detail: `stop ${name} in ${inspected.agent.pane} (${inspected.where})`, prefix: '+' }]
       : [{ step: 'stop', seat: name, detail: 'not currently running', prefix: 'skip' }];
-    return dryRunExit(out, json, `${stopStep}${advice}${plainText(formatPlan(preview))}`, {
-      project: team.project,
-      session,
-      seat: name,
+    return {
+      kind: 'dry',
+      text: `${stopStep}${advice}${plainText(formatPlan(preview))}`,
       plan: [...stopPlan, ...planStepsOf(preview)],
-      notes,
-    });
+    };
   }
 
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    return runLockRefused(out, json, runLock.held, session, dir);
+    return { kind: 'run-lock', held: runLock.held };
   }
   try {
     const freshAgents = sources.agents(session);
-    if (freshAgents === null) return herdrRefused(out, json);
+    if (freshAgents === null) return { kind: 'herdr' };
     const freshSession = readState(dir).sessions[session] ?? emptySession();
     const freshRecorded = freshSession.seats[name];
-    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, caller.kind === 'owner', sources);
-    if (rechecked.kind === 'replaced') return replacedRefused(out, json, name);
-    if (rechecked.kind === 'abandon-working') return abandonWorkingRefused(out, json, name);
-    if (rechecked.kind === 'busy') return busyRefused(out, json, rechecked.message);
+    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources);
+    if (rechecked.kind === 'replaced') return { kind: 'replaced' };
+    if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
+    if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
 
-    const who = describeCaller(caller);
+    const who = callerText;
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
 
     if (rechecked.agent) {
@@ -413,7 +557,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         dir,
         session,
         sources,
-        logCommand: 'restart',
+        logCommand: input.command,
         caller: who,
         seat: {
           name,
@@ -432,10 +576,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         unasked: `team restart ${name} --abandon closes it`,
       });
       if (!stopped) {
-        return busyRefused(out, json, `${name} could not be stopped; left as it is`);
+        return { kind: 'busy', message: `${name} could not be stopped; left as it is` };
       }
       if (sources.upLaunch.agentPanes(session)?.includes(rechecked.agent.pane)) {
-        return busyRefused(out, json, `${name} did not close its old pane; left as it is`);
+        return { kind: 'busy', message: `${name} did not close its old pane; left as it is` };
       }
       let priorPane = freshRecorded?.pane;
       updateState(dir, (file) => {
@@ -453,21 +597,21 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
       // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
-      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, name, 'stopped', 'restart');
-      if (ended) logLine(dir, 'restart', who, ended.note, sources.now());
+      const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason);
+      if (ended) logLine(dir, input.command, who, ended.note, sources.now());
     }
 
     const records = progressWriter(
       json
         ? { stdout: () => {}, stderr: (text) => { notes.push(...text.split('\n').filter((line) => line !== '')); }, isTTY: false }
-        : { stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false },
+        : { stdout: out.stdout, stderr: out.stderr, isTTY: out.stdoutIsTTY ?? false },
     );
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat], { project: team.project, root, home: sources.home });
+    const installed = installCliHooks(dir, session, [planSeat], { project: team.project, root, home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
-      logLine(dir, 'restart', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+      logLine(dir, input.command, who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
     const plan = upPlan({
       root,
@@ -492,8 +636,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     });
     const briefLine = (said: string): void => {
       if (json) notes.push(said);
-      else out.stderr(`team restart: ${plainText(said)}\n`);
-      logLine(dir, 'restart', who, said, sources.now());
+      else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
+      logLine(dir, input.command, who, said, sources.now());
     };
     for (const delivery of briefs.deliveries) {
       if (!delivery.ok) briefLine(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
@@ -507,12 +651,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       session,
       team: team,
       root,
-      home: sources.home,
+      home,
+      command: input.command,
+      endReason: input.endReason,
       ceilings,
       running: runningSeats,
       seat: declared,
       caller: who,
-      owner: caller.kind === 'owner',
+      owner,
       devMode: devModeMark(dev, devFolded),
       now: sources.now,
       launch: sources.upLaunch,
@@ -533,10 +679,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
     if (!launchedOk || !afterwards?.pane) {
-      logLine(dir, 'restart', who, `${name}: launch did not reach ready`, sources.now());
-      return notReadyRefused(out, json, `${name} did not reach a ready prompt`);
+      logLine(dir, input.command, who, `${name}: launch did not reach ready`, sources.now());
+      return { kind: 'not-ready', message: `${name} did not reach a ready prompt` };
     }
-    return readyExit(out, json, dir, who, name, oldPane, afterwards.pane, sources.now(), team.project, session, notes);
+    return { kind: 'ready', oldPane, pane: afterwards.pane };
   } finally {
     runLock.release();
   }
@@ -722,6 +868,10 @@ function hostOf(input: {
   team: TeamFile;
   root: string;
   home: string;
+  /** The command whose relaunch this host serves: its log lines carry the word, and a session
+   *  it closes on the way ends with its reason. */
+  command: PerformCommand;
+  endReason: 'restart' | 'swap';
   ceilings: Ceilings;
   running: Running[];
   seat: Seat;
@@ -818,7 +968,7 @@ function hostOf(input: {
         const machine = input.readMachine(input.root);
         const problem = launchLimit(machine, input.limits, input.samples, input.now().getTime());
         if (problem) {
-          logLine(dir, 'restart', input.caller, `refused: ${problem} — readings: ${readingsText(machine)}`, input.now());
+          logLine(dir, input.command, input.caller, `refused: ${problem} — readings: ${readingsText(machine)}`, input.now());
           return problem;
         }
       }
@@ -877,11 +1027,11 @@ function hostOf(input: {
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
           );
-          if ('note' in made) logLine(dir, 'restart', input.caller, made.note, input.now());
+          if ('note' in made) logLine(dir, input.command, input.caller, made.note, input.now());
           else {
             // The address: the live session socket this relaunch answers at, recorded on the agent.
             const refreshed = refreshAgentAddress(input.home, made.id, patch.pane, session);
-            if (refreshed.note) logLine(dir, 'restart', input.caller, refreshed.note, input.now());
+            if (refreshed.note) logLine(dir, input.command, input.caller, refreshed.note, input.now());
           }
         }
       }
@@ -901,7 +1051,7 @@ function hostOf(input: {
         ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
         now: input.now(),
       });
-      if ('note' in began) logLine(dir, 'restart', input.caller, began.note, input.now());
+      if ('note' in began) logLine(dir, input.command, input.caller, began.note, input.now());
     },
     running(name) {
       if (!running.some((item) => item.name === name)) {
@@ -925,8 +1075,8 @@ function hostOf(input: {
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
       if (name === seat.name) {
-        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped', 'restart');
-        if (ended) logLine(dir, 'restart', input.caller, ended.note, input.now());
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped', input.endReason);
+        if (ended) logLine(dir, input.command, input.caller, ended.note, input.now());
       }
     },
     say: (line) => input.io.stderr(plainText(line)),
@@ -937,7 +1087,7 @@ function hostOf(input: {
       const prof = profileFor(cli);
       return prof ? input.doctor.version(prof.binary) : null;
     },
-    log: (who, what) => logLine(dir, 'restart', input.caller, `${who}: ${what}`, input.now()),
+    log: (who, what) => logLine(dir, input.command, input.caller, `${who}: ${what}`, input.now()),
   };
 }
 
