@@ -3,8 +3,8 @@
 // Owns the per-seat FIFO queue (`MAX_QUEUE_DEPTH = 32`), retries when a seat is mid-turn
 // (`working`) or its per-seat lock (`seat-locks/<session>/<seat>`) is held by `up` or
 // `answer`, checks process identity (`paneHoldsShell` and `seatProcessVerdict`) so a trigger
-// is never typed into a bare shell, checks composer state (`boxHoldsText` and `readScreen`)
-// so a trigger is never typed over an unsent user draft or a dialog screen, writes `0600`
+// is never typed into a bare shell, checks composer state (`readScreen`) so a trigger is never
+// typed over a dialog screen and unsent text is copied and put back by the delivery, writes `0600`
 // drop files under `<storeDir>/drops/<session>/<seat>/<id>`, and appends `0600` JSONL records
 // to `<storeDir>/messages.jsonl`.
 import { randomUUID } from 'node:crypto';
@@ -29,8 +29,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
-import { boxHoldsText } from '../launch/deliver.ts';
+import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
@@ -40,7 +39,7 @@ import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
-import { bindPane, deliverTrigger, TAKEN_REASON } from './deliver.ts';
+import { bindPane, deliverTrigger, draftNote, TAKEN_REASON } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
@@ -82,6 +81,9 @@ export const realDaemonHost: DaemonHost = {
     status: (session, pane) => agentStatus(pane, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     paneText: (session, pane) => paneRead(pane, 40, session),
+    // The queue's typed leg is the same delivery `team send` makes: a box holding its owner's
+    // unsent text is cleared with the profile's measured keys and the text pasted back.
+    sendKey: (session, pane, key) => sendKey(pane, key, session),
   },
   now: () => new Date(),
   home: homedir(),
@@ -124,6 +126,8 @@ export type DaemonSendResponse =
       /** `taken` when the box cleared with no status or transcript evidence inside the window:
        *  a delivery whose confirmation is still to come, and which is never typed again. */
       evidence?: 'taken';
+      /** What became of unsent text the delivery moved out of the box, when it moved any. */
+      draft?: string;
       drop_path: string;
     }
   | { v: 1; ok: true; id: string; seat: string; outcome: 'answered'; reply: string; reply_id: string | null }
@@ -147,6 +151,8 @@ export type DaemonSendResponse =
       detail: string;
       box: string | null;
       tries: number;
+      /** What became of unsent text the delivery moved out of the box, when it moved any. */
+      draft?: string;
       drop_path: string;
     };
 
@@ -1020,9 +1026,9 @@ async function executeQueuedSend(
           return recordHeld(`the screen reads ${dialog}; the drop file is at ${dropPath}`);
         }
         const screenKind = readScreen(configured.cli, rawScreen).kind;
-        if (screenKind === 'unsent' && !boxHoldsText(configured.cli, trigger, rawScreen)) {
-          return recordHeld(`the composer already holds unsent text; the drop file is at ${dropPath}`);
-        }
+        // Unsent text does not hold the drop here: the delivery below copies it beside the drop,
+        // clears the box, delivers, and pastes the text back (or holds where this CLI has no
+        // measured way into its box).
         if (status === 'working' || screenKind === 'working') {
           lock.release();
           lock = null;
@@ -1049,9 +1055,13 @@ async function executeQueuedSend(
     // typed, and `delivered` only once the trigger has left the box and the seat is working.
     const result = await deliverTrigger(bindPane(host.native, team.session), pane, trigger, configured.cli);
     const where = `the drop file is at ${dropPath}`;
-    if (result.dialog !== undefined) return recordHeld(`the screen reads ${result.dialog}; ${where}`, 'typed');
+    // The draft's receipt travels with every exit that moved an unsent text: the caller, the log
+    // line and the history entry all say where the owner's text went.
+    const draft = result.draft === undefined ? undefined : draftNote(result.draft);
+    const withDraft = (text: string): string => (draft === undefined ? text : `${text}; ${draft}`);
+    if (result.dialog !== undefined) return recordHeld(withDraft(`the screen reads ${result.dialog}; ${where}`), 'typed');
     if (result.outcome === 'held') return recordHeld(`${result.reason ?? 'the composer holds text'}; ${where}`, 'typed');
-    if (result.outcome === 'unreachable') return recordUnreachable(`${result.reason ?? 'the seat was not reached'}; ${where}`, 'typed');
+    if (result.outcome === 'unreachable') return recordUnreachable(withDraft(`${result.reason ?? 'the seat was not reached'}; ${where}`), 'typed');
     if (result.outcome === 'not-submitted') {
       appendHistory(team.project, root, host.home, {
         ts: host.now().toISOString(),
@@ -1061,6 +1071,7 @@ async function executeQueuedSend(
         body,
         id: msgId,
         outcome: 'not-submitted',
+        ...(draft === undefined ? {} : { note: draft }),
         ms: Date.now() - startedAt,
         via: 'typed',
         failed: request.failed,
@@ -1073,20 +1084,22 @@ async function executeQueuedSend(
         id: msgId,
         seat: seatName,
         outcome: 'not-submitted',
-        detail: `the seat did not take the trigger; ${where}`,
+        detail: withDraft(`the seat did not take the trigger; ${where}`),
         box: result.box ?? null,
         tries: result.tries,
+        ...(draft === undefined ? {} : { draft }),
         drop_path: dropPath,
       };
     }
     const submittedStatus = result.status ?? 'working';
     const taken = result.evidence === 'taken';
+    const note = [taken ? TAKEN_REASON : undefined, draft].filter((one): one is string => one !== undefined).join('; ');
 
     logLine(
       dir,
       'send',
       who,
-      `${seatName}: delivered (drop ${String(body.length)} characters, ${taken ? TAKEN_REASON : result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`})`,
+      `${seatName}: delivered (drop ${String(body.length)} characters, ${taken ? TAKEN_REASON : result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`}${draft === undefined ? '' : `; ${draft}`})`,
       host.now(),
     );
     appendHistory(team.project, root, host.home, {
@@ -1097,7 +1110,7 @@ async function executeQueuedSend(
       body,
       id: msgId,
       outcome: 'delivered',
-      ...(taken ? { note: TAKEN_REASON } : {}),
+      ...(note === '' ? {} : { note }),
       ms: Date.now() - startedAt,
       via: 'typed',
       failed: request.failed,
@@ -1110,6 +1123,7 @@ async function executeQueuedSend(
       outcome: 'delivered',
       status: submittedStatus,
       ...(taken ? { evidence: 'taken' as const } : {}),
+      ...(draft === undefined ? {} : { draft }),
       drop_path: dropPath,
     };
   } catch {

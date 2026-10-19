@@ -10,6 +10,25 @@ import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
 import { trustAnswers, type TrustRecord } from './trust-answer.ts';
 
+/** How a CLI's input box is emptied and restored, as the one run that measured it saw.
+ *  Declared only on the profiles a run covered; a CLI without this block has its unsent text
+ *  left alone by every delivery and by a restart. */
+export type InputBlock = {
+  /** The keys that empty the box on an idle screen, sent in order and repeated until the box
+   *  reads empty. */
+  clear: readonly string[];
+  /** The keys that empty the box during a running turn, measured on a CLI that takes text there.
+   *  Null when the CLI's keys were measured only on an idle screen. */
+  clearWorking: readonly string[] | null;
+  /** How text is put back into the box. */
+  paste: 'bracketed';
+  /** Whether this CLI takes text into its box while a turn runs. True means `clearWorking` is
+   *  the sequence a delivery uses on a working screen; false means a draft found there is left
+   *  in place and held, because clearing it was never measured and the idle keys could stop the
+   *  turn. */
+  midTurn: boolean;
+};
+
 /**
  * A launch profile: what `team` knows about one CLI, so a seat can't start
  * blocked. Keyed by the seat's `cli`.
@@ -61,6 +80,9 @@ export interface Profile {
    *  key is established for this CLI: a seat that asks the question is one that could not be
    *  stopped by asking. */
   exitConfirm: string | null;
+  /** The measured way into this CLI's box — its clear keys and paste surface. Null when no run
+   *  measured them: a delivery that finds unsent text there holds, and a restart refuses. */
+  input: InputBlock | null;
   /** The exact relative paths of regular files this CLI may leave in its working folder.
    *  Empty when no capture has established a path for this CLI. */
   lobbyFiles: readonly string[];
@@ -450,7 +472,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -466,6 +488,18 @@ const CONFIRM_KEYS = ['enter'] as const;
 // takes no exit text. Closed like the sets above, and only a key a run established is in it:
 // `ctrl+c` quits the Jules TUI from its session table (0.1.42; the footer draws `ctrl+c: quit`).
 const EXIT_KEYS = ['ctrl+c'] as const;
+
+// The keys a profile may name as `input.clear` and `input.clear_working`: the exit-clearing set
+// with `ctrl+k` added, because a measured clear pair is greater than one key (codex empties one
+// line per [ctrl+u, ctrl+k] pass at idle). Closed like the sets above: a key no run established
+// is refused as the profile loads.
+const INPUT_KEYS = ['ctrl+c', 'ctrl+u', 'ctrl+k', 'escape', 'backspace'] as const;
+
+// The paste surfaces a profile may name as `input.paste`. Bracketed paste is the one measured:
+// claude 2.1.303, codex 0.161.0 and cursor-agent 2026.10.16 each drew a pasted draft back as its
+// own rows. What a delivery pastes is one row: a box drawn over more than one row cannot be told
+// from a soft wrap, so it is held (see captureBox in send/deliver.ts).
+const PASTE_SURFACES = ['bracketed'] as const;
 
 /** The value of `exit_keys`: a non-empty list of the keys above, spelled as herdr spells them. */
 function exitKeysOf(entry: YamlEntry): readonly string[] {
@@ -489,6 +523,42 @@ function clearKeyOf(entry: YamlEntry): string {
     fail(entry.line, `"exit_clear" must be one of: ${CLEAR_KEYS.join(', ')}`);
   }
   return value;
+}
+
+/** One key list of the `input` block: a non-empty list of the keys above, spelled as herdr
+ *  spells them. */
+function inputKeysOf(entry: YamlEntry, key: string): readonly string[] {
+  if (entry.value.kind !== 'seq' || entry.value.items.length === 0) {
+    fail(entry.line, `"${key}" must be a non-empty list of keys`);
+  }
+  return entry.value.items.map((item) => {
+    const value = stringOf(item);
+    if (value === null) fail(item.line, `"${key}" entries must be strings`);
+    if (!(INPUT_KEYS as readonly string[]).includes(value)) {
+      fail(item.line, `"${key}" must hold keys among: ${INPUT_KEYS.join(', ')}`);
+    }
+    return value;
+  });
+}
+
+/** The value of `input`: the measured clear keys and paste surface for this CLI's box. */
+function inputOf(entry: YamlEntry): InputBlock {
+  const entries = mapping(entry.value, '"input"');
+  only(entries, ['clear', 'clear_working', 'paste', 'mid_turn']);
+  const clear = inputKeysOf(required(entries, 'clear', entry.line), 'input.clear');
+  const workingEntry = optional(entries, 'clear_working');
+  const clearWorking = workingEntry ? inputKeysOf(workingEntry, 'input.clear_working') : null;
+  const pasteEntry = required(entries, 'paste', entry.line);
+  const paste = text(pasteEntry, 'input.paste');
+  if (!(PASTE_SURFACES as readonly string[]).includes(paste)) {
+    fail(pasteEntry.line, `"input.paste" must be one of: ${PASTE_SURFACES.join(', ')}`);
+  }
+  const midTurnEntry = optional(entries, 'mid_turn');
+  const midTurn = midTurnEntry ? boolOf(midTurnEntry.value, 'input.mid_turn') : false;
+  if (midTurn && clearWorking === null) {
+    fail(workingEntry?.line ?? entry.line, '"input.clear_working" is required when "input.mid_turn" is true');
+  }
+  return { clear, clearWorking, paste: paste as InputBlock['paste'], midTurn };
 }
 
 /** The value of `exit_confirm`: one of the keys above, spelled as herdr spells it. */
@@ -729,6 +799,14 @@ export function exitClearKey(text: string): string | null {
   return entry === undefined ? null : clearKeyOf(entry);
 }
 
+/** The `input` block a profile snippet names, by the loader's own rule: for tests. A key outside
+ *  the closed sets, or a `mid_turn` with no `clear_working`, throws; an absent block reads as
+ *  null, as an absent optional key does. */
+export function inputBlockOf(text: string): InputBlock | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'input');
+  return entry === undefined ? null : inputOf(entry);
+}
+
 /** The `exit_confirm` a profile snippet names, by the loader's own rule: for tests. A key outside
  *  the closed set throws; an absent key reads as null, as an absent optional key does. */
 export function exitConfirmKey(text: string): string | null {
@@ -786,6 +864,7 @@ function launchOf(root: YamlNode): Shipped {
   const unreadModelEntry = optional(entries, 'unread_model');
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
+  const inputEntry = optional(entries, 'input');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
@@ -824,6 +903,7 @@ function launchOf(root: YamlNode): Shipped {
       compose: composeEntry ? composeOf(composeEntry) : null,
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
+      input: inputEntry ? inputOf(inputEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
