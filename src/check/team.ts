@@ -24,6 +24,8 @@ import { devModeActive, devModeOwnerLift } from '../dev_mode.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
+import type { DaemonHealth } from '../daemon/health.ts';
+import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -110,6 +112,11 @@ export type CheckSources = {
   idleWork?(input: IdleWorkInput): IdleWorkReport;
   /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
   pendingGreen?(dir: string): PendingGreenSlice[];
+  /** The machine daemon's reading, already probed by the command wrapper before this
+   *  synchronous report runs. Absent in a test that does not stand one in. */
+  daemon?: DaemonHealth;
+  /** The one probe the wrapper awaits; a scene hands `daemon` instead and reads no socket. */
+  daemonHealth?(home: string): Promise<DaemonHealth>;
 };
 
 /**
@@ -166,6 +173,8 @@ export const realCheckSources: CheckSources = {
   // The same snapshot and pending reader `status` uses, wired once: the commands cannot disagree.
   idleWork: realSources.idleWork,
   pendingGreen: realSources.pendingGreen,
+  // One probe, at the command wrapper: this report is synchronous and only reads the snapshot.
+  daemonHealth: realSources.daemonHealth,
 };
 
 /**
@@ -408,6 +417,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const idleNotes = [
     ...(idleWork !== undefined ? idleWorkNotes(idleWork) : []),
     ...greenNotes(green),
+    // The daemon's reading: a note only when there is something to act on. A daemon that is
+    // simply not installed is the ordinary state and is said in `status`, not counted here.
+    ...(sources.daemon !== undefined ? daemonProblemNotes(sources.daemon) : []),
   ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
@@ -438,6 +450,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
       ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
       ...(green?.kind === 'refused' ? { green_notice: green.why } : {}),
+      ...(sources.daemon !== undefined ? { daemon: daemonReading(sources.daemon) } : {}),
       differences: differences.map(toJsonDifference),
       summary: summaryCounts(differences),
       ...(briefs.stale ? { hint: ROLLOUT_HINT } : {}),

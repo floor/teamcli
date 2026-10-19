@@ -13,6 +13,9 @@ import { devModeActive } from '../dev_mode.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
+import { daemonHealth } from '../daemon/health.ts';
+import type { DaemonHealth } from '../daemon/health.ts';
+import { daemonNotes, daemonReading } from '../daemon/health_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
 import { currentTeam } from '../file/current.ts';
@@ -84,6 +87,9 @@ export type StatusSources = {
   idleWork?(input: IdleWorkInput): IdleWorkReport;
   /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
   pendingGreen?(dir: string): PendingGreenSlice[];
+  /** The machine daemon's one health reading, probed once per run at this boundary. Absent in a
+   *  test that does not stand one in, so its scenes read no socket. */
+  daemonHealth?(home: string): Promise<DaemonHealth>;
 };
 
 /**
@@ -101,6 +107,9 @@ export const realSources: StatusSources = {
   // The green journal's own pending reader, the same function the watch uses: a corrupt journal
   // throws, and the presentation names that read as refused rather than as no ready slice.
   pendingGreen: pendingGreenSlices,
+  // The daemon's own health probe: it reads the state record and asks the socket once. It never
+  // throws and never waits past its timeout, so an unreadable machine is a reading, not a crash.
+  daemonHealth,
   live(session, team, state) {
     const running = sessionRunning(session);
     if (running === null) return null;
@@ -423,6 +432,13 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
   if (green !== null) comparison.notes.push(...greenNotes(green));
+  // One probe of the machine daemon for the whole run: the line below and the document's
+  // `daemon` field come from the same snapshot, so they cannot disagree. No second probe, no
+  // server, and no exit change — the reading is a fact, not a verdict.
+  const health = sources.daemonHealth === undefined
+    ? null
+    : await sources.daemonHealth(sources.home ?? homedir());
+  if (health !== null) comparison.notes.push(...daemonNotes(health));
   const record = approvalAndOverrideRows(
     standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
     overrides,
@@ -482,6 +498,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
       ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
       ...(green?.kind === 'refused' ? { green_notice: green.why } : {}),
+      ...(health !== null ? { daemon: daemonReading(health) } : {}),
       differences: comparison.differences.map(toJsonDifference),
       summary: summaryCounts(comparison.differences),
       notice: current.notice ?? null,
