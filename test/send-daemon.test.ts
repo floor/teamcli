@@ -640,7 +640,13 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'take the box'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    // The queue's own delivery says what became of the owner's text: the draft receipt travels
+    // with the delivered line, its history entry and the response, as it does on the direct leg.
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (the unsent text was pasted back)\n');
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries.at(-1)).toMatchObject({ outcome: 'delivered', via: 'typed', note: 'the unsent text was pasted back' });
     // claude-code's idle clear is ctrl+c; the trigger was typed, submitted, and the draft
     // redrawn by a bracketed paste, with no literal typing of the draft.
     expect(keys).toEqual(['ctrl+c']);

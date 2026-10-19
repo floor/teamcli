@@ -116,8 +116,10 @@ The outcome is one of eight, and none of them is silent:
                unsent text does not hold the delivery: the text is copied beside the
                drop, the box is cleared with the profile's measured keys, the trigger
                is typed and pressed Enter, and the text is pasted back exactly, its
-               rows unchanged (multi-line included), before the run's verdict (exit 1
-               only where the box could not be cleared or the text put back)
+               row unchanged, before the run's verdict (exit 1 only where the box
+               could not be cleared or the text put back); a box drawn over more than
+               one row is held untouched, since a soft wrap cannot be told from a
+               newline
   not-submitted the line was typed and the seat never took it (exit 1): Enter was
                pressed up to three times, and only to a box still holding exactly the
                trigger; the message names what the box holds, faint suggestions not
@@ -1294,7 +1296,9 @@ function finishDaemonSend(
   report.sent = res.id;
   if (res.outcome === 'delivered') {
     const taken = res.evidence === 'taken' ? TAKEN_REASON : undefined;
-    return delivered(io, seatName, report, taken === undefined ? note : note === undefined ? taken : `${taken}; ${note}`);
+    // The daemon's typed leg moved any unsent text too: its receipt belongs on the same line.
+    const notes = [taken, note, res.draft].filter((one): one is string => one !== undefined);
+    return delivered(io, seatName, report, notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
@@ -1304,7 +1308,8 @@ function finishDaemonSend(
     const result: DeliverResult = { outcome: 'not-submitted', tries: res.tries, ...(res.box === null ? {} : { box: res.box }) };
     // The daemon keeps no pending record in the folder a watch scans, so this line promises no
     // retry: it names the drop and stops there.
-    return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}`, host, report);
+    const where = `the drop file is at ${res.drop_path}${res.draft === undefined ? '' : `; ${res.draft}`}`;
+    return notSubmitted(io, dir, who, seatName, result, where, host, report);
   }
   return refuse(io, dir, who, res.detail, host, report);
 }

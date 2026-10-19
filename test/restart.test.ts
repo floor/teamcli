@@ -552,14 +552,19 @@ describe('team restart <seat>', () => {
     expect(docRun.did.created).toBe(0);
   });
 
-  test('a multi-line unsent draft comes back with its rows unchanged', async () => {
+  test('a multi-line unsent draft is refused: its rows cannot be told from a soft wrap', async () => {
     const fixture = makeFixture();
+    // The box draws the draft's rows at its own indent, exactly as a one-line draft the composer
+    // word-wrapped would draw: the screen cannot say which break is a newline, so nothing is
+    // copied and the pane is left as it is.
     const draft = 'first line\nsecond line\n\nfourth line';
     const run = makeHarness(fixture, { workerScreen: 'unsent', workerDraft: draft });
     const io = testIo(fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
-    expect(run.did.pasted).toEqual([`\x1b[200~${draft}\x1b[201~`]);
-    expect(io.out).toContain('worker: unsent text pasted back\n');
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toBe('team restart: worker holds unsent text in its input box over more than one drawn row, where a soft wrap cannot be told from a newline; left as it is (the owner clears it in its pane, or team restart worker --abandon closes it)\n');
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.pasted).toEqual([]);
     expect(existsSync(join(fixture.dir, 'restart-drafts', 'acme', 'worker.draft'))).toBe(false);
   });
 

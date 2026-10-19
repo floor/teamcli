@@ -5,9 +5,13 @@ turn and context facts, asks a free seat to exit and waits for its pane to retur
 closes its workspace, and launches the seat again in a fresh workspace. A seat that is busy —
 working, blocked at a prompt, at its own exit question, or holding unsent text — is left as it is
 unless `--abandon` is given. Unsent text is the exception: an idle seat holding it is restarted,
-its text copied under the state folder before the close and pasted back into the new pane's box —
-multi-line included — as soon as the seat's prompt is ready. Where the CLI has no measured input
-keys, or the box cannot be copied faithfully (behind a paste chip, a row the reader cannot read),
+its text copied under the state folder before the close and pasted back into the new pane's box
+as soon as the seat's prompt is ready. An unsent box is copied only when it draws one row: a box
+drawn over more than one row cannot be told from a one-line draft the composer word-wrapped, so
+it is left as it is rather than pasted back with a break the person never typed. Where the CLI
+has no measured input
+keys, or the box cannot be copied faithfully (behind a paste chip, over more than one drawn row,
+a row the reader cannot read),
 the seat is left as it is. A screen the profile does not recognise is advice, not a block: when
 herdr reports the seat idle or done, the workspace is closed without typing into it, and the run
 says the screen was not read. A seat whose profile says herdr cannot report it

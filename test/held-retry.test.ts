@@ -294,6 +294,53 @@ describe('retryHeldDrops', () => {
     expect(said).toEqual(['lead: a held send from owner was delivered on retry']);
   });
 
+  test('a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-draft', 'from the owner\n\nhello');
+    const one = pane(claudeBox('a draft for the retry'));
+    const said: string[] = [];
+    const at = {
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: scripts(one, true),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    };
+
+    await retryHeldDrops(at);
+    // One clear, the trigger, one Enter, then the owner's text back as one bracketed paste.
+    expect(one.keys).toEqual(['ctrl+c']);
+    expect(one.typed).toEqual([
+      triggerLine(join(dropDir, 'drop-draft')) as string,
+      '\x1b[200~a draft for the retry\x1b[201~',
+    ]);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(existsSync(join(dropDir, 'drop-draft.draft'))).toBe(false);
+    // The retry's receipt names where the text went, as the send's own line would have.
+    expect(said).toEqual(['lead: a held send from owner was delivered on retry; the unsent text was pasted back']);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([
+      {
+        ts: NOW.toISOString(),
+        from: 'owner',
+        to: 'lead',
+        body: 'from the owner\n\nhello',
+        id: 'drop-draft',
+        outcome: 'delivered',
+        note: 'the unsent text was pasted back',
+        via: 'typed',
+      },
+    ]);
+  });
+
   test('a seat the file marks human is never typed into: the marker is given up with the reason', async () => {
     const made = world();
     const text = teamText(made.root, lobbyDir(made.home)).replace('    name: lead\n', '    name: lead\n    human: true\n');
