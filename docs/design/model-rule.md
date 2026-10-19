@@ -110,8 +110,10 @@ the mark: a seat that says it is done and is still working does not swap.
 - A **broken seat** swaps at once: its screen is at the CLI's rate limit or provider error
   (the two states `provider-error` already reads), because it cannot finish its task.
 - Otherwise the swap waits for the boundary. After `swap-wait-seconds` the swap runs at the
-  next pass with no turn running and no dialog (`!working && !prompt`), and the log says the
-  deadline forced it — a lead that is never idle cannot hold it forever.
+  next pass with no turn running, no dialog and no unsent text in the input box
+  (`!working && !prompt && !unsent`); text nobody sent is a retry, never a boundary or a
+  pause, and the log says the deadline forced it — a lead that is never idle cannot hold it
+  forever.
 - `team swap now` runs at once, logs who forced it and when.
 - The same queue is drained by `team swap --run`, so a team with no watch is not stuck.
 
@@ -129,10 +131,12 @@ the attempt and what the screen showed; lossless resumption is not an observed f
 conversation would lose the context anyway — the seat is first asked for a handover file at
 a path the tool names, as the last step of its task, and the file is passed to the new
 conversation; a handover not written before the bounded wait is logged, and the run goes on.
+A broken seat is not asked: its screen cannot answer, and its swap runs at once.
 
 **Read-back.** After ready the screen is read again. A model the profile can show is
 compared with the new declaration (`modelDiffers`), and a mismatch is a failed swap, reported
-and logged. A model the profile cannot show is looked for in the CLI's own model-id line (the
+and logged — the queue record stands and no log line says the swap succeeded. A model the
+profile cannot show is looked for in the CLI's own model-id line (the
 `· API Usage Billing` banner a launch-wrapper pane draws, captured in
 `test/fixtures/nudge-typing/`); the id is compared by its normalized words with the id the
 donor seat shows the same way. When neither reading exists the log says `read-back: unread`
