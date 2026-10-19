@@ -11,15 +11,9 @@ import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../c
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive } from '../dev_mode.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
-import {
-  greenNotes,
-  idleWorkNotes,
-  readPendingGreen,
-  type IdleWorkInput,
-  type IdleWorkReport,
-  type PendingGreenRead,
-  type PendingGreenSlice,
-} from '../idle_work.ts';
+import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
+import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -100,6 +94,9 @@ export function standingSource(home: string): StatusSources['standing'] {
 }
 
 export const realSources: StatusSources = {
+  // The green journal's own pending reader, the same function the watch uses: a corrupt journal
+  // throws, and the presentation names that read as refused rather than as no ready slice.
+  pendingGreen: pendingGreenSlices,
   live(session, team, state) {
     const running = sessionRunning(session);
     if (running === null) return null;

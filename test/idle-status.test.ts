@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runTeamCheck } from '../src/check/team.ts';
+import { runTeamCheck, type CheckSources } from '../src/check/team.ts';
 import { runStatus } from '../src/commands/status.ts';
 import type { StatusSources } from '../src/commands/status.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
@@ -21,6 +21,7 @@ import {
 } from '../src/idle_work.ts';
 import { updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
+import { greenSlicesPath, pendingGreenSlices, recordGreenSliceReady } from '../src/tasks/green-slices.ts';
 import type { Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
@@ -191,4 +192,62 @@ test('check prints both readings, names a corrupt journal, and keeps its exit', 
   expect(io.out).toContain('idle with work: 1 idle seat past 5 minutes, 1 takeable; lead idle since 2026-10-19T08:50:00.000Z');
   expect(io.out).toContain('the green journal cannot be read, so ready slices are unknown (the journal is not JSON)');
   expect(code).toBe(0);
+});
+
+const realCheck = (at: { dir: string; home: string }): CheckSources => ({
+  live: () => live(),
+  branch: () => 'main',
+  standing: (root) => approvalStanding(root, at.home),
+  now: () => NOW,
+  home: at.home,
+  pendingGreen: pendingGreenSlices,
+});
+
+test('status and check read a real journal through its own pending reader', async () => {
+  const at = place();
+  const recorded = recordGreenSliceReady(at.dir, {
+    task: 'slice-alpha', seat: 'writer-01', commit: '0123456', version: '0.5.4', at: NOW,
+  });
+  if (!recorded.ok) throw new Error(recorded.why);
+  const io = testIo(at.root, { kind: 'owner' });
+  await runStatus(['--json'], io, {
+    live: () => live(),
+    branch: () => 'main',
+    standing: (root) => approvalStanding(root, at.home),
+    now: () => NOW,
+    home: at.home,
+    pendingGreen: pendingGreenSlices,
+  });
+  const doc = JSON.parse(io.out) as { notes: string[]; green_slices: PendingGreenSlice[] };
+  expect(doc.notes).toContain(`green slice ready and not installed: slice-alpha since ${AT}`);
+  expect(doc.green_slices).toEqual([
+    { task: 'slice-alpha', seat: 'writer-01', commit: '0123456', version: '0.5.4', readyAt: AT },
+  ]);
+  const checked = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, checked, realCheck(at));
+  expect(checked.out).toContain(`green slice ready and not installed: slice-alpha since ${AT}`);
+  expect(code).toBe(0);
+});
+
+test('a corrupt journal is named with its path, and changes no exit', async () => {
+  const at = place();
+  writeFileSync(greenSlicesPath(at.dir), '{ not json');
+  const why = `${greenSlicesPath(at.dir)} is not valid JSON; move it aside and run the command again`;
+  const checked = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, checked, realCheck(at));
+  expect(checked.out).toContain(`the green journal cannot be read, so ready slices are unknown (${why})`);
+  expect(code).toBe(0);
+  const io = testIo(at.root, { kind: 'owner' });
+  await runStatus(['--json'], io, {
+    live: () => live(),
+    branch: () => 'main',
+    standing: (root) => approvalStanding(root, at.home),
+    now: () => NOW,
+    home: at.home,
+    pendingGreen: pendingGreenSlices,
+  });
+  const doc = JSON.parse(io.out) as { notes: string[]; green_slices?: unknown; green_notice?: string };
+  expect(doc.green_slices).toBeUndefined();
+  expect(doc.green_notice).toBe(why);
+  expect(doc.notes).toContain(`the green journal cannot be read, so ready slices are unknown (${why})`);
 });

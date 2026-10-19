@@ -6,6 +6,9 @@
 import type { TeamFile } from './file/types.ts';
 import type { SessionState } from './state.ts';
 import type { Live } from './status/compare.ts';
+import type { PendingGreenSlice } from './tasks/green-slices.ts';
+
+export type { PendingGreenSlice };
 
 /** A seat the snapshot counted as quiet: `since` is the last moment it was seen working, or null
  *  when it was already idle when the watch started. */
@@ -41,15 +44,6 @@ export type IdleWorkInput = {
 };
 
 export type IdleWorkSource = (input: IdleWorkInput) => IdleWorkReport;
-
-/** One green slice the journal says is ready and not installed: metadata only. */
-export type PendingGreenSlice = {
-  task: string;
-  seat: string;
-  commit: string;
-  version: string;
-  readyAt: string;
-};
 
 /** The journal read, or the reason it could not be read. A refused read never becomes "none". */
 export type PendingGreenRead =

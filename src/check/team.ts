@@ -22,14 +22,8 @@ import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSource
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive, devModeOwnerLift } from '../dev_mode.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
-import {
-  greenNotes,
-  idleWorkNotes,
-  readPendingGreen,
-  type IdleWorkInput,
-  type IdleWorkReport,
-  type PendingGreenSlice,
-} from '../idle_work.ts';
+import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -169,6 +163,8 @@ export const realCheckSources: CheckSources = {
   standing: realSources.standing,
   now: realSources.now,
   home: realSources.home,
+  // The same pending reader `status` uses, wired once: both commands read the one journal.
+  pendingGreen: realSources.pendingGreen,
 };
 
 /**
