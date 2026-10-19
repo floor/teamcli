@@ -231,7 +231,7 @@ The following preserves proposed detail lifted from Planning chapter H. It is no
     "<goal>"` breaks the goal into items with a role and an estimate in tokens per model class,
     machine time and heavy slots (steps 1 and 3 of §1); it reads every account's figures (commitment
     15) and places each item on the account and the lab where it pays, defers to a reset what no
-    window carries, and places heavy runs in the machine's slots (Runtime amendment 01 §5; `team
+    window carries, and places heavy runs in the machine's slots (Runtime commitment 52; `team
     lock`); it prints the timing with its cost per account and the alternatives with theirs, one
     sentence each; and it writes nothing until the owner, or a delegate he named, approves, when the
     items become records of the source (commitment 2) in the plan's order (commitment 11) and the
@@ -263,7 +263,7 @@ The proposed historical-cost input to these estimates is specified in §7.3. An 
     and reversible, loosening nothing.** When `budget-actions` is `act` (the policy of commitment 21),
     the Runtime does, on the event that names it:
     - **Swap an out-of-token seat.** On `quota.seat-walled`, the seat is relaunched on another account
-      the entity declares (Runtime amendment 01 §3: the launch accounts of the entity, the keychain
+      the entity declares (Runtime commitment 50: the launch accounts of the entity, the keychain
       reference and never the key), chosen as `team usage`'s advice chooses it, the account with the
       most headroom first; the seat keeps its registry id, its grants, its lease and its item (the
       Runtime's commitment 2; 008 commitment 7), and the swap waits for the seat's idle prompt, never
