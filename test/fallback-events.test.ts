@@ -17,12 +17,11 @@ import type { Caller } from '../src/caller.ts';
 import { messageFile } from '../src/commands/messages.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
-import { eventThresholdsInForce } from '../src/policy/thresholds.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   allFailedRecordId,
   attemptLedgerFileName,
-  ESCALATION_DELAY_POLICY,
   escalateDue,
   escalatedRecordId,
   escalationDelayOf,
@@ -151,10 +150,10 @@ function fact(world: World, over: Partial<TransportFact> = {}): TransportFact {
   };
 }
 
-function delayMs(world: World): number {
-  const resolved = eventThresholdsInForce({ home: world.home, root: world.root, team: world.team, now: new Date(AT) });
-  if (!resolved.ok) throw new Error(JSON.stringify(resolved.refusals));
-  return resolved.thresholds.unreachable_threshold_seconds * 1000;
+function delayMs(world: World, recipient: CanonicalRecipient = world.recipient, ctx: FallbackContext = world.ctx): number {
+  const delay = escalationDelayOf(ctx, recipient, AT);
+  if (delay.ms === null) throw new Error(delay.refusal ?? 'no delay resolved');
+  return delay.ms;
 }
 
 function readMarker(world: World, messageId = 'm-001'): FallbackMarker {
@@ -185,9 +184,10 @@ describe('the fallback episode', () => {
     expect(note.state).toBe('all-failed');
     expect(note.eventDuplicate).toBe(false);
     expect(note.dueAt).toBe(new Date(Date.parse(AT) + delayMs(world)).toISOString());
-    const delay = escalationDelayOf(world.ctx, AT);
-    expect(delay.policy).toBe(ESCALATION_DELAY_POLICY);
-    expect(delay.policy).toBe('event-unreachable-threshold-seconds');
+    const delay = escalationDelayOf(world.ctx, world.recipient, AT);
+    expect(delay.source).toBe('release-default');
+    expect(delay.seconds).toBe(300);
+    expect(delay.ms).toBe(300_000);
     expect(delay.ms).toBe(delayMs(world));
     expect(delay.refusal).toBeUndefined();
 
@@ -730,5 +730,63 @@ describe('the fallback episode', () => {
     expect(repaired.escalated).toHaveLength(1);
     expect(readMarker(world).dueAt).toBe(new Date(Date.parse(AT) + delayMs(world)).toISOString());
     expect(verifiedLog(world)).toHaveLength(2);
+  });
+});
+
+describe('the escalation delay resolver', () => {
+  test('an explicit shorter legacy threshold caps the canonical delay', () => {
+    const world = makeWorld();
+    const shorter = writePolicySet(
+      world.home,
+      { level: 'entity', target: 'floor', name: 'event-unreachable-threshold-seconds', value: 150 },
+      { now: new Date(AT) },
+    );
+    if (!shorter.ok) throw new Error(shorter.why);
+
+    const delay = escalationDelayOf(world.ctx, world.recipient, AT);
+    expect(delay).toEqual({ ms: 150_000, seconds: 150, source: 'event-unreachable-threshold-seconds' });
+
+    // The scheduling path consumes the capped number: the due instant moves with it.
+    const note = noteTransport(world.ctx, fact(world));
+    if (!note.ok) throw new Error(note.reason);
+    expect(note.dueAt).toBe(new Date(Date.parse(AT) + 150_000).toISOString());
+  });
+
+  test('a receiver in another root reads its own chain, never the sender team', () => {
+    const world = makeWorld();
+    // The sender's chain declares 240 s at its own entity.
+    const senderPolicy = writePolicySet(
+      world.home,
+      { level: 'entity', target: 'floor', name: 'delivery-escalation', value: 240 },
+      { now: new Date(AT) },
+    );
+    if (!senderPolicy.ok) throw new Error(senderPolicy.why);
+    expect(escalationDelayOf(world.ctx, world.recipient, AT)).toEqual({
+      ms: 240_000,
+      seconds: 240,
+      source: 'delivery-escalation',
+    });
+
+    const foreign: CanonicalRecipient = {
+      team: 'floor',
+      seat: 'entity-lead',
+      toId: 'agt_entitylead00',
+      session: 'floor-hq',
+      root: world.entityRoot,
+    };
+    // Without the receiver's file in hand, nothing is borrowed from the sender: the episode stays
+    // pending and says which root could not be read.
+    const borrowed = escalationDelayOf(world.ctx, foreign, AT);
+    expect(borrowed.ms).toBeNull();
+    expect(borrowed.refusal).toContain('never read for another team');
+    expect(borrowed.refusal).toContain(world.entityRoot);
+
+    // With the receiver's validated file in hand, its own chain answers — the canonical 300 s
+    // release default, not the sender's 240 s.
+    const foreignYaml = TEAM_YAML.replace('project: acme', 'project: floor').replace('entity: floor', 'entity: ops');
+    const foreignTeam = validateTeamFile(foreignYaml);
+    if (!foreignTeam.ok) throw new Error(JSON.stringify(foreignTeam.errors));
+    const own = escalationDelayOf({ ...world.ctx, recipientTeam: foreignTeam.team }, foreign, AT);
+    expect(own).toEqual({ ms: 300_000, seconds: 300, source: 'release-default' });
   });
 });

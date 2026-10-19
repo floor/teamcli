@@ -10,11 +10,13 @@
 //      routing word selects (`matchesSubscriber`). Nothing is emitted before that point, and
 //      nothing per failed route.
 //   2. If no delivery follows within the owner's policy delay — the canonical
-//      `delivery-escalation`, read today through its one compatibility mapping to
-//      `unreachable_threshold_seconds` — one escalation to the main (entity) orchestrator: an
-//      event addressed to that seat and one signed mailbox record. A later delivery cancels the
-//      pending escalation. The escalation event goes to the orchestrator (addressed), the sender
-//      and the receiver team's lead, by the same routing.
+//      `delivery-escalation` for the receiving seat's own chain, read by the shared resolver
+//      (`deliveryEscalationDelay`), with an explicit shorter legacy
+//      `unreachable_threshold_seconds` as a cap and an unreadable chain leaving the episode
+//      pending — one escalation to the main (entity) orchestrator: an event addressed to that
+//      seat and one signed mailbox record. A later delivery cancels the pending escalation. The
+//      escalation event goes to the orchestrator (addressed), the sender and the receiver team's
+//      lead, by the same routing.
 //
 // Every attempt is appended whole to a durable ledger in the project's state store
 // (`fallback-attempts-<key>.jsonl`, one JSON line per fact, never rotated). The marker beside the
@@ -72,8 +74,9 @@ import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEvent
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator, type EntityOrchestrator } from '../bus/seats.ts';
 import { recordDir } from '../commands/messages.ts';
+import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
-import { eventThresholdsInForce } from '../policy/thresholds.ts';
+import { deliveryEscalationDelay, type DeliveryEscalationSource } from '../policy/delivery.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { withLock } from '../state.ts';
 import { appendStoreLine, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
@@ -127,7 +130,10 @@ export type TransportFact = {
 
 /** Everything the callbacks share: the verified sender, the team file in force, the checkout and
  *  home the record and the log live under, and the clock. `orchestrator` lets a host that already
- *  resolved the entity lead pass it in; absent, the registry answers (or names none). */
+ *  resolved the entity lead pass it in; absent, the registry answers (or names none).
+ *  `recipientTeam` is the receiving team's validated file when the receiver stands in another
+ *  checkout: the escalation delay reads the receiver's chain, never the sender's, so a
+ *  cross-root episode without it stays pending instead of borrowing this team's policy. */
 export type FallbackContext = {
   caller: Caller;
   team: TeamFile;
@@ -135,6 +141,7 @@ export type FallbackContext = {
   home: string;
   now: () => Date;
   orchestrator?: EntityOrchestrator | null;
+  recipientTeam?: TeamFile;
 };
 
 /** One attempt, as the marker's bounded summary keeps it. The durable ledger keeps every one. */
@@ -271,47 +278,49 @@ export function escalationMailboxId(recipient: CanonicalRecipient, messageId: st
   return `evt-fallback-${episodeHash(recipient, messageId)}`;
 }
 
-/** The canonical policy name for the main-escalation delay: the design round's
- *  `delivery-escalation` (delays), whose decided default is 300 s. Until B5's shared resolver and
- *  catalogue land, the delay is read through the one compatibility mapping below to the legacy
- *  `event-unreachable-threshold-seconds`; an explicit legacy value shorter than the canonical one
- *  remains a constraint, never a reversion to its own release default. The resolver owns the
- *  compatibility rule, and this module duplicates none of it: it consumes the resolved number and
- *  implements no route timing. `delivery-order` (the route sequence) and per-route
- *  `delivery-timeout` stay the transport's; the immediate all-failed event is a fixed invariant,
- *  not a policy. */
-export const ESCALATION_DELAY_POLICY = 'event-unreachable-threshold-seconds';
+/** The resolved main-escalation delay. `ms` is null exactly when the receiving seat's chain would
+ *  not resolve; `source` names which word answered, as the shared resolver names it. */
+export type EscalationDelay = {
+  ms: number | null;
+  seconds?: number;
+  source?: DeliveryEscalationSource;
+  refusal?: string;
+};
 
 /**
- * Resolve the main-escalation delay through the signed chain in force. The canonical name is
- * `delivery-escalation` (300 s main default); the compatibility mapping is the legacy
- * `unreachable_threshold_seconds` (explicit shorter values remain a constraint; no reversion to
- * its own release default), and B5's shared resolver will be swapped in here when it is green.
- * An unreadable or invalid chain schedules nothing and says why — never a fallback delay — and
- * the episode is still recorded; a later pass under a readable chain schedules it from the
- * original failure time.
+ * Resolve the main-escalation delay from the receiving seat's own policy chain through the one
+ * shared reader, `deliveryEscalationDelay`: the canonical `delivery-escalation`, an explicit
+ * shorter legacy `event-unreachable-threshold-seconds` as a cap, and the canonical 300 s release
+ * default otherwise. The chain read is the recipient's — its root, team and seat — never the
+ * sender's: a receiver in another root without its own team file in hand stays pending rather
+ * than reading the sender's chain. An unreadable or invalid chain schedules nothing and says why
+ * — never a fallback delay — and the episode is still recorded; a later pass under a readable
+ * chain schedules it from the original failure time. This module implements no route timing and
+ * no compatibility rule of its own.
  */
 export function escalationDelayOf(
   ctx: FallbackContext,
+  recipient: CanonicalRecipient,
   at: string,
-): { ms: number | null; policy: string; refusal?: string } {
-  const resolved = eventThresholdsInForce({
-    home: ctx.home,
-    root: ctx.root,
-    team: ctx.team,
-    now: new Date(at),
-  });
-  if (!resolved.ok) {
+): EscalationDelay {
+  const team = ctx.recipientTeam ?? (recipient.root === ctx.root ? ctx.team : null);
+  if (team === null) {
     return {
       ms: null,
-      policy: ESCALATION_DELAY_POLICY,
-      refusal: resolved.refusals.map((refusal) => refusal.message).join('; '),
+      refusal: `no team file is in hand for the receiver's root ${recipient.root}: the sender's chain is never read for another team`,
     };
   }
-  return {
-    ms: resolved.thresholds.unreachable_threshold_seconds * 1000,
-    policy: ESCALATION_DELAY_POLICY,
-  };
+  const resolved = deliveryEscalationDelay({
+    home: ctx.home,
+    entity: team.entity ?? '',
+    projectId: projectIdOfTeam(ctx.home, team, recipient.root) ?? '',
+    root: recipient.root,
+    team,
+    seat: recipient.seat,
+    now: new Date(at),
+  });
+  if (!resolved.ok) return { ms: null, refusal: resolved.why };
+  return { ms: resolved.seconds * 1000, seconds: resolved.seconds, source: resolved.source };
 }
 
 /**
@@ -498,7 +507,7 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
   // intent and before the append leaves an episode the next pass drains.
   marker.status = 'all-failed';
   marker.allFailedAt = fact.at;
-  const delay = escalationDelayOf(ctx, fact.at);
+  const delay = escalationDelayOf(ctx, fact.recipient, fact.at);
   if (delay.ms !== null) marker.dueAt = new Date(Date.parse(fact.at) + delay.ms).toISOString();
   else delete marker.dueAt;
   marker.outbox = {
@@ -619,7 +628,7 @@ function escalateOne(
   if (marker.dueAt === undefined) {
     // The first pass ran under an unreadable policy and scheduled nothing. Retry the resolution
     // now, from the original failure instant, and keep the episode unscheduled while it refuses.
-    const delay = escalationDelayOf(ctx, marker.allFailedAt ?? atIso);
+    const delay = escalationDelayOf(ctx, marker.recipient, marker.allFailedAt ?? atIso);
     if (delay.ms === null) {
       return { kind: 'refused', reason: `the escalation delay is unreadable: ${delay.refusal ?? 'no delay resolved'}` };
     }
