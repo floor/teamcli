@@ -109,7 +109,13 @@ export function getTeam(home: string, id: string): TeamRecord | null {
 
 /** What `upsertTeam` takes: any of the record's fields, and who is writing and when. A team not
  *  yet registered needs `project`, `session` and `root` at least. */
-export type TeamPatch = Partial<Omit<TeamRecord, 'id' | 'provenance'>> & { by?: string; at?: string };
+export type TeamPatch = Partial<Omit<TeamRecord, 'id' | 'provenance'>> & {
+  by?: string;
+  at?: string;
+  /** Entries to set, or to remove with `null`, inside the record's settings map. Applied to the
+   *  record the writer reads under the registry lock, so two writes of different keys both land. */
+  settingsDelta?: Record<string, YamlValue | null>;
+};
 
 /** Creates the team's record, or changes the fields the patch names and nothing else. */
 export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamRecord {
@@ -117,7 +123,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     const teams = readTeams(home);
     const at = patch.at ?? new Date().toISOString();
     const prior = teams[id];
-    const { by, at: _at, ...fields } = patch;
+    const { by, at: _at, settingsDelta, ...fields } = patch;
     let record: TeamRecord;
     if (prior) {
       record = { ...prior, ...definedOnly(fields), provenance: { ...prior.provenance, updated_at: at } };
@@ -141,6 +147,14 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
     if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
+    if (settingsDelta !== undefined) {
+      const settings: Record<string, YamlValue> = { ...(record.settings ?? {}) };
+      for (const [key, entry] of Object.entries(settingsDelta)) {
+        if (entry === null) delete settings[key];
+        else settings[key] = entry;
+      }
+      record.settings = settings;
+    }
     // A write of the primary session's lobby keeps that session's map entry in step; every other
     // entry is left exactly as it was, which is what keeps the other sessions' lobbies.
     record.lobbies = { ...(record.lobbies ?? {}) };

@@ -12,22 +12,21 @@
 // it reads one and refuses the source whole when one does not verify.
 //
 // A write is one signed record per key. One write bumps the owner-key generation once, signs
-// every entry with it, and replaces the level's record in one locked temp-and-rename, so a
-// multi-key write is atomic per record. A write across levels is not one transaction: it is
-// applied lowest level first (`seat`, then `team`, `project`, `entity`), stops at the first
-// refusal, and the result names what was applied, what failed and what was not attempted.
+// every entry with it, and hands the entries to the level's registry writer, which applies them
+// to the record it reads under its own lock, so a multi-key write lands together and a
+// concurrent write of another key survives. Entity settings are read only: the owner's entities
+// file stays hand-written in this release.
 
 import type { KeyObject } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { entitiesPath } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { grantsDir } from '../grant.ts';
 import { agentsDir, getAgent, updateAgent } from '../registry/agents.ts';
 import { get as getProject, projectsFile, upsertProject } from '../registry/projects.ts';
 import { getTeam, readTeams, teamsFile, upsertTeam } from '../registry/teams.ts';
-import { writeAtomic } from '../state.ts';
 import { bumpGeneration, keyOf, keyState } from '../store/keys.ts';
 import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
@@ -497,7 +496,7 @@ export function readSeatConfigSource(
   if (!isMap(root)) {
     return { ok: false, level: 'seat', target, source: path, why: `${path}: expected a map`, settings: [] };
   }
-  // A seat-level record may be signed for the agent id or for the seat name, as a policy one
+  // A seat-level record may be signed for the agent id or for the seat name, as a policy record
   // may. The agent file itself names its seat in `reach`, so a caller that knows only the agent
   // id (a write plan) accepts the same signed record the seat-named read does.
   const targets = new Set<string>([agentId]);
@@ -757,111 +756,6 @@ function diskEntry(record: SignedConfigRecord): Record<string, YamlValue> {
   };
 }
 
-function emitYamlVal(v: YamlValue): string {
-  if (v === null) return 'null';
-  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map((item) => emitYamlVal(item)).join(', ')}]`;
-  return JSON.stringify(v);
-}
-
-function scalarYaml(text: string): string {
-  const bare = /^[A-Za-z_/~][A-Za-z0-9_./@~-]*$/.test(text) && !/^(~|null|true|false)$/i.test(text);
-  return bare ? text : JSON.stringify(text);
-}
-
-function emitSettingsBlock(indent: string, settings: Record<string, YamlValue>): string[] {
-  const names = Object.keys(settings).sort();
-  if (names.length === 0) return [];
-  const lines = [`${indent}settings:`];
-  for (const name of names) {
-    const entry = settings[name];
-    if (isMap(entry)) {
-      lines.push(`${indent}  ${scalarYaml(name)}:`);
-      for (const [k, v] of Object.entries(entry)) {
-        lines.push(`${indent}    ${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
-      }
-    }
-  }
-  return lines;
-}
-
-function emitPoliciesBlock(indent: string, policies: Record<string, YamlValue>): string[] {
-  const names = Object.keys(policies).sort();
-  if (names.length === 0) return [];
-  const lines = [`${indent}policies:`];
-  for (const name of names) {
-    const entry = policies[name];
-    if (isMap(entry)) {
-      lines.push(`${indent}  ${scalarYaml(name)}:`);
-      for (const [k, v] of Object.entries(entry)) {
-        lines.push(`${indent}    ${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
-      }
-    }
-  }
-  return lines;
-}
-
-/** The entity record, rewritten whole: every root, liveness threshold, policy and unknown field is
- *  carried as it was, and only the `settings` map changes. One atomic replacement. */
-function writeEntitySettings(
-  home: string,
-  entity: string,
-  updates: Record<string, Record<string, YamlValue> | null>,
-): void {
-  const path = entitiesPath(home);
-  let root: Record<string, YamlValue> = {};
-  if (existsSync(path)) {
-    const text = readFileSync(path, 'utf8');
-    if (text.trim()) {
-      const parsed = toValue(parseYaml(text));
-      if (!isMap(parsed)) throw new Error(`${path}: expected a map of entities`);
-      root = { ...parsed };
-    }
-  }
-  const existingEntity = isMap(root[entity]) ? { ...(root[entity] as Record<string, YamlValue>) } : {};
-  const existingSettings = isMap(existingEntity.settings) ? { ...(existingEntity.settings as Record<string, YamlValue>) } : {};
-  for (const [name, entry] of Object.entries(updates)) {
-    if (entry === null) delete existingSettings[name];
-    else existingSettings[name] = entry;
-  }
-  if (Object.keys(existingSettings).length === 0) delete existingEntity.settings;
-  else existingEntity.settings = existingSettings;
-  root[entity] = existingEntity;
-
-  const lines: string[] = [];
-  for (const entityKey of Object.keys(root).sort()) {
-    const entityVal = root[entityKey];
-    if (!isMap(entityVal) || Object.keys(entityVal).length === 0) {
-      lines.push(`${scalarYaml(entityKey)}: {}`);
-      continue;
-    }
-    lines.push(`${scalarYaml(entityKey)}:`);
-    if (Array.isArray(entityVal.roots)) {
-      lines.push('  roots:');
-      for (const r of entityVal.roots) {
-        lines.push(`    - ${typeof r === 'string' ? scalarYaml(r) : emitYamlVal(r)}`);
-      }
-    }
-    if (isMap(entityVal.liveness)) {
-      const pairs = Object.entries(entityVal.liveness).map(([k, v]) => `${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
-      if (pairs.length > 0) lines.push(`  liveness: { ${pairs.join(', ')} }`);
-    }
-    if (isMap(entityVal.policies) && Object.keys(entityVal.policies).length > 0) {
-      lines.push(...emitPoliciesBlock('  ', entityVal.policies));
-    }
-    if (isMap(entityVal.settings) && Object.keys(entityVal.settings).length > 0) {
-      lines.push(...emitSettingsBlock('  ', entityVal.settings));
-    }
-    for (const [k, v] of Object.entries(entityVal)) {
-      if (k === 'roots' || k === 'liveness' || k === 'policies' || k === 'settings') continue;
-      lines.push(`  ${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
-    }
-  }
-  mkdirSync(dirname(path), { recursive: true });
-  writeAtomic(path, `${lines.join('\n')}\n`);
-}
-
 /** Applies signed entries to a level's record: the registry writers hold their own lock and
  *  replace the file atomically, so a multi-key write is one temp-and-rename per record. */
 function writeSettingsMap(
@@ -872,38 +766,25 @@ function writeSettingsMap(
 ): void {
   switch (level) {
     case 'entity':
-      writeEntitySettings(home, target, updates);
-      return;
+      // Entity settings are read but never written in this release: a key at that level arrives
+      // with the wider set, and the owner's entities file stays hand-written. A plan that reaches
+      // here is a caller bug, refused like one.
+      throw new Error('settings are not written at entity level in this release');
     case 'project': {
-      const current = getProject(home, target);
-      const settings = current?.settings ? { ...current.settings } : {};
-      for (const [name, entry] of Object.entries(updates)) {
-        if (entry === null) delete settings[name];
-        else settings[name] = entry;
-      }
-      upsertProject(home, target, { settings, by: 'owner' });
+      // The delta, not a map merged from a read outside the lock: the writer applies it to the
+      // record it reads under the registry lock, so a concurrent write of another key survives.
+      if (getProject(home, target) === null) throw new Error(`no project ${target} in the registry`);
+      upsertProject(home, target, { settingsDelta: updates, by: 'owner' });
       return;
     }
     case 'team': {
-      const current = getTeam(home, target);
-      if (!current) throw new Error(`no team ${target} in the registry`);
-      const settings = current.settings ? { ...current.settings } : {};
-      for (const [name, entry] of Object.entries(updates)) {
-        if (entry === null) delete settings[name];
-        else settings[name] = entry;
-      }
-      upsertTeam(home, target, { settings, by: 'owner' });
+      if (!getTeam(home, target)) throw new Error(`no team ${target} in the registry`);
+      upsertTeam(home, target, { settingsDelta: updates, by: 'owner' });
       return;
     }
     case 'seat': {
-      const current = getAgent(home, target);
-      if (!current) throw new Error(`no registered agent "${target}" in ${agentsDir(home)}`);
-      const settings = current.settings ? { ...current.settings } : {};
-      for (const [name, entry] of Object.entries(updates)) {
-        if (entry === null) delete settings[name];
-        else settings[name] = entry;
-      }
-      updateAgent(home, target, { settings });
+      if (!getAgent(home, target)) throw new Error(`no registered agent "${target}" in ${agentsDir(home)}`);
+      updateAgent(home, target, { settingsDelta: updates });
       return;
     }
   }

@@ -463,10 +463,10 @@ describe('the registry records above a seat', () => {
     expect(readSeatConfigSource(home, agentId).ok).toBe(false);
   });
 
-  test('an entity settings write preserves roots and policies', () => {
+  test('an entity settings write is refused, and the owner’s hand-written file is left as it was', () => {
     const path = entitiesPath(home);
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
-    writeFileSync(path, [
+    const before = [
       'acme:',
       '  roots:',
       '    - /srv/acme',
@@ -481,16 +481,20 @@ describe('the registry records above a seat', () => {
       '      generation: 1',
       '      signature: "aa"',
       '',
-    ].join('\n'));
-    // The entity level admits no key of this release, so a plan is refused there; the reader
-    // still reads the file's settings map (empty) and the writer's preservation is covered by the
-    // registry round-trip above.
-    const read = readProjectConfigSource(home, 'teamcli');
-    expect(read.ok).toBe(true);
-    expect(read.settings).toEqual([]);
-    const entityText = readFileSync(path, 'utf8');
-    expect(entityText).toContain('policies:');
-    expect(entityText).toContain('roots:');
+    ].join('\n');
+    writeFileSync(path, before);
+    // The entity level admits no key of this release, so no command plans one; a plan that reaches
+    // the store anyway is refused rather than rewriting the owner's hand-written file.
+    const written = writeConfigSet(home, {
+      ok: true,
+      level: 'entity',
+      target: 'acme',
+      settings: [{ key: 'model', value: 'claude-opus-5-5', previous: null }],
+    });
+    expect(written.ok).toBe(false);
+    if (written.ok) return;
+    expect(written.why).toContain('not written at entity level');
+    expect(readFileSync(path, 'utf8')).toBe(before);
   });
 });
 

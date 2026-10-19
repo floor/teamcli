@@ -159,7 +159,13 @@ export function projectIdOf(name: string): string {
 
 /** What `upsertProject` takes: any of the record's fields, and who is writing and when. A project
  *  not yet registered needs `name` at least. The id and the provenance are the writer's own. */
-export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & { by?: string; at?: string };
+export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & {
+  by?: string;
+  at?: string;
+  /** Entries to set, or to remove with `null`, inside the record's settings map. Applied to the
+   *  record the writer reads under the registry lock, so two writes of different keys both land. */
+  settingsDelta?: Record<string, YamlValue | null>;
+};
 
 /** Creates the project's record, or changes the fields the patch names and nothing else. The id
  *  is the key and never moves: a rename writes `name` and keeps `byName` answering for the new
@@ -172,7 +178,7 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
     const projects = readProjects(home);
     const at = patch.at ?? new Date().toISOString();
     const prior = projects[id];
-    const { by, at: _at, ...fields } = patch;
+    const { by, at: _at, settingsDelta, ...fields } = patch;
     let record: ProjectRecord;
     if (prior) {
       record = { ...prior, ...definedOnly(fields), provenance: { ...prior.provenance, updated_at: at } };
@@ -190,6 +196,14 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         ...(fields.settings !== undefined ? { settings: fields.settings } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
+    }
+    if (settingsDelta !== undefined) {
+      const settings: Record<string, YamlValue> = { ...(record.settings ?? {}) };
+      for (const [key, entry] of Object.entries(settingsDelta)) {
+        if (entry === null) delete settings[key];
+        else settings[key] = entry;
+      }
+      record.settings = settings;
     }
     if (record.policies !== undefined && Object.keys(record.policies).length === 0) {
       delete record.policies;

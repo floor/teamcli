@@ -113,6 +113,9 @@ export type AgentPatch = Partial<Omit<Agent, 'id' | 'signing' | 'reach' | 'prove
   signing?: Partial<AgentSigning>;
   reach?: Partial<AgentReach>;
   provenance?: AgentProvenancePatch;
+  /** Entries to set, or to remove with `null`, inside the record's settings map. Applied to the
+   *  record the writer reads under the folder lock, so two writes of different keys both land. */
+  settingsDelta?: Record<string, YamlValue | null>;
 };
 
 export function agentsDir(home: string): string {
@@ -189,7 +192,7 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
     const file = agentFile(home, id);
     const current = readAgentFile(file, id);
     if (!current) throw new Error(`no agent ${id} in ${agentsDir(home)}`);
-    const { signing, reach, provenance, ...rest } = patch;
+    const { signing, reach, provenance, settingsDelta, ...rest } = patch;
     const nextProvenance: AgentProvenance = { ...current.provenance, updated_at: new Date().toISOString() };
     if (provenance?.dev_mode === true) {
       nextProvenance.dev_mode = true;
@@ -213,6 +216,14 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
       reach: { ...current.reach, ...definedOnly(reach ?? {}) },
       provenance: nextProvenance,
     };
+    if (settingsDelta !== undefined) {
+      const settings: Record<string, YamlValue> = { ...(next.settings ?? {}) };
+      for (const [key, entry] of Object.entries(settingsDelta)) {
+        if (entry === null) delete settings[key];
+        else settings[key] = entry;
+      }
+      next.settings = settings;
+    }
     if (next.policies !== undefined && Object.keys(next.policies).length === 0) {
       delete next.policies;
     }
