@@ -31,6 +31,7 @@ import {
   generalBriefId,
   generalBriefRecord,
   recoverBrief,
+  walkBriefDeliveries,
   type BriefDelivery,
   type CurrentBriefClaim,
 } from '../launch/general-brief.ts';
@@ -440,10 +441,14 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
       attributed: [],
       broadcast: true,
     });
+    await walkBriefDeliveries(report, { dir, home: sources.home, io });
     const ended = new Map(report.deliveries.map((delivery) => [delivery.seat, delivery]));
     const out: BriefRow[] = [];
     for (const { seat, plan } of before) {
-      if (plan.kind === 'not-running' || plan.kind === 'stale-listener') {
+      // A seat whose delivery was refused is reported as the failure it is, even when the plan
+      // would have called it not running: "delivered at its next launch" is not true when the
+      // transport refused to write.
+      if ((plan.kind === 'not-running' || plan.kind === 'stale-listener') && ended.get(seat.name)?.ok !== false) {
         out.push(rowOf(seat.name, plan));
         continue;
       }
@@ -472,6 +477,7 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
           session,
           seat: seat.name,
           home: sources.home,
+          entity: team.entity,
           claim,
           toId: findAgent(sources.home, { team: teamIdOf(root), seat: seat.name })?.id ?? null,
         });

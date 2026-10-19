@@ -7,7 +7,6 @@
 // A chain that cannot be read or verified falls back to `file` — today's behaviour — and says
 // why, rather than guessing at a word the owner signed. The fallback never turns an unreadable
 // source into an imagined `message`: the launch goes on delivering briefs.
-import type { TeamFile } from '../file/types.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { loadAndResolvePolicyChain } from './sources.ts';
@@ -35,23 +34,22 @@ function projectIdOfTeam(home: string, root: string): string | null {
 }
 
 /**
- * Reads `brief-transport` across the team's own chain, up to the team level. The team file is
- * the one the caller already holds (its `policies` section is the team's word); the entity and
- * project levels are the registry's signed sources, read fresh.
+ * Reads `brief-transport` across the team's own chain, up to the team level. The entity is the
+ * receiving team file's own word; the team level is read from the file at `root`; the project
+ * level is the registry's signed source for the project the team sits in, read fresh.
  */
 export function briefTransportOf(input: {
   home: string;
   root: string;
-  team: TeamFile;
+  entity?: string | null;
   now?: Date;
 }): BriefTransportReading {
   const chain = loadAndResolvePolicyChain(
     {
       home: input.home,
-      entity: input.team.entity,
+      entity: input.entity ?? null,
       projectId: projectIdOfTeam(input.home, input.root),
       teamRoot: input.root,
-      team: input.team,
     },
     {
       ...(input.now === undefined ? {} : { now: input.now }),

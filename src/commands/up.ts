@@ -51,7 +51,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
-import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
+import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -1518,6 +1518,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       state: recorded ?? emptySession(),
       attributed: briefSeats,
     });
+    await walkBriefDeliveries(briefs, { dir, home: sources.home });
     for (const delivery of briefs.deliveries) {
       if (delivery.ok) continue;
       const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;

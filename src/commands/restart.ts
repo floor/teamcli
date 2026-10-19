@@ -53,7 +53,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
+import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -765,6 +765,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       broadcast: true,
       ...(handoverSentence === undefined ? {} : { handover: handoverSentence }),
     });
+    await walkBriefDeliveries(briefs, { dir, home });
     const briefLine = (said: string): void => {
       if (json) notes.push(said);
       else out.stderr(`team ${input.command}: ${plainText(said)}\n`);

@@ -2091,12 +2091,166 @@ async function deliverComposeSeat(
   return delivered(io, seatName, report, 'typed brief');
 }
 
+/** What a brief's walk reports to its caller, in words the launch can print or log. */
+export type BriefWalkResult = {
+  /** The leg that took the send; null when none did, or when no leg was walked. */
+  via: DeliveryLeg | null;
+  /** Whether the walk ran at all. A settings record the store disowns stops it before any leg. */
+  walked: boolean;
+  /** The reasons legs did not take the send, and why a walk did not run. */
+  failures: readonly string[];
+  /** 0 when a leg took the send (or no walk ran), 1 when the walk ran out of legs. */
+  exit: number;
+};
+
+/**
+ * The delivery half of `brief-transport: message` (OD50). The launch has already claimed the
+ * brief and written its signed record; this walks the receiving seat's own delivery order with
+ * the same legs, the same order resolution and the same history a send uses, so the brief earns
+ * the receipts a send earns. The record's identity — its id, thread, body and claim binding — is
+ * the launch's own and is never re-minted here; every leg writes or finds that same record.
+ *
+ * The walk does not print the send command's lines: the caller hands an `io` that captures them
+ * and reports the outcome in its own words. A seat whose signed settings record cannot be read is
+ * walked by no leg at all — routing on a declaration the store disowns could type into a human's
+ * pane — and the record the launch already wrote stands as the delivery. This build's native leg
+ * is a socket write it does not make and a SendMessage a launch cannot send, so it is recorded
+ * and passed; the mcp-inbox, typed and drop legs are the same functions `team send` walks.
+ */
+export async function walkBriefDelivery(input: {
+  io: Io;
+  host: SendHost;
+  /** The receiving team's `.agents` folder. */
+  dir: string;
+  root: string;
+  /** The receiving team's project; left out, the loaded team file's own. */
+  project?: string;
+  session: string;
+  seat: string;
+  cli: string;
+  payload: RecordPayload;
+}): Promise<BriefWalkResult> {
+  const seatName = input.seat;
+  const from = input.payload.from;
+  const startedAt = input.host.now().getTime();
+  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const read = resolveSeatOverrides({ home: input.host.home, root: input.root, seat: seatName });
+  if (!read.ok) {
+    return {
+      via: null,
+      walked: false,
+      exit: 0,
+      failures: [`the receiving seat's settings record cannot be read: ${read.why}`],
+    };
+  }
+  let file: TeamFile | undefined;
+  try {
+    const loaded = loadTeamFile(input.root, { home: input.host.home });
+    if (loaded.ok) file = loaded.team;
+  } catch {
+    // A file that cannot even be read declares nothing, as one that does not validate does.
+  }
+  const order = deliveryOrder(deliveryChainOf({
+    root: input.root,
+    seat: seatName,
+    home: input.host.home,
+    ...(file === undefined ? {} : { file }),
+    projectOfTeam: (id: string) => (input.host.projects ? input.host.projects.ofTeam(id) : projectRegistry.ofTeam(input.host.home, id)),
+    overrides: read.overrides,
+  }));
+  const declared = file?.seats.find((seat) => seat.name === seatName);
+  const project = input.project ?? file?.project ?? '';
+  // A human's pane never takes typing, whatever its order says: its walk is the drop leg alone,
+  // and the legs this ruling kept out are named first, exactly as a send's walk records them.
+  const human = read.overrides.human ?? (declared?.human === true);
+  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
+  const report: Report = {
+    json: false,
+    seat: seatName,
+    sent: null,
+    project,
+    session: input.session,
+    from_team: teamIdOf(input.root),
+  };
+  const failures: string[] = [];
+  if (human) {
+    for (const leg of order) {
+      if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
+      else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
+      else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
+    }
+  }
+  for (const leg of walk) {
+    if (leg === 'mcp-inbox') {
+      const live = inboxLive(dropDir, input.root, input.session, seatName, input.host.build?.());
+      if (!live.live) {
+        failures.push(`mcp-inbox: ${live.reason}`);
+        continue;
+      }
+      const exit = await deliverInbox(input.io, input.dir, from, from, project, input.root, input.session, seatName, dropDir, input.payload, input.host, report, startedAt, failures);
+      return { via: 'mcp-inbox', walked: true, exit, failures };
+    }
+    if (leg === 'native') {
+      // This build's send reads `native` as the frame on a cross-session socket — a socket write
+      // SOCKET_SEND does not make here — or as a handoff to a Claude Code sender's own
+      // SendMessage, which a launch cannot make. The leg is recorded and passed.
+      failures.push('native: the launch cannot make a cross-session SendMessage');
+      continue;
+    }
+    if (leg === 'typed') {
+      const compose = profileFor(input.cli)?.compose ?? null;
+      const trigger = readTriggerLine(seatName, input.session);
+      if (trigger === null && compose === null) {
+        failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+        continue;
+      }
+      const found = findAgent(input.host, input.session, seatName);
+      if (!found.ok) {
+        failures.push(`typed: ${found.reason}`);
+        continue;
+      }
+      if (isBareShellPane(input.dir, input.session, seatName, input.host.processInfo(input.session, found.pane))) {
+        failures.push('typed: the seat is back at its shell; nothing was typed');
+        continue;
+      }
+      if (compose === null) {
+        if (trigger === null) {
+          failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+          continue;
+        }
+        const exit = await deliverNative(input.io, input.dir, input.root, from, from, project, input.session, seatName, input.cli, found.pane, dropDir, input.payload, trigger, input.host, report, startedAt, undefined, failures);
+        return { via: 'typed', walked: true, exit, failures };
+      }
+      // The seat's own folder: the record's `cwd` under the receiving team's root, else the
+      // folder this delivery already writes to.
+      const seatCwd = declared === undefined ? input.dir : resolve(input.root, declared.cwd);
+      const exit = await deliverComposeSeat(input.io, input.dir, input.root, from, from, project, input.session, seatName, input.cli, found.pane, dropDir, input.payload, seatCwd, input.host, report, startedAt, failures);
+      return { via: 'typed', walked: true, exit, failures };
+    }
+    const exit = await deliverDropped(input.io, input.dir, input.root, from, from, project, input.session, seatName, dropDir, input.payload, input.host, report, startedAt, failures, null, human);
+    return { via: 'drop', walked: true, exit, failures };
+  }
+  const why = `no leg of its delivery order took the send${failures.length === 0 ? '' : ` (${failures.join('; ')})`}`;
+  appendHistory(project, input.root, input.host.home, {
+    ts: input.host.now().toISOString(),
+    from,
+    to: seatName,
+    ...historySender(report),
+    body: input.payload.body,
+    id: input.payload.id,
+    thread: input.payload.thread,
+    outcome: 'unreachable',
+    ms: input.host.now().getTime() - startedAt,
+    ...(failures.length > 0 ? { failed: [...failures] } : {}),
+  });
+  return { via: null, walked: true, exit: 1, failures };
+}
+
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
  *  message is on disk, and the one team.log line is the orchestrator's notice. Exit 1. */
 function typedBriefNotSubmitted(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
   return notSubmittedAt(io, dir, who, seat, reason, host, report);
 }
-
 /** A send that typed its line and was never taken: the trigger line of a drop-file send, or a
  *  compose seat's brief. One site, one exit id: both are the same outcome to a caller. */
 function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {

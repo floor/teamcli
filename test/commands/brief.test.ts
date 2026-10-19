@@ -26,12 +26,14 @@ import { USAGE, runBrief } from '../../src/commands/brief.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import {
   GENERAL_BRIEF_SHA256,
+  MEMORY_TRANSPORT_UNSUPPORTED,
   currentBriefClaim,
   generalBriefBody,
   generalBriefId,
   type CurrentBriefClaim,
 } from '../../src/launch/general-brief.ts';
 import type { InboxListener } from '../../src/mcp/inbox.ts';
+import { writePolicySet } from '../../src/policy/sources.ts';
 import { receiptFile } from '../../src/send/record.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import type { BuildIdentity } from '../../src/version.ts';
@@ -430,6 +432,30 @@ describe('the delivery', () => {
     expect(claimOf('worker')).toMatchObject({ id: claimed.id, attempt: 0, stage: 'ready' });
     expect(claimOf('lead')?.id).toBe(leadId);
     expect(recordAt(join(dropDir('worker'), claimed.id)).payload.id).toBe(claimed.id);
+  });
+
+  test('brief-transport memory refuses every seat: every row fails and no byte is written', async () => {
+    remember('lead');
+    settle(['lead']);
+    const wrote = writePolicySet(
+      home,
+      { level: 'team', target: root, teamRoot: root, name: 'brief-transport', value: 'memory' },
+      { now: NOW },
+    );
+    expect(wrote.ok).toBe(true);
+    // The policy write is the change; from here the rollout must add not one byte to the tree.
+    const before = snapshot();
+
+    const run = await runRollout(['rollout', '--apply']);
+
+    expect(run.code).toBe(1);
+    expect(run.out).toBe(
+      `failed lead: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`
+      + `failed worker: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`
+      + `failed helper: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`
+      + `failed desk: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`,
+    );
+    expect(snapshot()).toEqual(before);
   });
 });
 

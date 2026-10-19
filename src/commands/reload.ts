@@ -38,7 +38,7 @@ import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, reso
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
+import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
@@ -361,7 +361,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // brief is ahead of the seat's claim, and an idempotent delivery leaves a current claim and its
   // verified drop as they are. Without a home there is no message key to sign the record with, so
   // nothing is written.
-  const deliverBrief = (attributed: boolean): void => {
+  const deliverBrief = async (attributed: boolean): Promise<void> => {
     if (home === undefined) return;
     const briefs = deliverBriefForAttribution({
       dir,
@@ -373,13 +373,14 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       state: readState(dir).sessions[session] ?? emptySession(),
       attributed: attributed ? [seat.name] : [],
     });
+    await walkBriefDeliveries(briefs, { dir, home });
     for (const delivery of briefs.deliveries) {
       if (!delivery.ok) sayBrief(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
     }
     if (briefs.recording !== undefined) sayBrief(`the general seat brief was written and not recorded (${briefs.recording})`);
   };
   if (detail === null && rulesProblem === null && source === null) {
-    deliverBrief(false);
+    await deliverBrief(false);
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
       writeJson(io, 'team.reload', {
@@ -424,7 +425,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         else held.effort = compared.effort;
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
-      deliverBrief(false);
+      await deliverBrief(false);
       if (json) {
         writeJson(io, 'team.reload', {
           format: 1 as const,
@@ -553,7 +554,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     };
     // The general seat brief goes first, before the state hook and the plan's rules line: the
     // claim is written before the hook that resolves it and the signed drop before the launch.
-    deliverBrief(true);
+    await deliverBrief(true);
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);

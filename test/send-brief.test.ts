@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { testIo, type TestIo } from './helpers.ts';
 
@@ -207,5 +208,25 @@ describe('a body that only points at a brief is warned about', () => {
 
     expect(code, on.err).toBe(0);
     expect(on.err).toBe('');
+  });
+
+  // `brief-transport` governs the general seat brief a launch delivers, not an ordinary send.
+  // A `--brief` send is an ordinary send: it never reads the policy, so a team that chose
+  // `memory` for launches still sends this draft through its own legs and writes the record.
+  test('a memory brief-transport does not change an ordinary --brief send', async () => {
+    const w = world();
+    const wrote = writePolicySet(
+      w.home,
+      { level: 'team', target: w.root, teamRoot: w.root, name: 'brief-transport', value: 'memory' },
+      { now: NOW },
+    );
+    expect(wrote.ok).toBe(true);
+    const path = brief(w, 'lead-to-reader.md', 'First line.\nSecond line.\n');
+    const on = io(w);
+
+    const code = await runSend([SEAT, '--brief', path], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(record(w).body).toBe(`${HEADER}\n\nFirst line.\nSecond line.\n`);
   });
 });

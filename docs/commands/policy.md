@@ -14,6 +14,7 @@ policy declarations (`team policy set` and `team policy unset`).
 Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross-teams`,
 `state-trace-window-seconds`, `state-blind-after-seconds`, `state-hook-working-seconds`,
 `liveness-idle-lead-seconds`, `liveness-idle-owner-seconds`, `delivery-order`,
+`brief-transport`,
 `event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
@@ -44,6 +45,13 @@ rule — and the watch and `team check` carry it out in every team of the entity
 `swap-wait-seconds` is how long a queued model swap may wait for its boundary: 1800 seconds
 (30 minutes) when nothing declares it, a shorter word being the tighter one, and a broken seat
 swaps at once.
+
+`brief-transport` says how a general seat brief reaches its seat. `file`, the default, writes the
+claim and the signed drop and nothing else; `message` sends the whole brief as a real send body
+through the seat's own delivery legs, so its receipt, history line and outcome are an ordinary
+send's; `memory` is an experiment no runtime in this build proves zero-persistence for, so a
+`memory` policy delivers nothing and refuses every seat. `message` is within `file`; `memory` is
+comparable only to itself. It takes the entity, project and team levels.
 
 ## Who may run it
 

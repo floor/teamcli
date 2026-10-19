@@ -15,10 +15,13 @@
 // held by a foreign file or a link is reported, and only `team brief rollout --apply` recovers it
 // at the next attempt, leaving the foreign file byte for byte as it was.
 import { join } from 'node:path';
+import type { Io } from '../io.ts';
+import { briefTransportOf } from '../policy/brief-transport.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { recordFile, recordHolds, readRecord, signRecord, writeRecord, type RecordPayload } from '../send/record.ts';
 import { emptySession, readState, updateState, type BriefRecord, type SessionState } from '../state.ts';
+import type { SendHost } from '../commands/send.ts';
 import {
   briefIdOf,
   isBriefEpoch,
@@ -169,17 +172,39 @@ export type BriefDelivery =
       epoch: string;
       existing?: true;
       recoveredFrom?: string;
+      /** Present when `brief-transport` is `message`: how the seat's own delivery walk ended. */
+      message?: { via: string | null; walked: boolean; exit: number; text: string };
     }
   | { seat: string; ok: false; reason: string; blocked?: 'file' | 'nonfile' };
+
+/** One planned `message` walk: the seat, its declared CLI, and the exact record the launch wrote.
+ *  The walk reuses the send command's legs and never re-mints the record's identity. */
+export type BriefWalkPlan = {
+  seat: string;
+  cli: string;
+  project?: string;
+  payload: RecordPayload;
+};
 
 export type BriefDeliveryReport = {
   deliveries: BriefDelivery[];
   /** Why the state could not be written for the whole run, when a write failed outside a seat. */
   recording?: string;
+  /** Seats whose `brief-transport` is `message`, in delivery order. A launch runs them, once its
+   *  claim and record stand, with `walkBriefDeliveries`. */
+  walks?: BriefWalkPlan[];
 };
 
 /** The declared-seat fields this module needs; a validated team file is assignable. */
-export type BriefSeat = { name: string; human?: boolean };
+export type BriefSeat = { name: string; human?: boolean; cli?: string };
+
+/** Why a `brief-transport: memory` delivery writes nothing: no runtime in this build can prove
+ *  the whole path is memory-only. The refusal is the transport's whole behaviour — the brief is
+ *  not delivered by a fallback, and no claim, record, drop, inbox entry or history line is made
+ *  on either side. `<id>` and the other three fields of an outcome are all a memory run may ever
+ *  keep; this build keeps none of them because no run is attempted. */
+export const MEMORY_TRANSPORT_UNSUPPORTED =
+  'brief-transport is memory, which no runtime in this build proves to be zero-persistence; nothing was written and there is no fallback';
 
 /** Why a name cannot be used, or null when the kind is a regular file or missing. */
 function heldReason(kind: ReturnType<typeof heldAt>['kind']): string | null {
@@ -341,7 +366,7 @@ export function deliverBriefForAttribution(input: {
   session: string;
   home: string;
   now: Date;
-  team: { seats: readonly BriefSeat[] };
+  team: { seats: readonly BriefSeat[]; entity?: string | null; project?: string };
   state: SessionState;
   attributed: readonly string[];
   broadcast?: boolean;
@@ -361,7 +386,28 @@ export function deliverBriefForAttribution(input: {
   const at = input.now.toISOString();
   const team = teamIdOf(input.root);
   const deliveries: BriefDelivery[] = [];
-  for (const seat of names) {
+  const walks: BriefWalkPlan[] = [];
+  // The transport the owner's chain resolves for this team, read once before any seat is
+  // touched. A chain that cannot be read or verified resolves to `file` with its reason — the
+  // launch goes on delivering — while `memory`, which no runtime in this build proves, refuses
+  // every seat before a claim, a record or a drop is written.
+  const reading = briefTransportOf({
+    home: input.home,
+    root: input.root,
+    ...(input.team.entity === undefined || input.team.entity === null ? {} : { entity: input.team.entity }),
+    now: input.now,
+  });
+  // Under `memory` no seat receives a brief, whatever this run's delivery set was: the callers
+  // named in the team file are refused too, so a launch or a rollout never reports a seat as
+  // served when nothing was written.
+  const refused = reading.transport === 'memory'
+    ? input.team.seats.map((seat) => seat.name).filter((name) => !names.includes(name))
+    : [];
+  for (const seat of [...names, ...refused]) {
+    if (reading.transport === 'memory') {
+      deliveries.push({ seat, ok: false, reason: MEMORY_TRANSPORT_UNSUPPORTED });
+      continue;
+    }
     const live = input.state.seats[seat];
     const handover = attributed.has(seat) ? input.handover : undefined;
     let claim: CurrentBriefClaim;
@@ -398,9 +444,112 @@ export function deliverBriefForAttribution(input: {
       toId,
       ...(handover === undefined ? {} : { handover }),
     });
+    // The message transport is the same record and claim, walked: the seat's own delivery order
+    // is attempted with the send command's legs once this launch's writes stand. The record is
+    // rebuilt here only to hand the walk its exact payload, and only when its id is the one the
+    // claim and the delivery agree on.
+    if (delivery.ok && reading.transport === 'message') {
+      const payload = generalBriefRecord({
+        to: seat,
+        root: input.root,
+        session: input.session,
+        at: claim.at,
+        incarnation: claim.incarnation,
+        toId,
+        attempt: claim.attempt,
+        ...(handover === undefined ? {} : { handover }),
+      });
+      if (payload.id !== delivery.id) {
+        delivery.message = { via: null, walked: false, exit: 0, text: 'the record rebuilt for the walk does not match the delivered one; no leg was walked\n' };
+      } else {
+        const cli = input.team.seats.find((one) => one.name === seat)?.cli ?? '';
+        walks.push({
+          seat,
+          cli,
+          ...(input.team.project === undefined ? {} : { project: input.team.project }),
+          payload,
+        });
+      }
+    }
     deliveries.push(delivery);
   }
-  return { deliveries };
+  return { deliveries, ...(walks.length === 0 ? {} : { walks }) };
+}
+
+/**
+ * Runs the `message` walks a sync delivery planned, once the launch's claim and record stand.
+ * Each walked seat's outcome rides on its delivery as `message`; a seat whose walk could not run
+ * keeps its record — the drop leg's delivery — and reports why. One seat's failure never stops
+ * another. The send command is imported lazily inside `walkMessageDelivery`: this launch module
+ * is imported by the hook and MCP modules the send command itself imports, and a static import
+ * would close that cycle.
+ */
+export async function walkBriefDeliveries(
+  report: BriefDeliveryReport,
+  input: { dir: string; home: string; io?: Io; sendHost?: SendHost },
+): Promise<BriefDeliveryReport> {
+  for (const plan of report.walks ?? []) {
+    const delivery = report.deliveries.find((one) => one.ok && one.seat === plan.seat);
+    if (delivery === undefined || !delivery.ok) continue;
+    delivery.message = await walkMessageDelivery({
+      dir: input.dir,
+      root: plan.payload.root,
+      session: plan.payload.session,
+      seat: plan.seat,
+      cli: plan.cli,
+      home: input.home,
+      payload: plan.payload,
+      ...(plan.project === undefined ? {} : { project: plan.project }),
+      ...(input.io === undefined ? {} : { io: input.io }),
+      ...(input.sendHost === undefined ? {} : { sendHost: input.sendHost }),
+    });
+  }
+  return report;
+}
+
+/**
+ * Walks one delivered brief through the send command's legs. The walk's own lines are captured —
+ * a launch's output is its own — and the release of the walk is the seat's delivery, not a
+ * terminal. The host defaults to the real one with this run's home and its own advancing clock:
+ * the walk probes herdr and waits on legs exactly as `team send` does.
+ */
+async function walkMessageDelivery(input: {
+  dir: string;
+  root: string;
+  session: string;
+  project?: string;
+  seat: string;
+  cli: string;
+  home: string;
+  payload: RecordPayload;
+  io?: Io;
+  sendHost?: SendHost;
+}): Promise<{ via: string | null; walked: boolean; exit: number; text: string }> {
+  const captured: string[] = [];
+  const base: Io = input.io ?? { stdout: () => {}, stderr: () => {}, cwd: input.root, env: {}, stdinIsTTY: false };
+  const sink: Io = {
+    ...base,
+    stdout: (text) => {
+      captured.push(text);
+    },
+    stderr: (text) => {
+      captured.push(text);
+    },
+  };
+  const { realHost, walkBriefDelivery } = await import('../commands/send.ts');
+  const host = input.sendHost ?? { ...realHost, home: input.home };
+  const result = await walkBriefDelivery({
+    io: sink,
+    host,
+    dir: input.dir,
+    root: input.root,
+    ...(input.project === undefined ? {} : { project: input.project }),
+    session: input.session,
+    seat: input.seat,
+    cli: input.cli,
+    payload: input.payload,
+  });
+  return { via: result.via, walked: result.walked, exit: result.exit, text: captured.join('') };
 }
 
 /**
@@ -415,10 +564,23 @@ export function recoverBrief(input: {
   session: string;
   seat: string;
   home: string;
+  /** The team file's entity, when the caller holds it: the entity level of `brief-transport`. */
+  entity?: string | null;
   claim: CurrentBriefClaim;
   toId?: string | null;
   handover?: string;
 }): BriefDelivery {
+  // A `memory` team recovers nothing on disk either: the recovery is still a claim, a record and
+  // a drop, and the transport that forbids them for the delivery forbids them here too. The
+  // refusal comes before the state lock and before any file, so no attempt is consumed.
+  const reading = briefTransportOf({
+    home: input.home,
+    root: input.root,
+    ...(input.entity === undefined || input.entity === null ? {} : { entity: input.entity }),
+  });
+  if (reading.transport === 'memory') {
+    return { seat: input.seat, ok: false, reason: MEMORY_TRANSPORT_UNSUPPORTED };
+  }
   const body = generalBriefBody(input.handover);
   let next: CurrentBriefClaim;
   try {
