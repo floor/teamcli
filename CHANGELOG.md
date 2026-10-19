@@ -110,6 +110,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--session-id`, `--resume`/`-r` or `--continue`/`-c` is left as the owner wrote it, and an id
   the line spells is recorded. The id is the one TeamCLI set — it never reads the CLI's own
   session files — and reading a record back into a launch is not part of this release.
+- **`team add <name> --like <seat>` copies a declared seat.** Without `--temporary`, `--like` now
+  writes a new entry directly under the source's last field: the source's fields and the title
+  `<name>`, with its `stopped` mark and `count:` dropped (a counted source is split first) and its
+  comments and blank lines left where they are. The source's own entry is untouched, and the new
+  seat starts now where `up` would start it, and the entry is written before the launch, so a
+  launch that fails leaves the declared seat in the file for a retry. A `human: true` source is
+  refused before anything is written or launched. The name must be one the file does not declare (refused as
+  `add.like-exists`) and the source one it does; a copy the file's own validation refuses — a
+  second `leads`, `assistant` or nickname — stops before anything is written or launched. The new
+  entry is not added to the approval record, so the roster change is the owner's to approve; a
+  delegate's standing grant admits a copy only when the record holds the source seat just as the
+  live file writes it and the run writes that one entry, and a source the record does not hold, or
+  holds differently, stays the owner's. `--until` and `--worktree` still need `--temporary`;
+  `--like` alone is now a declared copy.
 
 ### Changed
 
