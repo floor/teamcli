@@ -169,7 +169,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
 | `<seat> is at a rate limit on <account>: usage limit, resets at <time>` | a seat stopped on its provider's usage limit, and the screen names when it resets — today Claude Code's rejected 429 or 403 and Gemini's exhausted-quota dialog; `<account>` is the pool the seat spends, its own `account:` or its vendor when it names none; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
 | `<seat> is at a rate limit on <account>: usage limit, and the screen names no reset time` | the same usage-limit screen when it names no reset time |
-| `<seat> is still at a <prompt> prompt after <n> minutes: the team's lead has not cleared it, and the entity's lead and the owner are told` | a permission, vendor-notice or rate-limit prompt held for `prompt_escalation_seconds` (5m by default, and only shorter): once per prompt, the team's lead having cleared none of it |
+| `<seat> is still at a <prompt> prompt after <n> minutes: the team's lead has not cleared it, and the entity's lead and the owner are told` | a permission, vendor-notice or rate-limit prompt held for `prompt_escalation_seconds` (5m in this release): once per prompt, the team's lead having cleared none of it |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is neither idle, done, working nor blocked; a seat whose profile says herdr cannot report it is read from its screen, so this is said only when that screen cannot be read either |
 | `<seat> holds text in its input box that was never sent` | unsent text for `watch.unsent_after`; the watch's own nudge never sends or clears text it cannot show it typed itself (a held-send retry is a delivery, which copies the owner's text and puts it back) |
@@ -233,7 +233,8 @@ shows on the budgets table, and a record that is not in force still shows there.
 
 A prompt never goes silent. When the seat at the prompt is the team's lead, or when any seat has
 held its prompt for the escalation window — `prompt_escalation_seconds`, a fixed five minutes in
-0.5.1; the owner's setter for it, shorten-only, comes in 0.5.2 — the watch raises
+this release, with no owner setter yet; the threshold set binds the window to shorten only —
+the watch raises
 `seat.prompt-escalated` beside its report. The routing sends that event, and a lead's own
 `seat.at-prompt`, to the entity's own lead and to the owner at once, and the watch leaves one
 signed record in the entity lead's mailbox under the entity team's own root, where that team's
