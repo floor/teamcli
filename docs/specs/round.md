@@ -97,7 +97,7 @@ An install replaces the running version with a newer one. Going back is a rollba
 - `team next [--mine | --release] [--wait] [--json]`: the re-dispatch the round's rules name; until receipts exist, a seat's acknowledgement is its pull through this command.
 - `team commits check <ref> [--since <ref>] [--file <path>] [--json]`: the commit and range check against the team file's seat list, which a close's review leans on.
 - The seat state (working, idle, done, blocked, held, unreachable, unknown), read from ranked sources — the seat-state specification's.
-- The liveness thresholds as enforced policy names with defaults (`300`/`300`/`900` seconds for the lead, owner and blindness rules; `120` seconds for the trace window) — the policies specification's.
+- The liveness thresholds as enforced policy names with defaults (`300`/`900`/`300` seconds for the lead, owner and blindness rules; `120` seconds for the trace window) — the policies specification's.
 
 ## 4. Commands and options
 
@@ -136,3 +136,4 @@ This specification contributes no registry rows of its own; the two policies the
 ## Revision log
 
 - **Draft** (the writer, 2026-10-18): lifted from 010 Workflow draft 2 (§2c, §2d, the settings table); read at `v0.5.0 (52db9b75)` — the round is not built, and the formats are marked planned; the liveness thresholds recorded as the policy names they became.
+- **Fold of round 1** (the writer, 2026-10-19): §3.6's liveness threshold order corrected to `300`/`900`/`300` seconds — lead, owner, blindness — (`src/settings/inherit.ts`; 010 Workflow commitment 14); the trace window's `120` seconds already stood. The review's remaining asks on this specification (its §3.2 decided labels, its §3.3 per-change steps, its §5 rules) are recorded as questions in the module's §10, not applied here. Nothing else changed.
