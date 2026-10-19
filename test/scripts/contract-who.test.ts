@@ -9,9 +9,9 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writ
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { commands } from '../../src/cli.ts';
-import { COMMAND_GATES } from '../../src/permissions/map.ts';
+import { COMMAND_GATES, type Gate } from '../../src/permissions/map.ts';
 
-type Who = { gate: string; why: string };
+type Who = { gate: string; why: string; terminal?: { who: string; where: string } };
 type Node = { name: string; hidden: boolean; who?: Who; subcommands?: Node[] };
 
 const root = join(import.meta.dir, '..', '..');
@@ -35,8 +35,21 @@ const GATE_WORDS = [
   'any-caller',
   'seat-only',
   'leads-only',
+  // The two named after the verdict function their module calls: `mayChangeTeamVerdict` and
+  // `mayReadTeam`. A row whose module also refuses a detached run carries `terminal` beside
+  // its kind, never a kind of its own.
+  'team-change',
+  'team-read',
   'unlisted',
 ] as const;
+
+/** The map's row as the contract carries it: the kind and `why` it copies, and the terminal
+ *  requirement when the module refuses a run with no terminal. */
+function whoOf(gate: Gate): Who {
+  const row: Who = { gate: gate.kind, why: gate.why };
+  if (gate.terminal !== undefined) row.terminal = gate.terminal;
+  return row;
+}
 
 test('every command states who may run it, in a closed vocabulary', () => {
   // Every word the CLI dispatches carries a row — the hidden faces and the help words too,
@@ -61,10 +74,9 @@ test('the row the contract carries is the map row as it stands, and silence read
     // Rows naming no command (the capability words, the Runtime words with no module) cannot be
     // the row of a command the adapter exposes; the contract is about commands.
     if (!contractNames.has(name)) continue;
-    expect(contract.commands.find((command) => command.name === name)?.who, `${name} does not repeat the map's row`).toEqual({
-      gate: gate.kind,
-      why: gate.why,
-    });
+    expect(contract.commands.find((command) => command.name === name)?.who, `${name} does not repeat the map's row`).toEqual(
+      whoOf(gate),
+    );
   }
   for (const command of contract.commands) {
     const gate = COMMAND_GATES[command.name];
@@ -76,7 +88,7 @@ test('the row the contract carries is the map row as it stands, and silence read
   }
   // The four kinds the 0.5.0 table gives commands, and the two whose gate lives elsewhere,
   // each name at least one command: a kind no command uses is a kind the page need not carry.
-  for (const name of ['owner-only', 'owner-or-leads', 'owner-or-own-team', 'seat-record', 'admission', 'pane-authority', 'any-caller', 'seat-only', 'leads-only']) {
+  for (const name of ['owner-only', 'owner-or-leads', 'owner-or-own-team', 'seat-record', 'admission', 'pane-authority', 'any-caller', 'seat-only', 'leads-only', 'team-change', 'team-read']) {
     expect(contract.commands.some((command) => command.who?.gate === name), `no command reads ${name}`).toBe(true);
   }
 });
@@ -91,16 +103,22 @@ test('every subcommand states its own row, and a module that admits only the own
       expect(GATE_WORDS as readonly string[]).toContain(sub.who?.gate ?? '');
       expect(sub.who?.why.trim(), `${command.name} ${sub.name} gives no reason`).not.toBe('');
       expect(sub.who?.why.includes('\n'), `${command.name} ${sub.name}'s reason spans lines`).toBe(false);
+      // The verb repeats the map row under its own `command:subcommand` key, kind and terminal
+      // requirement included: a verb that gates differently from its command is never described
+      // by the command's row.
+      const gate = COMMAND_GATES[`${command.name}:${sub.name}`];
+      expect(gate, `${command.name} ${sub.name} has no map row of its own`).toBeDefined();
+      if (gate !== undefined) expect(sub.who, `${command.name} ${sub.name} does not repeat its map row`).toEqual(whoOf(gate));
     }
   }
   const commandNamed = (name: string) => contract.commands.find((command) => command.name === name);
   const subNamed = (command: string, name: string) => commandNamed(command)?.subcommands?.find((sub) => sub.name === name);
   // The gates their own modules print, in the contract's words: `policy set`/`unset` refuse every
-  // non-owner; worktree's three words are the owner's, the orchestrator's or the operator's.
+  // non-owner; worktree's three words call `mayChangeTeamVerdict`, the map's `team-change`.
   expect(subNamed('policy', 'set')?.who?.gate).toBe('owner-only');
   expect(subNamed('policy', 'unset')?.who?.gate).toBe('owner-only');
   for (const name of ['list', 'new', 'remove']) {
-    expect(subNamed('worktree', name)?.who?.gate, `worktree ${name}`).toBe('owner-or-leads');
+    expect(subNamed('worktree', name)?.who?.gate, `worktree ${name}`).toBe('team-change');
   }
   // Words whose own module refuses every non-owner at the door: the map names the gate the
   // module enforces, and the contract repeats it — `unlisted` would leave the adapter guessing.
