@@ -32,6 +32,14 @@ function make(): World {
   return one;
 }
 
+/** The signed record in a drop folder, past the marker the drop leg leaves beside it: the
+ *  directory holds `<id>` and `<id>.pending`, and readdir order is the filesystem's. */
+function dropRecord(drops: string): string {
+  const name = readdirSync(drops).find((candidate) => !candidate.endsWith('.pending'));
+  if (name === undefined) throw new Error(`no drop record in ${drops}`);
+  return join(drops, name);
+}
+
 /** The state record `up` leaves for a launched seat: the pane herdr placed it on. */
 function place(dir: string, seat: string, pane: string): void {
   updateState(dir, (state) => {
@@ -83,7 +91,10 @@ describe('team send: two operators of one team', () => {
     expect(io.err).toBe('');
     expect(io.out).toBe('team acme, session "acme"\noperator-b: sent (unconfirmed) (drop, 0 ms)\n');
     const drops = dropDir(one.dir, 'operator-b');
-    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
+    // The drop leg leaves its retry marker beside the record, and readdir order is the
+    // filesystem's: the record is picked by name, never by position.
+    expect(readdirSync(drops).some((name) => name.endsWith('.pending'))).toBe(true);
+    expect(recordBody(dropRecord(drops))).toBe(
       "from the file's seat operator-a (no registry record yet) — admitted by: an operator to another operator of its own team\n\nthe handover is ready",
     );
     // Logged like every send: one history line and one team-log line.
@@ -114,7 +125,7 @@ describe('team send: two operators of one team', () => {
     expect(code).toBe(0);
     expect(io.err).toBe('');
     const drops = dropDir(one.dir, 'operator-b');
-    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
+    expect(recordBody(dropRecord(drops))).toBe(
       'from operator-a — admitted by: an operator to another operator of its own team\n\nstatus?',
     );
   });
