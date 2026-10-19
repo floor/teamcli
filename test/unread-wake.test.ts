@@ -622,6 +622,73 @@ describe('reportUnreadDrops', () => {
     expect(said[0]).toContain('reported to lead only');
   });
 
+  test('an agent listed at two seats routes nothing', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const beta = join(made.root, '..', 'beta');
+    mkdirSync(join(beta, '.agents'), { recursive: true });
+    const betaRoot = realpathSync(beta);
+    const betaId = teamIdOf(betaRoot);
+    const scout = registerSeat(made.home, betaId, 'scout', 'beta');
+    upsertTeam(made.home, betaId, {
+      project: 'beta',
+      session: 'beta',
+      root: betaRoot,
+      lobby: 'beta-lobby',
+      roster: [
+        { agent: scout, seat: 'scout', role: 'builder' },
+        { agent: scout, seat: 'other', role: 'builder' },
+      ],
+    });
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from scout\n\nforeign', new Date(NOW.getTime() - 21 * MIN), 'scout', scout);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    // The pair `scout at scout` matches one entry and would have routed, but the agent holds two
+    // seats: its seat is ambiguous, so nothing is written in beta's root or here.
+    expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
+    const reason = `team ${JSON.stringify(betaId)} lists 2 seats for agent ${scout}; one agent must hold one seat`;
+    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(reason);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(reason);
+    expect(said[0]).toContain('reported to lead only');
+  });
+
+  test('a seat held by two agents routes nothing', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const beta = join(made.root, '..', 'beta');
+    mkdirSync(join(beta, '.agents'), { recursive: true });
+    const betaRoot = realpathSync(beta);
+    const betaId = teamIdOf(betaRoot);
+    const scout = registerSeat(made.home, betaId, 'scout', 'beta');
+    const second = registerSeat(made.home, betaId, 'other', 'beta');
+    upsertTeam(made.home, betaId, {
+      project: 'beta',
+      session: 'beta',
+      root: betaRoot,
+      lobby: 'beta-lobby',
+      roster: [
+        { agent: scout, seat: 'scout', role: 'builder' },
+        { agent: second, seat: 'scout', role: 'other' },
+      ],
+    });
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from scout\n\nforeign', new Date(NOW.getTime() - 21 * MIN), 'scout', scout);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    // The pair matches one entry, but two agents share the seat: the sender at that seat is
+    // ambiguous, so nothing is written in beta's root or here.
+    expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
+    const reason = `team ${JSON.stringify(betaId)} lists 2 agents at seat "scout"; one seat must hold one agent`;
+    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(reason);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(reason);
+    expect(said[0]).toContain('reported to lead only');
+  });
+
   test('an unresolved sender is reported to the lead only, never to a same-named local seat', () => {
     const made = world();
     // The team file declares a local `helper`: the name alone must never route the report to it.

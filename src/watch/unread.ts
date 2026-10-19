@@ -352,8 +352,9 @@ type ReportResolution = {
  * another team, so a record without an agent id, or whose agent record, team record or roster
  * entry does not pin the same team, seat and session, is reported to the lead only, with the
  * missing metadata in the words. The identity is exact: the team record's own root must derive
- * the team id the agent names, and the roster must hold exactly one entry for that agent at that
- * seat — a root whose identity is another team, or an ambiguous roster, routes nothing.
+ * the team id the agent names, and the roster must hold exactly one entry for that agent, exactly
+ * one entry at that seat, and that entry must be the pair — a root whose identity is another team,
+ * an agent listed at two seats, or a seat held by two agents, routes nothing.
  */
 function reportTargets(scene: RetryScene, payload: RecordPayload, home: string): ReportResolution {
   const targets: ReportTarget[] = [];
@@ -404,11 +405,21 @@ function reportTargets(scene: RetryScene, payload: RecordPayload, home: string):
         } else if (!Object.hasOwn(team.lobbies, agent.reach.session)) {
           unresolved = `agent ${payload.from_id} names session ${JSON.stringify(agent.reach.session)}, which team ${JSON.stringify(agent.reach.team)} does not record`;
         } else {
-          const roster = team.roster.filter((entry) => entry.agent === payload.from_id && entry.seat === payload.from);
-          if (roster.length === 0) {
+          // An exact identity is one agent and one seat: the roster must hold one entry for this
+          // agent and one entry at this seat, and the pair must be that same entry. A pair match
+          // alone is not enough — an agent listed at two seats, or a seat held by two agents,
+          // leaves the sender's identity ambiguous, and an ambiguous identity routes nothing.
+          const pair = team.roster.filter((entry) => entry.agent === payload.from_id && entry.seat === payload.from);
+          const seats = team.roster.filter((entry) => entry.agent === payload.from_id);
+          const agents = team.roster.filter((entry) => entry.seat === payload.from);
+          if (pair.length === 0) {
             unresolved = `team ${JSON.stringify(agent.reach.team)} does not list agent ${payload.from_id} at seat ${JSON.stringify(payload.from)}`;
-          } else if (roster.length > 1) {
-            unresolved = `team ${JSON.stringify(agent.reach.team)} lists ${String(roster.length)} roster entries for agent ${payload.from_id} at seat ${JSON.stringify(payload.from)}`;
+          } else if (pair.length > 1) {
+            unresolved = `team ${JSON.stringify(agent.reach.team)} lists ${String(pair.length)} roster entries for agent ${payload.from_id} at seat ${JSON.stringify(payload.from)}`;
+          } else if (seats.length > 1) {
+            unresolved = `team ${JSON.stringify(agent.reach.team)} lists ${String(seats.length)} seats for agent ${payload.from_id}; one agent must hold one seat`;
+          } else if (agents.length > 1) {
+            unresolved = `team ${JSON.stringify(agent.reach.team)} lists ${String(agents.length)} agents at seat ${JSON.stringify(payload.from)}; one seat must hold one agent`;
           } else {
             add({ root: team.root, session: agent.reach.session, to: payload.from, label: `${payload.from} of ${team.project}` });
           }
