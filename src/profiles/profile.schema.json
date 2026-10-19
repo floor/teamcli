@@ -88,7 +88,7 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "minItems": 1,
-          "description": "arguments appended to the launch line; {seat}, {session}, {command} and {entry} are filled from the launch, and {file_args} is the server's --file pair as array elements when the launch named the team file, nothing otherwise"
+          "description": "arguments appended to the launch line; {seat}, {session}, {command} and {entry} are filled from the launch; {command_json}, {entry_json} and {seat_json} are the same values escaped for a double-quoted string inside a structured word; {file_args} is the server's --file pair as array elements when the launch named the team file, nothing otherwise"
         },
         "add": {
           "type": "array",

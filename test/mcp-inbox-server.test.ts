@@ -20,7 +20,7 @@ const WORKER_ID = '1c8d5a5f-4d5b-4a7f-8b3c-6e2d8f9a0b12';
 const TAMPERED_ID = '2d9e6b60-5e6c-4b80-9c4d-7f3e9a0b1c23';
 const UNSIGNED_ID = '3eaf7c71-6f7d-4c91-8d5e-8a4fab1c2d34';
 
-function teamText(seats: readonly string[]): string {
+function teamText(seats: readonly string[], session = SESSION): string {
   const rows = seats.map((name, at) => `  - role: ${at === 0 ? 'coordinator' : 'worker'}
     name: ${name}
     cli: ${at === 0 ? 'claude-code' : 'codex'}
@@ -32,7 +32,7 @@ function teamText(seats: readonly string[]): string {
 project: acme
 coordinator: ${seats[0] ?? 'lead'}
 operator: ${seats[0] ?? 'lead'}
-session: ${SESSION}
+session: ${session}
 workspace:
   mode: shared
 seats:
@@ -269,6 +269,50 @@ describe('team mcp serve', () => {
       }, { home: at.home });
       expect(code).toBe(2);
       expect(io.err).toContain('missing.yaml');
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('an explicit launch file wins over a different team file in the folder', async () => {
+    const at = place();
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-other-')));
+    try {
+      mkdirSync(join(elsewhere, '.agents'));
+      writeFileSync(join(elsewhere, '.agents', 'team.yaml'), teamText(['lead', 'worker'], 'other'));
+      signed(at, 'lead', LEAD_ID, 'for lead');
+      const io = testIo(elsewhere);
+      const replies: string[] = [];
+      const code = await runMcpServe({ seat: 'lead', session: SESSION, file: join(at.root, '.agents', 'team.yaml') }, io, {
+        lines: (async function* () {
+          yield call('1', 'inbox_check');
+        })(),
+        write: (line) => replies.push(line),
+      }, { home: at.home });
+      expect(code).toBe(0);
+      const reply = JSON.parse(replies[0]!) as Record<string, any>;
+      const listed = JSON.parse(reply.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+    } finally {
+      at.cleanup();
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  test('an empty or directory explicit file refuses even where the folder has a team file', async () => {
+    const at = place();
+    try {
+      for (const file of ['', at.root]) {
+        const io = testIo(at.root);
+        const code = await runMcpServe({ seat: 'lead', session: SESSION, file }, io, {
+          lines: (async function* () {
+            // no lines
+          })(),
+          write: () => {},
+        }, { home: at.home });
+        expect(code).toBe(2);
+        expect(io.err).toContain('could not be read');
+      }
     } finally {
       at.cleanup();
     }

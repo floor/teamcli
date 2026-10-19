@@ -7,6 +7,8 @@ import { profileFor } from '../src/profiles/profile.ts';
 import { registerInbox, selfRunner, type InboxRun } from '../src/mcp/register.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
+// Another team, for the scenes where the seat's folder and the launch name different teams.
+const elsewhere = example.replace('project: acme-web', 'project: elsewhere').replace('session: acme-web', 'session: elsewhere');
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -14,11 +16,11 @@ afterEach(() => {
 });
 
 /** A seat's folder: the fixture's team file, and in a repository when `repo` says so. */
-function folder(options: { repo?: 'plain' | 'ignored'; ignore?: string } = {}): string {
+function folder(options: { repo?: 'plain' | 'ignored'; ignore?: string; text?: string } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
   dirs.push(dir);
   mkdirSync(join(dir, '.agents'));
-  writeFileSync(join(dir, '.agents', 'team.yaml'), example);
+  writeFileSync(join(dir, '.agents', 'team.yaml'), options.text ?? example);
   if (options.repo) {
     execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
     if (options.repo === 'ignored') writeFileSync(join(dir, '.gitignore'), options.ignore ?? '.gemini/\n');
@@ -172,6 +174,46 @@ describe('registerInbox', () => {
     expect(calls[0]!.args.slice(-2)).toEqual(['--file', teamFile]);
   });
 
+  test('the launch file wins over a different team file in the seat folder', () => {
+    const seat = folder({ text: elsewhere });
+    const chosen = folder();
+    const teamFile = join(chosen, '.agents', 'team.yaml');
+    const { run, calls } = fakeAdd();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: seat, file: teamFile, run })).toEqual({ ok: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.args.slice(-4)).toEqual(['--session', 'acme-web', '--file', teamFile]);
+  });
+
+  test('an unreadable launch file never falls back to the seat folder team', () => {
+    const seat = folder();
+    const { run, calls } = fakeAdd();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: seat, file: join(seat, 'gone.yaml'), run })).toEqual({
+      ok: false,
+      reason: 'the team file its launch read could not be read',
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test('an empty launch file name refuses instead of reading the seat folder', () => {
+    const seat = folder();
+    const { run, calls } = fakeAdd();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: seat, file: '', run })).toEqual({
+      ok: false,
+      reason: 'the team file its launch read could not be read',
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test('a launch file that is a folder refuses, leaving the seat folder team unread', () => {
+    const seat = folder();
+    const { run, calls } = fakeAdd();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: seat, file: seat, run })).toEqual({
+      ok: false,
+      reason: 'the team file its launch read could not be read',
+    });
+    expect(calls).toEqual([]);
+  });
+
   test('a launch file that cannot be read refuses: the server would start with no team', () => {
     const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
     dirs.push(dir);
@@ -213,6 +255,22 @@ describe('the cursor file route', () => {
       },
     });
     expect(statSync(join(dir, '.cursor', 'mcp.json')).mode & 0o777).toBe(0o600);
+  });
+
+  test('the launch file wins over a different team file in the seat folder', () => {
+    const seat = folder({ text: elsewhere });
+    const chosen = folder();
+    const teamFile = join(chosen, '.agents', 'team.yaml');
+    const runner = selfRunner();
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: seat, file: teamFile })).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(seat, '.cursor', 'mcp.json'), 'utf8'))).toEqual({
+      mcpServers: {
+        'team-inbox': {
+          command: runner.command,
+          args: [runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web', '--file', teamFile],
+        },
+      },
+    });
   });
 
   test('a lobby folder writes its file from the launch team file, naming it to the server', () => {
