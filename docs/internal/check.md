@@ -108,11 +108,13 @@ The same pass names a seat held at a prompt it can read (`attentionDifferences`,
 `src/check/team.ts`). The pane is the one this project's state records for the seat, and only
 where herdr lists that seat on it — the same gate the watch's report lines use — read through the
 watch's own reader (`readScreen`, `src/watch/screen.ts`). The pane must still hold the process
-team launched, read as `compare()` reads it (`seatProcessVerdict`, `replacedSeat`,
-`src/launch/identity.ts`): a pane back at its shell, one running a process the record does not
-name with no stored session showing continuity, or a record with no identity whose pane holds a
-bare shell, is not read for a prompt at all. `compare()`'s process row already says what that pane
-is, and a dialog left in the scrollback of a dead or replaced pane is not a seat held at one.
+team launched, read as `compare()` reads it (`paneShowsSeat`, `src/status/compare.ts`, over
+`seatProcessVerdict` and `replacedSeat` in `src/launch/identity.ts`): a pane back at its shell,
+one running a process the record does not name with no stored session showing continuity, or a
+record with no identity whose pane holds a bare shell, is not read for a prompt at all.
+`compare()`'s process row already says what that pane is, and a dialog left in the scrollback of a
+dead or replaced pane is not a seat held at one. `compare()`'s temporary branch answers to the
+same gate before it prints a plain prompt row, so the check has no stale row to replace either.
 One line per held seat, by the screen's kind:
 
 - a **permission** prompt: `<seat>: stuck at a permission prompt (last active 4m ago):
