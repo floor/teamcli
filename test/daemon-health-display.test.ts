@@ -11,6 +11,7 @@ import { runTeamCheck, type CheckSources } from '../src/check/team.ts';
 import { check } from '../src/commands/check.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
+import type { DaemonRootState } from '../src/daemon/state.ts';
 import { daemonHealthy, daemonNotes, daemonProblemNotes, daemonReading } from '../src/daemon/health_display.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -38,10 +39,15 @@ function health(over: Partial<DaemonHealth> = {}): DaemonHealth {
     heartbeatAt: '2026-10-19T08:59:58.000Z',
     features: { broker: 'absent' },
     stuck: [],
+    roots: [],
     probe: { state: 'answered', at: AT },
     why: null,
     ...over,
   };
+}
+
+function root(over: Partial<DaemonRootState> = {}): DaemonRootState {
+  return { root: '/work/acme', team: 'acme', send: 'serving', bus: 'serving', why: null, ...over };
 }
 
 function notRunning(): DaemonHealth {
@@ -90,6 +96,7 @@ test('the reading carried in the document leaves out the socket path and the uid
     features: { broker: 'absent' },
     stuck: [{ id: 'req-1', op: 'dispatch', since: '2026-10-19T08:59:00.000Z', ageMs: 60000 }],
     probe: { state: 'answered', at: AT },
+    roots: [],
     why: null,
   });
   const loose = reading as Record<string, unknown>;
@@ -180,6 +187,33 @@ test('check hears only an actionable reading, and absence is not one', () => {
   expect(daemonHealthy(health())).toBe(true);
   expect(daemonHealthy(notRunning())).toBe(false);
   expect(daemonHealthy(unknown())).toBe(false);
+});
+
+test('a running daemon says what it hosted, and a failed endpoint is never full health', () => {
+  expect(daemonNotes(health({ roots: [root(), root({ root: '/work/beta', team: 'beta' })] }))).toEqual([
+    `${HEALTHY_LINE}; roots 2 (send 2, bus 2)`,
+  ]);
+  const failed = health({
+    roots: [root(), root({ root: '/work/beta', team: 'beta', send: 'failed', why: 'address in use' })],
+  });
+  expect(daemonNotes(failed)).toEqual([
+    `${HEALTHY_LINE}; roots 2 (send 1, bus 2); 1 endpoint did not start here (send for /work/beta: address in use)`,
+  ]);
+  expect(daemonHealthy(failed)).toBe(false);
+  expect(daemonProblemNotes(failed)).toEqual(daemonNotes(failed));
+  expect(daemonNotes(health({ roots: [root({ bus: 'failed', why: null })] }))).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 0); 1 endpoint did not start here (bus for /work/acme: no reason recorded)`,
+  ]);
+  // An endpoint another process already serves is not a failure, but it is not hosted here either.
+  const elsewhere = health({ roots: [root({ send: 'already-running' })] });
+  expect(daemonNotes(elsewhere)).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 0, bus 1); 1 endpoint not hosted here`,
+  ]);
+  expect(daemonHealthy(elsewhere)).toBe(true);
+  expect(daemonProblemNotes(elsewhere)).toEqual([]);
+  // A record written before roots were recorded says nothing about hosting.
+  expect(daemonNotes(health())).toEqual([HEALTHY_LINE]);
+  expect(daemonReading(failed).roots).toHaveLength(2);
 });
 
 const TEXT = `format: 1
@@ -358,5 +392,18 @@ test('a hung daemon is a check note that changes no total and no exit', () => {
   expect(io.out).toContain(
     `${HEALTHY_LINE}; it did not answer the health probe (timeout), so it may be hung`,
   );
+  expect(io.out).toContain('no differences');
+});
+
+test('a hosted endpoint that did not start is a check note, and machine health alone is not health', () => {
+  const at = place();
+  const io = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    ...checkSources(at, undefined),
+    daemon: health({ roots: [root({ send: 'failed', why: 'address in use' })] }),
+  });
+  expect(code).toBe(0);
+  expect(io.out).toContain('roots 1 (send 0, bus 1)');
+  expect(io.out).toContain('1 endpoint did not start here (send for /work/acme: address in use)');
   expect(io.out).toContain('no differences');
 });

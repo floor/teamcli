@@ -4,7 +4,7 @@
 // the system's service manager, a manual start, `team up` — never a platform's name; the socket
 // path and the process uid stay in the health module, because they are plumbing, not a reading.
 import type { DaemonHealth, DaemonProbe } from './health.ts';
-import type { DaemonFeatures, DaemonStuckRequest } from './state.ts';
+import type { DaemonFeatures, DaemonRootState, DaemonStuckRequest } from './state.ts';
 
 /**
  * The reading as the two commands publish it in `--json`: the socket path, the uid and the
@@ -21,6 +21,7 @@ export type DaemonReading = {
   heartbeatAt: string | null;
   features: DaemonFeatures | null;
   stuck: DaemonStuckRequest[];
+  roots: DaemonRootState[];
   probe: DaemonProbe;
   why: string | null;
 };
@@ -36,18 +37,24 @@ export function daemonReading(health: DaemonHealth): DaemonReading {
     heartbeatAt: health.heartbeatAt,
     features: health.features,
     stuck: health.stuck,
+    roots: health.roots,
     probe: health.probe,
     why: health.why,
   };
 }
 
 /**
- * Healthy: running, answering the health probe just now, and holding no request past the stuck
- * threshold. Every other reading is something a reader should hear about — a running daemon that
- * does not answer may be hung, and an unreadable record is "cannot tell", never "not running".
+ * Healthy: running, answering the health probe just now, holding no request past the stuck
+ * threshold, and with every checkout it tried to host getting its send and bus endpoint — a
+ * running daemon whose endpoint failed for a checkout is not full health. Every other reading is
+ * something a reader should hear about — a running daemon that does not answer may be hung, and
+ * an unreadable record is "cannot tell", never "not running".
  */
 export function daemonHealthy(health: DaemonHealth): boolean {
-  return health.state === 'running' && health.probe.state === 'answered' && health.stuck.length === 0;
+  return health.state === 'running'
+    && health.probe.state === 'answered'
+    && health.stuck.length === 0
+    && health.roots.every((root) => root.send !== 'failed' && root.bus !== 'failed');
 }
 
 /**
@@ -81,7 +88,7 @@ function daemonLine(health: DaemonHealth): string {
   const head = health.since === null
     ? `machine daemon: running (${pid}), ${startedPhrase(health.startedBy)}`
     : `machine daemon: running since ${health.since} (${pid}), ${startedPhrase(health.startedBy)}`;
-  const parts: string[] = [];
+  const parts: string[] = rootsPhrase(health.roots);
   if (health.probe.state === 'unanswered') {
     parts.push(`it did not answer the health probe (${health.probe.reason}), so it may be hung`);
   } else if (health.probe.state === 'refused') {
@@ -105,4 +112,38 @@ function startedPhrase(startedBy: string | null): string {
 function stuckPhrase(stuck: DaemonStuckRequest[]): string {
   const listed = stuck.map((held) => `${held.op} since ${held.since}`).join(', ');
   return `${String(stuck.length)} request${stuck.length === 1 ? '' : 's'} held past the stuck threshold (${listed})`;
+}
+
+/**
+ * What the daemon's process got for the checkouts it tried to host. A running daemon with a
+ * failed endpoint must never read as full health, so a failure is named with its checkout and
+ * reason; an endpoint another process already serves is not a failure, but the counts still say
+ * it is not hosted here. A record written before roots were recorded reads as none, and then the
+ * line says nothing about hosting rather than inventing it.
+ */
+function rootsPhrase(roots: DaemonRootState[]): string[] {
+  if (roots.length === 0) return [];
+  const sendServing = roots.filter((root) => root.send === 'serving').length;
+  const busServing = roots.filter((root) => root.bus === 'serving').length;
+  const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
+  const failed = roots.flatMap((root) => {
+    const entries: string[] = [];
+    if (root.send === 'failed') entries.push(`send for ${root.root}: ${root.why ?? 'no reason recorded'}`);
+    if (root.bus === 'failed') entries.push(`bus for ${root.root}: ${root.why ?? 'no reason recorded'}`);
+    return entries;
+  });
+  if (failed.length > 0) {
+    parts.push(
+      `${String(failed.length)} endpoint${failed.length === 1 ? '' : 's'} did not start here (${failed.join(', ')})`,
+    );
+    return parts;
+  }
+  const notHosted = roots.reduce(
+    (count, root) => count + (root.send === 'serving' ? 0 : 1) + (root.bus === 'serving' ? 0 : 1),
+    0,
+  );
+  if (notHosted > 0) {
+    parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
+  }
+  return parts;
 }
