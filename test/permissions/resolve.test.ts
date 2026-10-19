@@ -260,10 +260,66 @@ describe('the map names every word the contract exposes, and no more', () => {
   });
 
   test('`any-caller` admits a caller with no record at all', () => {
-    for (const command of ['help', 'doctor', 'watch']) {
+    for (const command of ['help', 'doctor']) {
       expect(resolvePermission(null, { id: TEAM }, command, [], TARGET)).toMatchObject({
         effect: 'allow',
         rule: 'any-caller',
+      });
+    }
+  });
+
+  test('a row carrying a terminal requirement refuses here without the bridge\'s proof', () => {
+    for (const command of ['watch', 'proc', 'proc:add', 'proc:done']) {
+      for (const caller of [null, OWNER, seat({ leads: true })]) {
+        const decision = resolvePermission(caller, { id: TEAM }, command, [], TARGET);
+        expect(decision, `${command} should refuse without the proof`).toMatchObject({ effect: 'deny', rule: 'terminal' });
+        expect(decision.why).toContain('only ');
+      }
+    }
+    // The proof is the module's `detachedRefusal` answer, both undefined where it permits:
+    // the row then decides as it stands, never by a record alone.
+    expect(resolvePermission(null, { id: TEAM }, 'watch', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'any-caller',
+    });
+    expect(resolvePermission(seat(), { id: TEAM }, 'proc', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'own-team',
+    });
+    expect(resolvePermission(OWNER, { id: TEAM }, 'proc', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'owner',
+    });
+  });
+
+  test('a `team-change` row is the verdict function\'s, and a record alone refuses it', () => {
+    for (const command of ['hold', 'worktree', 'worktree:list', 'worktree:new', 'worktree:remove']) {
+      expect(COMMAND_GATES[command]?.kind).toBe('team-change');
+      // A `leads` seat is not one of the three callers the function admits, and membership is
+      // not placement: the record-only resolver says so and names the function.
+      const decision = resolvePermission(seat({ leads: true }), { id: TEAM }, command, [], TARGET);
+      expect(decision).toMatchObject({ effect: 'deny', rule: 'team-change' });
+      expect(decision.why).toContain('mayChangeTeamVerdict');
+      // The owner is one of the three, and the resolver says the row is the owner's.
+      expect(resolvePermission(OWNER, { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'allow',
+        rule: 'owner',
+      });
+    }
+  });
+
+  test('a `team-read` row is the read gate\'s, and a record alone refuses it', () => {
+    for (const command of ['policy', 'proc:list', 'seats']) {
+      expect(COMMAND_GATES[command]?.kind).toBe('team-read');
+      // Membership is not placement and is no delegate evidence: the resolver refuses, and
+      // says the read gate decides.
+      const decision = resolvePermission(seat(), { id: TEAM }, command, [], TARGET);
+      expect(decision).toMatchObject({ effect: 'deny', rule: 'team-read' });
+      expect(decision.why).toContain('mayReadTeam');
+      // The owner is admitted before the read gate runs, and the resolver agrees.
+      expect(resolvePermission(OWNER, { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'allow',
+        rule: 'owner',
       });
     }
   });

@@ -73,6 +73,9 @@ export type PermissionRule =
   | 'owner-or-own-team'
   | 'seat-only'
   | 'leads-only'
+  | 'team-change'
+  | 'team-read'
+  | 'terminal'
   | 'absent'
   | 'outside-envelope'
   | 'outside-scope'
@@ -84,6 +87,12 @@ export type PermissionRule =
  *  one. A capability row reads it against every grant's `scope` — a grant is used within its
  *  scope, and the target, never a grant's own word, decides whether it applies. */
 export type PermissionTarget = { root: string; path?: string };
+
+/** The evidence a record cannot carry, supplied by the bridge that holds the walked caller.
+ *  `terminal` is the module's own `detachedRefusal` answer: it returned undefined for this call,
+ *  with the same route the row states. Without it a terminal row is refused here, because a
+ *  registry record cannot show where the caller runs. */
+export type PermissionProof = { terminal?: true };
 
 /** The answer: the effect, the rule it stands on, and the words a report or refusal says.
  *  Every deny's `why` names its rule. */
@@ -98,7 +107,9 @@ export type PermissionDecision = {
  * gated rows by the map's gate, capability rows by the own-list ∩ envelope intersection.
  * `grants` is the active set — `activeGrants(home, now)`, read fresh at every gate, with the
  * revoked and expired left out; `covers` decides which records are the caller's, and `at` is
- * the target a capability row reads every scope against.
+ * the target a capability row reads every scope against. `proof` is the bridge's evidence for
+ * requirements a record cannot carry — today the terminal requirement — and absent it a row
+ * carrying one is refused rather than admitted.
  */
 export function resolvePermission(
   caller: CallerRecord | null,
@@ -106,6 +117,7 @@ export function resolvePermission(
   command: string,
   grants: readonly GrantRecord[],
   at: PermissionTarget,
+  proof: PermissionProof = {},
 ): PermissionDecision {
   const gate = COMMAND_GATES[command];
   if (gate === undefined) {
@@ -113,6 +125,16 @@ export function resolvePermission(
       effect: 'deny',
       rule: 'not-in-map',
       why: `the map names no \`${command}\` row: 0.5.0 gates no command the Kernel's table does not name`,
+    };
+  }
+  // A row carrying `terminal` is the module's `detachedRefusal`', applied by the bridge with
+  // the walked caller before this resolver is asked. A record cannot show a terminal, so
+  // without that proof the row is refused here rather than admitted and refused by the module.
+  if (gate.terminal !== undefined && proof.terminal !== true) {
+    return {
+      effect: 'deny',
+      rule: 'terminal',
+      why: `\`${command}\` needs a terminal: only ${gate.terminal.who} runs this, from ${gate.terminal.where}`,
     };
   }
   // The `any-caller` rows ask for no record at all: nothing about the caller is read, so a
@@ -203,6 +225,25 @@ export function resolvePermission(
           caller.leads === true ? `leads a team, and not ${team.id}'s` : 'holds no `leads`'
         }`,
       };
+    case 'team-change':
+      // The row is `mayChangeTeamVerdict`'s: the owner, the orchestrator's seat or the
+      // operator's seat, judged from the walk and the state's standing. A registry record
+      // alone does not say where the caller stands, so this resolver neither admits nor
+      // refuses it as a copy of that function's rule — the bridge calls the function itself.
+      return {
+        effect: 'deny',
+        rule: 'team-change',
+        why: `\`${command}\` is decided by \`mayChangeTeamVerdict\` from the caller's placement, not from a registry record: ${gate.why}`,
+      };
+    case 'team-read':
+      // The row is the read gate's (`mayReadTeam`): a seat the state places on its recorded
+      // pane, or an approved delegate pane. Membership alone admits no one, so a record-only
+      // read refuses rather than re-derive the gate.
+      return {
+        effect: 'deny',
+        rule: 'team-read',
+        why: `\`${command}\` is decided by the read gate (\`mayReadTeam\`), which needs the caller's placement and the delegate evidence: ${gate.why}`,
+      };
     case 'admission':
     case 'pane-authority':
       return { effect: 'deny', rule: gate.kind, why: gate.why };
@@ -220,8 +261,9 @@ export function resolveFromHome(
   command: string,
   now: Date,
   at: PermissionTarget,
+  proof: PermissionProof = {},
 ): PermissionDecision {
-  return resolvePermission(caller, team, command, activeGrants(home, now), at);
+  return resolvePermission(caller, team, command, activeGrants(home, now), at, proof);
 }
 
 /**
@@ -348,6 +390,10 @@ function says(gate: Gate, command: string): string {
       return `\`${command}\` admits a declared seat of the team on the pane its state records, and not the owner`;
     case 'leads-only':
       return `\`${command}\` admits a seat the team marks \`leads\`, on its recorded pane, and not the owner`;
+    case 'team-change':
+      return `\`${command}\` is decided by \`mayChangeTeamVerdict\` from the walk and the state's standing`;
+    case 'team-read':
+      return `\`${command}\` is decided by the read gate (\`mayReadTeam\`) from the caller's placement and the delegate evidence`;
     case 'any-caller':
       return `\`${command}\` asks for no caller and reads no record`;
     case 'capability':
