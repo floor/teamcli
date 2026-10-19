@@ -227,6 +227,22 @@ test('status and check read a real journal through its own pending reader', asyn
   const code = runTeamCheck({ file: '.agents/team.yaml' }, checked, realCheck(at));
   expect(checked.out).toContain(`green slice ready and not installed: slice-alpha since ${AT}`);
   expect(code).toBe(0);
+  const asJson = testIo(at.root, { kind: 'owner' });
+  const jsonCode = runTeamCheck({ file: '.agents/team.yaml', json: true }, asJson, {
+    ...realCheck(at),
+    idleWork: () => report(),
+  });
+  const doc2 = JSON.parse(asJson.out) as {
+    notes: string[];
+    idle_work: IdleWorkReport;
+    green_slices: PendingGreenSlice[];
+  };
+  expect(doc2.idle_work.takeable).toBe(3);
+  expect(doc2.green_slices).toEqual([
+    { task: 'slice-alpha', seat: 'writer-01', commit: '0123456', version: '0.5.4', readyAt: AT },
+  ]);
+  expect(doc2.notes).toContain(`green slice ready and not installed: slice-alpha since ${AT}`);
+  expect(jsonCode).toBe(0);
 });
 
 test('a corrupt journal is named with its path, and changes no exit', async () => {
@@ -237,6 +253,13 @@ test('a corrupt journal is named with its path, and changes no exit', async () =
   const code = runTeamCheck({ file: '.agents/team.yaml' }, checked, realCheck(at));
   expect(checked.out).toContain(`the green journal cannot be read, so ready slices are unknown (${why})`);
   expect(code).toBe(0);
+  const asJson = testIo(at.root, { kind: 'owner' });
+  const jsonCode = runTeamCheck({ file: '.agents/team.yaml', json: true }, asJson, realCheck(at));
+  const checkedDoc = JSON.parse(asJson.out) as { notes: string[]; green_slices?: unknown; green_notice?: string };
+  expect(checkedDoc.green_slices).toBeUndefined();
+  expect(checkedDoc.green_notice).toBe(why);
+  expect(checkedDoc.notes).toContain(`the green journal cannot be read, so ready slices are unknown (${why})`);
+  expect(jsonCode).toBe(0);
   const io = testIo(at.root, { kind: 'owner' });
   await runStatus(['--json'], io, {
     live: () => live(),
