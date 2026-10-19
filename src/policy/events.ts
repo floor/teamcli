@@ -59,9 +59,10 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   'message.replied': ['sender'],
   // The lead's copy is raised only after `held-threshold`; the sender's word is immediate.
   'message.held': ['sender', 'lead'],
-  // Working and idle are read by the bus and the watch; a lead that wants them adds itself.
+  // Working is read by the bus and the watch; a lead that wants it adds itself.
+  // A worker seat idle past its window with assigned work reaches its lead once per idle stretch.
   'seat.working': [],
-  'seat.idle': [],
+  'seat.idle': ['lead'],
   'seat.idle-timeout': ['lead'],
   'seat.blocked': ['lead', 'operator'],
   'seat.at-prompt': ['lead', 'operator'],

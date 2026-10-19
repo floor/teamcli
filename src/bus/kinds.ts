@@ -115,7 +115,7 @@ export const OWNER_PROMPT_KINDS = [
 
 export type OwnerPromptKind = (typeof OWNER_PROMPT_KINDS)[number];
 
-const OWNER_PROMPT_SET: ReadonlySet<string> = new Set<string>([...OWNER_PROMPT_KINDS, 'rate-limit']);
+const OWNER_PROMPT_SET: ReadonlySet<string> = new Set<string>(OWNER_PROMPT_KINDS);
 
 /** Built-in privileged event kinds (Amendment 01 §4.4): `team.grant-*`, `team.policy-*`,
  *  `seat.at-prompt`, `record.invalid` and `security.refused`. The owner may grow this set via
