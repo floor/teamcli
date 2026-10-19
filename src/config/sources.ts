@@ -668,7 +668,8 @@ function seatTargetProblem(home: string, target: string): string | null {
       if (declared.includes(target)) return null;
     }
   } catch {
-    // An unreadable team registry declares no roster here; `team check` refuses it.
+    // An unreadable team registry declares no roster here; the call answers with the target it
+    // could not find.
   }
   return `no registered agent "${target}" in ${agentsDir(home)}, and no team roster declares it`;
 }

@@ -56,8 +56,9 @@ export function agentIdOf(home: string, root: string, seatName: string): { agent
       if (line !== undefined) return { agentId: line.agent, entity, projectId };
     }
   } catch {
-    // A registry this build cannot read declares no entity, project or roster here; `team check`
-    // refuses it. The project and agent registries below are still consulted.
+    // A registry this build cannot read declares no entity, project or roster here; the
+    // settings read reports the source it cannot read (`team settings <seat>` and
+    // `team seat <seat>` refuse it). The project and agent registries below are still consulted.
   }
   // The team record can be absent or carry no entity/project while the project registry still
   // names the team. The project record is the declaration then; without it the entity and
@@ -71,7 +72,7 @@ export function agentIdOf(home: string, root: string, seatName: string): { agent
       }
     } catch {
       // A project registry this build cannot read (or one naming the team twice) declares no
-      // single project here; `team check` refuses it.
+      // single project here; the settings read reports the file it cannot read.
     }
   }
   // The agent registry knows an agent by the stable team ID, never by the team's own name.

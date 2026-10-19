@@ -3,9 +3,9 @@
 // reading takes only the three a runtime consumer acts on.
 //
 // A chain that does not verify declares nothing here. Routing decides how a message travels,
-// never whether it may, and a send must not fail on a broken record; the read commands answer a
-// damaged source loudly, and `team check` names it. A caller that needs the loud answer reads
-// `readSeatSettings` instead.
+// never whether it may, and a send must not fail on a broken record; the read commands
+// (`team settings <seat>`, `team seat <seat>`) answer a damaged source loudly and name its file.
+// A caller that needs the loud answer reads `readSeatSettings` instead.
 
 import { teamIdOf } from '../registry/teams.ts';
 import type { DeliveryLeg } from '../settings/inherit.ts';
@@ -56,7 +56,8 @@ export function seatSettingsOf(input: {
     return overrides;
   } catch {
     // An unreadable registry or record declares nothing to a runtime consumer; the read
-    // commands and `team check` are where a damaged source is reported.
+    // commands (`team settings <seat>`, `team seat <seat>`) are where a damaged source is
+    // reported.
     return {};
   }
 }
