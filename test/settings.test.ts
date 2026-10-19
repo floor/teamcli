@@ -360,6 +360,28 @@ describe('the write verbs', () => {
     expect(set.err).toContain('seat "lead": the nickname "Hera" is also on seat "worker"');
   });
 
+  test('a record that does not verify signs no word, so it blocks no write the file admits', async () => {
+    registerLead();
+    const worker = registerAgent(home, {
+      ...agentInit(),
+      name: 'Worker One',
+      reach: { team: teamIdOf(root), seat: 'worker', session: 'acme', pane: 'w3:p2', address: null },
+    }).id;
+    const plan = planConfigSet(home, { level: 'seat', target: worker, settings: [{ key: 'nickname', value: 'Hera' }] });
+    if (!plan.ok) throw new Error(plan.why);
+    const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T10:00:00Z') });
+    if (!written.ok) throw new Error(written.why);
+    // The damaged record declares nothing to a runtime consumer, as it reads nowhere else: the
+    // collision it held is gone with its signature, and the write the file's own rules admit runs.
+    const path = join(agentsDir(home), `${worker}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('value: "Hera"', 'value: "Crow"'));
+
+    const set = await run(['set', 'lead', 'nickname=Hera']);
+
+    expect(set.code).toBe(0);
+    expect(set.out).toBe('settings: set nickname=Hera at seat (lead)\n');
+  });
+
   test('a model word is recorded as the launch id it names', async () => {
     registerLead();
     const set = await run(['set', 'lead', 'model=claude-haiku-5-5']);
