@@ -38,22 +38,29 @@ export type SeatSettingsInput = {
   project: string;
   seat: ConfigSeatInput & { name: string };
   teamDeliveryOrder: readonly DeliveryLeg[] | null;
+  /** The loaded declaration's `entity:`, when it names one. It is the entity a team file
+   *  declares, which a registry that names no entity must not hide: the entity source is still
+   *  read, and one that does not verify refuses the read instead of being skipped. */
+  entity?: string | null;
 };
 
 /** The agent id the team record's roster gives the seat, or the registry's newest agent of that
  *  team and seat; null when neither knows one. The team is named by its stable ID, which is what
- *  an agent record's `reach.team` carries. */
+ *  an agent record's `reach.team` carries. A roster line names the agent, but it is not the whole
+ *  context: the team record can carry a roster and still name no entity or project, and the
+ *  project registry is then the declaration the signed sources need. */
 export function agentIdOf(home: string, root: string, seatName: string): { agentId: string | null; entity: string | null; projectId: string | null } {
   const teamId = teamIdOf(root);
   let entity: string | null = null;
   let projectId: string | null = null;
+  let rosterAgentId: string | null = null;
   try {
     const record = getTeam(home, teamId);
     if (record !== null) {
       entity = record.entity;
       projectId = record.projectId;
       const line = record.roster.find((entry) => entry.seat === seatName);
-      if (line !== undefined) return { agentId: line.agent, entity, projectId };
+      if (line !== undefined) rosterAgentId = line.agent;
     }
   } catch {
     // A registry this build cannot read declares no entity, project or roster here; `team check`
@@ -74,6 +81,9 @@ export function agentIdOf(home: string, root: string, seatName: string): { agent
       // single project here; `team check` refuses it.
     }
   }
+  // The roster is the team record's own word for this seat, so it wins over the registry's
+  // newest agent once the project context has been resolved around it.
+  if (rosterAgentId !== null) return { agentId: rosterAgentId, entity, projectId };
   // The agent registry knows an agent by the stable team ID, never by the team's own name.
   const agent = findAgent(home, { team: teamId, seat: seatName });
   return { agentId: agent?.id ?? null, entity, projectId };
@@ -85,7 +95,11 @@ export function readSeatSettings(input: SeatSettingsInput): SeatSettingsRead {
     return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder) };
   }
   const { agentId, entity, projectId } = agentIdOf(home, input.root, input.seat.name);
-  const chainInput: ConfigChainInput = { home, entity, projectId, teamId: teamIdOf(input.root), agentId, seatName: input.seat.name };
+  // The declaration's own entity wins: a registry that names none must not turn the entity
+  // source off, because an entity record that does not verify then refuses the read instead of
+  // disappearing from it.
+  const resolvedEntity = input.entity ?? entity;
+  const chainInput: ConfigChainInput = { home, entity: resolvedEntity, projectId, teamId: teamIdOf(input.root), agentId, seatName: input.seat.name };
   const sources = readConfigSources(chainInput);
   const chain = resolveConfigChain(sources);
   if (!chain.ok) return { ok: false, refusals: chain.refusals };

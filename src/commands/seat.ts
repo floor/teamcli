@@ -200,6 +200,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     project: team.project,
     seat: declared,
     teamDeliveryOrder: team.deliveryOrder,
+    entity: team.entity,
   });
   if (!settingsRead.ok) {
     if (json) {
