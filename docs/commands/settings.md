@@ -6,8 +6,9 @@ and the registry (`team config keys`); it writes nothing, and the value verbs wa
 signed-record store the decision leaves open.
 
 A setting is a value, not a permission. `team settings` shows no value it would not accept: the
-`model` it prints is the file's value, and `team config keys` names the `allowed-models` policy that
-bounds it.
+`model` it prints is the value the file decides, or `unset` when the field is empty or the
+launcher chooses the model, and `team config keys` names the `allowed-models` policy that bounds
+it.
 
 ## Synopsis
 
