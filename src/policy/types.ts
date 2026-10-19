@@ -17,6 +17,7 @@ import {
   SWAP_WAIT_SECONDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
+import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
 import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
@@ -103,6 +104,7 @@ export const ENFORCED_POLICY_NAMES = [
   'event-reconcile-interval-seconds',
   'model-rule',
   'swap-wait-seconds',
+  'owner-reply-to',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -171,6 +173,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   reconcile: 'event-reconcile-interval-seconds',
   model_rule: 'model-rule',
   swap_wait_seconds: 'swap-wait-seconds',
+  owner_reply_to: 'owner-reply-to',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -512,6 +515,21 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parsePositiveSeconds,
     isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The entity-level address an owner-origin message names for the seat that answers it: one
+  // qualified `seat@team` target. The empty default is no target; entity `floor` alone answers
+  // its shipped `orchestrator@floor`, applied by the reader (`src/policy/owner-reply.ts`) rather
+  // than inherited by every entity as a level default. A signed entity declaration replaces it,
+  // and any other entity without one has no target.
+  'owner-reply-to': {
+    name: 'owner-reply-to',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: parseOwnerReplyToValue,
+    valueProblem: ownerReplyToValueProblem,
+    isWithin: () => true,
   },
   'development-mode': {
     name: 'development-mode',
