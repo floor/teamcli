@@ -4543,9 +4543,22 @@ seats:
     version: "4.0"
     launch: claude --model deepseek-flash
 `;
-  async function swapped(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+  async function swapped(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    over: Partial<RestartSources> = {},
+  ): Promise<Ran> {
     const io = testIo(place.root, caller);
-    return { code: await runSwap([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+    return {
+      code: await runSwap([...argv], io, {
+        home: place.home,
+        now: () => NOW,
+        sources: restartSources(place, over),
+      }),
+      out: io.out,
+      err: io.err,
+    };
   }
   function swapRule(place: Place, value = '*=!anthropic'): void {
     const wrote = writePolicySet(place.home, { level: 'entity', target: 'lab', name: 'model-rule', value }, { now: NOW });
@@ -4616,6 +4629,57 @@ seats:
     return show(await swapped(place, ['queue']), 'a <seat> is required for "swap queue"');
   });
   scene('swap.file', async (place) => show(await swapped(place, []), 'no team file'));
+  // The run's own outcomes. A run reads herdr before it does anything, so a scene that would
+  // run a swap stands herdr in; the stop is the down path's own typing, and the fake renders
+  // the exit text back so the stop reads it, then reports the shell once Enter is pressed.
+  const SWAP_TRUST = (place: Place): string => SWAP_TEAM.replace(
+    'workspace:\n',
+    `trust:\n  - ~/.config/team/lobbies/lab\n  - ${place.root}\nworkspace:\n`,
+  );
+  scene('swap.herdr', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    return show(
+      await swapped(place, ['--run'], owner, { agents: () => null }),
+      'herdr cannot be read, so no swap can be run now',
+    );
+  });
+  scene('swap.ran', async (place) => {
+    approve(place, SWAP_TRUST(place));
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    const oldPane = 'w9:p1';
+    let typed = '';
+    let shelled = false;
+    return show(await swapped(place, ['--run'], owner, {
+      agents: () => [{ ...agent('lead'), pane: oldPane }],
+      launch: downLaunch({
+        typeText: (_session, pane, text) => {
+          if (pane === oldPane) typed = text;
+          return true;
+        },
+        pressEnter: (_session, pane) => {
+          if (pane === oldPane) shelled = true;
+          return true;
+        },
+      }),
+      screenText: (_session, pane) => (pane === oldPane ? (typed === '' ? IDLE : claudeBox(typed)) : undefined),
+      foreground: (_session, pane) => (pane === oldPane && shelled ? ['zsh'] : ['claude']),
+    }), 'swapped: lead in w1:p1 (read-back unread)');
+  });
+  scene('swap.run-failed', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    // The record outlives the declaration: the file no longer declares the seat, so the run
+    // reports it and removes the record rather than launching over a name it cannot find.
+    write(place, SWAP_TEAM.replace('coordinator: lead\noperator: lead\n', 'coordinator: worker\noperator: worker\n').replace(LEAD, ''));
+    return show(
+      await swapped(place, ['--run'], owner, { agents: () => [] }),
+      'is no longer declared in the team file; its queued swap was removed',
+    );
+  });
 }
 
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);

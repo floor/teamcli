@@ -12,8 +12,9 @@ working seat: it runs at the seat's boundary — quiet, no turn, no dialog, no l
 — or, once the wait has passed, at the next pause between two turns. A broken seat, and a swap the
 owner forced, runs at once. `team swap` shows the queue; `--rule` lists every breach of the rule
 in the entity's teams with the donor each recipe came from; `queue` puts a swap in the queue;
-`now` is the owner's force; `cancel` takes a swap out of the queue. `team status` prints each
-queued swap as a `note:` line, and `team next` refuses a claim for the seat a swap waits on.
+`now` is the owner's force, which runs the sweep at once; `--run` carries out every queued swap
+that is due now; `cancel` takes a swap out of the queue. `team status` prints each queued swap as
+a `note:` line, and `team next` refuses a claim for the seat a swap waits on.
 
 ## Synopsis
 
@@ -21,6 +22,7 @@ queued swap as a `note:` line, and `team next` refuses a claim for the seat a sw
     team swap --rule [--file <path>] [--json]
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
     team swap now <seat> [--file <path>] [--json]
+    team swap --run [--file <path>] [--json]
     team swap cancel <seat> [--file <path>] [--json]
 
 A `<target>` is `<cli>:<model>`, and the recipe is copied from a seat of the entity that already
@@ -68,14 +70,24 @@ carries `forced: { "by": ..., "at": ... }`; a swap the owner started from nothin
 `"reason": "owner"`. A hand-edited record that is not the record this command writes is dropped
 when the state is read, so it is never printed by any reader.
 
+A run — `--run`, or the sweep `now` starts — writes the recipe into the seat's own declaration,
+ends the recorded session with reason `swap`, stops the old pane and launches the seat in a fresh
+workspace from the new declaration. The conversation resumes when the CLI stays the same and keeps
+sessions and a session id is recorded; otherwise the old conversation is asked, at its boundary,
+to write a handover the new one reads. Once the pane is ready the run reads the model back: the
+profile's own reading first, then the launch wrapper's `· API Usage Billing` banner. A screen that
+shows neither is reported as `read-back: unread`, and unread never claims a match. The record is
+removed when the pane is ready, whichever the read-back says; a different model is reported as a
+failed swap.
+
 ## Who may run it
 
 | Caller | May |
 | --- | --- |
-| the owner, from a terminal outside herdr | everything, including `now` and `--file` |
-| the orchestrator's or the operator's seat, on the pane the state records for it | queue and cancel, and the views |
+| the owner, from a terminal outside herdr | everything, including `now`, `--run` and `--file` |
+| the orchestrator's or the operator's seat, on the pane the state records for it | queue, `--run` and cancel, and the views |
 | any other seat of the team, on the pane the state records for it | the view and `--rule` |
-| any other caller, or a seat whose pane the state does not record | nothing: the view says `team swap: this team is not yours to read`; queue and cancel name the placement |
+| any other caller, or a seat whose pane the state does not record | nothing: the view says `team swap: this team is not yours to read`; queue, `--run` and cancel name the placement |
 | a run with no terminal | `now` alone refuses it: `team swap: only the owner runs this, from a terminal outside herdr or its own seat` |
 
 ## Flags
@@ -85,6 +97,7 @@ when the state is read, so it is never printed by any reader.
 | `--rule` | list every breach of the entity's model rule, with the donor each recipe came from |
 | `--to <target>` | with `queue`: take the recipe from a seat running `<cli>:<model>`, instead of the rule's own proposal |
 | `<seat>` | the seat to queue, force or cancel; required by `queue`, `now` and `cancel` |
+| `--run` | carry out every queued swap that is due now; `--json` prints one result per seat |
 | `--file <path>` | the team file to read; the owner's alone |
 | `--json` | emit a `team.swap` v1 JSON document (`schema/swap.schema.json`) on `stdout` |
 | `--help`, `-h` | the usage, and exit 0 |
@@ -95,10 +108,11 @@ when the state is read, so it is never printed by any reader.
 | --- | --- |
 | `team swap: <how the invocation is malformed>` (with the usage) | 2 |
 | `team swap: <why the team file did not load>` | 2 |
+| `team swap: team.yaml is invalid, so a swap cannot write the new declaration or launch from it` | 2 |
 | `team swap: this team is not yours to read` | 1 |
 | `team swap: only the owner forces a swap; this call is <caller>` | 1 |
 | `team swap: only the owner runs this, from a terminal outside herdr or its own seat` | 1 |
-| `team swap: only the owner, the orchestrator or the operator queues or cancels a swap; this call is <caller>` | 1 |
+| `team swap: only the owner, the orchestrator or the operator queues, runs or cancels a swap; this call is <caller>` | 1 |
 | `team swap: no pane is recorded for seat <name> in this session: a lead stops that seat and runs \`team up\`` | 1 |
 | `team swap: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)` | 1 |
 | `team swap: no seat "<name>" is declared in <project>` | 1 |
@@ -107,21 +121,27 @@ when the state is read, so it is never printed by any reader.
 | `team swap: <seat> declares a model the rule allows; there is nothing to swap to` | 1 |
 | `team swap: no seat of the entity this team may copy from runs <cli>:<model>` | 1 |
 | `team swap: <why no recipe is available for this seat>` | 1 |
+| `team swap: herdr cannot be read, so the forced swap cannot run now` | 1 |
+| `team swap: herdr cannot be read, so no swap can be run now` | 1 |
+| `team swap: <seat>: <why the run was refused>` | 1 |
+| `team swap: <seat>: read-back: mismatch — the file declares <expected>, the screen shows <shown>; the swap failed` | 1 |
 | `team swap: the state cannot be written: <why>` | 1 |
 
 ## Exit codes
 
-- `0` — the queue or the rule listing was shown, or a swap was queued, forced or cancelled.
+- `0` — the queue or the rule listing was shown; a swap was queued, forced or cancelled; or a run
+  carried out what was due, whether or not one was due.
 - `1` — it was refused: the caller may not do this, the rule or the wait cannot be read, no recipe
-  is available, no such seat, no swap waits, or the state can't be read or written.
+  is available, no such seat, no swap waits, herdr cannot be read so a run cannot start, a due
+  swap failed or read back a different model, or the state can't be read or written.
 - `2` — the invocation can't be read, or the team file can't.
 
 ## Example
 
 ```fixture
 approved: false
-herdr: none
-agents: none
+herdr: running
+agents: all
 watch: none
 ```
 
@@ -184,18 +204,55 @@ claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the ent
 exit 0
 ```
 
-The owner forces it, and a cancel takes it out of the queue:
+The orchestrator's seat queues on the pane the state records for it, and only the owner forces a
+swap:
 
-```console
+```console caller=claude-keeper
+$ team swap queue claude-keeper ; echo "exit $?"
+swap queued: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z
+exit 0
+$ team swap now worker ; echo "exit $?"
+team swap: only the owner forces a swap; this call is claude-keeper
+exit 1
+```
+
+The owner forces the swap while the seat is mid-turn: the force stands and the swap stays queued,
+because a working seat is never interrupted. A cancel takes it out of the queue:
+
+```console screens="claude-keeper=working"
 $ team swap now claude-keeper ; echo "exit $?"
 swap forced: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, forced by owner at 2026-10-04T09:00:00.000Z
+claude-keeper: stays queued (claude-keeper is working; left as it is; the queue stands)
 exit 0
 $ team swap cancel claude-keeper ; echo "exit $?"
 swap cancelled: claude-keeper
 exit 0
 ```
 
-A seat the rule allows has nothing to swap to, and nothing waits once the queue is empty:
+At its boundary the seat is swapped: the old pane is stopped, the file takes the recipe, the seat
+launches from it, and the new screen is read back:
+
+```console
+$ team swap queue claude-keeper ; echo "exit $?"
+swap queued: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z
+exit 0
+$ team swap --run ; echo "exit $?"
+claude-keeper: input box: empty
+claude-keeper: turn: not working (free)
+claude-keeper: context: workspace close ends the pane; relaunch runs "claude --model deepseek-flash" in a new workspace without passing the old transcript
+claude-keeper: stopped
+claude-keeper: ready
+claude-keeper: its screen doesn't show a model this version knows; not checked
+swapped: claude-keeper in w3:p1 (read-back unread)
+exit 0
+$ team swap ; echo "exit $?"
+swap: beacon (entity lab)
+nothing queued
+exit 0
+```
+
+A seat the rule allows has nothing to swap to, nothing waits once the queue is empty, and a run
+with nothing due is no work:
 
 ```console
 $ team swap queue worker ; echo "exit $?"
@@ -204,16 +261,6 @@ exit 1
 $ team swap cancel worker ; echo "exit $?"
 team swap: worker waits on no swap
 exit 1
-```
-
-The orchestrator's seat queues nothing without the pane the state records for it, and only the
-owner forces a swap:
-
-```console caller=claude-keeper
-$ team swap queue claude-keeper ; echo "exit $?"
-team swap: no pane is recorded for seat claude-keeper in this session: a lead stops that seat and runs `team up`
-exit 1
-$ team swap now worker ; echo "exit $?"
-team swap: only the owner forces a swap; this call is claude-keeper
-exit 1
+$ team swap --run ; echo "exit $?"
+exit 0
 ```

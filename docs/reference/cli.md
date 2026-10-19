@@ -1369,6 +1369,7 @@ Usage:
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
     team swap now <seat> [--file <path>] [--json]
     team swap cancel <seat> [--file <path>] [--json]
+    team swap --run [--file <path>] [--json]
 
 ### Flags
 
@@ -1378,6 +1379,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--rule` | no | no | no |
+| `--run` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

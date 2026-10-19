@@ -47,6 +47,8 @@
         "rule",
         "queued",
         "forced",
+        "ran",
+        "run-failed",
         "cancelled"
       ]
     },
@@ -437,6 +439,10 @@
               "rule": {
                 "type": "string"
               },
+              "handover": {
+                "type": "string",
+                "minLength": 1
+              },
               "forced": {
                 "type": "object",
                 "additionalProperties": false,
@@ -578,6 +584,10 @@
         "rule": {
           "type": "string"
         },
+        "handover": {
+          "type": "string",
+          "minLength": 1
+        },
         "forced": {
           "type": "object",
           "additionalProperties": false,
@@ -594,6 +604,58 @@
               "type": "string",
               "minLength": 1
             }
+          }
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seat",
+          "result"
+        ],
+        "properties": {
+          "seat": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "swapped",
+              "mismatch",
+              "failed",
+              "stays"
+            ]
+          },
+          "old_pane": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pane": {
+            "type": "string",
+            "minLength": 1
+          },
+          "read_back": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resumed": {
+            "type": "string",
+            "minLength": 1
+          },
+          "handover": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
+import { stripSgr } from '../ansi.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
@@ -65,12 +66,13 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
-import { shellQuote } from '../profiles/profile.ts';
+import { shellQuote, withResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -383,6 +385,10 @@ export type PerformInput = {
   session: string;
   name: string;
   declared: Seat;
+  /** The seat as the file will declare it once the stop is done: a swap's recipe. Absent, the
+   *  declaration is `declared` and the run is a restart. The inspection reads `declared` (the
+   *  pane still runs the old CLI); the preflight and the launch read this one. */
+  next?: Seat;
   recorded: SeatState | undefined;
   agents: readonly HerdrAgent[];
   abandon: boolean;
@@ -396,9 +402,25 @@ export type PerformInput = {
   endReason: 'restart' | 'swap';
   /** The dry run: preflight, then the plan, and nothing stopped or launched. */
   dry: boolean;
+  /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
+   *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
+  resume?: string;
+  /** The handover the new conversation reads first: the seat is asked to write this path before
+   *  the stop, and the wait is bounded. */
+  handover?: { path: string; waitMs: number };
+  /** Writes the team file's new declaration, after the old pane is closed and before the hooks
+   *  and the launch — the launch reads the file's own words. A failure is logged and the launch
+   *  goes on: the seat is already down. */
+  declare?: () => { ok: true } | { ok: false; why: string };
   now(): Date;
   sources: RestartSources;
 };
+
+/** What the launch's own screen says the new conversation is, read back after ready. */
+export type ReadBack =
+  | { kind: 'match'; model: string }
+  | { kind: 'mismatch'; expected: string; shown: string }
+  | { kind: 'unread' };
 
 export type PerformResult =
   | { kind: 'dry'; text: string; plan: PlanStep[] }
@@ -408,7 +430,7 @@ export type PerformResult =
   | { kind: 'not-ready'; message: string }
   | { kind: 'herdr' }
   | { kind: 'run-lock'; held: number }
-  | { kind: 'ready'; oldPane: string; pane: string };
+  | { kind: 'ready'; oldPane: string; pane: string; readBack: ReadBack };
 
 export async function performRestart(input: PerformInput): Promise<PerformResult> {
   const {
@@ -437,6 +459,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   } = input;
   const recordedSeat = input.recorded;
   const recordedSession = readState(dir).sessions[session] ?? emptySession();
+  // The declaration the launch reads: a swap's recipe, when one is handed in; a restart's own
+  // file entry otherwise. The inspection above it reads the old declaration — the pane still
+  // runs the old CLI.
+  const next = input.next ?? declared;
   const noteIo: Io = json
     ? { ...out, stdout: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
     : out;
@@ -448,18 +474,18 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
 
   // Preflight the relaunch before stopping the seat so a preflight refusal leaves the seat running.
-  const profile = profileFor(declared.cli);
+  const profile = profileFor(next.cli);
   if (!profile) {
-    return { kind: 'not-ready', message: `no launch profile for \`${plainLine(declared.cli)}\` in this version` };
+    return { kind: 'not-ready', message: `no launch profile for \`${plainLine(next.cli)}\` in this version` };
   }
   for (const problem of placedProblems(team, root, home, undefined, session)) {
     return { kind: 'not-ready', message: problem.message };
   }
-  const start = seatStart({ ...team, session }, declared, root, home);
+  const start = seatStart({ ...team, session }, next, root, home);
   if ('problem' in start) {
     return { kind: 'not-ready', message: start.problem };
   }
-  const doctorTeam = { ...team, seats: [declared] };
+  const doctorTeam = { ...team, seats: [next] };
   for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team)) {
     if (blocksLaunch(finding)) {
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
@@ -474,14 +500,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const remainingAgents = agents.filter((agent) => agent.name !== name);
   const runningSeats = runningOf(remainingAgents, team, recordedSession);
-  const room = ceilingProblem(ceilings, runningSeats, declared);
+  const room = ceilingProblem(ceilings, runningSeats, next);
   if (room) return { kind: 'not-ready', message: room };
 
   const budgets = budgetsInForceOf(standing, team);
   const budgetDecision = (sources.seatBudget ?? seatBudget)(
     budgets,
     loadReadings(dir),
-    declared,
+    next,
     sources.now().getTime(),
     loadSpendReadings(dir),
   );
@@ -490,7 +516,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   }
 
   const liveRules = standing.kind !== 'verified' || owner;
-  const planSeat = buildUpSeat(standing, team, declared, start, root, home, liveRules);
+  const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules);
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -537,6 +563,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
     const who = callerText;
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
+    let handoverPath: string | undefined;
+    let stopObs: Extract<InspectedSeat, { kind: 'ok' }> = rechecked;
 
     if (rechecked.agent) {
       // Print the three pre-close facts before stopping or closing the seat's workspace. Under
@@ -547,38 +575,65 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
       noteIo.stdout(`${plainLine(name)}: input box: ${box}\n`);
       noteIo.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
-      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(declared.launch)}" in a new workspace without passing the old transcript\n`);
+      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(next.launch)}" in a new workspace without passing the old transcript\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
 
-      const stopped = await stopRunning({
-        io: noteIo,
-        dir,
-        session,
-        sources,
-        logCommand: input.command,
-        caller: who,
-        seat: {
+      // The handover is asked at the boundary, as the last step of the old conversation's task,
+      // and before the stop. The request starts a turn; the pane is read again before the stop,
+      // so what the stop acts on is the screen after that turn, never the one it was asked at.
+      if (input.handover !== undefined) {
+        handoverPath = await askForHandover({
+          session,
           name,
-          cli: declared.cli,
           pane: rechecked.agent.pane,
-          workspace: rechecked.agent.workspace,
-          state: rechecked.where === 'free' ? 'free' : rechecked.where,
-          ...(rechecked.exitInBox ? { exitInBox: true } : {}),
-          ...(rechecked.atExitQuestion ? { atExitQuestion: true } : {}),
-        },
-        keep: false,
-        // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
-        // says "close without typing" here, and the owner's own `--abandon` stays what it was.
-        abandon: (abandon || rechecked.unrecognised !== undefined) && rechecked.where !== 'free',
-        closeUnasked: abandon,
-        unasked: `team restart ${name} --abandon closes it`,
-      });
+          path: input.handover.path,
+          waitMs: input.handover.waitMs,
+          sources,
+          log: (said) => logLine(dir, input.command, who, said, sources.now()),
+        });
+        const fresh = sources.agents(session);
+        if (fresh === null) return { kind: 'herdr' };
+        const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources);
+        if (seen.kind === 'replaced') return { kind: 'replaced' };
+        if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
+        if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
+        stopObs = seen;
+      }
+
+      // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
+      // old record is cleared below either way.
+      let stopped = true;
+      if (stopObs.agent) {
+        stopped = await stopRunning({
+          io: noteIo,
+          dir,
+          session,
+          sources,
+          logCommand: input.command,
+          caller: who,
+          seat: {
+            name,
+            cli: declared.cli,
+            pane: stopObs.agent.pane,
+            workspace: stopObs.agent.workspace,
+            state: stopObs.where === 'free' ? 'free' : stopObs.where,
+            ...(stopObs.exitInBox ? { exitInBox: true } : {}),
+            ...(stopObs.atExitQuestion ? { atExitQuestion: true } : {}),
+          },
+          keep: false,
+          // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
+          // says "close without typing" here, and the owner's own `--abandon` stays what it was.
+          abandon: (abandon || stopObs.unrecognised !== undefined) && stopObs.where !== 'free',
+          closeUnasked: abandon,
+          unasked: `team ${input.command} ${name} --abandon closes it`,
+        });
+      }
       if (!stopped) {
         return { kind: 'busy', message: `${name} could not be stopped; left as it is` };
       }
-      if (sources.upLaunch.agentPanes(session)?.includes(rechecked.agent.pane)) {
+      if (stopObs.agent && sources.upLaunch.agentPanes(session)?.includes(stopObs.agent.pane)) {
         return { kind: 'busy', message: `${name} did not close its old pane; left as it is` };
       }
       let priorPane = freshRecorded?.pane;
@@ -600,6 +655,44 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason);
       if (ended) logLine(dir, input.command, who, ended.note, sources.now());
     }
+
+    // The team file's new declaration lands after the old pane is closed and before the hooks
+    // and the launch, which reads the file's own words. A write that fails is said and logged,
+    // and the launch goes on: the seat is already down.
+    if (input.declare) {
+      const wrote = input.declare();
+      if (!wrote.ok) {
+        const said = `the team file was not rewritten (${wrote.why}); the launch uses the queued recipe`;
+        if (json) notes.push(said);
+        else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
+        logLine(dir, input.command, who, said, sources.now());
+      }
+    }
+
+    // A handover the old conversation wrote is passed to the new one through the brief and the
+    // rules line it already reads first, whichever way this CLI carries its rules.
+    if (handoverPath !== undefined) {
+      const sentence = `Your predecessor wrote a handover for you at ${handoverPath}; read it before anything else.`;
+      planSeat.rules = `${planSeat.rules}\n\n${sentence}`;
+      if (planSeat.rulesFile) planSeat.rulesFile.line = `${planSeat.rulesFile.line} ${sentence}`;
+    }
+
+    // The recorded conversation, resumed on the new declaration. The profile decides whether the
+    // CLI can carry the id at all; the attempt is the log's fact, never a claim that it resumed
+    // losslessly.
+    let resumed: string | undefined;
+    if (input.resume !== undefined) {
+      const line = withResume(next.cli, planSeat.launch, input.resume);
+      if (line !== null) {
+        planSeat.launch = line;
+        resumed = input.resume;
+        logLine(dir, input.command, who, `${name}: resuming session ${input.resume} on the new declaration`, sources.now());
+      }
+    }
+
+    // What the launch declares: the recipe, with the resume line the plan carries where one was
+    // applied. The record and the registry read this seat, never the old declaration.
+    const launching: Seat = resumed === undefined ? next : { ...next, launch: planSeat.launch };
 
     const records = progressWriter(
       json
@@ -633,6 +726,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       seats: [planSeat.name],
       home,
       at: (sources.now?.() ?? new Date()).toISOString(),
+      ...(handoverPath === undefined ? {} : { handover: handoverPath }),
     });
     const briefLine = (said: string): void => {
       if (json) notes.push(said);
@@ -654,9 +748,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       home,
       command: input.command,
       endReason: input.endReason,
+      ...(resumed === undefined ? {} : { resume: resumed }),
+      ...(handoverPath === undefined ? {} : { handover: handoverPath }),
       ceilings,
       running: runningSeats,
-      seat: declared,
+      seat: launching,
       caller: who,
       owner,
       devMode: devModeMark(dev, devFolded),
@@ -682,10 +778,125 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       logLine(dir, input.command, who, `${name}: launch did not reach ready`, sources.now());
       return { kind: 'not-ready', message: `${name} did not reach a ready prompt` };
     }
-    return { kind: 'ready', oldPane, pane: afterwards.pane };
+    return {
+      kind: 'ready',
+      oldPane,
+      pane: afterwards.pane,
+      readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
+    };
   } finally {
     runLock.release();
   }
+}
+
+/** How often the handover wait looks for the file. The wait is bounded by the caller; this is
+ *  the poll inside it. */
+const HANDOVER_POLL_MS = 2_000;
+
+/** The line typed into the old conversation to ask for its handover. One line: it is typed into
+ *  an empty input box and sent with Enter. */
+export function handoverRequest(path: string): string {
+  return `Before this conversation ends, write a handover for your successor to ${path}: what you were doing, what is done, what is left, and anything the next conversation must not redo. Write the file as the last thing you do.`;
+}
+
+function fileHasText(path: string): boolean {
+  try {
+    return statSync(path).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Asks the old conversation for its handover and waits, bounded, for the file. A file a previous
+ * attempt already wrote is used without asking again. A request that cannot be typed is said and
+ * the launch goes on; one that is chosen but not answered before the wait is the caller's to log.
+ */
+async function askForHandover(input: {
+  session: string;
+  name: string;
+  pane: string;
+  path: string;
+  waitMs: number;
+  sources: RestartSources;
+  log(said: string): void;
+}): Promise<string | undefined> {
+  if (fileHasText(input.path)) {
+    input.log(`${input.name}: using the handover already at ${input.path}`);
+    return input.path;
+  }
+  try {
+    mkdirSync(dirname(input.path), { recursive: true });
+  } catch {
+    input.log(`${input.name}: the handover folder could not be made; the launch goes on`);
+    return undefined;
+  }
+  const typed = input.sources.upLaunch.typeText?.(input.session, input.pane, handoverRequest(input.path)) ?? false;
+  const entered = typed && (input.sources.upLaunch.pressEnter?.(input.session, input.pane) ?? false);
+  if (!entered) {
+    input.log(`${input.name}: the handover request was not typed; the launch goes on`);
+    return undefined;
+  }
+  const started = input.sources.now().getTime();
+  for (;;) {
+    if (fileHasText(input.path)) {
+      input.log(`${input.name}: the old conversation wrote the handover at ${input.path}`);
+      return input.path;
+    }
+    if (input.sources.now().getTime() - started >= input.waitMs) {
+      input.log(`${input.name}: no handover was written before the wait ended; the launch goes on`);
+      return undefined;
+    }
+    await input.sources.upLaunch.sleep(HANDOVER_POLL_MS);
+  }
+}
+
+/** The words a model id is compared by: lowercased, split where a CLI or a file may spell the
+ *  same id with a hyphen, a dot or a space. */
+function modelIdWords(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== '');
+}
+
+/** The model id a launch line names with `--model`, where it names one. */
+function launchModelId(launch: string): string | null {
+  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(launch);
+  return match?.[1] ?? null;
+}
+
+/** The id on the launch wrapper's banner line, `<id> · API Usage Billing`, where the pane shows
+ *  one. This is the reading for a CLI the profile cannot show a model for. */
+export function bannerModel(screen: string | undefined): string | null {
+  if (screen === undefined) return null;
+  for (const line of stripSgr(screen).split('\n')) {
+    const match = /([A-Za-z0-9][A-Za-z0-9._-]*)\s*·\s*API Usage Billing/.exec(line);
+    if (match) return match[1] ?? null;
+  }
+  return null;
+}
+
+/**
+ * What the new pane says the conversation is, compared with the declaration it was launched
+ * from. The profile's own model reading comes first (`modelDiffers`); a model it cannot show is
+ * read off the wrapper's banner instead, compared by normalized words with the id the recipe's
+ * launch line carries — the id a donor seat running the same line shows. Neither reading is
+ * `unread`, and `unread` never claims a match.
+ */
+export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
+  const shown = seatModel(seat, screen);
+  if (shown !== null) {
+    const want = `${seat.model} ${seat.version}`;
+    const got = `${shown.model} ${shown.version}`;
+    return modelDiffers(shown, seat) ? { kind: 'mismatch', expected: want, shown: got } : { kind: 'match', model: got };
+  }
+  const banner = bannerModel(screen);
+  if (banner !== null) {
+    const expected = launchModelId(seat.launch) ?? seat.model;
+    const wanted = modelIdWords(expected);
+    const got = modelIdWords(banner);
+    const same = wanted.length === got.length && wanted.every((word) => got.includes(word));
+    return same ? { kind: 'match', model: banner } : { kind: 'mismatch', expected, shown: banner };
+  }
+  return { kind: 'unread' };
 }
 
 type InspectedSeat =
@@ -872,6 +1083,10 @@ function hostOf(input: {
    *  it closes on the way ends with its reason. */
   command: PerformCommand;
   endReason: 'restart' | 'swap';
+  /** The recorded conversation the launch resumed, when it did. */
+  resume?: string;
+  /** The handover file the new conversation was told to read first. */
+  handover?: string;
   ceilings: Ceilings;
   running: Running[];
   seat: Seat;
@@ -1040,6 +1255,9 @@ function hostOf(input: {
     // ended as `restart` before the close; this one names it `previous`.
     sessionStarted(name, started) {
       if (name !== seat.name) return;
+      // A resumed launch names no `--session-id` of its own: the id it carries is the recorded
+      // conversation's, and the start record is that conversation's session.
+      const sessionId = started.cli_session ?? input.resume;
       const began = beginSession({
         home: input.home,
         root: input.root,
@@ -1048,7 +1266,8 @@ function hostOf(input: {
         seat,
         pane: started.pane,
         ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
-        ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+        ...(sessionId === undefined ? {} : { cli_session: sessionId }),
+        ...(input.handover === undefined ? {} : { handover: input.handover }),
         now: input.now(),
       });
       if ('note' in began) logLine(dir, input.command, input.caller, began.note, input.now());

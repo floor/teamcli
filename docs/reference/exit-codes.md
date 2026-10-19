@@ -505,11 +505,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.forced` | `swap` | 0 | the owner forced the queued swap to run at once | `team swap now builder-1` |
 | `swap.listed` | `swap` | 0 | the queue or the entity's rule listing was shown | `team swap` |
 | `swap.queued` | `swap` | 0 | a model swap was queued for the seat's boundary | `team swap queue builder-1` |
+| `swap.ran` | `swap` | 0 | the queued swaps due now were carried out, or none was due | `team swap --run` |
 | `swap.caller` | `swap` | 1 | not the owner, the orchestrator or the operator, or not a seat of the team for the view | `team swap queue builder-1` |
 | `swap.detached` | `swap` | 1 | a run with no terminal | `team swap now builder-1` |
+| `swap.herdr` | `swap` | 1 | herdr cannot be read, so no swap can be run | `team swap --run` |
 | `swap.io` | `swap` | 1 | the state can't be read or written | `team swap queue builder-1` |
 | `swap.not-queued` | `swap` | 1 | no swap waits for the seat | `team swap cancel builder-1` |
 | `swap.rule` | `swap` | 1 | the entity's model rule can't be read or none is declared | `team swap queue builder-1` |
+| `swap.run-failed` | `swap` | 1 | a due swap did not run: a preflight refusal, a read-back mismatch, or the seat is signed off or no longer declared | `team swap --run` |
 | `swap.seat` | `swap` | 1 | no such seat in the team | `team swap queue nobody` |
 | `swap.target` | `swap` | 1 | no seat of the entity the team may copy from runs the requested model, or no recipe is available | `team swap queue builder-1 --to claude-code:nothing` |
 | `swap.unchanged` | `swap` | 1 | the seat already declares a model the rule allows | `team swap queue builder-1` |

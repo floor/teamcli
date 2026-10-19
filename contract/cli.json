@@ -2562,6 +2562,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -2707,7 +2713,8 @@
         "team swap --rule [--file <path>] [--json]",
         "team swap queue <seat> [--to <target>] [--file <path>] [--json]",
         "team swap now <seat> [--file <path>] [--json]",
-        "team swap cancel <seat> [--file <path>] [--json]"
+        "team swap cancel <seat> [--file <path>] [--json]",
+        "team swap --run [--file <path>] [--json]"
       ]
     },
     {

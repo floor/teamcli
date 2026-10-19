@@ -265,6 +265,18 @@ export function withLaunchSession(cli: string, command: string): { command: stri
   return { command: `${command} --session-id ${sessionId}`, sessionId };
 }
 
+/**
+ * The command a pane runs to resume a recorded conversation, where the CLI keeps sessions: the
+ * id is appended after every other argument, as `withLaunchSession` appends a new one. The
+ * measured line is Claude Code's (`-r, --resume [value] Resume a conversation - provide a
+ * session ID`, `claude --help` 2.1.303, quoted on `supportsSessionResume`). Null when the CLI
+ * cannot resume: the caller hands over instead.
+ */
+export function withResume(cli: string, command: string, sessionId: string): string | null {
+  if (!supportsSessionResume(cli)) return null;
+  return `${command} --resume ${sessionId}`;
+}
+
 /** True when the CLI accepts an effort override flag on its launch line. */
 export function supportsEffortLaunch(cli: string): boolean {
   return cli === 'claude-code' || cli === 'antigravity' || cli === 'grok' || cli === 'codex' || cli === 'muse';

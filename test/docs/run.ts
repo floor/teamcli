@@ -394,8 +394,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runStatus(rest, io, world.statusSources());
     case 'swap':
       // The queue's clock is the page's: a queued swap's `queuedAt` and `deadline` are the
-      // page's instant and the wait that follows it.
-      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+      // page's instant and the wait that follows it. A run reads the world's own herdr, as the
+      // restart example does, never the machine's.
+      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now), sources: world.restartSources() });
     case 'list':
       return runList(rest, io, world.listSources());
     case 'up':

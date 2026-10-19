@@ -27,7 +27,7 @@ import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
-import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
+import { generalBriefBody, generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import {
@@ -722,8 +722,14 @@ function generalBriefDifferences(
     }
     // Without a home there is no message key to verify with; the entry stands as before.
     if (home === undefined) continue;
-    const id = generalBriefId();
-    const expected = generalBriefRecord({ to: seat.name, root, session, at: recorded.at });
+    const id = generalBriefId(recorded.handover === undefined ? undefined : generalBriefBody(recorded.handover));
+    const expected = generalBriefRecord({
+      to: seat.name,
+      root,
+      session,
+      at: recorded.at,
+      ...(recorded.handover === undefined ? {} : { handover: recorded.handover }),
+    });
     const path = join(root, '.agents', 'send-drops', session, seat.name, id);
     if (recorded.id === id && recordHolds(path, expected, home)) continue;
     out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });

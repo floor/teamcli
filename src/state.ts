@@ -29,10 +29,12 @@ export type RetainedSeat = {
   last_active?: string;
 };
 
-/** One seat's general-brief delivery: the record's id and when the seat received it. */
+/** One seat's general-brief delivery: the record's id and when the seat received it. A brief
+ *  that carried a handover file also records its path, so `team check` rebuilds that record. */
 export type BriefRecord = {
   id: string;
   at: string;
+  handover?: string;
 };
 
 export type SeatState = {
@@ -158,6 +160,12 @@ export type QueuedSwap = {
   waitFor: string;
   /** The rule value in force when a rule-driven swap was queued. */
   rule?: string;
+  /**
+   * The handover file the old conversation is asked to write, when the launch will not resume
+   * it: named when the swap is queued, so a run retried after a busy turn offers the same path
+   * and a file already written is used without asking again.
+   */
+  handover?: string;
   forced?: { by: string; at: string };
 };
 
@@ -403,6 +411,7 @@ function isQueuedSwap(value: unknown): value is QueuedSwap {
   if (typeof swap.deadline !== 'string' || Number.isNaN(Date.parse(swap.deadline))) return false;
   if (typeof swap.waitFor !== 'string' || swap.waitFor === '') return false;
   if (swap.rule !== undefined && typeof swap.rule !== 'string') return false;
+  if (swap.handover !== undefined && (typeof swap.handover !== 'string' || swap.handover === '')) return false;
   if (swap.forced !== undefined) {
     if (!swap.forced || typeof swap.forced.by !== 'string' || swap.forced.by === '') return false;
     if (typeof swap.forced.at !== 'string' || Number.isNaN(Date.parse(swap.forced.at))) return false;
@@ -484,6 +493,10 @@ export function readState(dir: string): State {
           Number.isNaN(Date.parse(brief.at))
         ) {
           delete session.briefs[seat];
+          continue;
+        }
+        if (brief.handover !== undefined && (typeof brief.handover !== 'string' || brief.handover === '')) {
+          delete brief.handover;
         }
       }
     } else if (session.briefs !== undefined) {

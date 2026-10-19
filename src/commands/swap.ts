@@ -1,5 +1,4 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import {
   anotherPaneRefusal,
@@ -21,14 +20,23 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
-import { loadAndResolvePolicyChain, logExpiredPoliciesOnce } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState, type QueuedSwap } from '../state.ts';
-import { cancelSwap, enqueueSwap, forceSwap, queuedSwap, queuedSwaps, swapLine, type QueueRequest } from '../swap/queue.ts';
+import { WAIT_FOR, waitSecondsFor } from '../swap/auto.ts';
+import {
+  cancelSwap,
+  enqueueSwap,
+  forceSwap,
+  queuedSwap,
+  queuedSwaps,
+  swapLine,
+  swapModelOf,
+  type QueueRequest,
+} from '../swap/queue.ts';
 import { findRecipe, listModelRuleBreaches, type ModelRecipe, type RuleDonor, type RuleListing } from '../swap/rule.ts';
-import { resolveProjectIdForTeam } from './policy.ts';
+import { runDueSwaps, runOneSwap, type SwapRunOptions, type SwapRunResult } from '../swap/run.ts';
+import { realSources, type RestartSources } from './restart.ts';
 
 // `team swap` is the command family for the entity's model rule and the queued swap
 // (Policies rules 10 and 11, OD-20261018-20, OD-20261019-01, -02 and -03). The rule is read
@@ -43,12 +51,13 @@ export const USAGE = `Usage: team swap [--file <path>] [--json]
        team swap queue <seat> [--to <target>] [--file <path>] [--json]
        team swap now <seat> [--file <path>] [--json]
        team swap cancel <seat> [--file <path>] [--json]
+       team swap --run [--file <path>] [--json]
 
 A <target> is <cli>:<model>, and the recipe is copied from a seat of the entity that already runs it.
-Exits 0 when the queue or the listing is shown, a swap is queued, forced or cancelled, 1 when refused or the entity rule cannot be read, 2 when the invocation or team file is invalid.
+Exits 0 when the queue or the listing is shown, or a swap is queued, forced, run or cancelled, 1 when refused, a run failed or the entity rule cannot be read, 2 when the invocation or team file is invalid.
 `;
 
-export type SwapCommandOptions = { home?: string; now?: Date | (() => Date) };
+export type SwapCommandOptions = { home?: string; now?: Date | (() => Date); sources?: RestartSources };
 
 function resolveNow(now: Date | (() => Date) | undefined): Date {
   if (typeof now === 'function') return now();
@@ -63,20 +72,48 @@ type Outcome =
   | 'listed'
   | 'queued'
   | 'forced'
+  | 'ran'
   | 'cancelled'
   | 'invocation'
   | 'file'
   | 'caller'
   | 'detached'
+  | 'herdr'
   | 'io'
   | 'not-queued'
   | 'rule'
+  | 'run-failed'
   | 'seat'
   | 'target'
   | 'unchanged';
 
+/** What `execute` hands the async half: `team swap --run` drains the queue, and `team swap now`
+ *  forces one record and runs it at once. */
+type RunPlan = {
+  plan: true;
+  dir: string;
+  root: string;
+  home: string;
+  /** The team file's path: the run writes the new declaration there and launches from it. */
+  path: string;
+  team: TeamFile;
+  session: string;
+  io: Io;
+  rawIo: Io;
+  json: boolean;
+  base: Base;
+  /** The words the log carries as the caller. */
+  by: string;
+  owner: boolean;
+  now: Date;
+  sources: RestartSources;
+  /** `team swap now`: the seat it forced and the record it stands on; absent for `--run`. */
+  forcedSeat?: { seat: Seat; record: QueuedSwap; donor: RuleDonor | null };
+};
+
 export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOptions = {}): Promise<number> {
-  const outcome = execute(argv, rawIo, options);
+  const executed = execute(argv, rawIo, options);
+  const outcome = typeof executed === 'string' ? executed : await performRun(executed);
   if (outcome === 'invocation') {
     return 2; // exit: swap.invocation
   }
@@ -89,6 +126,9 @@ export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOpt
   if (outcome === 'detached') {
     return 1; // exit: swap.detached
   }
+  if (outcome === 'herdr') {
+    return 1; // exit: swap.herdr
+  }
   if (outcome === 'io') {
     return 1; // exit: swap.io
   }
@@ -97,6 +137,9 @@ export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOpt
   }
   if (outcome === 'rule') {
     return 1; // exit: swap.rule
+  }
+  if (outcome === 'run-failed') {
+    return 1; // exit: swap.run-failed
   }
   if (outcome === 'seat') {
     return 1; // exit: swap.seat
@@ -113,26 +156,33 @@ export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOpt
   if (outcome === 'queued') {
     return 0; // exit: swap.queued
   }
+  if (outcome === 'ran') {
+    return 0; // exit: swap.ran
+  }
   if (outcome === 'forced') {
     return 0; // exit: swap.forced
   }
   return 0; // exit: swap.cancelled
 }
 
-type Sub = 'view' | 'rule' | 'queue' | 'now' | 'cancel';
+type Sub = 'view' | 'rule' | 'queue' | 'now' | 'cancel' | 'run';
 
-function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcome {
+function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcome | RunPlan {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['to', 'file'], ['rule', 'json']);
+  const args = readArgs(argv, ['to', 'file'], ['rule', 'json', 'run']);
   const home = options.home ?? homedir();
   const now = resolveNow(options.now);
 
   if (args.error !== undefined) return invocation(rawIo, io, json, plainText(args.error));
   const name = args.rest[0];
   const ruleView = args.flags.has('rule');
+  const runFlag = args.flags.has('run');
   let sub: Sub;
-  if (name === undefined) sub = ruleView ? 'rule' : 'view';
+  if (runFlag && (name !== undefined || ruleView)) {
+    return invocation(rawIo, io, json, '--run takes no subcommand and no seat');
+  } else if (runFlag) sub = 'run';
+  else if (name === undefined) sub = ruleView ? 'rule' : 'view';
   else if (ruleView) return invocation(rawIo, io, json, '--rule takes no subcommand');
   else if (name === 'queue' || name === 'now' || name === 'cancel') sub = name;
   else {
@@ -140,7 +190,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
       rawIo,
       io,
       json,
-      `unexpected "${plainLine(name)}"; expected "queue", "now", "cancel", "--rule", or no subcommand`,
+      `unexpected "${plainLine(name)}"; expected "queue", "now", "cancel", "--rule", "--run", or no subcommand`,
     );
   }
   if (args.values.to !== undefined && sub !== 'queue') {
@@ -214,7 +264,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   const notice = current.notice ? plainText(current.notice) : undefined;
   if (notice !== undefined && !json) io.stdout(`${notice}\n`);
 
-  if (sub === 'queue' || sub === 'cancel') {
+  if (sub === 'queue' || sub === 'cancel' || sub === 'run') {
     const judged = judgeCallerIn(rawIo, dir, team);
     const verdict = mayChangeTeamVerdict(judged.caller, team, standingOf(dir, judged.session, judged.caller));
     if (verdict.kind !== 'ok') {
@@ -229,6 +279,36 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   const base: Base = { project: team.project, session: team.session, entity: team.entity, notice: notice ?? null };
   if (sub === 'view') return view(rawIo, io, json, team, dir, now, base);
   if (sub === 'rule') return ruleListing(rawIo, io, json, team, root, home, base);
+
+  if (sub === 'run' || sub === 'now') {
+    // A run writes the file's new declaration and launches from it: the saved copy an invalid
+    // file fell back to is not where either may happen.
+    if (current.path === undefined || notice !== undefined) {
+      const msg = 'team.yaml is invalid, so a swap cannot write the new declaration or launch from it';
+      if (json) writeJsonError(rawIo, 'swap.file', msg, null);
+      else io.stderr(`team swap: ${msg}\n`);
+      return 'file';
+    }
+    if (sub === 'run') {
+      return {
+        plan: true,
+        dir,
+        root,
+        home,
+        path: current.path,
+        team,
+        session: team.session,
+        io,
+        rawIo,
+        json,
+        base,
+        by: describeCaller(walked),
+        owner,
+        now,
+        sources: options.sources ?? realSources,
+      };
+    }
+  }
 
   const seat = team.seats.find((candidate) => candidate.name === seatName) ?? null;
   if (!seat) {
@@ -270,7 +350,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   }
 
   // `queue` and `now`: the wait in force, the rule, and the recipe.
-  const wait = waitSecondsOf(home, root, team, seat, now);
+  const wait = waitSecondsFor(home, root, team, seat, now);
   if ('why' in wait) {
     refuse(rawIo, io, json, 'swap.rule', plainText(wait.why), null, notice, null);
     return 'rule';
@@ -293,9 +373,28 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     return 'rule';
   }
 
+  const plan = {
+    plan: true as const,
+    dir,
+    root,
+    home,
+    // The check above refused `run` and `now` on an invalid file; a `queue` never hands this on.
+    path: current.path as string,
+    team,
+    session: team.session,
+    io,
+    rawIo,
+    json,
+    base,
+    by: describeCaller(walked),
+    owner,
+    now,
+    sources: options.sources ?? realSources,
+  };
+
   if (sub === 'now') {
     const held = queuedSwap(readState(dir), seat.name);
-    if (held) return forceExisting(rawIo, io, json, dir, seat, walked, now, held, base, null);
+    if (held) return forcedPlan(plan, seat, held, null);
   }
 
   const choice = choose(sub, listing, root, seat, args.values.to);
@@ -309,7 +408,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   }
   const request: QueueRequest = {
     seat: seat.name,
-    from: fromOf(seat),
+    from: swapModelOf(seat),
     to: {
       cli: choice.recipe.cli,
       vendor: choice.recipe.vendor,
@@ -335,7 +434,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     return 'io';
   }
   if (sub === 'now') {
-    return forceExisting(rawIo, io, json, dir, seat, walked, now, queued, base, choice.donor);
+    return forcedPlan(plan, seat, queued, choice.donor);
   }
   logLine(
     dir,
@@ -361,48 +460,150 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   return 'queued';
 }
 
-/** `team swap now`: force the record the queue already holds (or the one just queued). */
-function forceExisting(
-  rawIo: Io,
-  io: Io,
-  json: boolean,
-  dir: string,
+/** `team swap now`: force the record the queue already holds (or the one just queued) and hand
+ *  the run to the async half. The force is written first, so a run that cannot start now leaves
+ *  the record standing and the watch still carries it out. */
+function forcedPlan(
+  origin: Omit<RunPlan, 'forcedSeat'>,
   seat: Seat,
-  caller: Caller,
-  now: Date,
   held: QueuedSwap,
-  base: Base,
   donor: RuleDonor | null,
-): Outcome {
+): Outcome | RunPlan {
   let record: QueuedSwap;
   try {
-    record = forceSwap(dir, seat.name, describeCaller(caller), now) ?? held;
+    record = forceSwap(origin.dir, seat.name, origin.by, origin.now) ?? held;
   } catch (error) {
-    refuse(rawIo, io, json, 'swap.io', `the state cannot be written: ${(error as Error).message}`, null, base.notice ?? undefined, null);
+    refuse(origin.rawIo, origin.io, origin.json, 'swap.io', `the state cannot be written: ${(error as Error).message}`, null, origin.base.notice ?? undefined, null);
     return 'io';
   }
   logLine(
-    dir,
+    origin.dir,
     'swap',
-    describeCaller(caller),
+    origin.by,
     `${seat.name}: forced now, ${record.from.cli} ${record.from.model} -> ${record.to.cli} ${record.to.model} (${record.to.vendor} ${record.to.model} ${record.to.version})`,
-    now,
+    origin.now,
   );
+  if (!origin.json) origin.io.stdout(`swap forced: ${swapLine(seat.name, record, origin.now)}\n`);
+  return { ...origin, forcedSeat: { seat, record, donor } };
+}
+
+/**
+ * The async half: `team swap --run` drains the queue the way the watch would — each record at
+ * its boundary, forced ones at once — and `team swap now` runs the one record it forced. A
+ * swap that cannot start (a busy turn, a replaced pane) stays queued; a preflight refusal, a
+ * signed-off seat or a read-back mismatch is a failure and the exit says so.
+ */
+async function performRun(origin: RunPlan): Promise<Outcome> {
+  const { dir, root, home, path, team, session, io, rawIo, json, base, by, owner, now, sources, forcedSeat } = origin;
+  if (sources.agents(session) === null) {
+    const what = forcedSeat ? 'the forced swap cannot run' : 'no swap can be run';
+    refuse(rawIo, io, json, 'swap.herdr', `herdr cannot be read, so ${what} now`, null, base.notice ?? undefined, null);
+    return 'herdr';
+  }
+  const notes: string[] = [];
+  const options: SwapRunOptions = {
+    dir,
+    root,
+    home,
+    path,
+    team,
+    session,
+    io,
+    json,
+    notes,
+    sources,
+    by,
+    owner,
+    now: () => now,
+  };
+  let results: SwapRunResult[];
+  try {
+    results = forcedSeat
+      ? [await runOneSwap(options, forcedSeat.seat.name, forcedSeat.record)]
+      : await runDueSwaps(options);
+  } catch (error) {
+    refuse(rawIo, io, json, 'swap.io', `the run could not be carried out: ${(error as Error).message}`, null, base.notice ?? undefined, null);
+    return 'io';
+  }
+
+  let failed = false;
+  for (const result of results) {
+    if (result.kind === 'mismatch' || result.kind === 'failed') failed = true;
+    if (json) continue;
+    switch (result.kind) {
+      case 'ready':
+        io.stdout(
+          `swapped: ${result.seat} in ${result.pane} (read-back ${result.readBack.kind === 'match' ? result.readBack.model : 'unread'})\n`,
+        );
+        break;
+      case 'mismatch':
+        io.stderr(
+          `team swap: ${result.seat}: read-back: mismatch — the file declares ${result.readBack.expected}, the screen shows ${result.readBack.shown}; the swap failed\n`,
+        );
+        break;
+      case 'failed':
+        io.stderr(`team swap: ${result.seat}: ${result.why}\n`);
+        break;
+      case 'retry':
+        io.stdout(`${result.seat}: stays queued (${result.why})\n`);
+        break;
+      case 'wait':
+        io.stdout(`${result.seat}: stays queued (not due yet)\n`);
+        break;
+    }
+  }
+
   if (json) {
+    const swapped = results.filter((result) => result.kind === 'ready').length;
     writeJson(rawIo, 'team.swap', {
       ...base,
       format: 1,
       dry_run: false,
-      status: 'forced',
-      action_summary: `swap: ${seat.name} forced`,
-      seat: seat.name,
-      swap: record,
-      ...(donor ? { donor } : {}),
+      status: failed ? 'run-failed' : forcedSeat ? 'forced' : 'ran',
+      action_summary: `swap: ${forcedSeat ? `${forcedSeat.seat.name} forced` : 'run'}, ${swapped} swapped, ${results.length - swapped} left queued or failed`,
+      ...(forcedSeat
+        ? {
+            seat: forcedSeat.seat.name,
+            swap: forcedSeat.record,
+            ...(forcedSeat.donor ? { donor: forcedSeat.donor } : {}),
+          }
+        : {}),
+      results: results.map(resultDoc),
     });
-  } else {
-    io.stdout(`swap forced: ${swapLine(seat.name, record, now)}\n`);
   }
-  return 'forced';
+  if (failed) return 'run-failed';
+  return forcedSeat ? 'forced' : 'ran';
+}
+
+/** One run result as the `--json` document carries it. */
+function resultDoc(result: SwapRunResult): Record<string, unknown> {
+  switch (result.kind) {
+    case 'ready':
+      return {
+        seat: result.seat,
+        result: 'swapped',
+        old_pane: result.oldPane,
+        pane: result.pane,
+        read_back: result.readBack.kind === 'match' ? result.readBack.model : null,
+        ...(result.resumed === undefined ? {} : { resumed: result.resumed }),
+        ...(result.handover === undefined ? {} : { handover: result.handover }),
+      };
+    case 'mismatch':
+      return {
+        seat: result.seat,
+        result: 'mismatch',
+        old_pane: result.oldPane,
+        pane: result.pane,
+        read_back: null,
+        why: `the file declares ${result.readBack.expected}, the screen shows ${result.readBack.shown}`,
+      };
+    case 'failed':
+      return { seat: result.seat, result: 'failed', why: result.why };
+    case 'retry':
+      return { seat: result.seat, result: 'stays', why: result.why };
+    case 'wait':
+      return { seat: result.seat, result: 'stays', why: 'not due yet' };
+  }
 }
 
 /** The recipe a `queue` or `now` will take, or the refusal it prints. */
@@ -436,7 +637,7 @@ function choose(sub: Sub, listing: RuleListing, root: string, seat: Seat, to: st
 function verdictRefusal(verdict: CallerVerdict, caller: Caller): string {
   if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
   if (verdict.kind === 'another-pane') return anotherPaneRefusal(verdict.name, verdict.recordedPane);
-  return `only the owner, the orchestrator or the operator queues or cancels a swap; this call is ${describeCaller(caller)}`;
+  return `only the owner, the orchestrator or the operator queues, runs or cancels a swap; this call is ${describeCaller(caller)}`;
 }
 
 function repairOf(verdict: CallerVerdict): string | null {
@@ -536,43 +737,9 @@ function ruleListing(rawIo: Io, io: Io, json: boolean, team: TeamFile, root: str
   return 'listed';
 }
 
-function fromOf(seat: Seat) {
-  return { cli: seat.cli, vendor: seat.vendor, model: seat.model, version: seat.version, display: seat.display };
-}
-
 /** `--to <cli>:<model>`, or the sentence saying how it is malformed. */
 function parseTarget(text: string): { cli: string; model: string } | string {
   const colon = text.indexOf(':');
   if (colon <= 0 || colon === text.length - 1) return `--to takes <cli>:<model>, not "${text}"`;
   return { cli: text.slice(0, colon), model: text.slice(colon + 1) };
 }
-
-/** The wait in force for this seat: the resolved `swap-wait-seconds` chain, in seconds. */
-function waitSecondsOf(
-  home: string,
-  root: string,
-  team: TeamFile,
-  seat: Seat,
-  now: Date,
-): { seconds: number } | { why: string } {
-  const agent = findAgent(home, { team: teamIdOf(root), seat: seat.name });
-  const resolved = loadAndResolvePolicyChain(
-    {
-      home,
-      entity: team.entity,
-      projectId: resolveProjectIdForTeam(home, root, team),
-      teamRoot: root,
-      team,
-      agentId: agent?.id ?? null,
-      seat,
-    },
-    { now, upToLevel: 'seat' },
-  );
-  logExpiredPoliciesOnce(join(root, '.agents'), resolved.expired, now);
-  if (!resolved.ok) return { why: resolved.refusals.map((refusal) => refusal.message).join('; ') };
-  const value = resolved.policies['swap-wait-seconds']?.value;
-  return typeof value === 'number' ? { seconds: value } : { why: 'swap-wait-seconds did not resolve to a number' };
-}
-
-/** What `status` and the queue print as the wait: the boundary the watch observes. */
-const WAIT_FOR = "the seat's boundary (quiet, no turn, no dialog, no lease, no work drop)";

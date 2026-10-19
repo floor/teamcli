@@ -729,6 +729,7 @@ const QUEUED_SWAP_SCHEMA_FRAGMENT: JsonSchema = {
     deadline: { type: 'string', minLength: 1 },
     waitFor: { type: 'string', minLength: 1 },
     rule: { type: 'string' },
+    handover: { type: 'string', minLength: 1 },
     forced: {
       type: 'object',
       additionalProperties: false,
@@ -746,7 +747,7 @@ export const SWAP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.swap',
   fileName: 'swap.schema.json',
   title: 'team swap --json output',
-  statuses: ['listed', 'rule', 'queued', 'forced', 'cancelled'],
+  statuses: ['listed', 'rule', 'queued', 'forced', 'ran', 'run-failed', 'cancelled'],
   required: ['project', 'session'],
   properties: {
     entity: { type: ['string', 'null'] },
@@ -845,6 +846,24 @@ export const SWAP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
       },
     },
     swap: QUEUED_SWAP_SCHEMA_FRAGMENT,
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seat', 'result'],
+        properties: {
+          seat: { type: 'string', minLength: 1 },
+          result: { type: 'string', enum: ['swapped', 'mismatch', 'failed', 'stays'] },
+          old_pane: { type: 'string', minLength: 1 },
+          pane: { type: 'string', minLength: 1 },
+          read_back: { type: ['string', 'null'] },
+          why: { type: 'string', minLength: 1 },
+          resumed: { type: 'string', minLength: 1 },
+          handover: { type: 'string', minLength: 1 },
+        },
+      },
+    },
     donor: {
       type: 'object',
       additionalProperties: false,

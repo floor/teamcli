@@ -3495,6 +3495,13 @@
       "trigger": "team swap queue builder-1"
     },
     {
+      "code": 0,
+      "command": "swap",
+      "id": "swap.ran",
+      "meaning": "the queued swaps due now were carried out, or none was due",
+      "trigger": "team swap --run"
+    },
+    {
       "code": 1,
       "command": "swap",
       "id": "swap.caller",
@@ -3507,6 +3514,13 @@
       "id": "swap.detached",
       "meaning": "a run with no terminal",
       "trigger": "team swap now builder-1"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.herdr",
+      "meaning": "herdr cannot be read, so no swap can be run",
+      "trigger": "team swap --run"
     },
     {
       "code": 1,
@@ -3528,6 +3542,13 @@
       "id": "swap.rule",
       "meaning": "the entity's model rule can't be read or none is declared",
       "trigger": "team swap queue builder-1"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.run-failed",
+      "meaning": "a due swap did not run: a preflight refusal, a read-back mismatch, or the seat is signed off or no longer declared",
+      "trigger": "team swap --run"
     },
     {
       "code": 1,

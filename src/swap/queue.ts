@@ -4,6 +4,8 @@
 // `down` and `up`, and the same record serves any change that needs a restart (`reason` says
 // which command asked).
 
+import { join } from 'node:path';
+import { supportsSessionResume } from '../profiles/profile.ts';
 import { readState, updateState, type QueuedSwap, type State, type SwapModel } from '../state.ts';
 
 export type QueueRequest = {
@@ -20,6 +22,12 @@ export type QueueRequest = {
   now: Date;
 };
 
+/** The model fields a seat declares now, as the record's `from`: the file's words at queue
+ *  time, which the run compares the new screen's read-back with. */
+export function swapModelOf(seat: { cli: string; vendor: string; model: string; version: string; display: string }): SwapModel {
+  return { cli: seat.cli, vendor: seat.vendor, model: seat.model, version: seat.version, display: seat.display };
+}
+
 /** The queue in seat order, so two readers print the same list. */
 export function queuedSwaps(state: State, teamSeats?: ReadonlySet<string>): Array<[string, QueuedSwap]> {
   return Object.entries(state.swaps ?? {})
@@ -31,8 +39,25 @@ export function queuedSwap(state: State, seat: string): QueuedSwap | null {
   return state.swaps?.[seat] ?? null;
 }
 
+/**
+ * Whether the swap's launch must be given a handover instead of the recorded conversation:
+ * the CLI changes, or the target CLI keeps no session to resume. The decision is the profile's
+ * fact plus the two declarations, so the record and the run read one rule.
+ */
+export function needsHandover(from: SwapModel, to: QueuedSwap['to']): boolean {
+  return from.cli !== to.cli || !supportsSessionResume(to.cli);
+}
+
+/** The path a swap's handover is written at: the project's `handovers` folder, named for the
+ *  seat and the queueing instant. A queued record keeps the path, so a run retried after a busy
+ *  turn looks for the same file and a retry never types over one already written. */
+export function handoverPath(dir: string, seat: string, now: Date): string {
+  return join(dir, 'handovers', `${seat}-${now.toISOString().replace(/[:.]/g, '-')}.md`);
+}
+
 /** Queues (or replaces) one seat's swap and returns the record written. The deadline is the
- *  request's own wait from `now`; queueing again restarts the wait and the record. */
+ *  request's own wait from `now`; queueing again restarts the wait and the record. A swap whose
+ *  CLI changes — or whose target CLI cannot resume — names its handover now, in the record. */
 export function enqueueSwap(dir: string, request: QueueRequest): QueuedSwap {
   const queuedAt = request.now.toISOString();
   const deadline = new Date(request.now.getTime() + request.waitSeconds * 1000).toISOString();
@@ -44,6 +69,7 @@ export function enqueueSwap(dir: string, request: QueueRequest): QueuedSwap {
     deadline,
     waitFor: request.waitFor,
     ...(request.rule !== undefined ? { rule: request.rule } : {}),
+    ...(needsHandover(request.from, request.to) ? { handover: handoverPath(dir, request.seat, request.now) } : {}),
   };
   return updateState(dir, (state) => {
     state.swaps = { ...(state.swaps ?? {}), [request.seat]: record };
@@ -69,6 +95,35 @@ export function forceSwap(dir: string, seat: string, by: string, now: Date): Que
     const held = state.swaps?.[seat];
     if (!held) return null;
     held.forced = { by, at: now.toISOString() };
+    return held;
+  });
+}
+
+/**
+ * Takes one seat's swap out of the queue once its run is done. Only the record the run read is
+ * removed (`queuedAt` names it): a swap queued again while the run was stopping and launching
+ * the seat is a new request and stays. Null when the queue holds no such record.
+ */
+export function finishSwap(dir: string, seat: string, queuedAt: string): QueuedSwap | null {
+  return updateState(dir, (state) => {
+    const held = state.swaps?.[seat];
+    if (!held || held.queuedAt !== queuedAt) return null;
+    delete state.swaps?.[seat];
+    if (state.swaps && Object.keys(state.swaps).length === 0) delete state.swaps;
+    return held;
+  });
+}
+
+/**
+ * Records the handover path a run named for a swap queued without one (the CLI was the same,
+ * so the record expected a resume, and the registry held no session id). Pinned to `queuedAt`
+ * for the same reason `finishSwap` is: a record queued again is not this run's.
+ */
+export function noteHandover(dir: string, seat: string, queuedAt: string, path: string): QueuedSwap | null {
+  return updateState(dir, (state) => {
+    const held = state.swaps?.[seat];
+    if (!held || held.queuedAt !== queuedAt) return null;
+    held.handover = path;
     return held;
   });
 }
