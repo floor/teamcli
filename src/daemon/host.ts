@@ -33,6 +33,10 @@ import { probeDaemonHealth } from './health.ts';
 import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
+import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './routes.ts';
+import { createHostedWatch, type HostedWatch } from './watch.ts';
+import { hostedWatchRun } from './watch-run.ts';
+import type { HostedLoop } from '../watch/hosted.ts';
 import {
   ensureMachineDir,
   writeDaemonState,
@@ -47,8 +51,20 @@ export type MachineRootStatus = DaemonRootState;
 export type MachineDaemon = {
   socketPath: string;
   roots: MachineRootStatus[];
+  /** The routing table a later machine-socket handler resolves a scope against. */
+  routes: readonly HostedRoute[];
   health(): DaemonHealthSnapshot;
   close(): Promise<void>;
+};
+
+/** What a route's watch is built from. The host owns the tick and the cancellation; the run
+ *  is the shared watch loop, or a test's stand-in for it. */
+export type HostedWatchBuild = {
+  run(loop: HostedLoop): Promise<number>;
+  /** `open` only when the caller injected a verified admitted sender; closed otherwise. */
+  effects?: 'blocked' | 'open';
+  /** Defaults to true: a host is created only when the route was started to carry a watch. */
+  required?: boolean;
 };
 
 export type StartMachineDaemonInput = {
@@ -66,6 +82,17 @@ export type StartMachineDaemonInput = {
   features?: DaemonFeatures;
   /** Injected for a test that must not touch the real pane/herdr sources. */
   sendHost?: DaemonHost;
+  /**
+   * Whether each hosted route carries a watch on the daemon's heartbeat. Off by default: the
+   * quiet foundation lands before any activation, and a daemon started only to host endpoints
+   * carries none. A route with a watch records one; a route without was never started with
+   * one, and a reader must not treat its silence as a failed watch.
+   */
+  watchHosting?: boolean;
+  /** Builds one route's watch. The default runs the shared watch loop over the real read
+   *  sources with mutating sources closed and outbound effects blocked; a test injects its
+   *  own run and clock and, only with a verified admitted sender, `open` effects. */
+  hostedWatch?: (route: HostedRoute, log: (text: string) => void) => HostedWatchBuild;
 };
 
 export type StartMachineDaemonResult =
@@ -234,6 +261,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const inFlight = new Map<string, InFlight>();
   const roots: MachineRootStatus[] = [];
+  const routes: HostedRoute[] = [];
+  // Filled once the roots loop has resolved every route; a status entry gains its `watch`
+  // record on each state write, and only entries that actually got a host ever have one.
+  const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
   let heartbeatAt = since;
   let closed = false;
 
@@ -262,6 +293,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const writeState = (): void => {
     if (closed) return;
+    for (const one of hostedWatches) one.status.watch = one.watch.state();
     try {
       writeDaemonState(home, {
         format: 1,
@@ -351,12 +383,37 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
       continue;
     }
+    // Routed by what the loader actually opened, never by the spelling of the argument: two
+    // spellings of one checkout are one route, or every scope naming it would be ambiguous.
+    const canonical = canonicalRoot(loaded.root);
+    if (canonical === null) {
+      status.why = 'the checkout root cannot be resolved to a folder';
+      roots.push(status);
+      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      continue;
+    }
+    if (duplicateRoute(routes, canonical) !== null) {
+      status.root = canonical;
+      status.why = 'this checkout is already hosted by this daemon';
+      roots.push(status);
+      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      continue;
+    }
+    status.root = canonical;
     status.team = loaded.team.project;
     sweepRoots.push({ root: loaded.root, team: loaded.team });
+    routes.push(
+      routeOf(
+        canonical,
+        loaded.team.project,
+        loaded.team.session,
+        loaded.team.seats.map((seat) => seat.name),
+      ),
+    );
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
     let send: Awaited<ReturnType<typeof startSendDaemon>>;
     try {
-      send = await startSendDaemon({ root: loaded.root, dir: loaded.root, team: loaded.team, host: sendHost });
+      send = await startSendDaemon({ root: canonical, dir: canonical, team: loaded.team, host: sendHost });
     } catch (error) {
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       roots.push(status);
@@ -394,7 +451,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     let bus: Awaited<ReturnType<typeof startBus>>;
     try {
       bus = await startBus({
-        root: loaded.root,
+        root: canonical,
         team: loaded.team,
         home,
         stderr: (text) => appendDaemonLog(home, text, now()),
@@ -411,7 +468,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (bus.kind === 'serving') {
       busHandles.push(bus.handle);
       status.bus = 'serving';
-      watch.busSocket = busSocket(loaded.root);
+      watch.busSocket = busSocket(canonical);
     } else {
       status.bus = 'failed';
       if (status.why === null) {
@@ -425,6 +482,24 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     roots.push(status);
     appendDaemonLog(home, `root ${rootArg}: send ${status.send}, bus ${status.bus}`, now());
+  }
+
+  // One watch per hosted route, on the daemon's existing heartbeat. The run starts at once and
+  // performs its first pass; no second timer exists, and a pass that hangs holds nothing the
+  // heartbeat needs. A root that failed to load, or that duplicates a checkout already hosted,
+  // has no route and gets no watch; its status entry has no `watch` record either.
+  if (input.watchHosting === true) {
+    const log = (text: string): void => appendDaemonLog(home, text, now());
+    for (const status of roots) {
+      const route = routes.find((candidate) => candidate.root === status.root);
+      if (route === undefined) continue;
+      if (hostedWatches.some((one) => one.watch.route === route)) continue;
+      const build = input.hostedWatch?.(route, log) ?? { run: hostedWatchRun({ route, log }) };
+      hostedWatches.push({
+        status,
+        watch: createHostedWatch({ route, run: build.run, effects: build.effects, required: build.required, now }),
+      });
+    }
   }
 
   // A socket file that stays behind after a crash, or a listener that stops answering, is not a
@@ -470,6 +545,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const timer = setInterval(() => {
     heartbeatAt = now().toISOString();
+    // A tick releases only the waits whose own due instant has passed and returns at once: a
+    // pass that is still running is never awaited here, so one slow or hanging route cannot
+    // stop the daemon's liveness or another route's cycles. Each route is isolated.
+    for (const one of hostedWatches) {
+      try {
+        one.watch.tick(now());
+      } catch (error) {
+        appendDaemonLog(home, `root ${one.watch.route.root}: the hosted watch tick failed: ${(error as Error).message}`, now());
+      }
+    }
     writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
@@ -498,6 +583,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed) return;
     closed = true;
     clearInterval(timer);
+    // Each watch leaves through its own loop: the stop resolves its wait false and awaits the
+    // pass in flight, so nothing is left half-written. The state record's last write keeps the
+    // stopped phase and its reason.
+    await Promise.all(hostedWatches.map(async (one) => {
+      try {
+        await one.watch.stop('the daemon is closing');
+      } catch {
+        // Closing is best effort; the process is ending.
+      }
+      one.status.watch = one.watch.state();
+    }));
     for (const handle of busHandles.splice(0)) {
       try {
         await handle.close();
@@ -528,6 +624,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   return {
     kind: 'serving',
-    daemon: { socketPath, roots, health, close },
+    daemon: { socketPath, roots, routes: [...routes], health, close },
   };
 }
