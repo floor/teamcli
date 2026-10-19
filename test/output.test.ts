@@ -496,6 +496,32 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           value: 'freeze deploys',
         }),
       ],
+      'team.pause': [
+        jsonEnvelope('team.pause', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'paused',
+          action_summary: 'paused since 2026-10-04T09:00:00.000Z by owner',
+          project: 'beacon',
+          session: 'beacon',
+          target: 'team',
+          value: null,
+          pause: { by: 'owner', at: '2026-10-04T09:00:00.000Z', stops: [{ seat: 'lead' }] },
+        }),
+      ],
+      'team.resume': [
+        jsonEnvelope('team.resume', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'resumed',
+          action_summary: 'resumed beacon (paused since 2026-10-04T09:00:00.000Z by owner)',
+          project: 'beacon',
+          session: 'beacon',
+          target: 'team',
+          value: null,
+          resumed: { by: 'owner', at: '2026-10-04T09:00:00.000Z', stops: [{ seat: 'lead' }] },
+        }),
+      ],
       'team.raise': [
         jsonEnvelope('team.raise', {
           format: 1 as const,

@@ -41,6 +41,7 @@ import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
+import { runPause } from '../src/commands/pause.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -48,6 +49,7 @@ import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runReply } from '../src/commands/reply.ts';
+import { runResume } from '../src/commands/resume.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
@@ -2976,6 +2978,80 @@ scene('hold.invocation', async (place) => {
   return show(await held(place, []), 'a <reason> is required');
 });
 
+async function pausedTeam(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runPause(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('pause.placed', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, []), 'stop lead: no record');
+});
+scene('pause.paused', async (place) => {
+  write(place, TEAM);
+  await pausedTeam(place, []);
+  return show(await pausedTeam(place, []), 'already paused: paused since 2026-10-04T09:00:00.000Z by owner');
+});
+scene('pause.caller', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, [], other), 'only the owner or the orchestrator pauses the team; this call is other');
+});
+scene('pause.detached', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, [], detachedCaller), 'only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat');
+});
+scene('pause.io', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+  return show(await pausedTeam(place, []), 'is not valid JSON');
+});
+scene('pause.file', async (place) => show(await pausedTeam(place, []), 'no team file'));
+scene('pause.team', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, ['other']), 'no team named "other" is registered on this machine');
+});
+scene('pause.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, ['--all', '--json']), "can't be used together");
+});
+
+async function resumedTeam(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runResume(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('resume.resumed', async (place) => {
+  write(place, TEAM);
+  await pausedTeam(place, []);
+  return show(await resumedTeam(place, []), 'resumed acme (paused since 2026-10-04T09:00:00.000Z by owner)');
+});
+scene('resume.not-paused', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, []), 'not paused');
+});
+scene('resume.caller', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, [], other), 'only the owner or the orchestrator resumes the team; this call is other');
+});
+scene('resume.detached', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, [], detachedCaller), 'only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat');
+});
+scene('resume.io', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+  return show(await resumedTeam(place, []), 'is not valid JSON');
+});
+scene('resume.file', async (place) => show(await resumedTeam(place, []), 'no team file'));
+scene('resume.team', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, ['other']), 'no team named "other" is registered on this machine');
+});
+scene('resume.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, ['--all', '--json']), "can't be used together");
+});
+
 {
   async function raised(place: Place, argv: readonly string[], caller: Caller = leadSeat): Promise<Ran> {
     const io = testIo(place.root, caller);
@@ -3097,6 +3173,14 @@ scene('next.shape', async (place) => {
 });
 scene('next.invocation', async (place) => show(await nexted(place, ['extra']), 'unexpected'));
 scene('next.not-a-repo', async (place) => show(await nexted(place), 'run team from a project\n'), false);
+scene('next.paused', async (place) => {
+  write(place, TASKS);
+  recordLead(place);
+  updateState(join(place.root, '.agents'), (state) => {
+    state.pause = { by: 'owner', at: NOW.toISOString(), stops: [{ seat: 'lead' }] };
+  });
+  return show(await nexted(place), 'nothing new is claimed until `team resume`');
+});
 
 // The broker's own rows. One credential read is stood in everywhere: the shipped wiring reads
 // the owner's Keychain, which no scene may ever run. The socket is real — unix sockets under a
