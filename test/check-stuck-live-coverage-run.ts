@@ -105,4 +105,18 @@ screens['w6:p1'] = PERMISSION;
 processes['w6:p1'] = { shell: 10, foreground: [10, 11] };
 const held = scene('w6:p1', { launched: { shell: 10, cli: [11] } });
 
-console.log(JSON.stringify({ stale, shell, held }));
+// A recorded seat herdr no longer lists at all: nothing to read, and the row says it is not
+// running rather than quoting what the pane last drew.
+reset();
+screens['w6:p1'] = PERMISSION;
+const dead = scene('w6:p1', {});
+
+// A pane replaced by a process the record does not name, whose stored agent session is the live
+// one: the seat is the seat again, and its prompt is named.
+reset();
+seats.push({ name: 'claude-acme-tmp-1', agent: 'claude', pane: 'w6:p1', workspace: 'w6', status: 'working', cwd: null, session: 'sess-1' });
+screens['w6:p1'] = PERMISSION;
+processes['w6:p1'] = { shell: 20, foreground: [30] };
+const restored = scene('w6:p1', { launched: { shell: 10, cli: [11] }, agent_session: 'sess-1' });
+
+console.log(JSON.stringify({ stale, shell, held, dead, restored }));

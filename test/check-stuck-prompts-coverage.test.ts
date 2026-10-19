@@ -282,6 +282,8 @@ test('the real live read reads a temporary seat\'s pane, and only while the reco
     stale: { code: number; out: string; reads: string[] };
     shell: { out: string; reads: string[] };
     held: { out: string; reads: string[] };
+    dead: { out: string; reads: string[] };
+    restored: { out: string; reads: string[] };
   };
   // Herdr names the seat on another pane: the state's pane is not read, and nothing is named.
   expect(parsed.stale.reads).toEqual([]);
@@ -293,4 +295,13 @@ test('the real live read reads a temporary seat\'s pane, and only while the reco
   // The recorded CLI pids are in front: read, and named.
   expect(parsed.held.reads).toContain('w6:p1');
   expect(parsed.held.out).toContain('claude-acme-tmp-1: stuck at a permission prompt (last active 4m ago): Write(synthetic-note.txt)');
+  // Herdr names no agent for the record: nothing is read, and the row is the not-running one.
+  expect(parsed.dead.reads).toEqual([]);
+  expect(parsed.dead.out).toContain('claude-acme-tmp-1: a temporary seat is recorded and is not running');
+  expect(parsed.dead.out).not.toContain('permission prompt');
+  // A replaced pane whose stored session is the live one: the seat is the seat, and its prompt
+  // is named.
+  expect(parsed.restored.reads).toContain('w6:p1');
+  expect(parsed.restored.out).toContain('claude-acme-tmp-1: stuck at a permission prompt (last active 4m ago): Write(synthetic-note.txt)');
+  expect(parsed.restored.out).not.toContain('waits at a permission prompt');
 });
