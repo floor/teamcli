@@ -86,7 +86,7 @@ test('an accepting Claude seat with no declared order walks the socket first, af
   const host = fake(made, {
     deliver: async (_path: string, frame: string) => {
       frames.push(frame);
-      atDial = readdirSync(drops);
+      atDial = readdirSync(drops).filter((name) => !name.includes('.'));
       return { ok: true };
     },
   });
@@ -100,7 +100,8 @@ test('an accepting Claude seat with no declared order walks the socket first, af
   // The durable signed copy was in the receiver's folder before the frame left: the record's
   // file is named by the message id, and it is the only file there.
   expect(atDial.length).toBe(1);
-  expect(readdirSync(drops).length).toBe(1);
+  // The record alone: the fallback episode's marker beside it is a sidecar, never a message.
+  expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
 });
 
 test('every socket frame ends with the reply address of the sender its signed record carries', async () => {

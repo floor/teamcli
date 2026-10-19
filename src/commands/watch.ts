@@ -23,6 +23,7 @@ import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
 import { watchCommand, watchWouldRead } from './up.ts';
+import { realHost, sendDirect } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
@@ -110,6 +111,17 @@ export {
   type StatusWaitSeat,
 };
 
+/** One idle dispatch: the seat, the pane and CLI the pass saw for it, and the body the seat is
+ *  to read. The pane and CLI are the pass's own observation, never re-derived by the sender. */
+export type WorkPushRequest = { seat: string; pane: string; cli: string; body: string };
+
+/** What one dispatch actually did. `ok` names the route that ended the walk and what that route
+ *  returned: a durable copy is `held`, never a wake, and an accepted socket or inbox write is not
+ *  a read. `ok: false` is a refusal that attempted no direct route. */
+export type WorkPushResult = { ok: true; outcome: string } | { ok: false; refused: string };
+
+export type WorkPush = (request: WorkPushRequest) => Promise<WorkPushResult>;
+
 // What the watch reads and does outside its own process, so tests can stand in for it.
 export type WatchSources = {
   live(session: string, team: TeamFile): Live | null;
@@ -187,7 +199,28 @@ export type WatchSources = {
   onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
   /** Optional herdr status-event source (`herdr wait agent-status` per seat). */
   statusSource?: StatusSource;
+  /** One idle dispatch: the body goes to the seat over direct routes only, never a keystroke,
+   *  and the actual transport outcome comes back. The real watch runs the send command in this
+   *  process; a test stands in. */
+  pushWork?: WorkPush;
 };
+
+/** The streams a direct dispatch writes through: the watch process's own, with an optional copy
+ *  of what it said on stderr, so a refusal that names no route still reaches the dispatcher. */
+function watchIo(onStderr?: (text: string) => void): Io {
+  return {
+    stdout: (text) => void process.stdout.write(text),
+    stderr: (text) => {
+      onStderr?.(text);
+      void process.stderr.write(text);
+    },
+    cwd: process.cwd(),
+    env: process.env,
+    stdinIsTTY: Boolean(process.stdin.isTTY),
+    stdoutIsTTY: Boolean(process.stdout.isTTY),
+    stderrIsTTY: Boolean(process.stderr.isTTY),
+  };
+}
 
 export const realWatchSources: WatchSources = {
   // The status live read, handed no state: the watch compares each live pane's process with its
@@ -231,6 +264,21 @@ export const realWatchSources: WatchSources = {
   busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'owner', cursor }, { deadlineMs: 500 }),
   busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
   statusSource: herdrStatusSource(),
+  pushWork: async (request) => {
+    // The send runs in this process, through the same admission, delivery order and route rules
+    // an ordinary send runs; only the typed and native legs are left out. What the dispatcher
+    // reads back is the route that ended the walk and that route's own word — never `sent`.
+    const said: string[] = [];
+    const run = await sendDirect(watchIo((text) => said.push(text)), realHost, request);
+    const result = run.result;
+    if (result === null) {
+      const why = said.join('').replace(/\s+/g, ' ').trim();
+      return { ok: false, refused: why === '' ? 'the send ended before any direct route was attempted' : why };
+    }
+    const detail = result.reason === undefined ? '' : `: ${result.reason}`;
+    if (result.outcome === 'refused') return { ok: false, refused: `${result.route}${detail}` };
+    return { ok: true, outcome: `${result.route}: ${result.outcome}${detail}` };
+  },
 };
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);

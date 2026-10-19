@@ -211,6 +211,31 @@ Exits 0 when delivered, answered, listed, recorded, or resolved by --dry-run,
 the invocation or team file can't be read.
 `;
 
+/** The walk's ending as a direct-only caller reads it: which route took the send or ended it,
+ *  the one message id every attempt carried, and the signed record's path when one was staged. */
+export type DirectSendResult = {
+  outcome: AttemptOutcome;
+  route: string;
+  id: string;
+  record: string | null;
+  reason?: string;
+};
+
+/**
+ * The watch's idle dispatch uses this hook. With it set, the send walks only the routes that ask
+ * nothing of a pane — the typed and native legs are left out, so no keystroke leaves this process
+ * — and the walk's ending is handed back as a result instead of only an exit code. Admission, the
+ * delivery order and every route's own rules are the same ones an ordinary send runs.
+ */
+export type DirectSendHook = {
+  /** The pane and CLI the caller's own pass saw for this seat: the send is bound to them, and a
+   *  seat the session no longer lists at that pane, or whose file names another CLI, is refused
+   *  before any route is attempted. */
+  expect?: { pane: string; cli: string };
+  /** Called once, when a route's ending closes the walk, before the command returns. */
+  ended(result: DirectSendResult): void;
+};
+
 export type SendHost = {
   /** The live agents of a session; null when herdr can't be reached. `cli` is the agent herdr
    *  reads on the pane (`claude`, `codex`, …), the process name a CLI profile names — null or
@@ -258,6 +283,9 @@ export type SendHost = {
   /** The build this process runs, compared against a live inbox listener's marker. Left out
    *  (a test's host), the mcp-inbox leg keeps the liveness-only check. */
   build?: () => BuildIdentity;
+  /** The direct-only ending hook: when set, the typed leg is never walked and the ending is
+   *  reported once. The watch's idle dispatch is its caller. */
+  direct?: DirectSendHook;
 };
 
 export const realHost: SendHost = {
@@ -793,7 +821,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
   // back.
   const human = overrides.human ?? (declared?.human === true);
-  const walk: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
+  const chosen: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
+  // A direct-only walk (the watch's idle dispatch) never types: the typed leg and the native
+  // leg, whose trigger line is typed too, are left out of the order, so no keystroke can leave
+  // this process. Every remaining leg keeps its own rules, and the order's own words decide which
+  // of them the receiver offers.
+  const walk: readonly DeliveryLeg[] = host.direct ? chosen.filter((leg) => leg !== 'typed' && leg !== 'native') : chosen;
 
   // One signed record is written into the recipient's folder — the whole body, its thread, the
   // address it resolved to and the rule that admitted it — and the leg that takes the send
@@ -807,6 +840,23 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const callerRoot = { root, session: team.session };
   if (dry) {
     return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, SOCKET_SEND && inbound.policy === 'accept')}; nothing was written`, report);
+  }
+  // A direct-only caller hands in the pane and CLI its own pass saw for this seat: the send is
+  // bound to them, never re-aimed at a pane the caller did not read. A seat the session no longer
+  // lists at that pane, or whose file now names another CLI, is refused here — before any route
+  // is attempted, so the refusal stages nothing.
+  const bound = host.direct?.expect;
+  if (bound !== undefined) {
+    if (to.cli !== bound.cli) {
+      return refuse(io, dir, who, `${to.seat}: its CLI is ${to.cli}, not the ${bound.cli} the pass saw; nothing was sent`, host, report);
+    }
+    const here = findAgent(host, to.session, to.seat);
+    if (!here.ok) {
+      return refuse(io, dir, who, `${to.seat}: ${here.reason}; nothing was sent`, host, report);
+    }
+    if (here.pane !== bound.pane) {
+      return refuse(io, dir, who, `${to.seat}: its pane is now ${here.pane}, not the ${bound.pane} the pass saw; nothing was sent`, host, report);
+    }
   }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
@@ -846,6 +896,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // Whether the walk's last route has already recorded its exhaustion, so the ending below
   // records one only when no leg's own ending did.
   let ended = false;
+  // The direct-only hook fires once, when a route's ending closes the walk.
+  let directEnded = false;
   const ensureEpisode = async (): Promise<void> => {
     if (stagedTried) return;
     stagedTried = true;
@@ -866,8 +918,24 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       if (!attempt.liveRoutesRemain) ended = true;
       const noted = begun.note(attempt);
       if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
+      // A direct-only caller hears the walk's ending here: the attempt that took the send, or
+      // the last route's failure. The record was staged before the first attempt, whatever it was.
+      if (host.direct !== undefined && !directEnded && (attempt.outcome === 'delivered' || !attempt.liveRoutesRemain)) {
+        directEnded = true;
+        host.direct.ended({
+          outcome: attempt.outcome,
+          route: attempt.route,
+          id: msgId,
+          record: stagedWalk?.ok === true ? stagedWalk.path : null,
+          ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
+        });
+      }
     };
   };
+  // A direct-only send stages its record before its first attempt: no route the watch can take
+  // asks anything of the receiver's pane, and the ending the caller reads names that record. An
+  // order with no direct route left attempts nothing, so it stages nothing and reports no ending.
+  if (host.direct !== undefined && walk.length > 0) await ensureEpisode();
   let socketNote: string | null = null;
   for (const [at, leg] of walk.entries()) {
     if (leg === 'mcp-inbox') {
@@ -1127,6 +1195,32 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
   // finds no live agent, so nothing after it is dropped from the walk's description.
   if (walkable.length === 1) return words(first);
   return `${words(first)}, falling back to ${walkable.slice(1).map(words).join(', then ')}`;
+}
+
+/** What a direct-only run reports: the command's own exit code and the walk's ending. A run
+ *  that refused before any direct route was attempted carries no result. */
+export type DirectSendRun = { code: number; result: DirectSendResult | null };
+
+/**
+ * Sends `body` to `seat` over direct routes only, through the same command an ordinary send
+ * runs: the same admission, the same delivery order, the same route rules. The typed and native
+ * legs are left out, so nothing is typed into any pane, and the send is bound to the pane and CLI
+ * the caller's pass saw. The watch's idle dispatch calls this.
+ */
+export async function sendDirect(
+  io: Io,
+  host: SendHost,
+  input: { seat: string; pane: string; cli: string; body: string },
+): Promise<DirectSendRun> {
+  const captured: { result: DirectSendResult | null } = { result: null };
+  const code = await runSend([input.seat, input.body], io, {
+    ...host,
+    direct: {
+      expect: { pane: input.pane, cli: input.cli },
+      ended: (ending) => { captured.result = ending; },
+    },
+  });
+  return { code, result: captured.result };
 }
 
 /** Records one route attempt for the send's fallback episode; null when no episode could be
