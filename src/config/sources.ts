@@ -116,17 +116,22 @@ export type PlannedConfigSetting = {
   previous: SignedConfigRecord | null;
 };
 
+/** Why a write was refused, in the terms the command maps to an exit id: the key is not one the
+ *  level holds (`key`), the value is not one the key's type admits (`value`), the level's record
+ *  cannot be read or verified (`source`), or the record could not be replaced (`write`). */
+export type ConfigPlanRefusal = { ok: false; kind: 'key' | 'value' | 'source' | 'write'; why: string };
+
 export type ConfigSetPlan =
   | { ok: true; level: ConfigLevel; target: string; settings: PlannedConfigSetting[] }
-  | { ok: false; why: string };
+  | ConfigPlanRefusal;
 
 export type ConfigWriteResult =
   | { ok: true; level: ConfigLevel; target: string; generation: number; written: SignedConfigRecord[] }
-  | { ok: false; why: string };
+  | ConfigPlanRefusal;
 
 export type ConfigUnsetPlan =
   | { ok: true; level: ConfigLevel; target: string; removed: PlannedConfigSetting[] }
-  | { ok: false; why: string };
+  | ConfigPlanRefusal;
 
 /** One level's outcome in a write across levels, and the levels a refusal left untouched. */
 export type ConfigAcrossResult = {
@@ -531,48 +536,49 @@ function normalizeSetting(
   level: ConfigLevel,
   key: string,
   value: unknown,
-): { ok: true; key: ConfigKey; value: ConfigValue } | { ok: false; why: string } {
+): { ok: true; key: ConfigKey; value: ConfigValue } | { ok: false; kind: 'key' | 'value'; why: string } {
   const spec = getConfigSpec(key);
   if (spec === null) {
     const known = configKeysAt(level);
     return {
       ok: false,
+      kind: 'key',
       why: known.length > 0
         ? `unknown setting "${key}" at level ${level}; known settings: ${known.join(', ')}`
         : `unknown setting "${key}" at level ${level}; no setting may be set at this level in this release`,
     };
   }
   if (!spec.levels.includes(level)) {
-    return { ok: false, why: `setting "${key}" may not be set at level ${level} (allowed: ${spec.levels.join(', ')})` };
+    return { ok: false, kind: 'key', why: `setting "${key}" may not be set at level ${level} (allowed: ${spec.levels.join(', ')})` };
   }
   switch (spec.type) {
     case 'model':
     case 'effort':
     case 'nickname': {
       if (typeof value !== 'string' || value.trim() === '') {
-        return { ok: false, why: `setting "${key}" needs a word` };
+        return { ok: false, kind: 'value', why: `setting "${key}" needs a word` };
       }
       const word = value.trim();
-      if (/\s/.test(word)) return { ok: false, why: `setting "${key}" must be one word` };
+      if (/\s/.test(word)) return { ok: false, kind: 'value', why: `setting "${key}" must be one word` };
       if (looksLikeCredential(word)) {
-        return { ok: false, why: `setting "${key}" looks like a credential; settings hold no secrets` };
+        return { ok: false, kind: 'value', why: `setting "${key}" looks like a credential; settings hold no secrets` };
       }
       if (spec.type === 'nickname' && word.toLowerCase() === 'lead') {
-        return { ok: false, why: 'a nickname may not be "lead"' };
+        return { ok: false, kind: 'value', why: 'a nickname may not be "lead"' };
       }
       return { ok: true, key: spec.key, value: word };
     }
     case 'order': {
       const legs = typeof value === 'string' ? value.split(',').map((leg) => leg.trim()).filter((leg) => leg !== '') : value;
       if (!Array.isArray(legs) || legs.length === 0) {
-        return { ok: false, why: `setting "${key}" needs at least one leg: ${DELIVERY_LEGS.join(', ')}` };
+        return { ok: false, kind: 'value', why: `setting "${key}" needs at least one leg: ${DELIVERY_LEGS.join(', ')}` };
       }
       const seen = new Set<string>();
       for (const leg of legs) {
         if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
-          return { ok: false, why: `setting "${key}" "${String(leg)}" must be one of: ${DELIVERY_LEGS.join(', ')}` };
+          return { ok: false, kind: 'value', why: `setting "${key}" "${String(leg)}" must be one of: ${DELIVERY_LEGS.join(', ')}` };
         }
-        if (seen.has(leg)) return { ok: false, why: `setting "${key}" names leg "${leg}" twice` };
+        if (seen.has(leg)) return { ok: false, kind: 'value', why: `setting "${key}" names leg "${leg}" twice` };
         seen.add(leg);
       }
       return { ok: true, key: spec.key, value: legs as DeliveryLeg[] };
@@ -581,7 +587,7 @@ function normalizeSetting(
       if (typeof value === 'boolean') return { ok: true, key: spec.key, value };
       if (value === 'true') return { ok: true, key: spec.key, value: true };
       if (value === 'false') return { ok: true, key: spec.key, value: false };
-      return { ok: false, why: `setting "${key}" must be true or false` };
+      return { ok: false, kind: 'value', why: `setting "${key}" must be true or false` };
     }
   }
 }
@@ -604,16 +610,16 @@ function readTargetSource(home: string, level: ConfigLevel, target: string, seat
  */
 export function planConfigSet(home: string, request: ConfigSetRequest): ConfigSetPlan {
   if (!(CONFIG_LEVELS as readonly string[]).includes(request.level)) {
-    return { ok: false, why: `"${request.level}" is not a settings level: expected ${CONFIG_LEVELS.join(', ')}` };
+    return { ok: false, kind: 'key', why: `"${request.level}" is not a settings level: expected ${CONFIG_LEVELS.join(', ')}` };
   }
   if (!request.target || !request.target.trim()) {
-    return { ok: false, why: `a target is required to set a setting at level ${request.level}` };
+    return { ok: false, kind: 'key', why: `a target is required to set a setting at level ${request.level}` };
   }
-  if (request.settings.length === 0) return { ok: false, why: 'at least one setting is required' };
+  if (request.settings.length === 0) return { ok: false, kind: 'key', why: 'at least one setting is required' };
   const planned: { key: ConfigKey; value: ConfigValue }[] = [];
   const seen = new Set<string>();
   for (const setting of request.settings) {
-    if (seen.has(setting.key)) return { ok: false, why: `setting "${setting.key}" is named twice` };
+    if (seen.has(setting.key)) return { ok: false, kind: 'key', why: `setting "${setting.key}" is named twice` };
     seen.add(setting.key);
     const normalized = normalizeSetting(request.level, setting.key, setting.value);
     if (!normalized.ok) return normalized;
@@ -621,7 +627,7 @@ export function planConfigSet(home: string, request: ConfigSetRequest): ConfigSe
   }
   const current = readTargetSource(home, request.level, request.target);
   if (!current.ok) {
-    return { ok: false, why: current.why ?? `${current.level}: the current settings record could not be read` };
+    return { ok: false, kind: 'source', why: current.why ?? `${current.level}: the current settings record could not be read` };
   }
   return {
     ok: true,
@@ -639,31 +645,31 @@ export function planConfigSet(home: string, request: ConfigSetRequest): ConfigSe
  *  the row can be reported and the change recorded. All keys are checked before any is removed. */
 export function planConfigUnset(home: string, request: ConfigUnsetRequest): ConfigUnsetPlan {
   if (!(CONFIG_LEVELS as readonly string[]).includes(request.level)) {
-    return { ok: false, why: `"${request.level}" is not a settings level: expected ${CONFIG_LEVELS.join(', ')}` };
+    return { ok: false, kind: 'key', why: `"${request.level}" is not a settings level: expected ${CONFIG_LEVELS.join(', ')}` };
   }
   if (!request.target || !request.target.trim()) {
-    return { ok: false, why: `a target is required to unset a setting at level ${request.level}` };
+    return { ok: false, kind: 'key', why: `a target is required to unset a setting at level ${request.level}` };
   }
-  if (request.keys.length === 0) return { ok: false, why: 'at least one setting is required' };
+  if (request.keys.length === 0) return { ok: false, kind: 'key', why: 'at least one setting is required' };
   const seen = new Set<string>();
   for (const key of request.keys) {
-    if (seen.has(key)) return { ok: false, why: `setting "${key}" is named twice` };
+    if (seen.has(key)) return { ok: false, kind: 'key', why: `setting "${key}" is named twice` };
     seen.add(key);
     const spec = getConfigSpec(key);
-    if (spec === null) return { ok: false, why: `unknown setting "${key}"` };
+    if (spec === null) return { ok: false, kind: 'key', why: `unknown setting "${key}"` };
     if (!spec.levels.includes(request.level)) {
-      return { ok: false, why: `setting "${key}" may not be set at level ${request.level} (allowed: ${spec.levels.join(', ')})` };
+      return { ok: false, kind: 'key', why: `setting "${key}" may not be set at level ${request.level} (allowed: ${spec.levels.join(', ')})` };
     }
   }
   const current = readTargetSource(home, request.level, request.target);
   if (!current.ok) {
-    return { ok: false, why: current.why ?? `${current.level}: the current settings record could not be read` };
+    return { ok: false, kind: 'source', why: current.why ?? `${current.level}: the current settings record could not be read` };
   }
   const removed: PlannedConfigSetting[] = [];
   for (const key of request.keys) {
     const previous = current.settings.find((record) => record.key === key);
     if (!previous) {
-      return { ok: false, why: `setting "${key}" is not set at level ${request.level} for ${request.target}; nothing to unset` };
+      return { ok: false, kind: 'value', why: `setting "${key}" is not set at level ${request.level} for ${request.target}; nothing to unset` };
     }
     removed.push({ key: previous.key, value: previous.value, previous });
   }
@@ -867,7 +873,7 @@ export function writeConfigSet(home: string, plan: ConfigSetPlan, options: Confi
   try {
     writeSettingsMap(home, plan.level, plan.target, updates);
   } catch (error) {
-    return { ok: false, why: (error as Error).message };
+    return { ok: false, kind: 'write', why: (error as Error).message };
   }
   return { ok: true, level: plan.level, target: plan.target, generation, written };
 }
@@ -884,7 +890,7 @@ export function writeConfigUnset(home: string, request: ConfigUnsetRequest): Con
   try {
     writeSettingsMap(home, plan.level, plan.target, updates);
   } catch (error) {
-    return { ok: false, why: (error as Error).message };
+    return { ok: false, kind: 'write', why: (error as Error).message };
   }
   return plan;
 }
