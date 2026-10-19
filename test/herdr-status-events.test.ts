@@ -941,6 +941,31 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       subject: 'jules-1',
     });
     expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'jules-1', clock + 1_000, { project: 'acme', home })).toBe(false);
+
+    // 4. The general seat brief is not assigned work: neither the current delivery nor an id its
+    // claim replaced. Any other drop in the folder still is.
+    const dropsDir = join(root, '.agents', 'send-drops', 'acme-dev', 'worker-3');
+    mkdirSync(dropsDir, { recursive: true });
+    const replaced = '0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d';
+    writeFileSync(join(dropsDir, replaced), 'a delivery the claim replaced\n');
+    updateState(join(root, '.agents'), (state) => {
+      const current = (state.sessions['acme-dev'] ??= emptySession());
+      current.briefs = {
+        'worker-3': {
+          id: '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d',
+          at: '2026-10-04T09:00:00.000Z',
+          incarnation: 'inc_000000000010',
+          epoch: 'run_000000000010',
+          sha256: '4b273912a6c995f1b2b8ab1a43a0432cad323c1dbb986c9ae50b4ad2a7f84fec',
+          attempt: 0,
+          stage: 'ready',
+          superseded: [replaced],
+        },
+      };
+    });
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(false);
+    writeFileSync(join(dropsDir, '1b6c8d2e-9f30-4b7c-8d4e-2f3a4b5c6d7e'), 'a message from a seat\n');
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(true);
   });
 
   test('runWatch drains statusEngine nudges and writes a work drop when a worker seat with assigned work is idle past threshold', async () => {

@@ -23,10 +23,11 @@ import { readEvents } from '../src/bus/log.ts';
 import type { Caller } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
+import { generalBriefRecord, GENERAL_BRIEF_SHA256 } from '../src/launch/general-brief.ts';
 import { DROPS_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, type ReceiptPayload } from '../src/send/record.ts';
-import { receiptPath } from '../src/mcp/inbox.ts';
+import { signRecord, signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, writeRecord, type ReceiptPayload } from '../src/send/record.ts';
+import { listUnread, receiptPath } from '../src/mcp/inbox.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
@@ -217,6 +218,49 @@ describe('team drops', () => {
     const listing = listDrops(dropDir, state.key);
     if (listing.kind !== 'ok') throw new Error(listing.reason);
     expect(listing.rows.map((row) => [row.id, row.from])).toEqual([[D_RECORD, null]]);
+  });
+
+  test('a listing omits the deliveries the current claim replaced or does not name', () => {
+    // The seat's current claim: this build's brief, and the id an earlier delivery held.
+    const claimId = '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d';
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions.acme = {
+        ...state.sessions.acme,
+        briefs: {
+          lead: {
+            id: claimId,
+            at: '2026-10-04T09:00:00.000Z',
+            incarnation: 'inc_000000000010',
+            epoch: 'run_000000000010',
+            sha256: GENERAL_BRIEF_SHA256,
+            attempt: 0,
+            stage: 'ready' as const,
+            superseded: [D_OWNER],
+          },
+        },
+      } as never;
+    });
+    // A file at an id the claim replaced: never read, never listed.
+    drop(D_OWNER, 'an earlier delivery, replaced');
+    // A launch record under its own delivery lifetime, which the claim does not name: an earlier
+    // brief the read could only refuse, so the listing does not offer it.
+    const old = generalBriefRecord({
+      to: 'lead',
+      root,
+      session: 'acme',
+      at: '2026-10-04T08:00:00.000Z',
+      incarnation: 'inc_000000000011',
+    });
+    const wrote = writeRecord(dropDir, signRecord(old, home));
+    expect(wrote.ok).toBe(true);
+    const key = messageKeyState(home);
+    if (key.kind !== 'key') throw new Error('the fixture wrote no key');
+    const listing = listDrops(dropDir, key.key, { to: 'lead', root, session: 'acme' });
+    if (listing.kind !== 'ok') throw new Error(listing.reason);
+    expect(listing.rows).toEqual([]);
+    // The inbox listing skips the replaced id by name; the earlier brief is not named by the claim.
+    const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
+    expect(unread.map((message) => message.id)).not.toContain(D_OWNER);
   });
 
   test('--json is the same reading as one team.drops document', async () => {

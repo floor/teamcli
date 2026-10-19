@@ -17,6 +17,7 @@
 import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  currentBriefClaim,
   GENERAL_BRIEF_FROM,
   GENERAL_BRIEF_RULE,
   type CurrentBriefClaim,
@@ -24,6 +25,7 @@ import {
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
+import { readState } from '../state.ts';
 import {
   isRead,
   readRecord,
@@ -236,11 +238,22 @@ function markerOf(dropDir: string, id: string): { from?: string; ts?: string } {
   }
 }
 
+/** The current claim of one seat's general seat brief, read from the checkout's state; null when
+ *  the state cannot be read or holds no current claim. */
+export function currentClaimIn(root: string, session: string, seat: string): CurrentBriefClaim | null {
+  try {
+    return currentBriefClaim(readState(join(root, '.agents')).sessions[session]?.briefs?.[seat]);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Every message waiting in this seat's own folder: a UUID-named regular file with no signed read
  * receipt beside it. Oldest first. Anything else in the folder — a link, a marker, a directory —
  * is not a message and is skipped; a receipt the message key did not sign proves nothing, so the
- * message still waits.
+ * message still waits. An earlier delivery of the seat's general seat brief is not waiting mail:
+ * the claim names the ids it replaced, and a read could only refuse them as superseded.
  */
 export function listUnread(dropDir: string, context: StatusContext, home: string): InboxMessage[] {
   let names: string[];
@@ -250,9 +263,11 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
     return [];
   }
   const key = messageKeyState(home);
+  const superseded = new Set(currentClaimIn(context.root, context.session, context.to)?.superseded ?? []);
   const messages: InboxMessage[] = [];
   for (const name of names) {
     if (!MESSAGE_ID.test(name)) continue;
+    if (superseded.has(name)) continue;
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
     if (key.kind === 'key' && isRead(dropDir, name, context, key.key)) continue;

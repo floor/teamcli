@@ -412,7 +412,8 @@ export type SeatStatusEngine = {
 /** Checks whether `seatName` currently has assigned work on disk under `root`:
  *  1. Active lease in `.agents/leases/<id>.json` (`lease.seat === seatName && Date.parse(lease.until) > atMs`)
  *  2. Assigned worktree (`worktrees[task].seat === seatName`) or temporary seat task in `.agents/state.json`
- *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding startup brief, `work-*`, and sidecars)
+ *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding the startup brief — its
+ *     current id and the superseded ids its claim replaced — `work-*`, and sidecars)
  *  4. Open `work.claimed` event for `seatName` in `.agents/events.jsonl` not yet closed by `work.done` or `work.released`. */
 export function seatHasAssignedWorkOnDisk(
   root: string,
@@ -448,10 +449,12 @@ export function seatHasAssignedWorkOnDisk(
 
   // 2. Assigned worktree or temporary task in `state.json`.
   let briefId: string | undefined;
+  let supersededBriefs: ReadonlySet<string> = new Set();
   try {
     const state = readState(agentsDir);
     const sessionState = state.sessions[session];
     briefId = sessionState?.briefs?.[seatName]?.id;
+    supersededBriefs = new Set(sessionState?.briefs?.[seatName]?.superseded ?? []);
     if (sessionState?.seats?.[seatName]?.temporary?.task) return true;
     for (const wt of Object.values(sessionState?.worktrees ?? {})) {
       if (wt.seat === seatName) return true;
@@ -472,6 +475,7 @@ export function seatHasAssignedWorkOnDisk(
           || name.endsWith('.delivered')
           || name.endsWith('.closed.json')
           || (briefId !== undefined && name === briefId)
+          || supersededBriefs.has(name)
         ) {
           continue;
         }

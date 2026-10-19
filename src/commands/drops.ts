@@ -29,9 +29,9 @@ import {
 import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
-import { currentBriefClaim } from '../launch/general-brief.ts';
+import { currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
-import { listUnread, readMessage, type BriefRead } from '../mcp/inbox.ts';
+import { currentClaimIn, listUnread, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import {
@@ -196,7 +196,10 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
  * it is the signed status receipt the inbox and `team messages` write and the receipt module
  * verifies — a file at that name that was not signed by the message key leaves the drop waiting.
  * Without a key and context nothing can be proven, so every drop is listed. A folder that does not
- * exist is an empty one: no send has written here yet.
+ * exist is an empty one: no send has written here yet. With a context, a listing omits a delivery
+ * of the general seat brief that cannot be served: the current claim's superseded ids are skipped
+ * by name, and a launch record whose digest or incarnation is not the claim's is not shown — an
+ * earlier brief is not waiting mail.
  */
 export function listDrops(dropDir: string, key?: KeyObject, context?: StatusContext): DropListing {
   let names: string[];
@@ -208,8 +211,13 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }
   const rows: DropRow[] = [];
+  // The claim this listing serves under. Without a context there is none, and every drop is
+  // listed — the same "nothing can be proven" rule the receipt read follows above.
+  const claim = context === undefined ? null : currentClaimIn(context.root, context.session, context.to);
+  const superseded = new Set(claim?.superseded ?? []);
   for (const name of names) {
     if (name.includes('.')) continue;
+    if (superseded.has(name)) continue;
     const path = join(dropDir, name);
     let stat;
     try {
@@ -224,6 +232,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key)) continue;
     let from: string | null = null;
     let fromId: string | null = null;
+    let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
     try {
       const text = readFileSync(path, 'utf8');
       const record = signedRecordOf(parsedJson(text));
@@ -234,12 +243,21 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
         if (key === undefined || verifyRecord(record, key)) {
           from = record.payload.from;
           fromId = record.payload.from_id;
+          if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
+            launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+          }
         }
       } else {
         from = senderOf(text.split('\n', 1)[0] ?? '');
       }
     } catch {
       // The file is still a drop; its sender is unknown.
+    }
+    // A launch record the current claim does not name cannot be served: it is an earlier
+    // delivery, or an old build's record carrying none of the fields a claim binds.
+    if (key !== undefined && context !== undefined && launch !== null
+      && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
+      continue;
     }
     rows.push({ id: name, from, from_id: fromId, received: stat.mtime.toISOString(), path });
   }
