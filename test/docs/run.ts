@@ -11,6 +11,7 @@ import { runAdd } from '../../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
 import { runApprove, type Waiting } from '../../src/approve/command.ts';
+import { runBrief } from '../../src/commands/brief.ts';
 import { runBroker } from '../../src/commands/broker.ts';
 import { runBus } from '../../src/commands/bus.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
@@ -308,6 +309,10 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     // credential read — no keychain, no socket, no peer on the page's fixture. The command's own
     // refusals that need a broker source are shown as text on the page instead: their sentences
     // differ by platform, and the docs suite runs on macOS and Linux.
+    case 'brief':
+      // The page's clock is pinned, so a delivery's `at` is the page's instant, and a state the
+      // page seeds with fixed lifetimes prints the ids those lifetimes derive.
+      return runBrief(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'broker':
       return runBroker(rest, io, { home: fixture.home });
     case 'bus':

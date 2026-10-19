@@ -221,6 +221,85 @@
         }
       ],
       "hidden": false,
+      "name": "brief",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--apply",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "rollout",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "team-read",
+            "why": "the command's only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat's claim and its signed drop"
+          }
+        }
+      ],
+      "usage": [
+        "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "the rollout plan reads the team's seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner's alone, and --apply delivers the general seat brief to the team's live seats"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "broker",
       "positionals": [],
       "subcommands": [],
@@ -656,6 +735,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--epoch",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--follow",
           "repeatable": false,
           "takesValue": false
@@ -703,7 +788,7 @@
       "subcommands": [],
       "usage": [
         "team drops [--follow] [--json]",
-        "team drops --read --seat <seat> [--session <session>]"
+        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]"
       ],
       "who": {
         "gate": "seat-only",
@@ -1150,6 +1235,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--epoch",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--file",
               "repeatable": false,
               "takesValue": true
@@ -1184,7 +1275,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
+            "team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]"
           ],
           "who": {
             "gate": "any-caller",
@@ -1228,7 +1319,7 @@
       "usage": [
         "team mcp status [--json]",
         "team mcp doctor [--json]",
-        "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
+        "team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]"
       ],
       "who": {
         "gate": "any-caller",

@@ -122,6 +122,56 @@ Usage:
 | --- | --- | --- |
 | `request_id` | no | no |
 
+## `brief`
+
+Hidden: no
+
+Usage:
+
+    team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+
+### Who may run it
+
+`team-read` — the rollout plan reads the team's seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner's alone, and --apply delivers the general seat brief to the team's live seats
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `rollout`
+
+Hidden: no
+
+Usage:
+
+    team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+
+#### Who may run it
+
+`team-read` — the command's only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat's claim and its signed drop
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--apply` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `broker`
 
 Hidden: no
@@ -409,7 +459,7 @@ Hidden: no
 Usage:
 
     team drops [--follow] [--json]
-    team drops --read --seat <seat> [--session <session>]
+    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]
 
 ### Who may run it
 
@@ -419,6 +469,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--epoch` | yes | no | no |
 | `--follow` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
@@ -655,7 +706,7 @@ Usage:
 
     team mcp status [--json]
     team mcp doctor [--json]
-    team mcp serve --seat <seat> [--session <session>] [--file <path>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 
 ### Who may run it
 
@@ -702,7 +753,7 @@ Hidden: no
 
 Usage:
 
-    team mcp serve --seat <seat> [--session <session>] [--file <path>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 
 #### Who may run it
 
@@ -712,6 +763,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--epoch` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--seat` | yes | no | no |

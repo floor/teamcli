@@ -91,6 +91,16 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
+| `brief.current` | `brief` | 0 | --apply left every live or human seat current; the read is not demanded here | `team brief rollout --apply` |
+| `brief.plan` | `brief` | 0 | the dry run found every live or human seat current, and wrote nothing | `team brief rollout` |
+| `brief.file-owner` | `brief` | 1 | --file is the owner's | `team brief rollout --file .agents/team.yaml` |
+| `brief.incomplete` | `brief` | 1 | --apply left a seat stale or failed | `team brief rollout --apply` |
+| `brief.session-owner` | `brief` | 1 | --session is the owner's | `team brief rollout --session other` |
+| `brief.stale` | `brief` | 1 | the dry run found a live or human seat that needs delivery | `team brief rollout` |
+| `brief.file` | `brief` | 2 | the team file can't be read | `team brief rollout` |
+| `brief.file-invalid` | `brief` | 2 | the team file can't be parsed | `team brief rollout` |
+| `brief.invocation` | `brief` | 2 | the invocation can't be read | `team brief` |
+| `brief.not-yours` | `brief` | 2 | the caller may not read this team | `team brief rollout` |
 | `broker.stopped` | `broker` | 0 | the broker served until it was stopped | `team broker` |
 | `broker.bind` | `broker` | 1 | the socket could not be bound | `team broker` |
 | `broker.busy` | `broker` | 1 | a broker is already answering on this clone's socket | `team broker` |

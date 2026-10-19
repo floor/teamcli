@@ -1336,6 +1336,54 @@ export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team brief rollout` (`schema/brief.schema.json`): one
+ *  row per declared seat — the action the plan takes or the outcome `--apply` reached — and the
+ *  counts of those rows. `current` is delivery currency, never a read. */
+export const BRIEF_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.brief',
+  fileName: 'brief.schema.json',
+  title: 'team brief rollout --json output',
+  required: ['format', 'project', 'session', 'apply', 'seats', 'counts'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    apply: { type: 'boolean' },
+    seats: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seat', 'action', 'hash12', 'id', 'from', 'reason', 'current'],
+        properties: {
+          seat: { type: 'string', minLength: 1 },
+          action: { type: 'string', enum: ['current', 'deliver', 'recover', 'recovered', 'not-running', 'human', 'failed'] },
+          // The delivered brief's digest, first twelve hex digits; null when the row names none.
+          hash12: { type: ['string', 'null'] },
+          id: { type: ['string', 'null'] },
+          // The id a recovery moves past: the name that is not this brief's.
+          from: { type: ['string', 'null'] },
+          reason: { type: ['string', 'null'] },
+          current: { type: 'boolean' },
+        },
+      },
+    },
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['current', 'deliver', 'recover', 'not_running', 'human', 'failed'],
+      properties: {
+        current: { type: 'integer', minimum: 0 },
+        deliver: { type: 'integer', minimum: 0 },
+        recover: { type: 'integer', minimum: 0 },
+        not_running: { type: 'integer', minimum: 0 },
+        human: { type: 'integer', minimum: 0 },
+        failed: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team reply` (`schema/reply.schema.json`): one record
  *  written on a thread (`replied`), or a close beside the record it ends (`closed`). */
 export const REPLY_OUTPUT_SCHEMA: CommandSchemaSpec = {
@@ -2163,6 +2211,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ASK_SHOW_OUTPUT_SCHEMA,
   MESSAGES_OUTPUT_SCHEMA,
   DROPS_OUTPUT_SCHEMA,
+  BRIEF_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
   REPLY_OUTPUT_SCHEMA,

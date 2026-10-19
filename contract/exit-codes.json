@@ -598,6 +598,76 @@
     },
     {
       "code": 0,
+      "command": "brief",
+      "id": "brief.current",
+      "meaning": "--apply left every live or human seat current; the read is not demanded here",
+      "trigger": "team brief rollout --apply"
+    },
+    {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.plan",
+      "meaning": "the dry run found every live or human seat current, and wrote nothing",
+      "trigger": "team brief rollout"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team brief rollout --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.incomplete",
+      "meaning": "--apply left a seat stale or failed",
+      "trigger": "team brief rollout --apply"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.session-owner",
+      "meaning": "--session is the owner's",
+      "trigger": "team brief rollout --session other"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.stale",
+      "meaning": "the dry run found a live or human seat that needs delivery",
+      "trigger": "team brief rollout"
+    },
+    {
+      "code": 2,
+      "command": "brief",
+      "id": "brief.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team brief rollout"
+    },
+    {
+      "code": 2,
+      "command": "brief",
+      "id": "brief.file-invalid",
+      "meaning": "the team file can't be parsed",
+      "trigger": "team brief rollout"
+    },
+    {
+      "code": 2,
+      "command": "brief",
+      "id": "brief.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team brief"
+    },
+    {
+      "code": 2,
+      "command": "brief",
+      "id": "brief.not-yours",
+      "meaning": "the caller may not read this team",
+      "trigger": "team brief rollout"
+    },
+    {
+      "code": 0,
       "command": "broker",
       "id": "broker.stopped",
       "meaning": "the broker served until it was stopped",

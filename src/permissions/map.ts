@@ -148,6 +148,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'the broker reads the tracker credential from the owner\'s keychain, one per clone, from a terminal outside herdr',
     },
+    brief: {
+      kind: 'team-read',
+      why: 'the rollout plan reads the team\'s seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner\'s alone, and --apply delivers the general seat brief to the team\'s live seats',
+    },
+    'brief:rollout': {
+      kind: 'team-read',
+      why: 'the command\'s only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat\'s claim and its signed drop',
+    },
     bus: {
       kind: 'owner-only',
       why: 'the bus reconciles the project\'s event log, and the owner runs it, one per clone, from a terminal outside herdr',

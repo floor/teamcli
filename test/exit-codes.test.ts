@@ -17,6 +17,7 @@ import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
+import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { commits } from '../src/commands/commits.ts';
@@ -871,6 +872,61 @@ scene('add.delegate-edit', async (place) => {
   return show(await added(place, ['worker'], addRemoveCaller, addSources(place, {
     delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
   })), 'only a same-copy seat');
+});
+
+async function briefed(place: Place, argv: string[], caller: Caller): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runBrief(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+// A live, settled lead: the state records it on its pane and the launch delivered the brief.
+function settledLead(place: Place): void {
+  recordsLead(place);
+  deliverBriefs({ dir: join(place.root, '.agents'), root: place.root, session: 'acme', seats: ['lead'], home: place.home, at: NOW.toISOString() });
+}
+
+scene('brief.plan', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['rollout'], owner), 'brief lead: current');
+});
+scene('brief.stale', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  return show(await briefed(place, ['rollout'], owner), 'deliver lead:');
+});
+scene('brief.current', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['rollout', '--apply'], owner), 'brief lead: current');
+});
+scene('brief.incomplete', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  // A regular file where the seat's drop folder must be: the claim is written, the record is not.
+  mkdirSync(join(place.root, '.agents', 'send-drops', 'acme'), { recursive: true });
+  writeFileSync(join(place.root, '.agents', 'send-drops', 'acme', 'lead'), 'not a folder\n');
+  return show(await briefed(place, ['rollout', '--apply'], owner), 'failed lead:');
+});
+scene('brief.file-owner', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  return show(await briefed(place, ['rollout', '--file', '.agents/team.yaml'], leadSeat), "--file is the owner's");
+});
+scene('brief.session-owner', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  return show(await briefed(place, ['rollout', '--session', 'other'], leadSeat), "--session is the owner's");
+});
+scene('brief.not-yours', async (place) => {
+  write(place, TEAM);
+  return show(await briefed(place, ['rollout'], other), 'this team is not yours to read');
+});
+scene('brief.invocation', async (place) => show(await briefed(place, ['deploy'], owner), 'unexpected "deploy"'));
+scene('brief.file', async (place) => show(await briefed(place, ['rollout', '--file', 'missing.yaml'], owner), 'no team file'));
+scene('brief.file-invalid', async (place) => {
+  invalid(place);
+  return show(await briefed(place, ['rollout', '--file', 'team.yaml'], owner), 'line');
 });
 
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {
