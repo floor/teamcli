@@ -28,7 +28,14 @@
 // resolver admits no one to either; their wiring asks its own gate. This module decides only:
 // it reads no file, runs nothing, and the same inputs always give the same answer.
 import { sep } from 'node:path';
-import { activeGrants, covers, type GrantRecord } from './grants.ts';
+import {
+  activeGrants,
+  activeSeatScopeForTeam,
+  covers,
+  seatGrantCoversPathForTeam,
+  seatGrantHasActiveScopeForTeam,
+  type GrantRecord,
+} from './grants.ts';
 import { COMMAND_GATES, isCapability, type Capability, type Gate } from './map.ts';
 
 /** Who asks, as a record — not src/caller.ts's walked caller, which says where the ask came
@@ -274,7 +281,27 @@ export function resolveFromHome(
   at: PermissionTarget,
   proof: PermissionProof = {},
 ): PermissionDecision {
-  return resolvePermission(caller, team, command, activeGrants(home, now), at, proof);
+  const active = activeGrants(home, now);
+  const decision = resolvePermission(caller, team, command, active, at, proof);
+  if (
+    decision.effect === 'deny' &&
+    decision.rule === 'absent' &&
+    caller !== null &&
+    caller.kind === 'seat' &&
+    caller.team === team.id &&
+    isCapability(command) &&
+    !active.some((grant) => grant.kind === 'team' && covers(grant, { teamId: team.id }) && grant.capabilities.includes(command))
+  ) {
+    return resolvePermission(
+      caller,
+      team,
+      command,
+      activeGrants(home, now, { teamId: team.id, includeEnvelopeEndedSeatGrants: true }),
+      at,
+      proof,
+    );
+  }
+  return decision;
 }
 
 /**
@@ -309,7 +336,11 @@ function resolveCapability(
   }
   const where = at.path ?? at.root;
   const namedGrants = grants.filter(
-    (grant) => grant.kind === 'seat' && covers(grant, { agentId: caller.agent }) && grant.capabilities.includes(capability),
+    (grant) =>
+      grant.kind === 'seat' &&
+      covers(grant, { agentId: caller.agent }) &&
+      grant.capabilities.includes(capability) &&
+      seatGrantHasActiveScopeForTeam(grant, team.id, capability),
   );
   const named = namedGrants.map((grant) => grant.name).sort();
   const namedByGrant = named.map((name) => `\`${name}\``).join(', ');
@@ -328,11 +359,11 @@ function resolveCapability(
         }, but team ${team.id}'s envelope does not carry it: effective authority is the own list intersected with the envelope, never a union`,
       };
     }
-    if (named.length > 0 && !namedGrants.some((grant) => within(grant.scope, where))) {
+    if (named.length > 0 && !namedGrants.some((grant) => seatGrantCoversPathForTeam(grant, team.id, capability, where))) {
       return {
         effect: 'deny',
         rule: 'outside-scope',
-        why: `\`${capability}\` is named for ${caller.seat} by seat grant ${namedByGrant}, and not within its scope: ${where} is outside ${scopesOf(namedGrants)} — a grant is used within its scope`,
+        why: `\`${capability}\` is named for ${caller.seat} by seat grant ${namedByGrant}, and not within its scope: ${where} is outside ${seatScopesOf(namedGrants, team.id, capability)} — a grant is used within its scope`,
       };
     }
     if (!envelopes.some((grant) => within(grant.scope, where))) {
@@ -383,6 +414,12 @@ function within(scope: readonly string[], path: string): boolean {
 /** The scope paths of the records named, for a refusal's words. */
 function scopesOf(grants: readonly GrantRecord[]): string {
   const paths = [...new Set(grants.flatMap((grant) => grant.scope))].sort();
+  return paths.length > 0 ? paths.join(', ') : 'an empty scope';
+}
+
+/** The active scope paths of the seat grants named for `(teamId, capability)`. */
+function seatScopesOf(grants: readonly GrantRecord[], teamId: string, capability: string): string {
+  const paths = [...new Set(grants.flatMap((grant) => activeSeatScopeForTeam(grant, teamId, capability)))].sort();
   return paths.length > 0 ? paths.join(', ') : 'an empty scope';
 }
 

@@ -32,6 +32,7 @@ import {
   planRevocation,
   readGrants,
   RECORD_NAME_PATTERN,
+  standingRevocationName,
   writeGrant,
   writeRevocation,
   type GrantRecord,
@@ -221,7 +222,11 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
       }
       return 'ok';
     }
-    const request: RevocationRequest = { name: `revoke-${grant.name}`, grant: grant.name, generation: grant.generation };
+    const request: RevocationRequest = {
+      name: standingRevocationName(grant.name, grant.generation, grants, revocations),
+      grant: grant.name,
+      generation: grant.generation,
+    };
     const plan = planRevocation(home, request);
     if (!plan.ok) {
       if (json) {
@@ -232,7 +237,7 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
       return 'invalid';
     }
     if (options.dryRun) {
-      const summary = `revoke: would revoke the grant ${grant.name} at generation ${grant.generation}, writing the record ${request.name}; nothing written`;
+      const summary = `revoke: would revoke the grant ${grant.name} at generation ${grant.generation}, writing the record ${plan.record.name}; nothing written`;
       if (json) {
         writeJson(rawIo, 'team.revoke', {
           format: 1 as const,
