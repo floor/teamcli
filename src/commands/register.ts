@@ -30,6 +30,7 @@ import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, pan
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { deliverRules } from '../launch/deliver.ts';
+import { deliverBriefForAttribution } from '../launch/general-brief.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -647,6 +648,33 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${seatId} — pane ${pane}`, refreshedAt);
         if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
       }
+      // The general seat brief, through the one boundary every attribution path calls. This run
+      // attributed no seat — the record was already here — so the boundary writes a fresh
+      // lifetime for nobody; it delivers where a live seat's claim is missing or another build's,
+      // and an idempotent delivery leaves a current claim and its verified drop as they are. The
+      // call sits after the state record above, and a dry run never reaches this block.
+      const briefs = deliverBriefForAttribution({
+        dir,
+        root,
+        session,
+        home: sources.home,
+        now: refreshedAt,
+        team,
+        state: readState(dir).sessions[session] ?? emptySession(),
+        attributed: [],
+        broadcast: true,
+      });
+      for (const delivery of briefs.deliveries) {
+        if (delivery.ok) continue;
+        const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+        out.stderr(`team register: ${plainText(said)}\n`);
+        logLine(dir, 'register', callerLabel(walked), said, refreshedAt);
+      }
+      if (briefs.recording !== undefined) {
+        const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+        out.stderr(`team register: ${plainText(said)}\n`);
+        logLine(dir, 'register', callerLabel(walked), said, refreshedAt);
+      }
     }
     const ended = `already registered — pane ${plainLine(pane)}`;
     const line = wroteRoster
@@ -830,6 +858,33 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // The record it names is the registry's agent, the id the write above returned.
     const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, pane, session);
     if (refreshed.note) logLine(dir, 'register', callerLabel(walked), refreshed.note, now);
+  }
+  // The general seat brief, through the one boundary every attribution path calls: this run
+  // attributed the seat, so it gets a fresh delivery lifetime, and the broadcast reaches the rest
+  // of the team. The claim is written here, after the state record above and before any line says
+  // the seat is up; the seat itself reads the drop at its next turn. A delivery that cannot be
+  // written is said and logged, and the registration goes on; `team check` names the seat.
+  const briefs = deliverBriefForAttribution({
+    dir,
+    root,
+    session,
+    home: sources.home,
+    now,
+    team,
+    state: readState(dir).sessions[session] ?? emptySession(),
+    attributed: [name],
+    broadcast: true,
+  });
+  for (const delivery of briefs.deliveries) {
+    if (delivery.ok) continue;
+    const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+    out.stderr(`team register: ${plainText(said)}\n`);
+    logLine(dir, 'register', callerLabel(walked), said, now);
+  }
+  if (briefs.recording !== undefined) {
+    const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+    out.stderr(`team register: ${plainText(said)}\n`);
+    logLine(dir, 'register', callerLabel(walked), said, now);
   }
   // The seat's sidebar, painted from the file the way `up` and `add` paint it: the record above
   // makes the seat reachable; these two writes make its own lines say what the file says.
