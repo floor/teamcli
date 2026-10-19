@@ -1221,19 +1221,16 @@ describe('team usage', () => {
 
   test('a file that exists and cannot be read prints the error for the owner, one fixed sentence for anyone else', async () => {
     // A directory where the file would be, in a checkout the loader resolves: the read itself is
-    // what fails (`EISDIR`), and its message is the code and the syscall — a recorded run of this
-    // branch showed exactly `EISDIR: illegal operation on a directory, read`. An errno error's
-    // body can name the path it failed on (`ENOENT: … open '/<path>'`, a recorded probe), so this
-    // body does not pass through either: a caller who is not the owner reads one fixed sentence,
-    // and its tail is not `run team status`, because a run showed `status` throws on this same
-    // fixture instead of printing anything.
+    // what fails. The loader refuses it with its own sentence and marks the problem unreadable,
+    // so the owner reads that reason, while anyone else reads one fixed sentence whose body never
+    // passes through — a read error can name the path it failed on
+    // (`ENOENT: … open '/<path>'`, a recorded probe).
     rmSync(file);
     mkdirSync(file, { recursive: true });
     execFileSync('git', ['init', root], { env: gitEnv(), stdio: 'ignore' });
-    const note = 'EISDIR: illegal operation on a directory, read';
     const owner = await usageAt(root, OWNER);
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain(`note: ${note}\n`);
+    expect(owner.out).toContain(`note: the team file at ${file} could not be read\n`);
     const mine = await usageAt(root, SEAT, '--tree');
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
@@ -1289,7 +1286,8 @@ describe('team usage', () => {
     writeFileSync(file, 'project: [unclosed\n');
     expect(await faces(root)).toContain('note: .agents/team.yaml does not load (line 1): the owner reads the reason\n');
 
-    // A file that exists and cannot be read: the read fails with a bare errno error.
+    // A file that exists and cannot be read: the read itself fails, and the loader's marked
+    // refusal keeps its own sentence for this caller.
     rmSync(file);
     mkdirSync(file, { recursive: true });
     execFileSync('git', ['init', root], { env: gitEnv(), stdio: 'ignore' });
