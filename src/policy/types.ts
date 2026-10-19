@@ -95,6 +95,8 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-lead-seconds',
   'liveness-idle-owner-seconds',
   'delivery-order',
+  'delivery-timeout',
+  'delivery-escalation',
   'brief-transport',
   'sender-line',
   'event-thread-ttl-seconds',
@@ -148,6 +150,8 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   idle_owner_seconds: 'liveness-idle-owner-seconds',
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
+  delivery_timeout: 'delivery-timeout',
+  delivery_escalation: 'delivery-escalation',
   brief_transport: 'brief-transport',
   sender_line: 'sender-line',
   daemon_broker: 'daemon.broker',
@@ -318,6 +322,91 @@ function deliveryOrderProblem(raw: unknown): string | null {
   return null;
 }
 
+/** One `delivery-timeout` word's entries, in the order it names them; an empty part is invalid. */
+function deliveryTimeoutItems(raw: unknown): unknown[] | null {
+  if (typeof raw === 'string') return raw.split(',');
+  if (Array.isArray(raw)) return raw;
+  return null;
+}
+
+/** The budgets a word names; null when the word is not a route map this surface admits. */
+function parseDeliveryTimeoutEntries(raw: unknown): Map<DeliveryTimeoutRoute, number> | null {
+  const items = deliveryTimeoutItems(raw);
+  if (!items || items.length === 0) return null;
+  const entries = new Map<DeliveryTimeoutRoute, number>();
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const text = item.trim();
+    const match = /^([a-z][a-z0-9-]*)=([1-9][0-9]*)$/.exec(text);
+    if (!match) return null;
+    const route = match[1] as DeliveryTimeoutRoute;
+    if (!(DELIVERY_TIMEOUT_ROUTES as readonly string[]).includes(route)) return null;
+    const seconds = Number.parseInt(match[2]!, 10);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86_400) return null;
+    if (entries.has(route)) return null;
+    entries.set(route, seconds);
+  }
+  return entries;
+}
+
+/** The budgets a normalized `delivery-timeout` value carries; a route the word leaves out keeps
+ *  the release default, so every in-force value is a complete map. */
+export function deliveryTimeoutOf(value: unknown): Record<DeliveryTimeoutRoute, number> | null {
+  const entries = parseDeliveryTimeoutEntries(value);
+  if (entries === null) return null;
+  const budgets: Record<DeliveryTimeoutRoute, number> = { ...DELIVERY_TIMEOUT_DEFAULTS };
+  for (const [route, seconds] of entries) budgets[route] = seconds;
+  return budgets;
+}
+
+/** The canonical value: the complete map, in route order (`socket=15,mcp-inbox=15,typed=15`). */
+function formatDeliveryTimeout(budgets: Readonly<Record<DeliveryTimeoutRoute, number>>): string {
+  return DELIVERY_TIMEOUT_ROUTES.map((route) => `${route}=${String(budgets[route])}`).join(',');
+}
+
+function parseDeliveryTimeout(raw: unknown): string | null {
+  const budgets = deliveryTimeoutOf(raw);
+  return budgets === null ? null : formatDeliveryTimeout(budgets);
+}
+
+function deliveryTimeoutProblem(raw: unknown): string | null {
+  const items = deliveryTimeoutItems(raw) ?? [];
+  const routes = items
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.split('=')[0]?.trim() ?? '');
+  if (routes.includes('socket-accepted')) return 'socket-accepted is not available in this release';
+  for (const route of routes) {
+    if (route === 'drop' || route === 'native' || route === 'durable-copy') {
+      return `route "${route}" has no live receipt wait and no attempt budget`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The main delay before a durable escalation reaches the entity orchestrator's mailbox after
+ * every live route has failed: five minutes (Atlas timing decision, 2026-10-20). The
+ * all-live-routes-failed event is immediate at 0 and is not a value this policy can move. The
+ * legacy `event-unreachable-threshold-seconds` remains enforced as a compatibility cap only when
+ * a level declares it; its own release default of 600 does not lengthen this 300.
+ */
+export const DELIVERY_ESCALATION_SECONDS = 300;
+
+/**
+ * The routes `delivery-timeout` may budget: each leg with a live transport attempt. A route with
+ * no live receipt wait — `drop`, `native`, `durable-copy` — is not in the map, and a word naming
+ * one is refused.
+ */
+export const DELIVERY_TIMEOUT_ROUTES = ['socket', 'mcp-inbox', 'typed'] as const;
+export type DeliveryTimeoutRoute = (typeof DELIVERY_TIMEOUT_ROUTES)[number];
+
+/** The reviewed attempt budget per route: fifteen seconds each (Atlas timing decision). */
+export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, number>> = {
+  socket: 15,
+  'mcp-inbox': 15,
+  typed: 15,
+};
+
 /**
  * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
  * sourced directly from `src/settings/inherit.ts`.
@@ -422,6 +511,49 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
       && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+  },
+  // The attempt budget per route: one map, `route=<seconds>` entries separated by commas, with
+  // any route the word leaves out keeping the release default. It is the TOTAL budget for one
+  // attempt at that route — probe, connect, write and any receipt the transport requires — and a
+  // low-level capability may only shorten the remaining budget. The post-submit read-receipt
+  // window is not part of it (`team send --wait` owns that, and a receipt wait is never shorter
+  // than the attempt it follows). `deliveryTimeoutInForce` in `src/policy/delivery.ts` reads the
+  // resolved value; a level may only shorten each route against the value in force, and a word
+  // that leaves a route out restates it at the release default, so it must name the routes it
+  // means to keep at a shortened value.
+  'delivery-timeout': {
+    name: 'delivery-timeout',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: formatDeliveryTimeout(DELIVERY_TIMEOUT_DEFAULTS),
+    gateLifting: false,
+    parseValue: parseDeliveryTimeout,
+    valueProblem: deliveryTimeoutProblem,
+    // Every route in the lower word is at or below the value in force for that route.
+    isWithin: (lower: string, higher: string) => {
+      const lowerBudgets = deliveryTimeoutOf(lower);
+      const higherBudgets = deliveryTimeoutOf(higher);
+      if (lowerBudgets === null || higherBudgets === null) return false;
+      return DELIVERY_TIMEOUT_ROUTES.every((route) => lowerBudgets[route] <= higherBudgets[route]);
+    },
+  },
+  // The one main delay in the fallback path: how long after every live route has failed the
+  // durable escalation reaches the entity orchestrator's mailbox. A shorter delay is the tighter
+  // one, and the release default is the ceiling, so a longer word is refused before it is signed.
+  // The all-live-routes-failed event itself is immediate at 0 and is not in this value. The legacy
+  // `event-unreachable-threshold-seconds` stays enforced beside it as a compatibility cap when a
+  // level declares it; its release default never lengthens this value.
+  // `deliveryEscalationDelay` in `src/policy/delivery.ts` reads both and returns the smaller.
+  'delivery-escalation': {
+    name: 'delivery-escalation',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DELIVERY_ESCALATION_SECONDS,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseShortenableSeconds(raw, DELIVERY_ESCALATION_SECONDS),
+    valueProblem: (raw: unknown) => shortenOnlyProblem('delivery-escalation', raw, DELIVERY_ESCALATION_SECONDS),
+    // Shorter or equal delay is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // How a general seat brief travels (OD50): `file` is the signed record in the seat's own drop
   // folder, as every launch writes it; `message` keeps that same signed record and claim and

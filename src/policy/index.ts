@@ -1,5 +1,9 @@
 export {
   ADVISED_POLICY_NAMES,
+  DELIVERY_ESCALATION_SECONDS,
+  DELIVERY_TIMEOUT_DEFAULTS,
+  DELIVERY_TIMEOUT_ROUTES,
+  deliveryTimeoutOf,
   DEV_MODE_OPERATIONS,
   ENFORCED_POLICY_NAMES,
   getPolicySpec,
@@ -10,6 +14,7 @@ export {
   POLICY_NAME_ALIASES,
   type AdvisedPolicyName,
   type CataloguePolicyName,
+  type DeliveryTimeoutRoute,
   type DevModeOperation,
   type EnforcedPolicyName,
   type Policy,
@@ -18,6 +23,19 @@ export {
   type PolicySpec,
   type PolicyValue,
 } from './types.ts';
+
+export {
+  DELIVERY_LEGACY_ESCALATION_DEFAULT_SECONDS,
+  DELIVERY_PREPROBE_MS,
+  DELIVERY_RECEIPT_SECONDS,
+  deliveryEscalationDelay,
+  deliveryTimeoutInForce,
+  receiptSecondsFor,
+  type DeliveryEscalationDelay,
+  type DeliveryEscalationSource,
+  type DeliveryPolicyInput,
+  type DeliveryTimeoutInForce,
+} from './delivery.ts';
 
 export {
   EVENT_KINDS,
