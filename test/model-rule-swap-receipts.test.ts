@@ -191,15 +191,16 @@ function putReceipt(
   if (!written.ok) throw new Error(written.reason);
 }
 
-/** The launch's current brief for the seat, written and recorded the way the launch does. */
+/** The launch's current brief for the seat, written and recorded the way the launch does. The
+ *  incarnation is the claims cut's delivery lifetime: one fixed value so the derived record id is
+ *  stable across scenes, shaped as the mint (`inc_` and twelve lowercase hex digits). */
 function currentBrief(fx: Fixture): string {
-  // The incarnation is the claims cut's binding; the fixture pins one so the derived id is stable.
   const payload = generalBriefRecord({
     to: 'worker',
     root: fx.root,
     session: SESSION,
     at: NOW.toISOString(),
-    incarnation: 'inc_000000000001',
+    incarnation: 'inc_0a0b0c0d0e01',
   });
   mkdirSync(dropDir(fx), { recursive: true });
   const written = writeRecordOver(dropDir(fx), signRecord(payload, fx.home));
@@ -219,7 +220,7 @@ function supersededBrief(fx: Fixture): string {
     root: fx.root,
     session: SESSION,
     at: NOW.toISOString(),
-    incarnation: 'inc_000000000002',
+    incarnation: 'inc_0a0b0c0d0e02',
     handover: join(fx.base, 'handover-old.txt'),
   });
   mkdirSync(dropDir(fx), { recursive: true });
