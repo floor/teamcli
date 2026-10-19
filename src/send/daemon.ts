@@ -43,6 +43,7 @@ import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliv
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
+import { frameFor, replyLine } from './frame.ts';
 import { declaredInboundOf, inboundIsLive, inboundSkipReason } from './inbound.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
@@ -1197,7 +1198,20 @@ async function executeSocketSend(
   }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
   const startedAt = Date.now();
-  const frame = `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
+  // The reply line rides every frame, built from the sender the request carries and the team
+  // this daemon serves; with no team there is no address, and the frame is not dialed.
+  const sendingTeam = sentAs.from_team;
+  if (sendingTeam === undefined) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: the sending team is not known, so the frame carries no reply address; nothing was sent`,
+    };
+  }
+  const frame = frameFor(body, msgId, replyLine(host.home, from, sendingTeam));
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

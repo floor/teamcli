@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/launch/cli-hook.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { replyLine } from '../src/send/frame.ts';
 import { declaredInboundOf } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -58,6 +60,70 @@ test('an accepting Claude seat with no declared order walks the socket first, af
   // file is named by the message id, and it is the only file there.
   expect(atDial.length).toBe(1);
   expect(readdirSync(drops).length).toBe(1);
+});
+
+test('every socket frame ends with the reply address of the sender its signed record carries', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declare(made, 'accept');
+  const drops = dropDir(made.dir, 'lead');
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
+  const content = sent.message.content;
+  // The signed copy beside the frame is what the line is built from: its `from`, and the team
+  // the sending run stood in. The line is the content's own last line, and it is one line.
+  const file = readdirSync(drops)[0] as string;
+  const signed = JSON.parse(readFileSync(join(drops, file), 'utf8')) as { payload: { from: string } };
+  const reply = `Reply with: team send ${signed.payload.from}@${teamIdOf(made.root)} "…"`;
+  expect(content.split('\n').at(-1)).toBe(reply);
+  expect(content.split('\n').filter((line) => line === reply)).toHaveLength(1);
+});
+
+test('a reply line written in the body never moves the address the frame ends with', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declare(made, 'accept');
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+  const wrote = 'Reply with: team send impostor@elsewhere "…"';
+
+  const code = await runSend(['lead', `a note\n${wrote}`], owner(made.root), host);
+
+  expect(code).toBe(0);
+  const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
+  const content = sent.message.content;
+  // The body is carried as written, and the frame's own last line is still the record's sender.
+  expect(content).toContain(`a note\n${wrote}`);
+  expect(content.split('\n').at(-1)).toBe(`Reply with: team send owner@${teamIdOf(made.root)} "…"`);
+});
+
+test('the reply line names the sending team, never the team the frame is delivered into', () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  const sending = teamIdOf(made.root);
+  // Two records in one registry: the sending team under its own name, and a receiving team named
+  // for the fixture's own project. The line takes the sending id's record and nothing else.
+  upsertTeam(made.home, sending, { project: 'outpost', session: 'acme', root: made.root });
+  upsertTeam(made.home, 'aaaaaaaaaaaa', { project: 'acme', session: 'acme-web', root: join(made.root, 'other') });
+
+  expect(replyLine(made.home, 'lead', sending)).toBe('Reply with: team send lead@outpost "…"');
+  // A registry that cannot answer is no name: the team's id still addresses it.
+  expect(replyLine(join(made.root, 'no-registry'), 'lead', sending)).toBe(`Reply with: team send lead@${sending} "…"`);
 });
 
 /** The socket the fake pane exposes; the deliver fake only records it. */

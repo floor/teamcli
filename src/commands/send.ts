@@ -38,6 +38,7 @@ import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS,
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
+import { frameFor, replyLine } from '../send/frame.ts';
 import { declaredInboundOf, inboundIsLive, inboundSkipReason, type InboundDeclaration } from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
@@ -2229,12 +2230,6 @@ function socketDirs(host: SendHost): string {
   return host.socketsDirAlt === undefined ? host.socketsDir : `${host.socketsDir}, ${host.socketsDirAlt}`;
 }
 
-/** The one frame this channel carries: `type:"user"`, the whole body, the id. `JSON.stringify`
- *  keeps multi-line text one line. */
-function frameFor(body: string, msgId: string): string {
-  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: body }, msg_id: msgId })}\n`;
-}
-
 type SocketAttempt = { kind: 'delivered' } | { kind: 'held'; reason: string } | { kind: 'fallback'; reason: string };
 
 /** The one sentence a held socket frame reports: the pane, the frame's state, and why nothing
@@ -2295,7 +2290,14 @@ async function deliverSocketFrame(
   // The address as written, when it was a form: every history line carries it beside the seat.
   const sentAs = to.sentAs === null ? {} : to.sentAs;
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
-  const frame = frameFor(body, msgId);
+  // The reply line names the seat the signed record carries and the team this run stood in; a
+  // team the run does not know is no address at all, and the frame is not dialed rather than
+  // answering somewhere guessed.
+  const sendingTeam = report.from_team;
+  if (sendingTeam === undefined) {
+    return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
+  }
+  const frame = frameFor(body, msgId, replyLine(host.home, payload.from, sendingTeam));
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
