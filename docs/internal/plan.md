@@ -19,17 +19,19 @@ A deadline the clock has passed is marked overdue here. The mark decides nothing
 record is still takeable and is never dropped, blocked, reordered or released by lateness. An
 unparseable deadline is printed as written and unmarked.
 
-The source is a file the owner committed, or a tracker the owner's broker reads. On a broker
-source, `team plan` asks the broker the same read `team next` asks, and claims nothing. The
-broker holds the tracker credential; this command never reads it.
+The source is a file the owner committed, or a tracker the owner's broker reads. A team that
+names no source reads its own local queue, `.agents/queue.yaml`; a missing one is an empty
+queue. On a broker source, `team plan` asks the broker the same read `team next` asks, and
+claims nothing. The broker holds the tracker credential; this command never reads it.
 
 The mark is against this clone's clock. Another machine's clock may disagree.
 
 ## What it reads and writes
 
 Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
-the team file, and the YAML list at `tasks.path`. The path is relative to that root. A record's
-`id` and `title` are required. The plain plan is the
+the team file, and the YAML list at `tasks.path` — or, when the team file names no source, the
+local queue at `.agents/queue.yaml`. The path is relative to that root. A record's `id` and
+`title` are required. The plain plan is the
 contract's table: one row per takeable record, in `team next`'s order — priority first (a number
 before a text, ascending), then the `tasks.fallback` tie-break — with the queue position, the
 STATE mark, the owner or `-`, and the title. Every other field the record carries is in the
@@ -75,7 +77,6 @@ The read is bounded, and it says so.
 
 ```text
 team plan: only a seat of this team pulls a task; this call is owner
-team plan: the team file declares no task source
 team plan: tasks.source must be file
 team plan: tasks.path must stay inside the checkout
 team plan: the task file is not there

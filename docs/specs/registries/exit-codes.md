@@ -213,7 +213,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `init.not-a-repo` | not inside a git repository | present at 0.5.0 | `contract/exit-codes.json` | command `init`; exit `2` |
 | `issues.none` | nothing is waiting | present at 0.5.0 | `contract/exit-codes.json` | command `issues`; exit `0` |
 | `issues.shown` | the task list was shown | present at 0.5.0 | `contract/exit-codes.json` | command `issues`; exit `0` |
-| `issues.file` | the team file can't be read, it declares no task source, or its source is a broker's | present at 0.5.0 | `contract/exit-codes.json` | command `issues`; exit `1` |
+| `issues.file` | the team file can't be read, its source is a broker's, or its task path can't be used | present at 0.5.0 | `contract/exit-codes.json` | command `issues`; exit `1` |
 | `issues.missing` | the task file is not there | present at 0.5.0 | `contract/exit-codes.json` | command `issues`; exit `1` |
 | `issues.shape` | a record is not a task, or the task file is not a list | present at 0.5.0 | `contract/exit-codes.json` | command `issues`; exit `1` |
 | `issues.invocation` | the invocation can't be read | present at 0.5.0 | `contract/exit-codes.json` | command `issues`; exit `2` |
@@ -251,7 +251,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `next.wait` | the wait was stopped, or a clock that did not advance ended it | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `0` |
 | `next.broker` | no broker is running, or its answer was not one this build knows | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `1` |
 | `next.caller` | the caller is not a seat of this team on its recorded pane | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `1` |
-| `next.file` | the team file can't be read, or it declares no task source | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `1` |
+| `next.file` | the team file can't be read, or its task source or task path can't be used | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `1` |
 | `next.missing` | the task file is not there | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `1` |
 | `next.policy` | a task policy the validator refuses | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `1` |
 | `next.read` | the broker failed the read | present at 0.5.0 | `contract/exit-codes.json` | command `next`; exit `1` |
@@ -262,7 +262,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `plan.shown` | the takeable queue was printed | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `0` |
 | `plan.broker` | no broker is running, or its answer was not one this build knows | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `1` |
 | `plan.caller` | the caller is not a seat of this team on its recorded pane | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `1` |
-| `plan.file` | the team file can't be read, or it declares no task source | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `1` |
+| `plan.file` | the team file can't be read, or its task source or task path can't be used | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `1` |
 | `plan.missing` | the task file is not there | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `1` |
 | `plan.read` | the broker failed the read | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `1` |
 | `plan.shape` | nothing was printed, and a record is not a task or the task file is not a list | present at 0.5.0 | `contract/exit-codes.json` | command `plan`; exit `1` |

@@ -7,7 +7,8 @@ codes stay on the page.
 
 ## What the run does: the intake, the lease, the take
 
-Claims one record from the file the team file names, and holds it with a lease in this clone.
+Claims one record from the file the team file names — or, when it names no source, this clone's
+local queue — and holds it with a lease in this clone.
 A seat cannot pull until `team up` has recorded its pane.
 
 The source is a file the owner committed, or a tracker the owner's broker reads. On a broker
@@ -32,8 +33,10 @@ The watch's ring is unchanged: `Team: run team drops --read --seat <seat> --sess
 ## What it reads and writes
 
 Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
-the team file, the YAML list at `tasks.path`, and the lease files under `.agents/leases/`
-at that root. The path is relative to that root. A record's `id` and `title` are required.
+the team file, the YAML list at `tasks.path` — or, when the team file names no source, the
+local queue at `.agents/queue.yaml`, whose absence is an empty queue — and the lease files
+under `.agents/leases/` at that root. The path is relative to that root. A record's `id` and
+`title` are required.
 The printed block is the `team issues` block, one record. No lease field is printed.
 
 On a broker source it reads the same root and team file, then asks the broker over
@@ -109,7 +112,6 @@ take proceeds with the notice, never with a silent truncation.
 ```text
 team next: only a seat of this team pulls a task; this call is owner
 team next: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
-team next: the team file declares no task source
 team next: the team is paused (paused since <instant> by <who>); nothing new is claimed until `team resume`
 team next: <seat> waits on a swap: <the queue's line>; nothing new is claimed until it runs or `team swap cancel <seat>`
 team next: tasks.source must be file

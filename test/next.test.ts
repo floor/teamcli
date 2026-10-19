@@ -400,8 +400,10 @@ describe('team next', () => {
         },
       },
     };
+    // A team that declares no source reads its own local queue: an absent one is an empty
+    // queue that says nothing is takeable, and the injected registry is not consulted.
     ready(TEAM, null);
-    expect(await run([], lead, registry)).toEqual({ code: 1, out: '', err: 'team next: the team file declares no task source\n' });
+    expect(await run([], lead, registry)).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
     expect(read).toBe(false);
     ready(WITH, null);
     expect(await run()).toEqual({ code: 1, out: '', err: 'team next: the task file is not there\n' });

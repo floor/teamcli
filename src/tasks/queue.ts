@@ -18,8 +18,10 @@ import { fileAdapter } from './file.ts';
 export const LOCAL_QUEUE = '.agents/queue.yaml';
 
 /** The tasks value `team next` and its listing commands read for a team with no task source:
- *  the local queue as a file source, with the file source's defaults. */
-export const LOCAL_TASKS = { source: 'file', path: LOCAL_QUEUE } as const;
+ *  the local queue as a file source, with the file source's defaults. Typed as the team file's
+ *  own tasks union so a command that falls back to it reads `pull`, `fallback` and `cadence`
+ *  exactly as it reads a declared section's. */
+export const LOCAL_TASKS: NonNullable<TeamFile['tasks']> = { source: 'file', path: LOCAL_QUEUE };
 
 /** The file source one command reads: the owner's declared path, or the local queue when the
  *  team file declares no tasks section. Null only when a tracker is declared. */

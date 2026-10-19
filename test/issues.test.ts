@@ -176,8 +176,9 @@ describe('team issues', () => {
     expect(await run()).toEqual({ code: 0, out: `${CONTEXT}0 issues\n`, err: '' });
     rmSync(join(root, '.agents', 'tasks.yaml'));
     expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: the task file is not there\n' });
+    // A team that declares no source lists its own local queue: an absent one reads empty.
     project(TEAM);
-    expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: the team file declares no task source\n' });
+    expect(await run()).toEqual({ code: 0, out: `${CONTEXT}0 issues\n`, err: '' });
   });
 
   test('repos and needs mark the record blocked; --json carries both and judges neither', async () => {

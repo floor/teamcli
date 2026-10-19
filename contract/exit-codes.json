@@ -1622,7 +1622,7 @@
       "code": 1,
       "command": "issues",
       "id": "issues.file",
-      "meaning": "the team file can't be read, it declares no task source, or its source is a broker's",
+      "meaning": "the team file can't be read, its source is a broker's, or its task path can't be used",
       "trigger": "team issues"
     },
     {
@@ -1937,7 +1937,7 @@
       "code": 1,
       "command": "next",
       "id": "next.file",
-      "meaning": "the team file can't be read, or it declares no task source",
+      "meaning": "the team file can't be read, or its task source or task path can't be used",
       "trigger": "team next"
     },
     {
@@ -2084,7 +2084,7 @@
       "code": 1,
       "command": "plan",
       "id": "plan.file",
-      "meaning": "the team file can't be read, or it declares no task source",
+      "meaning": "the team file can't be read, or its task source or task path can't be used",
       "trigger": "team plan"
     },
     {

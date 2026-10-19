@@ -237,7 +237,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.not-a-repo` | `init` | 2 | not inside a git repository | `team init` |
 | `issues.none` | `issues` | 0 | nothing is waiting | `team issues` |
 | `issues.shown` | `issues` | 0 | the task list was shown | `team issues` |
-| `issues.file` | `issues` | 1 | the team file can't be read, it declares no task source, or its source is a broker's | `team issues` |
+| `issues.file` | `issues` | 1 | the team file can't be read, its source is a broker's, or its task path can't be used | `team issues` |
 | `issues.missing` | `issues` | 1 | the task file is not there | `team issues` |
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
@@ -282,7 +282,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.wait` | `next` | 0 | the wait was stopped, or a clock that did not advance ended it | `team next --wait` |
 | `next.broker` | `next` | 1 | no broker is running, or its answer was not one this build knows | `team next` |
 | `next.caller` | `next` | 1 | the caller is not a seat of this team on its recorded pane | `team next` |
-| `next.file` | `next` | 1 | the team file can't be read, or it declares no task source | `team next` |
+| `next.file` | `next` | 1 | the team file can't be read, or its task source or task path can't be used | `team next` |
 | `next.missing` | `next` | 1 | the task file is not there | `team next` |
 | `next.paused` | `next` | 1 | the team is paused, so nothing was claimed | `team next` |
 | `next.policy` | `next` | 1 | a task policy the validator refuses | `team next` |
@@ -303,7 +303,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `plan.shown` | `plan` | 0 | the takeable queue was printed | `team plan` |
 | `plan.broker` | `plan` | 1 | no broker is running, or its answer was not one this build knows | `team plan` |
 | `plan.caller` | `plan` | 1 | the caller is not a seat of this team on its recorded pane | `team plan` |
-| `plan.file` | `plan` | 1 | the team file can't be read, or it declares no task source | `team plan` |
+| `plan.file` | `plan` | 1 | the team file can't be read, or its task source or task path can't be used | `team plan` |
 | `plan.missing` | `plan` | 1 | the task file is not there | `team plan` |
 | `plan.read` | `plan` | 1 | the broker failed the read | `team plan` |
 | `plan.shape` | `plan` | 1 | nothing was printed, and a record is not a task or the task file is not a list | `team plan` |
