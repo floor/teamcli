@@ -4,7 +4,11 @@ Restarts one declared seat in place without editing `.agents/team.yaml`: prints 
 turn and context facts, asks a free seat to exit and waits for its pane to return to its shell,
 closes its workspace, and launches the seat again in a fresh workspace. A seat that is busy —
 working, blocked at a prompt, at its own exit question, or holding unsent text — is left as it is
-unless `--abandon` is given. A screen the profile does not recognise is advice, not a block: when
+unless `--abandon` is given. Unsent text is the exception: an idle seat holding it is restarted,
+its text copied under the state folder before the close and pasted back into the new pane's box —
+multi-line included — as soon as the seat's prompt is ready. Where the CLI has no measured input
+keys, or the box cannot be copied faithfully (behind a paste chip, a row the reader cannot read),
+the seat is left as it is. A screen the profile does not recognise is advice, not a block: when
 herdr reports the seat idle or done, the workspace is closed without typing into it, and the run
 says the screen was not read. A seat whose profile says herdr cannot report it
 (`herdr_status: unreliable`) is free when its own screen reads idle, and it is stopped on its
@@ -37,7 +41,7 @@ profile's exit key there.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the seat was restarted | the three pre-close facts, `<seat>: stopped`, the launch record, and `team restart: restarted <seat>; pane <old-pane> -> <new-pane>` | 0 |
+| the seat was restarted | the three pre-close facts, `<seat>: stopped`, the launch record, `<seat>: unsent text pasted back` when the box held unsent text, and `team restart: restarted <seat>; pane <old-pane> -> <new-pane>` | 0 |
 | `--dry-run` succeeded | the stop line and the launch plan | 0 |
 | the run was refused, or the seat was left behind | `team restart: <reason>` | 1 |
 | the invocation or the team file can't be read | `team restart: <problem>` and the usage | 2 |
