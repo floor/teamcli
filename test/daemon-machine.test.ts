@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { daemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { daemonSocketPath } from '../src/daemon/paths.ts';
+import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath, machineConfigDir } from '../src/daemon/paths.ts';
 import { daemonSocketPath as sendSocketPath } from '../src/send/daemon.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceRunResult } from '../src/daemon/service.ts';
@@ -110,6 +110,29 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     expect(existsSync(daemonSocketPath(home))).toBe(false);
     const after = await daemonHealth(home);
     expect(after.state).toBe('not-running');
+  });
+
+  test('the machine folder is 0700 and its socket, state, lock and log are 0600', async () => {
+    const { root, home } = scratch();
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 10_000,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      const mode = (path: string): number => statSync(path).mode & 0o777;
+      expect(mode(machineConfigDir(home))).toBe(0o700);
+      expect(mode(daemonSocketPath(home))).toBe(0o600);
+      expect(mode(daemonStatePath(home))).toBe(0o600);
+      expect(mode(daemonLockPath(home))).toBe(0o600);
+      expect(mode(daemonLogPath(home))).toBe(0o600);
+    } finally {
+      await started.daemon.close();
+    }
   });
 });
 

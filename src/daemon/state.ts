@@ -1,4 +1,4 @@
-// The one machine daemon's state record (`<home>/.config/teamcli/daemon.state.json`, mode 0600).
+// The one machine daemon's state record (`<home>/.config/team/daemon.state.json`, mode 0600).
 // The daemon writes it at start and refreshes `heartbeatAt` while it serves; `team status`,
 // `team check` and the daemon's own health answer read it through this module.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
