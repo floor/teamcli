@@ -495,6 +495,181 @@ export function agentStatus(pane: string, session?: string): string | null {
   return agentList(session)?.find((agent) => agent.pane === pane)?.status ?? null;
 }
 
+export type HerdrAgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
+
+export const HERDR_AGENT_STATUSES: readonly HerdrAgentStatus[] = [
+  'idle',
+  'working',
+  'blocked',
+  'done',
+  'unknown',
+];
+
+export function isHerdrAgentStatus(value: unknown): value is HerdrAgentStatus {
+  return (
+    value === 'idle'
+    || value === 'working'
+    || value === 'blocked'
+    || value === 'done'
+    || value === 'unknown'
+  );
+}
+
+export type HerdrWaitOutcome =
+  | {
+      outcome: 'changed';
+      status: HerdrAgentStatus;
+      pane: string;
+      workspace?: string;
+      agent?: string;
+    }
+  | { outcome: 'timeout' }
+  | { outcome: 'error'; message: string };
+
+export type HerdrWaitExec = (
+  args: string[],
+  signal?: AbortSignal,
+) => Promise<{ code: number | null; stdout: string; stderr: string }>;
+
+const shellWaitExec: HerdrWaitExec = (args, signal) =>
+  new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ code: null, stdout: '', stderr: 'timed out waiting for agent status change' });
+      return;
+    }
+    let child;
+    try {
+      child = spawn('herdr', args, { stdio: ['ignore', 'pipe', 'pipe'], signal });
+    } catch (error) {
+      resolve({ code: 1, stdout: '', stderr: String(error) });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', (error: Error & { name?: string }) => {
+      if (signal?.aborted || error.name === 'AbortError') {
+        resolve({ code: null, stdout, stderr: 'timed out waiting for agent status change' });
+        return;
+      }
+      resolve({ code: 1, stdout, stderr: stderr || error.message });
+    });
+    child.on('close', (code) => {
+      if (signal?.aborted && code !== 0) {
+        resolve({ code, stdout, stderr: 'timed out waiting for agent status change' });
+        return;
+      }
+      resolve({ code, stdout, stderr });
+    });
+  });
+
+let waitExec: HerdrWaitExec = shellWaitExec;
+
+/** Swaps the async process runner `waitAgentStatus` uses; null restores the real `herdr` spawn. */
+export function setHerdrWaitExec(exec: HerdrWaitExec | null): void {
+  waitExec = exec ?? shellWaitExec;
+}
+
+/** Parses one `herdr wait agent-status` exit and output into a structured wait outcome.
+ *  Probed against herdr 0.7.1:
+ *  - match exits 0 and prints `{"event":"pane.agent_status_changed","data":{"pane_id":"...","workspace_id":"...","agent_status":"done",...}}`
+ *  - timeout exits 1 and prints `timed out waiting for agent status change`
+ *  - invalid pane / unreachable daemon exits non-zero with a JSON error envelope or message. */
+export function parseWaitAgentStatusOutput(
+  code: number | null,
+  stdout: string,
+  stderr: string,
+  fallbackPane: string,
+  requestedStatus: HerdrAgentStatus,
+): HerdrWaitOutcome {
+  const trimmedOut = stdout.trim();
+  const trimmedErr = stderr.trim();
+  const combined = `${trimmedOut}\n${trimmedErr}`.toLowerCase();
+  if (code !== 0 && combined.includes('timed out waiting for agent status change')) {
+    return { outcome: 'timeout' };
+  }
+  if (code === 0) {
+    if (trimmedOut !== '') {
+      try {
+        const body = JSON.parse(trimmedOut) as HerdrEnvelope & {
+          event?: unknown;
+          data?: {
+            pane_id?: unknown;
+            workspace_id?: unknown;
+            agent_status?: unknown;
+            agent?: unknown;
+          };
+        };
+        if (isHerdrError(body)) {
+          return { outcome: 'error', message: trimmedOut };
+        }
+        const rawStatus = body.data?.agent_status;
+        const status = isHerdrAgentStatus(rawStatus) ? rawStatus : requestedStatus;
+        const pane = typeof body.data?.pane_id === 'string' && body.data.pane_id !== ''
+          ? body.data.pane_id
+          : fallbackPane;
+        const workspace = typeof body.data?.workspace_id === 'string' && body.data.workspace_id !== ''
+          ? body.data.workspace_id
+          : undefined;
+        const agent = typeof body.data?.agent === 'string' && body.data.agent !== ''
+          ? body.data.agent
+          : undefined;
+        return {
+          outcome: 'changed',
+          status,
+          pane,
+          ...(workspace !== undefined ? { workspace } : {}),
+          ...(agent !== undefined ? { agent } : {}),
+        };
+      } catch {
+        return { outcome: 'error', message: `invalid json from herdr wait agent-status: ${trimmedOut}` };
+      }
+    }
+    return { outcome: 'changed', status: requestedStatus, pane: fallbackPane };
+  }
+  return {
+    outcome: 'error',
+    message: trimmedErr || trimmedOut || 'herdr wait agent-status failed',
+  };
+}
+
+/** Waits for `pane`'s agent status in `herdr` to reach `status` within `timeoutMs`.
+ *  Read-only: never types or sends a key into any pane. */
+export async function waitAgentStatus(
+  pane: string,
+  status: HerdrAgentStatus,
+  timeoutMs = 30_000,
+  session?: string,
+  signal?: AbortSignal,
+): Promise<HerdrWaitOutcome> {
+  const args = [
+    ...(session && session !== 'default' ? ['--session', session] : []),
+    'wait',
+    'agent-status',
+    pane,
+    '--status',
+    status,
+    '--timeout',
+    String(Math.max(1, Math.round(timeoutMs))),
+  ];
+  try {
+    const { code, stdout, stderr } = await waitExec(args, signal);
+    return parseWaitAgentStatusOutput(code, stdout, stderr, pane, status);
+  } catch (error) {
+    return {
+      outcome: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 // The herdr versions this version of `team` was run with.
 export const HERDR_TESTED = { from: '0.7.1', to: '0.7.1' };
 

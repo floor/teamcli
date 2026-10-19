@@ -27,7 +27,7 @@ import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
-import { newMemory, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { newMemory, NUDGE_TEXT, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
@@ -58,6 +58,51 @@ import {
 } from '../bus/server.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
+import {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isScreenVerifiedStatusCli,
+  isStatusWaiterSeat,
+  reconcileStatusWithScreen,
+  seatHasAssignedWorkOnDisk,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+} from '../watch/status-events.ts';
+
+export {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isScreenVerifiedStatusCli,
+  isStatusWaiterSeat,
+  reconcileStatusWithScreen,
+  seatHasAssignedWorkOnDisk,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+};
 
 // What the watch reads and does outside its own process, so tests can stand in for it.
 export type WatchSources = {
@@ -128,6 +173,8 @@ export type WatchSources = {
    *  and watch resyncs from records. `reason` is `'retention'` when retained drop records declare
    *  the missing window. */
   onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
+  /** Optional herdr status-event source (`herdr wait agent-status` per seat). */
+  statusSource?: StatusSource;
 };
 
 export const realWatchSources: WatchSources = {
@@ -169,6 +216,7 @@ export const realWatchSources: WatchSources = {
   // to `owner` and what the raising side addresses to `owner`. It is never a seat name.
   busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'owner', cursor }, { deadlineMs: 500 }),
   busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
+  statusSource: herdrStatusSource(),
 };
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
@@ -456,6 +504,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let paneGoneOnce = false;
   // The agents and panes of the last whole read: what the label sweep between passes works on.
   let lastLive: Live | null = null;
+  let statusEngine: SeatStatusEngine | undefined;
+  let statusWaiters: { stop(): void; done: Promise<void> } | undefined;
+  let statusWaitersKey = '';
   try {
     for (;;) {
       // The file is read again on every pass, so a seat parked or stopped since is seen.
@@ -550,10 +601,71 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         silent = true;
       } else {
         silent = false;
+        // `human: true` seats have zero screen reads and zero keys typed (`workspace-adapters` §6).
+        for (const seat of team.seats) {
+          if (seat.human !== true) continue;
+          const humanAgent = live.agents.find((candidate) => candidate.name === seat.name);
+          if (humanAgent) delete live.screens[humanAgent.pane];
+        }
         noteWorked(dir, session, live, sources.now());
         const whole = readState(dir);
         const state = whole.sessions[session] ?? emptySession();
         const now = sources.now().getTime();
+        if (!foreign && sources.statusSource !== undefined) {
+          statusEngine ??= createSeatStatusEngine({
+            team,
+            session,
+            root,
+            home: sources.home,
+            source: sources.statusSource,
+            now: () => sources.now().getTime(),
+            graceMs: inForce.interval * 1000,
+            publish: sources.busPublish,
+          });
+          const panesBySeat: Record<string, string> = {};
+          for (const seat of team.seats) {
+            if (seat.human === true || seat.stopped === true) continue;
+            const agent = live.agents.find((candidate) => candidate.name === seat.name);
+            if (!agent) continue;
+            panesBySeat[seat.name] = agent.pane;
+            const hasSidebarLabel = Boolean(memory.seatLabels[seat.name]?.title);
+            const readScreenNow = shouldReadScreenForStatus(seat, agent.status, hasSidebarLabel);
+            const liveScreen = live.screens[agent.pane];
+            const rawScreen = readScreenNow
+              ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (sources.screen(agent.pane, session) ?? liveScreen))
+              : undefined;
+            if (rawScreen !== undefined && rawScreen !== '') {
+              live.screens[agent.pane] = rawScreen;
+            }
+            if (herdrUnreliable(seat.cli)) {
+              await statusEngine.pollUnreliableSeat(seat.name, rawScreen ?? liveScreen, now, agent.pane);
+            } else if (
+              agent.status === 'idle'
+              || agent.status === 'working'
+              || agent.status === 'blocked'
+              || agent.status === 'done'
+              || agent.status === 'unknown'
+            ) {
+              const verifyScreen = isScreenVerifiedStatusCli(seat.cli) || agent.status === 'blocked'
+                ? rawScreen
+                : undefined;
+              await statusEngine.observe(seat.name, agent.status, now, agent.pane, verifyScreen);
+            }
+          }
+          await statusEngine.tick(now);
+          const nextPanesKey = Object.entries(panesBySeat)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, v]) => `${k}=${v}`)
+            .join(',');
+          if (nextPanesKey !== statusWaitersKey) {
+            statusWaiters?.stop();
+            await statusWaiters?.done;
+            statusWaitersKey = nextPanesKey;
+            statusWaiters = nextPanesKey === ''
+              ? undefined
+              : statusEngine.startWaiters(panesBySeat, { timeoutMs: Math.min(9_000, inForce.interval * 1000) });
+          }
+        }
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the
         // pass reads what they read, and nothing else. Only their state is ever said — a
         // contract failure or a timeout says `unreadable`, never a line of what they printed.
@@ -676,6 +788,21 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             else say(`${label.name}: its display was not reported`, false);
           }
         }
+        if (!foreign && statusEngine !== undefined) {
+          for (const nudgedSeat of statusEngine.drainNudges()) {
+            if (result.work.some((item) => item.seat === nudgedSeat)) continue;
+            const fileSeat = team.seats.find((item) => item.name === nudgedSeat);
+            const agent = live.agents.find((item) => item.name === nudgedSeat);
+            if (!fileSeat || !agent || fileSeat.human === true || fileSeat.parked || fileSeat.stopped) continue;
+            const body = (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', nudgedSeat);
+            result.work.push({
+              pane: agent.pane,
+              seat: nudgedSeat,
+              cli: fileSeat.cli,
+              body,
+            });
+          }
+        }
         const delivered = new Set<string>();
         if (!foreign) {
           for (const item of result.work) {
@@ -758,7 +885,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const last = lastLive;
         if (last === null) return;
         const { failed } = labelSweep({
-          seats: team.seats,
+          seats: team.seats.filter((seat) => seat.human !== true),
           agents: last.agents,
           memory,
           read: (pane) => sources.screen(pane, session),
@@ -769,6 +896,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       if (!(await sources.wait(inForce.interval, sweep))) break;
     }
   } finally {
+    statusWaiters?.stop();
+    await statusWaiters?.done;
     updateState(dir, (state) => {
       const record = state.sessions[session];
       if (record?.watch?.pid === sources.pid) delete record.watch;
