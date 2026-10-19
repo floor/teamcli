@@ -91,6 +91,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not emit `seat.at-prompt` twice. Profiles whose herdr status is unreliable keep the screen
   module, `human: true` seats are never waited on and their screens are never read, and a status
   waiter never types or sends keys.
+- **`team sessions` lists the session records TeamCLI keeps.** Every launch and stop command now
+  writes an append-only registry, one event per line, in the project's machine state folder —
+  never from an agent's word. `up` and `add` write a `start` when a pane takes the launch line;
+  `restart` closes a record with reason `restart`, `reload` with `swap`, and `down` or `remove`
+  with `owner-stop`; a `start` that finds a session still open for the same team, herdr session
+  and seat closes it as `crash`, and a launch after a drift repair or a reload closes the old
+  record as `swap` and links the new one. A record holds what the launching command knew — seat,
+  team and entity, CLI and lab, declared model, version and effort, account, herdr session, pane
+  and workspace, the previous session of the seat, and the CLI session id where the CLI takes one
+  — and a field no command wrote is absent. `team sessions [<seat>] [--by model|team|entity]
+  [--json]` lists them from every state folder on the machine, so it runs anywhere and needs no
+  team file: SESSION, SEAT, TEAM, MODEL, STARTED, ENDED, WHY (`swap`, `restart`, `crash`,
+  `owner-stop`; `quota` is in the vocabulary with no writer yet) and COST, which prints `unknown`
+  — never `0` — until a command measures it. `--by` groups the listing under one heading per
+  value, and `--json` carries each record whole, absent keys absent. A Claude Code launch line
+  that chooses no session gets `--session-id <uuid>` appended; one that already carries
+  `--session-id`, `--resume`/`-r` or `--continue`/`-c` is left as the owner wrote it, and an id
+  the line spells is recorded. The id is the one TeamCLI set — it never reads the CLI's own
+  session files — and reading a record back into a launch is not part of this release.
 
 ### Changed
 
