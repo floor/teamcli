@@ -169,6 +169,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.service-unavailable` | `daemon` | 1 | no system service manager adapter is available on this platform yet | `team daemon install` |
 | `daemon.uninstall-failed` | `daemon` | 1 | the system service manager refused to stop or remove the unit | `team daemon uninstall` |
 | `daemon.no-root` | `daemon` | 2 | no checkout was named and the current folder has no readable team file | `team daemon install` |
+| `daemon.run-root` | `daemon` | 2 | a checkout named on run cannot be read, so nothing was started | `team daemon run` |
 | `daemon.usage` | `daemon` | 2 | the invocation cannot be read | `team daemon watch` |
 | `delegate.done` | `delegate` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team delegate <session/pane> --commands up,down` |
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |

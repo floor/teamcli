@@ -253,6 +253,14 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       return 1;
     }
     const named = rootsOf(parsed, io, home);
+    // A named root that cannot be read is refused rather than silently dropped: the service
+    // unit's checkout list is validated when it is written, and a missing checkout must be
+    // visible instead of starting a daemon that hosts nothing.
+    if ('problem' in named && parsed.roots.length > 0) {
+      refuse(io, parsed.json, 'daemon', { id: 'daemon.run-root', message: named.problem, repair: null });
+      // exit: daemon.run-root
+      return 2;
+    }
     const roots = 'problem' in named ? [] : named.roots;
     const started = await (sources.start ?? startMachineDaemon)({
       home,

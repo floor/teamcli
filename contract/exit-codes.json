@@ -1145,6 +1145,13 @@
     {
       "code": 2,
       "command": "daemon",
+      "id": "daemon.run-root",
+      "meaning": "a checkout named on run cannot be read, so nothing was started",
+      "trigger": "team daemon run"
+    },
+    {
+      "code": 2,
+      "command": "daemon",
       "id": "daemon.usage",
       "meaning": "the invocation cannot be read",
       "trigger": "team daemon watch"
