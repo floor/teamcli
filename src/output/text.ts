@@ -246,21 +246,29 @@ function narrowestWho(legs: readonly DifferenceWho[]): DifferenceWho {
  * Maps a `team <command>` name to the first `DifferenceWho` that applies from
  * the permission map (`src/permissions/map.ts`) and grant scopes (`src/file/types.ts`):
  * - `owner-only` → `'the owner'`
- * - `owner-or-leads` / `pane-authority` → `"the team's lead"`
+ * - `owner-or-leads` / `pane-authority` / `team-change` → `"the team's lead"`
  * - `capability` / `GRANT_SCOPES` (`reload`, `swap`, `approve`) → `'a grant holder'`
- * - `seat-record` / `owner-or-own-team` / `admission` → `'any seat'`
+ * - `seat-record` / `owner-or-own-team` / `admission` / `team-read` → `'any seat'`
  * - `any-caller` / `seat-only` / `leads-only` → `"the team's lead"`, the answer the fallback
  *   gives: the rows 0.5.2 adds describe who the contract admits, and they leave every
- *   difference's actor as it was.
+ *   difference's actor as it was. A row's `terminal` requirement narrows none of these: the
+ *   differences keep the actor they had before the requirement was stated.
  */
 export function whoFromCommand(command: string): DifferenceWho {
   if (command === 'tempo' || command === 'broker') return 'the owner';
   const gate = COMMAND_GATES[command];
   if (gate) {
     if (gate.kind === 'owner-only') return 'the owner';
-    if (gate.kind === 'owner-or-leads' || gate.kind === 'pane-authority') return "the team's lead";
+    if (gate.kind === 'owner-or-leads' || gate.kind === 'pane-authority' || gate.kind === 'team-change') {
+      return "the team's lead";
+    }
     if (gate.kind === 'capability') return 'a grant holder';
-    if (gate.kind === 'seat-record' || gate.kind === 'owner-or-own-team' || gate.kind === 'admission') {
+    if (
+      gate.kind === 'seat-record' ||
+      gate.kind === 'owner-or-own-team' ||
+      gate.kind === 'admission' ||
+      gate.kind === 'team-read'
+    ) {
       return 'any seat';
     }
   }

@@ -849,8 +849,8 @@
         "team hold --release [--json]"
       ],
       "who": {
-        "gate": "owner-or-leads",
-        "why": "a hold is the team's: the owner or `leads` on its own seat places and releases it"
+        "gate": "team-change",
+        "why": "a hold is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, places and releases it"
       }
     },
     {
@@ -1488,8 +1488,8 @@
         "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
       ],
       "who": {
-        "gate": "owner-or-own-team",
-        "why": "the view is read by the owner, a seat of the team on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr"
+        "gate": "team-read",
+        "why": "the view is read by the owner, a seat the state places on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr"
       }
     },
     {
@@ -1632,6 +1632,10 @@
           ],
           "who": {
             "gate": "owner-or-own-team",
+            "terminal": {
+              "where": "a terminal outside herdr or its own pane",
+              "who": "the owner or a seat of this team"
+            },
             "why": "the owner or a declared seat records its process; a seat of another team and a run with no terminal are refused"
           }
         },
@@ -1671,7 +1675,11 @@
           ],
           "who": {
             "gate": "owner-or-own-team",
-            "why": "a seat clears its own, a lead clears another seat's, and the owner clears any"
+            "terminal": {
+              "where": "a terminal outside herdr or its own pane",
+              "who": "the owner or a seat of this team"
+            },
+            "why": "a seat clears its own, a lead clears another seat's, and the owner clears any; a run with no terminal is refused"
           }
         },
         {
@@ -1703,7 +1711,7 @@
             "team proc list [--json]"
           ],
           "who": {
-            "gate": "owner-or-own-team",
+            "gate": "team-read",
             "why": "the owner, a seat the state places on its own pane, or an approved delegate pane reads the list"
           }
         }
@@ -1715,7 +1723,11 @@
       ],
       "who": {
         "gate": "owner-or-own-team",
-        "why": "add and done are the owner's or a declared seat's, and list reads what status does, so an approved delegate pane may list too"
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a seat of this team"
+        },
+        "why": "add and done are the owner's or a declared seat's, from a terminal; list reads what status does, so an approved delegate pane may list too"
       }
     },
     {
@@ -2452,8 +2464,8 @@
         "team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]"
       ],
       "who": {
-        "gate": "owner-or-own-team",
-        "why": "the owner, a seat of the team on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone"
+        "gate": "team-read",
+        "why": "the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone"
       }
     },
     {
@@ -2844,6 +2856,10 @@
       ],
       "who": {
         "gate": "any-caller",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a placed seat"
+        },
         "why": "anyone in a terminal or its own pane starts the watch; a run with no terminal is refused before it starts"
       }
     },
@@ -2907,8 +2923,8 @@
             "team worktree list [--session <name>] [--file <path>] [--json]"
           ],
           "who": {
-            "gate": "owner-or-leads",
-            "why": "the owner or `leads` on its own seat lists the worktrees; --session and --file are the owner's"
+            "gate": "team-change",
+            "why": "the owner, the orchestrator's seat or the operator's seat lists the worktrees; --session and --file are the owner's"
           }
         },
         {
@@ -2970,8 +2986,8 @@
             "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]"
           ],
           "who": {
-            "gate": "owner-or-leads",
-            "why": "the owner or `leads` on its own seat creates a worktree; --session and --file are the owner's"
+            "gate": "team-change",
+            "why": "the owner, the orchestrator's seat or the operator's seat creates a worktree; --session and --file are the owner's"
           }
         },
         {
@@ -3027,8 +3043,8 @@
             "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
           ],
           "who": {
-            "gate": "owner-or-leads",
-            "why": "the owner or `leads` on its own seat removes a worktree; --session and --file are the owner's"
+            "gate": "team-change",
+            "why": "the owner, the orchestrator's seat or the operator's seat removes a worktree; --session and --file are the owner's"
           }
         }
       ],
@@ -3038,8 +3054,8 @@
         "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
       ],
       "who": {
-        "gate": "owner-or-leads",
-        "why": "the owner or `leads` on its own seat manages worktrees; --session and --file are the owner's"
+        "gate": "team-change",
+        "why": "the owner, the orchestrator's seat or the operator's seat manages worktrees; --session and --file are the owner's"
       }
     }
   ],
