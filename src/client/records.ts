@@ -21,12 +21,12 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { declaredRoots } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
+import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { seatStart } from '../worktree/place.ts';
 
 /** The domain tag client-grant and client-revocation signatures carry. */
 export const CLIENT_GRANT_DOMAIN = 'team-client-grant-v1\n';
@@ -201,7 +201,10 @@ function readPlacementSessions(dir: string): Record<string, unknown> | null {
 }
 
 /** The team's declarations, as the placement check reads them: a file that is absent, one that
- *  cannot be read or does not validate, or the team file it read. */
+ *  cannot be read or does not validate, or the team file it read. The text and schema alone are
+ *  judged here, never the placement rules a launch applies: a declaration can legitimately omit a
+ *  trust section, or trust a folder without listing the derived lobby, and still name the folder
+ *  its seats run in. */
 type DeclaredTeam =
   | { kind: 'absent' }
   | { kind: 'unreadable' }
@@ -212,7 +215,7 @@ function readDeclarations(root: string, home: string): DeclaredTeam {
   if (!existsSync(join(root, '.agents', 'team.yaml'))) return { kind: 'absent' };
   let loaded: ReturnType<typeof loadTeamFile>;
   try {
-    loaded = loadTeamFile(root, { home });
+    loaded = loadTeamFile(root, { home, checkOnly: true });
   } catch {
     return { kind: 'unreadable' };
   }
@@ -220,20 +223,39 @@ function readDeclarations(root: string, home: string): DeclaredTeam {
   return { kind: 'read', team: loaded.team };
 }
 
-/** The folder a declaration launches its seat in, through the resolver `up` and `restart` use:
- *  `seat.cwd` against the recorded team root, a lead in the project root, a worktree seat in the
- *  session's recorded lobby. A declaration this resolver cannot place has no fallback, and the
- *  caller refuses in the resolver's own words rather than skipping the seat. */
+/** The folder a declaration launches its seat in, resolved from recorded and declared placement
+ *  metadata only: the seat's declared cwd against the recorded team root, the recorded root for a
+ *  lead, and the session's RECORDED lobby for a seat that waits in one. A session that recorded no
+ *  lobby falls back to the folder the declaration itself names in `lobby:`, never to a lobby
+ *  recomputed from HOME; a seat with neither is ambiguous and the caller refuses in these words
+ *  rather than guessing one. This is folder discovery, not a launch decision: no trust rule or
+ *  protected-checkout rule takes part, so a folder the record names cannot block a key for a
+ *  reason that belongs to `up`. */
 function declaredLaunchFolder(
   team: TeamFile,
   seat: Seat,
   root: string,
   home: string,
+  recordedLobby: string | undefined,
+  project: string,
   session: string,
 ): { ok: true; folder: string } | { ok: false; why: string } {
-  const start = seatStart({ ...team, session }, seat, root, home);
-  if ('problem' in start) return { ok: false, why: start.problem };
-  return { ok: true, folder: isAbsolute(start.cwd) ? start.cwd : resolve(root, start.cwd) };
+  if (seat.cwd !== '.') return { ok: true, folder: resolve(root, seat.cwd) };
+  if (isLeadSeat(team, seat.name)) return { ok: true, folder: root };
+  const declared = team.lobby === null || team.lobby === ''
+    ? undefined
+    : (() => {
+        const expanded = team.lobby.replace(/^~(?=$|\/)/, home);
+        return isAbsolute(expanded) ? expanded : resolve(root, expanded);
+      })();
+  const lobby = recordedLobby !== undefined && recordedLobby !== '' ? recordedLobby : declared;
+  if (lobby === undefined) {
+    return {
+      ok: false,
+      why: `the session "${session}" of team "${project}" records no lobby and the declaration names none, so the folder seat "${seat.name}" starts in cannot be resolved`,
+    };
+  }
+  return { ok: true, folder: lobby };
 }
 
 /**
@@ -295,6 +317,8 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
         return `the recorded session "${sessionName}" of team "${team.project}" is not a state record: client key placement cannot be checked`;
       }
       const session = rawSession as { seats?: unknown; worktrees?: unknown };
+      // The lobby this session recorded when it registered; never one recomputed from HOME.
+      const recordedLobby = team.lobbies?.[sessionName];
       if (session.seats !== undefined && (session.seats === null || typeof session.seats !== 'object' || Array.isArray(session.seats))) {
         return `the recorded seats of session "${sessionName}" cannot be read: client key placement cannot be checked`;
       }
@@ -314,12 +338,11 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
           // A seat at ready or launched is running, and a named seat that carries a pane, a
           // workspace, a launched identity or an agent session has been seen by the runtime: its
           // record carries no folder, so the folder it really started in is the one its
-          // declaration launches it in, through the resolver `up` and `restart` use — the
-          // declared cwd against the recorded team root, a lead in the project root, a worktree
-          // seat in the session's recorded lobby — never the caller's working folder and never a
-          // process inferred from a pid. Only a named legacy record with none of that evidence
-          // may legitimately carry no start folder; an unknown stage cannot be cleared as
-          // inactive either.
+          // declaration names — the declared cwd against the recorded team root, the recorded
+          // root for a lead, the session's recorded lobby for a lobby seat — never the caller's
+          // working folder, a folder derived from HOME, or a process inferred from a pid. Only a
+          // named legacy record with none of that evidence may legitimately carry no start
+          // folder; an unknown stage cannot be cleared as inactive either.
           const inactiveNamed =
             seat.stage === 'named' &&
             seat.pane === undefined &&
@@ -342,7 +365,7 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
             if (declaration === undefined) {
               return `${absent} and the team file of "${team.project}" declares no seat by that name: client key placement cannot be checked`;
             }
-            const launch = declaredLaunchFolder(file.team, declaration, team.root, home, sessionName);
+            const launch = declaredLaunchFolder(file.team, declaration, team.root, home, recordedLobby, team.project, sessionName);
             if (!launch.ok) {
               return `${absent} and its declaration's launch folder cannot be resolved (${launch.why}): client key placement cannot be checked`;
             }
