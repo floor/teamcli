@@ -84,6 +84,7 @@ export const TRUST_CAPTURES: readonly string[] = [
   "claude-code claude-code/2.1.302/trust.txt",
   "claude-code claude-code/2.1.302/unsent.txt",
   "claude-code claude-code/2.1.302/working.txt",
+  "claude-code claude-code/2.1.303/unsent-multiline-ansi.txt",
   "claude-code exit-typing/claude-code-idle-ansi.txt",
   "claude-code exit-typing/claude-code-other-text-ansi.txt",
   "claude-code exit-typing/claude-code-scheduled-idle-ansi.txt",
