@@ -76,6 +76,34 @@ test('the row the contract carries is the map row as it stands, and silence read
   }
 });
 
+test('every subcommand states its own row, and a module that admits only the owner reads owner-only', () => {
+  // A subcommand is its own dispatched word with its own gate (`policy set` refuses a non-owner
+  // where `policy` alone answers a seat's read): a node the adapter may expose needs its row,
+  // exactly as a top-level command does.
+  for (const command of contract.commands) {
+    for (const sub of command.subcommands ?? []) {
+      expect(sub.who, `${command.name} ${sub.name} carries no who row`).toBeDefined();
+      expect(GATE_WORDS as readonly string[]).toContain(sub.who?.gate ?? '');
+      expect(sub.who?.why.trim(), `${command.name} ${sub.name} gives no reason`).not.toBe('');
+      expect(sub.who?.why.includes('\n'), `${command.name} ${sub.name}'s reason spans lines`).toBe(false);
+    }
+  }
+  const commandNamed = (name: string) => contract.commands.find((command) => command.name === name);
+  const subNamed = (command: string, name: string) => commandNamed(command)?.subcommands?.find((sub) => sub.name === name);
+  // The gates their own modules print, in the contract's words: `policy set`/`unset` refuse every
+  // non-owner; worktree's three words are the owner's, the orchestrator's or the operator's.
+  expect(subNamed('policy', 'set')?.who?.gate).toBe('owner-only');
+  expect(subNamed('policy', 'unset')?.who?.gate).toBe('owner-only');
+  for (const name of ['list', 'new', 'remove']) {
+    expect(subNamed('worktree', name)?.who?.gate, `worktree ${name}`).toBe('owner-or-leads');
+  }
+  // Words whose own module refuses every non-owner at the door: the map names the gate the
+  // module enforces, and the contract repeats it — `unlisted` would leave the adapter guessing.
+  for (const name of ['bus', 'broker', 'tempo']) {
+    expect(commandNamed(name)?.who?.gate, `${name} admits only the owner`).toBe('owner-only');
+  }
+});
+
 test('the reference page states every command the same row', () => {
   const page = readFileSync(join(root, 'docs/reference/cli.md'), 'utf8');
   expect(page.split('\n').filter((line) => line === '### Who may run it').length).toBe(contract.commands.length);
