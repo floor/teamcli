@@ -20,6 +20,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   revoke: () => import('./commands/revoke.ts'),
   status: () => import('./commands/status.ts'),
   seats: () => import('./commands/seats.ts'),
+  seat: () => import('./commands/seat.ts'),
   list: () => import('./commands/list.ts'),
   up: () => import('./commands/up.ts'),
   watch: () => import('./commands/watch.ts'),

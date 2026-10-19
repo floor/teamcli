@@ -1291,6 +1291,30 @@ Usage:
 | --- | --- | --- |
 | `seat` | no | no |
 
+## `seat`
+
+Hidden: no
+
+Usage:
+
+    team seat <seat> [--session <name>] [--file <path>] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `seats`
 
 Hidden: no

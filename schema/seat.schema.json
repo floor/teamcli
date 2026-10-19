@@ -1,0 +1,334 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/seat.schema.json",
+  "title": "team seat <seat> --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "project",
+    "session",
+    "seat",
+    "settings",
+    "status",
+    "turn",
+    "conversation"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.seat"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": "string",
+      "minLength": 1
+    },
+    "seat": {
+      "type": "string",
+      "minLength": 1
+    },
+    "settings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value",
+          "source",
+          "applies"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "model",
+              "effort",
+              "nickname",
+              "delivery_order",
+              "human"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "boolean",
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "native",
+                "mcp-inbox",
+                "typed",
+                "drop"
+              ]
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "team file",
+              "team default",
+              "default",
+              "none"
+            ]
+          },
+          "applies": {
+            "type": "string",
+            "enum": [
+              "restart-resume",
+              "at-once"
+            ]
+          }
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "nickname",
+        "id",
+        "role",
+        "cli",
+        "model",
+        "effort",
+        "status",
+        "state",
+        "state_source",
+        "last_active",
+        "pane",
+        "launch_line"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nickname": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cli": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blind": {
+          "type": "boolean",
+          "const": true
+        },
+        "last_active": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pane": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "launch_line": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "turn": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "since"
+      ],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "working",
+            "idle"
+          ]
+        },
+        "since": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "conversation": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "started",
+        "ended",
+        "reason"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cli_session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resumable": {
+          "type": "boolean"
+        },
+        "resume_until": {
+          "type": "string",
+          "minLength": 1
+        },
+        "handover": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previous": {
+          "type": "string",
+          "minLength": 1
+        },
+        "started": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amount",
+        "currency",
+        "source"
+      ],
+      "properties": {
+        "amount": {
+          "type": "number",
+          "minimum": 0
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "estimated"
+          ]
+        }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "in",
+        "out",
+        "source"
+      ],
+      "properties": {
+        "in": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "out": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "estimated"
+          ]
+        }
+      }
+    }
+  }
+}

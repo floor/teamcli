@@ -3174,6 +3174,83 @@
     },
     {
       "code": 0,
+      "command": "seat",
+      "id": "seat.shown",
+      "meaning": "the seat is printed",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team seat lead --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.no-seat",
+      "meaning": "the team file declares no seat of that name",
+      "trigger": "team seat ghost"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.session-owner",
+      "meaning": "--session is the owner's",
+      "trigger": "team seat lead --session team"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.sessions",
+      "meaning": "the session registry can't be read",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.file",
+      "meaning": "the team file can't be found or read",
+      "trigger": "team seat lead --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.file-invalid",
+      "meaning": "the team file does not parse or does not validate",
+      "trigger": "team seat lead --file team.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.herdr",
+      "meaning": "herdr doesn't answer",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.invocation",
+      "meaning": "the invocation is not one of the command's forms",
+      "trigger": "team seat"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.not-a-repo",
+      "meaning": "the directory is not inside a git repository",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.not-yours",
+      "meaning": "the team is not the caller's to read",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 0,
       "command": "seats",
       "id": "seats.shown",
       "meaning": "the seats table was printed",

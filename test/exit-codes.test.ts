@@ -55,6 +55,7 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
+import { runSeat } from '../src/commands/seat.ts';
 import { runSessions } from '../src/commands/sessions.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runSettings, type SettingsCommandOptions } from '../src/commands/settings.ts';
@@ -1861,6 +1862,61 @@ scene('seats.not-yours', async (place) => {
   scene('settings.shown', async (place) => {
     write(place, TEAM);
     return show(await settingsRun(place, ['lead']), 'delivery_order');
+  });
+}
+
+{
+  async function seatRun(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    sources: SeatsSources = statusSources(quiet),
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runSeat([...argv], io, sources), out: io.out, err: io.err };
+  }
+  scene('seat.invocation', async (place) => show(await seatRun(place, []), 'a seat name is required'));
+  scene('seat.file-owner', async (place) => show(await seatRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
+  scene('seat.session-owner', async (place) => show(await seatRun(place, ['lead', '--session', 'acme'], other), "--session is the owner's"));
+  scene('seat.not-a-repo', async (place) => show(await seatRun(place, ['lead']), 'not inside a git repository'), false);
+  scene('seat.file', async (place) => show(await seatRun(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+  scene('seat.file-invalid', async (place) => {
+    invalid(place);
+    return show(await seatRun(place, ['lead', '--file', 'team.yaml']), 'line');
+  });
+  scene('seat.not-yours', async (place) => {
+    write(place, TEAM);
+    return show(
+      await seatRun(place, ['lead'], other, {
+        ...statusSources(quiet),
+        home: place.home,
+        gate: { standing: () => ({ kind: 'none' }) },
+      }),
+      'this team is not yours to read',
+    );
+  });
+  scene('seat.no-seat', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['ghost']), 'no seat "ghost" is declared in acme');
+  });
+  scene('seat.herdr', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['lead'], owner, statusSources(null)), "doesn't answer");
+  });
+  scene('seat.sessions', async (place) => {
+    write(place, TEAM);
+    const log = sessionsRegistry(place);
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(join(place.base, 'real-sessions.jsonl'), '');
+    symlinkSync(join(place.base, 'real-sessions.jsonl'), log);
+    return show(
+      await seatRun(place, ['lead'], owner, { ...statusSources(quiet), home: place.home }),
+      'a symbolic link was found and not followed',
+    );
+  });
+  scene('seat.shown', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['lead']), 'delivery_order');
   });
 }
 

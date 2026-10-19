@@ -459,6 +459,17 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `route.unrecorded` | `route` | 1 | the pair is admitted and the route record could not be written | `team route builder-2` |
 | `route.configuration` | `route` | 2 | the team file cannot be read | `team route builder-2` |
 | `route.usage` | `route` | 2 | the invocation cannot be read | `team route` |
+| `seat.shown` | `seat` | 0 | the seat is printed | `team seat lead` |
+| `seat.file-owner` | `seat` | 1 | --file is the owner's | `team seat lead --file .agents/team.yaml` |
+| `seat.no-seat` | `seat` | 1 | the team file declares no seat of that name | `team seat ghost` |
+| `seat.session-owner` | `seat` | 1 | --session is the owner's | `team seat lead --session team` |
+| `seat.sessions` | `seat` | 1 | the session registry can't be read | `team seat lead` |
+| `seat.file` | `seat` | 2 | the team file can't be found or read | `team seat lead --file missing.yaml` |
+| `seat.file-invalid` | `seat` | 2 | the team file does not parse or does not validate | `team seat lead --file team.yaml` |
+| `seat.herdr` | `seat` | 2 | herdr doesn't answer | `team seat lead` |
+| `seat.invocation` | `seat` | 2 | the invocation is not one of the command's forms | `team seat` |
+| `seat.not-a-repo` | `seat` | 2 | the directory is not inside a git repository | `team seat lead` |
+| `seat.not-yours` | `seat` | 2 | the team is not the caller's to read | `team seat lead` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |

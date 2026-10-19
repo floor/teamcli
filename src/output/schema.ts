@@ -1978,6 +1978,104 @@ export const CONFIG_KEYS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team seat <seat>` (`schema/seat.schema.json`): the seat's
+ *  settings, the row `team seats` reads for it, its last turn and its newest session. */
+export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.seat',
+  fileName: 'seat.schema.json',
+  title: 'team seat <seat> --json output',
+  required: ['format', 'project', 'session', 'seat', 'settings', 'status', 'turn', 'conversation'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    settings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'value', 'source', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          value: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          source: { type: 'string', enum: ['team file', 'team default', 'default', 'none'] },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+        },
+      },
+    },
+    status: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'nickname', 'id', 'role', 'cli', 'model', 'effort', 'status', 'state', 'state_source', 'last_active', 'pane', 'launch_line'],
+      properties: {
+        name: { type: 'string', minLength: 1 },
+        nickname: { type: ['string', 'null'] },
+        id: { type: ['string', 'null'] },
+        role: { type: 'string', minLength: 1 },
+        cli: { type: 'string', minLength: 1 },
+        model: { type: ['string', 'null'] },
+        effort: { type: ['string', 'null'] },
+        status: { type: 'string', minLength: 1 },
+        state: { type: 'string', minLength: 1 },
+        state_source: { type: 'string', minLength: 1 },
+        blind: { type: 'boolean', const: true },
+        last_active: { type: ['string', 'null'] },
+        pane: { type: ['string', 'null'] },
+        launch_line: { type: ['string', 'null'] },
+      },
+    },
+    turn: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['state', 'since'],
+      properties: {
+        state: { type: 'string', enum: ['working', 'idle'] },
+        since: { type: 'string', minLength: 1 },
+      },
+    },
+    conversation: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['id', 'started', 'ended', 'reason'],
+      properties: {
+        id: { type: 'string', minLength: 1 },
+        cli_session: { type: 'string', minLength: 1 },
+        resumable: { type: 'boolean' },
+        resume_until: { type: 'string', minLength: 1 },
+        handover: { type: 'string', minLength: 1 },
+        previous: { type: 'string', minLength: 1 },
+        started: { type: 'string', minLength: 1 },
+        ended: { type: ['string', 'null'] },
+        reason: { type: ['string', 'null'] },
+      },
+    },
+    cost: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['amount', 'currency', 'source'],
+      properties: {
+        amount: { type: 'number', minimum: 0 },
+        currency: { type: 'string', minLength: 1 },
+        source: { type: 'string', enum: ['measured', 'estimated'] },
+      },
+    },
+    tokens: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['in', 'out', 'source'],
+      properties: {
+        in: { type: 'integer', minimum: 0 },
+        out: { type: 'integer', minimum: 0 },
+        source: { type: 'string', enum: ['measured', 'estimated'] },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -2028,6 +2126,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   USAGE_OUTPUT_SCHEMA,
   SETTINGS_OUTPUT_SCHEMA,
   CONFIG_KEYS_OUTPUT_SCHEMA,
+  SEAT_OUTPUT_SCHEMA,
 ];
 
 

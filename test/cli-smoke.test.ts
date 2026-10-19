@@ -79,6 +79,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'status', args: ['status'], schemaKey: 'team.status' },
   { command: 'seats', args: ['seats'], schemaKey: 'team.seats' },
   { command: 'settings', args: ['settings', 'claude-keeper'], schemaKey: 'team.settings' },
+  { command: 'seat', args: ['seat', 'claude-keeper'], schemaKey: 'team.seat' },
   { command: 'config', args: ['config', 'keys'], schemaKey: 'team.config-keys' },
   { command: 'doctor', args: ['doctor'], schemaKey: 'team.doctor' },
   { command: 'check', args: ['check'], schemaKey: 'team.check' },
