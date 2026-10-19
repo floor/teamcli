@@ -92,7 +92,9 @@ When that pane's screen names a model, a note names it — `<seat>: its pane run
 seat with no `launched` record — a seat launched before this record existed, or one whose process
 herdr could not read (the reading is taken once, after the seat's idle prompt; a seat stopped at a
 dialog records it in the same write as its waiting record) — is shown as it always was;
-`team doctor` says which seats those are.
+`team doctor` says which seats those are. The same gate decides whether a pane's screen is read
+as a prompt at all: a dialog left in a shell's scrollback is not a seat waiting at one, for a
+declared seat and a temporary seat alike (`paneShowsSeat`).
 
 The comparison is wrong in the safe direction, but it is wrong: a CLI that replaces its own process
 — an updater that re-executes, a wrapper that hands over — changes the foreground pids, and the
