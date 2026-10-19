@@ -35,16 +35,12 @@ import {
   ensureMachineDir,
   writeDaemonState,
   type DaemonFeatures,
+  type DaemonRootState,
   type DaemonStuckRequest,
 } from './state.ts';
 
-export type MachineRootStatus = {
-  root: string;
-  team: string | null;
-  send: 'serving' | 'already-running' | 'failed';
-  bus: 'serving' | 'failed';
-  why: string | null;
-};
+/** One checkout as hosted by this process; the state record keeps the same shape. */
+export type MachineRootStatus = DaemonRootState;
 
 export type MachineDaemon = {
   socketPath: string;
@@ -210,6 +206,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const inFlight = new Map<string, InFlight>();
   const connections = new Set<Socket>();
+  const roots: MachineRootStatus[] = [];
   let heartbeatAt = since;
   let closed = false;
 
@@ -250,6 +247,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         socket: socketPath,
         features,
         stuck: stuckNow(),
+        roots: [...roots],
       });
     } catch {
       // The next heartbeat tries again; an unwritable record is reported as unknown, never healthy.
@@ -319,7 +317,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   chmodSync(socketPath, 0o600);
   writeState();
 
-  const roots: MachineRootStatus[] = [];
   const sendHandles: SendDaemonHandle[] = [];
   const busHandles: BusHandle[] = [];
 
@@ -408,6 +405,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     roots.push(status);
     appendDaemonLog(home, `root ${rootArg}: send ${status.send}, bus ${status.bus}`, now());
   }
+
+  // The first state write happened before hosting so a reader never finds a bound socket with no
+  // record; this one records what each checkout actually got, failures and reasons included, and
+  // every heartbeat refreshes it.
+  writeState();
 
   const timer = setInterval(() => {
     heartbeatAt = now().toISOString();

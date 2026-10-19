@@ -15,6 +15,7 @@ import {
   daemonStateAlive,
   readDaemonState,
   type DaemonFeatures,
+  type DaemonRootState,
   type DaemonState,
   type DaemonStuckRequest,
 } from './state.ts';
@@ -39,6 +40,9 @@ export type DaemonHealth = {
   heartbeatAt: string | null;
   features: DaemonFeatures | null;
   stuck: DaemonStuckRequest[];
+  /** The checkouts the running daemon recorded hosting, with any failure reason. Empty when
+   *  nothing was hosted or when the reading cannot tell. */
+  roots: DaemonRootState[];
   probe: DaemonProbe;
   /** Why the reading is unknown, when it is. */
   why: string | null;
@@ -82,6 +86,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       heartbeatAt: null,
       features: null,
       stuck: [],
+      roots: [],
       probe: { state: 'unanswered', at: stamp(now), reason: 'closed' },
       why: null,
     };
@@ -100,6 +105,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       heartbeatAt: null,
       features: null,
       stuck: [],
+      roots: [],
       probe: { state: 'unanswered', at: stamp(now), reason: 'closed' },
       why: null,
     };
@@ -120,6 +126,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       heartbeatAt: health.heartbeatAt,
       features: health.features,
       stuck: health.stuck,
+      roots: read.state.roots,
       probe: { state: 'answered', at: stamp(now) },
       why: null,
     };
@@ -153,6 +160,7 @@ function runningFromState(state: DaemonState, socket: string, probe: DaemonProbe
     heartbeatAt: state.heartbeatAt,
     features: state.features,
     stuck: state.stuck,
+    roots: state.roots,
     probe,
     why: null,
   };
@@ -172,6 +180,7 @@ function unknown(socket: string, why: string, now: () => Date): DaemonHealth {
     heartbeatAt: null,
     features: null,
     stuck: [],
+    roots: [],
     probe: { state: 'unknown', at: stamp(now), reason: why },
     why,
   };

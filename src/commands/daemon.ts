@@ -218,6 +218,18 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
       `since ${health.since ?? 'unknown'}`,
       `heartbeat ${health.heartbeatAt ?? 'unknown'}`,
     ];
+    // A daemon can be running while a checkout's send or bus endpoint did not start here; the
+    // one line says so instead of reporting plain health, and the detail is in --json and log.
+    const sendServing = health.roots.filter((root) => root.send === 'serving').length;
+    const busServing = health.roots.filter((root) => root.bus === 'serving').length;
+    const notHosted = health.roots.reduce(
+      (count, root) => count + (root.send === 'serving' ? 0 : 1) + (root.bus === 'serving' ? 0 : 1),
+      0,
+    );
+    parts.push(`roots ${String(health.roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`);
+    if (notHosted > 0) {
+      parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
+    }
     if (health.probe.state === 'unanswered') {
       parts.push(`probe unanswered (${health.probe.reason})`);
     } else if (health.probe.state === 'refused') {

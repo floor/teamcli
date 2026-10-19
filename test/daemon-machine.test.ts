@@ -98,6 +98,12 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       expect(health.state).toBe('running');
       expect(health.startedBy).toBe('service-manager');
       expect(health.features).toEqual({ broker: 'absent' });
+      expect(health.roots).toEqual([{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }]);
+
+      const status = testIo(home, owner);
+      expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
+      expect(status.out).toContain('roots 1 (send 1, bus 1)');
+      expect(status.out).not.toContain('not hosted here');
 
       const answer = await request(machine, JSON.stringify({ v: 1, id: 'a', op: 'send', scope: { root } }));
       expect(answer).toMatchObject({ ok: false, error: { code: 'daemon.auth-unsupported' } });
@@ -110,6 +116,35 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     expect(existsSync(daemonSocketPath(home))).toBe(false);
     const after = await daemonHealth(home);
     expect(after.state).toBe('not-running');
+  });
+
+  test('status names a checkout whose endpoints were not hosted', async () => {
+    const { base, root, home } = scratch();
+    const absent = join(base, 'absent');
+    const started = await startMachineDaemon({
+      home,
+      roots: [root, absent],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 10_000,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      const status = testIo(home, owner);
+      expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
+      expect(status.out).toContain('roots 2 (send 1, bus 1)');
+      expect(status.out).toContain('2 endpoints not hosted here');
+      expect(status.out.trim().split('\n').length).toBe(1);
+
+      const json = testIo(home, owner);
+      expect(await runDaemon(['status', '--json'], json, sourcesOf(home))).toBe(0);
+      const doc = JSON.parse(json.out) as { daemon: { roots: Array<Record<string, unknown>> } };
+      expect(doc.daemon.roots).toHaveLength(2);
+      expect(doc.daemon.roots[1]).toMatchObject({ root: absent, send: 'failed', bus: 'failed' });
+    } finally {
+      await started.daemon.close();
+    }
   });
 
   test('the machine folder is 0700 and its socket, state, lock and log are 0600', async () => {

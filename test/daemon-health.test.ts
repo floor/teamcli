@@ -48,6 +48,7 @@ function stateOf(home: string): DaemonState {
     socket: daemonSocketPath(home),
     features: snapshot.features,
     stuck: snapshot.stuck,
+    roots: [],
   };
 }
 
