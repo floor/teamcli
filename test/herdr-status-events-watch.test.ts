@@ -12,6 +12,7 @@ import { readEvents, verifySignedEvent } from '../src/bus/log.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Live } from '../src/status/compare.ts';
 import { createSeatStatusEngine, type StatusSource, type StatusTarget } from '../src/watch/status-events.ts';
@@ -40,6 +41,13 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+  - name: worker-2
+    role: builder
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
   - name: jules-1
     role: builder
     cli: jules
@@ -62,6 +70,7 @@ const PANES: Record<string, string> = {
   'worker-1': 'w2',
   'jules-1': 'w3',
   'owner-pane': 'w4',
+  'worker-2': 'w5',
 };
 
 const fine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
@@ -242,6 +251,83 @@ describe('the watch pass raises seat status events', () => {
     expect(await runWatch(['--file', fixture.file], io, sources), io.err).toBe(0);
     expect(promptReads).toBe(0);
     expect(readLog(fixture).events.some((record) => record.payload.seat === 'owner-pane')).toBe(false);
+  });
+});
+
+describe('the pass follows the live pane set', () => {
+  test('a seat that appears between passes gets its own waiter, and the first set is stopped', async () => {
+    const fixture = makeFixture();
+    const waits: string[] = [];
+    const statusSource: StatusSource = {
+      waitStatus(seat, _target, _timeoutMs, signal) {
+        waits.push(seat.name);
+        return new Promise((resolve) => {
+          signal?.addEventListener('abort', () => resolve({ outcome: 'timeout' as const, at: 0 }), { once: true });
+        });
+      },
+      promptKind: () => 'unknown',
+    };
+    const sources = watchSources(
+      fixture,
+      [
+        scene({ 'crew-lead': 'idle', 'worker-1': 'idle' }),
+        scene({ 'crew-lead': 'idle', 'worker-1': 'idle', 'worker-2': 'idle' }),
+      ],
+      statusSource,
+      [],
+      [],
+    );
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runWatch(['--file', fixture.file], io, sources), io.err).toBe(0);
+
+    // Pass one waited on the two eligible seats; pass two stopped them and waited on all three.
+    expect(waits.filter((name) => name === 'crew-lead')).toHaveLength(2);
+    expect(waits.filter((name) => name === 'worker-1')).toHaveLength(2);
+    expect(waits.filter((name) => name === 'worker-2')).toEqual(['worker-2']);
+  });
+});
+
+describe('the assigned-work gate on seat.idle', () => {
+  test('a message drop is assigned work; sidecars and the startup brief are not, and a lead never raises seat.idle', () => {
+    const fixture = makeFixture();
+    const agents = join(fixture.root, '.agents');
+    const dropDir = join(agents, 'send-drops', 'acme-dev', 'worker-1');
+    mkdirSync(dropDir, { recursive: true });
+    const leadDropDir = join(agents, 'send-drops', 'acme-dev', 'crew-lead');
+    mkdirSync(leadDropDir, { recursive: true });
+    const briefId = '0f0f0f0f-0000-4000-8000-000000000001';
+    updateState(agents, (state) => {
+      const current = (state.sessions['acme-dev'] ??= emptySession());
+      current.briefs = { 'worker-1': { id: briefId, at: new Date(0).toISOString() } };
+    });
+    writeFileSync(join(leadDropDir, 'drop-2'), 'x');
+
+    let clock = Date.parse('2026-10-19T06:00:00Z');
+    const engine = createSeatStatusEngine({
+      team: fixture.team,
+      session: 'acme-dev',
+      root: fixture.root,
+      home: fixture.home,
+      now: () => clock,
+      idleThresholdSeconds: 60,
+    });
+    engine.observeSync('worker-1', 'idle', clock, 'w2:p1');
+    engine.observeSync('crew-lead', 'idle', clock, 'w1:p1');
+    clock += 120_000;
+    // A work nudge, a delivery sidecar and the startup brief are not assigned work.
+    writeFileSync(join(dropDir, 'work-nudge'), 'x');
+    writeFileSync(join(dropDir, 'old.pending'), 'x');
+    writeFileSync(join(dropDir, briefId), 'x');
+    expect(engine.tickSync(clock).filter((ev) => ev.input.kind === 'seat.idle')).toEqual([]);
+    expect(engine.drainNudges()).toEqual([]);
+
+    // An unacked message drop is assigned work for the worker; the lead's own drop still raises nothing.
+    writeFileSync(join(dropDir, 'drop-1'), 'x');
+    const idle = engine.tickSync(clock).filter((ev) => ev.input.kind === 'seat.idle');
+    expect(idle.map((ev) => ev.input.seat)).toEqual(['worker-1']);
+    expect(idle[0]!.recipients).toEqual(new Set(['crew-lead']));
+    expect(engine.drainNudges()).toEqual(['worker-1']);
   });
 });
 
