@@ -43,7 +43,7 @@ export async function runAuthorityEdit(
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate (OD-20261019-49): a placed lead or
     // orchestrator continues with the warning; the owner's own path above is untouched.
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: msg, ...(options.home !== undefined ? { home: options.home } : {}) });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: msg, home: options.home ?? homedir() });
     if (lift === null || !lift.lifted) {
       if (json) {
         writeJsonError(rawIo, `${command}.refused`, plainText(msg), `the owner runs \`team ${command}\` from a terminal outside herdr`, 1, 'owner-only');
