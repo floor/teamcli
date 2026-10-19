@@ -11,6 +11,7 @@ import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
 import { findTeam, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
 import { resolveSeatSettings } from '../config/apply.ts';
+import { agentIdOf } from '../config/read.ts';
 
 /** What a spec resolves to: the owning team record, the agent, and the pane to type into. */
 export type Target = { team: TeamRecord; agent: Agent; pane: string };
@@ -142,13 +143,19 @@ type NicknameAnswer = { nickname: string | undefined } | { error: string };
  *  A record that exists but does not verify is a refusal, never a fallback: an address decision
  *  cannot stand on a word the record disowns. */
 function nicknameOfLine(home: string, team: TeamRecord, line: RosterEntry): NicknameAnswer {
+  // A roster line is not the whole context: the team record can carry one and still name no
+  // project or entity, and the project registry is then the declaration the signed chain reads.
+  // Resolving the context around the line keeps a project record from being skipped here, where
+  // an address decision must not stand on a record the resolver never asked for.
+  const context = agentIdOf(home, team.root, line.seat);
   const read = resolveSeatSettings({
     home,
     root: team.root,
     agentId: line.agent,
     seat: line.seat,
     teamId: team.id,
-    entity: team.entity,
+    entity: context.entity,
+    projectId: context.projectId,
   });
   if (!read.ok) return { error: `the settings record of the seat "${line.seat}" cannot be read: ${read.why}` };
   return { nickname: read.overrides.nickname ?? line.nickname };

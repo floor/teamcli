@@ -13,13 +13,15 @@ import type { Caller } from '../src/caller.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { agentsDir, registerAgent, updateAgent, type Agent } from '../src/registry/agents.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
 import { historyPath } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
+import { signConfigRecord } from '../src/config/record.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
-import { installKey } from '../src/store/keys.ts';
+import { installKey, keyOf } from '../src/store/keys.ts';
 import { updateState } from '../src/state.ts';
 import { gitEnv, recordBody, testIo } from './helpers.ts';
 
@@ -336,6 +338,40 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     expect(target.kind).toBe('configuration');
     expect(target.error).toContain(path);
     expect(target.error).toContain('signature verification failed');
+  });
+
+  test('a project record the roster line never names is still read: the project registry supplies the context', () => {
+    const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const id = teamIdOf(w.root);
+    const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-alpha-atlas' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: id, seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    // The team record carries a roster line and names no project; the project registry names it.
+    team(w.home, id, 'alpha', 'alpha', w.root, [
+      { agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
+    ]);
+    const record = upsertTeam(w.home, id, { project: 'alpha', session: 'alpha', root: w.root, projectId: null, roster: [
+      { agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
+    ] });
+    expect(record.projectId).toBeNull();
+    upsertProject(w.home, 'acme-proj', { name: 'Acme', teams: [id] });
+    installKey(w.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    // A record at a level the key does not reach is damage the resolution must see, not skip.
+    const signed = signConfigRecord(
+      { key: 'nickname', value: 'crow', level: 'project', target: 'acme-proj', setter: 'owner', date: '2026-10-19T08:00:00.000Z', generation: 1 },
+      keyOf(w.home),
+    );
+    upsertProject(w.home, 'acme-proj', {
+      settingsDelta: { nickname: { value: 'crow', setter: signed.setter, date: signed.date, target: signed.target, generation: signed.generation, signature: signed.signature } },
+    });
+
+    const target = resolveTarget(w.home, '@zeus', { cwd: w.root });
+    expect('error' in target).toBe(true);
+    if (!('error' in target)) return;
+    expect(target.kind).toBe('configuration');
+    expect(target.error).toContain('project acme-proj');
+    expect(target.error).toContain('may not be set at level project');
   });
 
   test('no role addresses: a spec equal to a seat\'s role names nobody', () => {
