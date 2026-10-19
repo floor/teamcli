@@ -767,26 +767,47 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(false);
     writeFileSync(barrier, 'go\n');
     const [manualRun, automaticRun] = await Promise.all([manual, automatic]);
-    expect(manualRun.code).toBe(0);
-    expect(automaticRun.code).toBe(0);
-    const manualResult = JSON.parse(manualRun.out) as { code: number; out: string; err: string };
-    const automaticResult = JSON.parse(automaticRun.out) as { ok: boolean; body?: string; served?: string };
-    expect(manualResult.code).toBe(0);
-    expect(manualResult.err).toBe('');
+    // Both children whole, so a failure names the run that caused it: the product's own stdout
+    // (a refusal's difference text lives there), its stderr, and each child's exit. They travel in
+    // every assertion below; a passing run prints none of it.
+    const detail = [
+      `manual child: exit ${String(manualRun.code)}, stdout ${JSON.stringify(manualRun.out)}, stderr ${JSON.stringify(manualRun.err)}`,
+      `automatic child: exit ${String(automaticRun.code)}, stdout ${JSON.stringify(automaticRun.out)}, stderr ${JSON.stringify(automaticRun.err)}`,
+    ].join('\n');
+    let manualResult: { code: number; out: string; err: string };
+    let automaticResult: { ok: boolean; body?: string; served?: string };
+    try {
+      manualResult = JSON.parse(manualRun.out) as typeof manualResult;
+      automaticResult = JSON.parse(automaticRun.out) as typeof automaticResult;
+    } catch {
+      throw new Error(`a child printed no JSON\n${detail}`);
+    }
 
-    // Counted, never inferred: exactly one side returns the body string.
+    // The gate first, the exits last: an earlier run exited 1 with no body and the evidence was
+    // lost with the child's stdout. Counted, never inferred: exactly one side returns the body.
     const exposed = (manualResult.out.includes(BODY) ? 1 : 0) + (automaticResult.body === BODY ? 1 : 0);
-    expect(exposed).toBe(1);
+    expect({ exposed, detail }).toEqual({ exposed: 1, detail });
     if (automaticResult.ok) {
-      expect(automaticResult.body).toBe(BODY);
-      expect(manualResult.out).not.toContain(BODY);
+      expect({ body: automaticResult.body, detail }).toEqual({ body: BODY, detail });
+      expect({ manualOut: manualResult.out.includes(BODY), detail }).toEqual({ manualOut: false, detail });
     } else {
-      expect(automaticResult.served).toBe('already-served');
-      expect(manualResult.out).toContain(BODY);
+      expect({ served: automaticResult.served, detail }).toEqual({ served: 'already-served', detail });
+      expect({ manualOut: manualResult.out.includes(BODY), detail }).toEqual({ manualOut: true, detail });
     }
     // One signed read receipt stands, it verifies, and no publisher's temp is left behind.
-    expect(statusOf(scene.dropDir, ID, scene.context, messageKey())).toBe('read');
-    expect(readdirSync(scene.dropDir).filter((name) => name.endsWith('.new'))).toEqual([]);
+    expect({ status: statusOf(scene.dropDir, ID, scene.context, messageKey()), detail })
+      .toEqual({ status: 'read', detail });
+    expect({ temps: readdirSync(scene.dropDir).filter((name) => name.endsWith('.new')), detail })
+      .toEqual({ temps: [], detail });
+
+    // Every exit is last, so a refusal reaches the gate checks above before it fails a run.
+    expect({
+      manualProduct: manualResult.code,
+      manualStderr: manualResult.err,
+      manualProcess: manualRun.code,
+      automaticProcess: automaticRun.code,
+      detail,
+    }).toEqual({ manualProduct: 0, manualStderr: '', manualProcess: 0, automaticProcess: 0, detail });
   });
 
   // A general seat brief is waiting for the seat's own turn-start reader: its receipt is bound to
