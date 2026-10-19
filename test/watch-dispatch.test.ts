@@ -1,8 +1,11 @@
 // The idle-work dispatcher: one shared snapshot, one attempt per seat per idle episode (a
 // refusal spends it), and no legacy typed nudge for an episode the dispatcher owns. A route that
 // is missing or refuses leaves one signed runtime record per distinct target (the team lead and
-// the main orchestrator) per episode, with the transport's own words kept. The last case proves
-// the watch seam itself: the direct route is called and nothing is typed into the seat.
+// the main orchestrator) per episode, with the transport's own words kept. Two production
+// readings leave nothing to deliver and are announced once each through the same records: an
+// empty source with idle seats, and a seat still idle a minute after an accepted wake with no
+// read-only evidence of a claim. The last case proves the watch seam itself: the direct route is
+// called and nothing is typed into the seat.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
 import {
@@ -357,7 +360,7 @@ describe('readings no dispatcher may act on', () => {
     const push: WorkPush = async () => ({ ok: true, outcome: 'typed (unconfirmed)' });
     const empty = await dispatchIdleWork(input({ push }));
     expect(empty.pushed).toEqual([]);
-    expect(empty.fallback).toBeUndefined();
+    expect(empty.fallback?.written).toHaveLength(2); // the empty-source notice, not a push
     queue([{ id: 't1', title: 'First' }]);
     const later = await dispatchIdleWork(input({ push, now: new Date(NOW + MIN) }));
     expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
@@ -378,6 +381,144 @@ describe('readings no dispatcher may act on', () => {
     const swapped = await dispatchIdleWork(input({ push, swaps: ['worker-1', 'worker-2'] }));
     expect(swapped.pushed).toEqual([]);
     expect(calls).toEqual([]);
+  });
+});
+
+describe('an empty source', () => {
+  test('idle seats with nothing queued give one aggregate notice per continuous empty stretch', async () => {
+    const push: WorkPush = async () => ({ ok: true, outcome: 'typed (unconfirmed)' });
+    const first = await dispatchIdleWork(input({ push }));
+    expect(first.pushed).toEqual([]);
+    expect(first.fallback?.failed).toEqual([]);
+    expect(first.fallback?.missing).toEqual([]);
+    expect(first.fallback?.written).toHaveLength(2);
+    const lead = recordsIn(join(root, '.agents', 'messages', 'crew-lead'));
+    expect(lead).toHaveLength(1);
+    const record = JSON.parse(readFileSync(join(root, '.agents', 'messages', 'crew-lead', lead[0]!), 'utf8')) as {
+      payload: { from: string; to: string; body: string };
+    };
+    expect(record.payload.from).toBe('runtime');
+    expect(record.payload.to).toBe('crew-lead');
+    expect(record.payload.body).toBe('acme-web: 2 idle, nothing queued (worker-1, worker-2)');
+
+    // The same stretch, a later pass: no second notice.
+    const second = await dispatchIdleWork(input({ push, now: new Date(NOW + MIN) }));
+    expect(second.fallback).toBeUndefined();
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+
+    // Work arrives and is taken: the stretch ends.
+    queue([{ id: 't1', title: 'First' }]);
+    const worked = await dispatchIdleWork(input({ push, now: new Date(NOW + 2 * MIN) }));
+    expect(worked.pushed).toHaveLength(2);
+    expect(worked.fallback).toBeUndefined();
+
+    // Empty again, same seats: a new stretch is a new notice, written under a new id.
+    rmSync(join(root, '.agents', 'queue.yaml'));
+    const third = await dispatchIdleWork(input({ push, now: new Date(NOW + 3 * MIN) }));
+    expect(third.fallback?.written).toHaveLength(2);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(2);
+  });
+
+  test('no idle seat, an unknown window or an unreadable source announces nothing', async () => {
+    // Everyone is working: an empty source is not news.
+    const working = live({ 'worker-1': { status: 'working', screen: busy }, 'worker-2': { status: 'working', screen: busy } });
+    expect((await dispatchIdleWork(input({ live: working }))).fallback).toBeUndefined();
+    // Readings no dispatcher may act on: an unknown window and a source it cannot read.
+    const broken = teamOf(`${CREW}\npolicies:\n  idle-threshold: 90s\n`);
+    expect((await dispatchIdleWork(input({ team: broken }))).fallback).toBeUndefined();
+    const missing = teamOf(`${CREW}\ntasks:\n  source: file\n  path: .agents/tasks.yaml\n`);
+    expect((await dispatchIdleWork(input({ team: missing }))).fallback).toBeUndefined();
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+  });
+});
+
+describe('a failed pickup', () => {
+  test('an accepted wake still idle a minute later is announced once and never woken again', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    const first = await dispatchIdleWork(input({ push, state: one }));
+    expect(first.pushed).toHaveLength(1);
+
+    // Half a minute in, the grace has not elapsed: nothing is said.
+    const early = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 30_000) }));
+    expect(early.pushed).toEqual([]);
+    expect(early.fallback).toBeUndefined();
+
+    // A minute in, still idle with no lease and no activity: one announcement, once.
+    const late = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 61_000) }));
+    expect(late.pushed).toEqual([]);
+    expect(late.fallback?.failed).toEqual([]);
+    expect(late.fallback?.missing).toEqual([]);
+    expect(late.fallback?.written).toHaveLength(2);
+    const lead = recordsIn(join(root, '.agents', 'messages', 'crew-lead'));
+    expect(lead).toHaveLength(1);
+    const record = JSON.parse(readFileSync(join(root, '.agents', 'messages', 'crew-lead', lead[0]!), 'utf8')) as {
+      payload: { from: string; to: string; body: string };
+    };
+    expect(record.payload.from).toBe('runtime');
+    expect(record.payload.to).toBe('crew-lead');
+    expect(record.payload.body).toContain('worker-1');
+    expect(record.payload.body).toContain('still idle with no observed claim');
+
+    // No retry and no second notice for the same idle episode.
+    const later = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 10 * MIN) }));
+    expect(later.pushed).toEqual([]);
+    expect(later.fallback).toBeUndefined();
+    expect(calls).toBe(1);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+  });
+
+  test('a live lease held by the woken seat is a claim, so the pickup is not reported', async () => {
+    queue([{ id: 't1', title: 'First' }, { id: 't2', title: 'Second' }]);
+    const push: WorkPush = async () => ({ ok: true, outcome: 'typed (unconfirmed)' });
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    await dispatchIdleWork(input({ push, state: one }));
+    // The seat claimed t2 the way `team next` does: a live lease in this clone. t1 stays takeable.
+    mkdirSync(join(root, '.agents', 'leases'), { recursive: true });
+    writeFileSync(join(root, '.agents', 'leases', 't2.json'), `${JSON.stringify({
+      format: 1, id: 't2', seat: 'worker-1', pane: 'w1:p1',
+      acquiredAt: new Date(NOW).toISOString(), renewedAt: new Date(NOW).toISOString(),
+      until: new Date(NOW + 10 * MIN).toISOString(),
+    }, null, 2)}\n`);
+    const late = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 61_000) }));
+    expect(late.pushed).toEqual([]);
+    expect(late.fallback).toBeUndefined();
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+  });
+
+  test('leaving eligibility cancels the pending pickup, and the seat is woken again when idle', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    await dispatchIdleWork(input({ push, state: one }));
+    // The seat starts a turn: it leaves its idle episode, which cancels the pending check.
+    await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 30_000), live: live({ 'worker-1': { status: 'working', screen: busy } }) }));
+    // Idle again past the old grace: a new episode, a new attempt, and no failed-pickup notice.
+    const again = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 61_000) }));
+    expect(again.pushed).toHaveLength(1);
+    expect(again.fallback).toBeUndefined();
+    expect(calls).toBe(2);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+  });
+
+  test('a refused route never counts as a wake that failed pickup', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    const push: WorkPush = async () => ({ ok: false, refused: 'the pane holds a dialog' });
+    await dispatchIdleWork(input({ push, state: one }));
+    const late = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 10 * MIN) }));
+    expect(late.fallback).toBeUndefined();
+    // Only the refusal's own record is there.
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
   });
 });
 
