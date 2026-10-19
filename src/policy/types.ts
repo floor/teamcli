@@ -6,6 +6,7 @@
 // policies come from a closed, release-owned vocabulary; advised policies may be from the
 // catalogue or a project's own text.
 
+import { DURATION, parseMeasure } from '../file/sections/units.ts';
 import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
@@ -106,6 +107,7 @@ export const ENFORCED_POLICY_NAMES = [
   'swap-wait-seconds',
   'owner-reply-to',
   'codex-daemon',
+  'idle-threshold',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -176,6 +178,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   swap_wait_seconds: 'swap-wait-seconds',
   owner_reply_to: 'owner-reply-to',
   codex_daemon: 'codex-daemon',
+  idle_threshold: 'idle-threshold',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -230,6 +233,25 @@ function parsePositiveSeconds(raw: unknown): number | null {
     return Number.isInteger(n) && n > 0 ? n : null;
   }
   return null;
+}
+
+/**
+ * A duration written the way the team file writes one — a number with its unit, `30s`, `5m` or
+ * `2h` (the `DURATION` table in `src/file/sections/units.ts`) — or a bare whole number of
+ * seconds, the spelling a policy threshold already takes. The value is whole seconds.
+ */
+function parseDurationSeconds(raw: unknown): number | null {
+  if (typeof raw === 'number') return Number.isInteger(raw) && raw > 0 ? raw : null;
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  if (/^[1-9][0-9]*$/.test(text)) return Number.parseInt(text, 10);
+  const seconds = parseMeasure(text, DURATION);
+  return seconds !== null && Number.isInteger(seconds) && seconds > 0 ? seconds : null;
+}
+
+function durationValueProblem(name: string, raw: unknown): string | null {
+  if (parseDurationSeconds(raw) !== null) return null;
+  return `policy "${name}" needs a duration above 0, such as 30s, 5m or 2h, or a whole number of seconds`;
 }
 
 /** A positive whole count (a record cap, a number of days), without the seconds suffix. */
@@ -548,6 +570,22 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseOnOff,
     // 'off' is the opt-out and is always within; 'on' is only within an inherited 'on'.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => lower === 'off' || higher === 'on',
+  },
+  // How long a seat may sit idle before its lead hears about it: a duration with its unit (`5m`,
+  // `30s`) or whole seconds, five minutes when nothing declares it, always read as numeric
+  // seconds. Only the entity, project or team sets it — never the seat — and a shorter window is
+  // the tighter one. `team watch` reads the effective value; this entry is only the name, its
+  // alias and the value rule.
+  'idle-threshold': {
+    name: 'idle-threshold',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 300,
+    gateLifting: false,
+    parseValue: parseDurationSeconds,
+    valueProblem: (raw: unknown) => durationValueProblem('idle-threshold', raw),
+    // A shorter or equal window is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
   },
   'development-mode': {
     name: 'development-mode',

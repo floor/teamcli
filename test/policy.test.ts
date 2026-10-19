@@ -218,6 +218,54 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     }
   });
 
+  test('idle-threshold takes a duration with its unit, defaults to five minutes and stops at the team', () => {
+    const spec = POLICY_CATALOGUE['idle-threshold'];
+    expect(spec.kind).toBe('enforced');
+    expect(spec.levels).toEqual(['entity', 'project', 'team']);
+    expect(spec.defaultValue).toBe(300);
+    expect(spec.gateLifting).toBe(false);
+    expect(normalizePolicyName('idle_threshold')).toBe('idle-threshold');
+
+    for (const [word, seconds] of [['30s', 30], ['5m', 300], ['2h', 7200], ['300', 300], [300, 300], ['1.5m', 90]] as const) {
+      expect(spec.parseValue(word)).toBe(seconds);
+    }
+    for (const word of [0, -5, '0m', '5x', '1.5s', 'nope', '', true]) expect(spec.parseValue(word)).toBeNull();
+
+    const absent = resolvePolicy('idle-threshold', []);
+    expect(absent.ok).toBe(true);
+    if (absent.ok) {
+      expect(absent.effective.value).toBe(300);
+      expect(absent.effective.level).toBe('default');
+    }
+
+    const tightened = resolvePolicy('idle-threshold', [
+      { name: 'idle-threshold', value: '10m', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'idle-threshold', value: '5m', level: 'team', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(tightened.ok).toBe(true);
+    if (tightened.ok) {
+      expect(tightened.effective.value).toBe(300);
+      expect(tightened.effective.level).toBe('team');
+    }
+
+    const loosened = resolvePolicy('idle-threshold', [
+      { name: 'idle-threshold', value: '5m', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'idle-threshold', value: '10m', level: 'team', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(loosened.ok).toBe(false);
+    if (!loosened.ok) {
+      expect(loosened.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'idle-threshold', higherLevel: 'entity', lowerLevel: 'team' });
+    }
+
+    const seatLevel = resolvePolicy('idle-threshold', [
+      { name: 'idle-threshold', value: '5m', level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(seatLevel.ok).toBe(false);
+    if (!seatLevel.ok) {
+      expect(seatLevel.refusals[0]?.message).toContain('allowed: entity, project, team');
+    }
+  });
+
   test('absent declarations resolve to the release default, and off for gate-lifting policies', () => {
     const devMode = resolvePolicy('dev-mode', []);
     expect(devMode.ok).toBe(true);
