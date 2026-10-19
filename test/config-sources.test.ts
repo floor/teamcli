@@ -1,7 +1,6 @@
 // The signed settings store on disk (OD-20261018-08 and the storage ruling): the seat record
 // every write lands in today, the registry's own settings maps at each level, the generation a
-// multi-key write shares, verification before any read, and a cross-level write applied lowest
-// level first.
+// multi-key write shares, and verification before any read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,7 +14,6 @@ import {
   readSeatConfigSource,
   readTeamConfigSource,
   resolveConfigChain,
-  writeConfigAcross,
   writeConfigSet,
   writeConfigUnset,
   type ConfigSourceRead,
@@ -538,35 +536,5 @@ describe('the chain over the four records', () => {
     if (chain.ok) return;
     expect(chain.refusals[0]?.level).toBe('project');
     expect(chain.refusals[0]?.why).toContain('signature verification failed');
-  });
-});
-
-describe('a write across levels', () => {
-  test('applies seat first, stops at the first refusal, and names what it did not attempt', () => {
-    const agentId = seatAgent();
-    const teamId = registeredTeam();
-    const result = writeConfigAcross(home, [
-      { level: 'entity', target: 'acme', settings: [{ key: 'model', value: 'x' }] },
-      { level: 'team', target: teamId, settings: [{ key: 'model', value: 'x' }] },
-      { level: 'seat', target: agentId, settings: [{ key: 'model', value: 'claude-opus-5-5' }] },
-    ]);
-    expect(result.ok).toBe(false);
-    expect(result.attempted.map((entry) => entry.level)).toEqual(['seat', 'team']);
-    expect(result.attempted[0]?.result.ok).toBe(true);
-    expect(result.attempted[1]?.result.ok).toBe(false);
-    expect(result.skipped).toEqual([{ level: 'entity', target: 'acme' }]);
-    expect(readSeatConfigSource(home, agentId).settings.map((entry) => entry.key)).toEqual(['model']);
-  });
-
-  test('names a target with no registered agent truthfully, after applying the seat', () => {
-    const missing = 'agt_000000000000';
-    const result = writeConfigAcross(home, [
-      { level: 'seat', target: missing, settings: [{ key: 'effort', value: 'low' }] },
-    ]);
-    expect(result.ok).toBe(false);
-    expect(result.attempted[0]?.result.ok).toBe(false);
-    if (result.attempted[0]?.result.ok !== false) return;
-    expect(result.attempted[0].result.why).toContain('no registered agent');
-    expect(existsSync(join(agentsDir(home), `${missing}.yaml`))).toBe(false);
   });
 });

@@ -134,13 +134,6 @@ export type ConfigUnsetPlan =
   | { ok: true; level: ConfigLevel; target: string; removed: PlannedConfigSetting[] }
   | ConfigPlanRefusal;
 
-/** One level's outcome in a write across levels, and the levels a refusal left untouched. */
-export type ConfigAcrossResult = {
-  ok: boolean;
-  attempted: { level: ConfigLevel; target: string; result: ConfigWriteResult }[];
-  skipped: { level: ConfigLevel; target: string }[];
-};
-
 // ---- reading one level ----------------------------------------------------------------------
 
 function isMap(value: YamlValue | undefined): value is { [key: string]: YamlValue } {
@@ -973,31 +966,4 @@ export function writeConfigUnset(home: string, request: ConfigUnsetRequest): Con
     return { ok: false, kind: 'write', why: (error as Error).message };
   }
   return plan;
-}
-
-/**
- * Applies a write that names several levels. Not one transaction: the levels are applied lowest
- * first — `seat`, then `team`, `project`, `entity` — and a refusal stops the write, so the level
- * that failed and the levels not attempted are both reported as they are.
- */
-export function writeConfigAcross(
-  home: string,
-  requests: readonly ConfigSetRequest[],
-  options: ConfigWriteOptions = {},
-): ConfigAcrossResult {
-  const order: ConfigLevel[] = ['seat', 'team', 'project', 'entity'];
-  const sorted = [...requests].sort((a, b) => order.indexOf(a.level) - order.indexOf(b.level));
-  const attempted: ConfigAcrossResult['attempted'] = [];
-  const skipped: ConfigAcrossResult['skipped'] = [];
-  let failed = false;
-  for (const request of sorted) {
-    if (failed) {
-      skipped.push({ level: request.level, target: request.target });
-      continue;
-    }
-    const result = writeConfigSet(home, planConfigSet(home, request), options);
-    attempted.push({ level: request.level, target: request.target, result });
-    if (!result.ok) failed = true;
-  }
-  return { ok: !failed, attempted, skipped };
 }
