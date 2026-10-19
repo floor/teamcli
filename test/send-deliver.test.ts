@@ -532,19 +532,47 @@ describe('unsent text in the box', () => {
     }
   });
 
-  test('a multi-line draft from a real capture comes back exactly, blank row included', async () => {
+  test('a multi-line draft from a real capture is held: its rows cannot be told from a soft wrap', async () => {
     const sidecar = dropSidecar();
     try {
       // Taken from claude-code 2.1.303 on herdr 0.7.1: four composer rows typed line by line,
-      // one of them blank. The capture reads as the draft's own rows.
+      // one of them blank. The same drawing is what a wrapped one-line draft looks like, so the
+      // rows cannot be copied faithfully and the box is left untouched.
       const screen = captureLater('unsent-multiline-ansi.txt');
-      const draft = 'first row\nsecond row\n\nfourth row';
-      expect(captureDraft('claude-code', screen)).toEqual({ text: draft });
-      const cli = draftCli({ screen, draft });
+      expect(captureDraft('claude-code', screen)).toEqual({
+        why: 'over more than one drawn row, where a soft wrap cannot be told from a newline',
+      });
+      const cli = draftCli({ screen, draft: 'first row\nsecond row\n\nfourth row' });
       const result = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
-      expect(result.outcome).toBe('delivered');
-      expect(result.draft).toEqual({ restored: true });
-      expect(cli.typed).toEqual([sidecar.line, `\x1b[200~${draft}\x1b[201~`]);
+      expect(result.outcome).toBe('held');
+      expect(result.reason).toBe(
+        'the composer already holds unsent text over more than one drawn row, where a soft wrap cannot be told from a newline; it was left as it is',
+      );
+      expect(cli.typed).toEqual([]);
+      expect(cli.keys).toEqual([]);
+      expect(existsSync(sidecar.copy)).toBe(false);
+    } finally {
+      sidecar.cleanup();
+    }
+  });
+
+  test('a one-line draft the composer draws over several rows is held, never pasted back with an added newline', async () => {
+    const sidecar = dropSidecar();
+    try {
+      // The drawing a word wrap makes: the draft's line continued at the box's own indent. A
+      // newline the person typed draws the same way, so the row break cannot be copied faithfully.
+      const wide = 'Please check the staging deployment logs for the billing service before handing the parser work to the night team.';
+      const screen = screenWith(
+        `${PROMPT}Please check the staging deployment logs for the billing\n  service before handing the parser work to the night team.`,
+      );
+      const cli = draftCli({ screen, draft: wide });
+      const result = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      expect(result.outcome).toBe('held');
+      expect(result.reason).toBe(
+        'the composer already holds unsent text over more than one drawn row, where a soft wrap cannot be told from a newline; it was left as it is',
+      );
+      expect(cli.typed).toEqual([]);
+      expect(cli.keys).toEqual([]);
       expect(existsSync(sidecar.copy)).toBe(false);
     } finally {
       sidecar.cleanup();
@@ -626,6 +654,126 @@ describe('unsent text in the box', () => {
       expect(result.draft).toEqual({ restored: true });
       // The trigger was cleared, then the draft pasted back — the box is the owner's again.
       expect(cli.keys).toEqual(['ctrl+c', 'ctrl+c']);
+      expect(cli.typed).toEqual([sidecar.line, '\x1b[200~Fix the\x1b[201~']);
+      expect(existsSync(sidecar.copy)).toBe(false);
+    } finally {
+      sidecar.cleanup();
+    }
+  });
+
+  /** A pane whose one-row draft is cleared and whose box keeps drawing the submitted trigger
+   *  for the leave check's read; the redraw to an empty box lands inside the verify window. */
+  function lateClearCli(line: string): DeliverHost & { typed: string[]; keys: string[] } {
+    let box = 'Fix the';
+    let entered = false;
+    let cleared = false;
+    let readsSinceEnter = 0;
+    const typed: string[] = [];
+    const keys: string[] = [];
+    return {
+      typed,
+      keys,
+      typeText: (_pane: string, text: string): boolean => {
+        typed.push(text);
+        const paste = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
+        box = paste ? paste[1] ?? '' : text;
+        return true;
+      },
+      pressEnter: (): boolean => {
+        entered = true;
+        readsSinceEnter = 0;
+        return true;
+      },
+      status: (): string => (entered ? 'working' : 'idle'),
+      wait: async (): Promise<void> => {},
+      readAnsi: (): string => {
+        if (entered) {
+          readsSinceEnter += 1;
+          // The leave check's own read still sees the trigger drawn; the redraw follows it.
+          if (readsSinceEnter === 1) return claudeBox(line);
+          if (!cleared) {
+            box = '';
+            cleared = true;
+          }
+        }
+        return claudeBox(box);
+      },
+      sendKey: (_pane: string, key: string): boolean => {
+        keys.push(key);
+        box = '';
+        return true;
+      },
+    };
+  }
+
+  test('a box that empties only after the leave check is restored inside the verify window', async () => {
+    const sidecar = dropSidecar();
+    try {
+      const cli = lateClearCli(sidecar.line);
+      const result = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      expect(result.outcome).toBe('delivered');
+      expect(result.draft).toEqual({ restored: true });
+      // One clear, the trigger, one Enter, then the owner's text back as one paste.
+      expect(cli.keys).toEqual(['ctrl+c']);
+      expect(cli.typed).toEqual([sidecar.line, '\x1b[200~Fix the\x1b[201~']);
+      expect(existsSync(sidecar.copy)).toBe(false);
+    } finally {
+      sidecar.cleanup();
+    }
+  });
+
+  /** A pane whose reads fail for a moment after Enter (a redraw), then recover with the box
+   *  empty: the leave check reads nothing, and the delivery verifies once reads come back. */
+  function unreadLeaveCli(line: string): DeliverHost & { typed: string[]; keys: string[] } {
+    let box = 'Fix the';
+    let entered = false;
+    let cleared = false;
+    let readsSinceEnter = 0;
+    const typed: string[] = [];
+    const keys: string[] = [];
+    return {
+      typed,
+      keys,
+      typeText: (_pane: string, text: string): boolean => {
+        typed.push(text);
+        const paste = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
+        box = paste ? paste[1] ?? '' : text;
+        return true;
+      },
+      pressEnter: (): boolean => {
+        entered = true;
+        readsSinceEnter = 0;
+        return true;
+      },
+      status: (): string => (entered ? 'working' : 'idle'),
+      wait: async (): Promise<void> => {},
+      readAnsi: (): string | null => {
+        if (entered) {
+          readsSinceEnter += 1;
+          if (readsSinceEnter <= 3) return null;
+          if (!cleared) {
+            box = '';
+            cleared = true;
+          }
+        }
+        return claudeBox(box);
+      },
+      sendKey: (_pane: string, key: string): boolean => {
+        keys.push(key);
+        box = '';
+        return true;
+      },
+    };
+  }
+
+  test('a leave check whose read fails still restores the draft once reads recover', async () => {
+    const sidecar = dropSidecar();
+    try {
+      const cli = unreadLeaveCli(sidecar.line);
+      const result = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      expect(result.outcome).toBe('delivered');
+      expect(result.draft).toEqual({ restored: true });
+      expect(cli.keys).toEqual(['ctrl+c']);
       expect(cli.typed).toEqual([sidecar.line, '\x1b[200~Fix the\x1b[201~']);
       expect(existsSync(sidecar.copy)).toBe(false);
     } finally {

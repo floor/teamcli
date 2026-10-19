@@ -496,8 +496,9 @@ const EXIT_KEYS = ['ctrl+c'] as const;
 const INPUT_KEYS = ['ctrl+c', 'ctrl+u', 'ctrl+k', 'escape', 'backspace'] as const;
 
 // The paste surfaces a profile may name as `input.paste`. Bracketed paste is the one measured:
-// claude 2.1.303, codex 0.161.0 and cursor-agent 2026.10.16 each drew a pasted draft back as
-// its own rows, multi-line unchanged.
+// claude 2.1.303, codex 0.161.0 and cursor-agent 2026.10.16 each drew a pasted draft back as its
+// own rows. What a delivery pastes is one row: a box drawn over more than one row cannot be told
+// from a soft wrap, so it is held (see captureBox in send/deliver.ts).
 const PASTE_SURFACES = ['bracketed'] as const;
 
 /** The value of `exit_keys`: a non-empty list of the keys above, spelled as herdr spells them. */

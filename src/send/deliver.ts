@@ -219,16 +219,20 @@ function chipLinesOf(profile: string, screen: string): number | null {
 
 type Capture = { text: string } | { why: string };
 
-/** The unsent text a box holds, as the rows it draws: the row after the prompt and every
- *  continuation row with the box's own indent stripped, joined by a newline — the same rows
- *  `boxText` reports. Refused for a text with no surface that can be copied faithfully: a fold
- *  marker (the screen shows the CLI's fold, not the text) and a paste chip (the folded lines are
- *  the CLI's own); and for a box that reads unsent but draws no usable row. A draft's rows came
- *  back unchanged through a bracketed paste on claude 2.1.303, codex 0.161.0 and cursor-agent
- *  2026.10.16 (multi-line included). */
+/** The unsent text a box holds, as the rows it draws: the row after the prompt, with the box's
+ *  own indent stripped — the same row `boxText` reports. Refused for a text with no surface that
+ *  can be copied faithfully: a fold marker (the screen shows the CLI's fold, not the text), a
+ *  paste chip (the folded lines are the CLI's own), a box that reads unsent but draws no usable
+ *  row, and a box drawn over more than one row. The last refusal is the ambiguity a screen
+ *  cannot settle: a line the composer word-wraps draws continuation rows at the same indent as
+ *  the rows a person's Enters made, so copying the rows would turn a soft wrap into a newline
+ *  the person never typed. Such a box is left as it is rather than copied changed. */
 function captureBox(profile: string, screen: string): Capture {
   if (readFoldMark(profile, screen)) return { why: 'behind its fold marker' };
   if (chipLinesOf(profile, screen) !== null) return { why: 'behind a paste chip' };
+  const box = readBox(profile, screen);
+  if (box === null) return { why: 'but its rows could not be read' };
+  if (box.rows.length > 0) return { why: 'over more than one drawn row, where a soft wrap cannot be told from a newline' };
   const text = boxText(profile, screen);
   if (text === '') return { why: 'but its rows could not be read' };
   return { text };
@@ -379,7 +383,13 @@ async function putDraftBack(
   text: string,
   copy: string,
 ): Promise<DraftMove> {
-  const now = look(host, pane, line, profile);
+  let now = look(host, pane, line, profile);
+  // A read that fails right after Enter can be a redraw in progress: the box is given the same
+  // window a paste's read-back gets before an unreadable box is left to its copy.
+  for (let waited = RESTORE_POLL_MS; now.state === 'unread' && waited <= RESTORE_WAIT_MS; waited += RESTORE_POLL_MS) {
+    await host.wait(RESTORE_POLL_MS);
+    now = look(host, pane, line, profile);
+  }
   if (now.state === 'dialog') return { restored: false, copy, note: `the screen reads ${now.kind}; nothing was pasted back` };
   if (now.state === 'unread') return { restored: false, copy, note: 'the box could not be read to put the text back' };
   if (now.state !== 'empty') {
@@ -498,7 +508,10 @@ export type DeliverOptions = {
  * `not-submitted`; one that has left it — an empty box, one holding a pasted-back draft, or other
  * text — is `delivered` with `taken` evidence, taken but not yet confirmed, because a busy CLI can
  * clear its box while herdr's status lags or stays idle. A box that cannot be read keeps the first
- * Enter and is judged by the status alone, and never gets a second.
+ * Enter and is judged by the status alone, and never gets a second. A delivery that moved an
+ * unsent draft puts it back on every delivered exit — the leave check reads the box only once,
+ * 400 ms after Enter, so a clear that lands inside the verify window is restored there too — or
+ * keeps the copy and names it in the move.
  */
 export async function deliverTrigger(
   host: DeliverHost, pane: string, line: string, profile: string, options: DeliverOptions = {},
@@ -595,6 +608,19 @@ export async function deliverTrigger(
   // The verdict reads a box holding exactly the pasted-back draft as an empty one: the trigger
   // has left it, and the box is the owner's again.
   const afterDraft = (): string | undefined => (restored ? draftText : undefined);
+  // What a delivered exit still owes the owner's text: the leave check reads the box once, so a
+  // clear that lands after it — or a read that was unread there — must still put the text back,
+  // or the receipt must name the copy. A box that reads other text is never typed over; the copy
+  // is kept and named instead. A restore is attempted once, like the leave check's.
+  const restoreOnDelivered = async (): Promise<void> => {
+    if (draftText === undefined || restored || copyPath === undefined || input === null) return;
+    restored = true;
+    if (look(host, pane, line, profile).state === 'other') {
+      draft = { restored: false, copy: copyPath, note: 'the box held other text when the trigger left; nothing was pasted back' };
+      return;
+    }
+    draft = await putDraftBack(host, pane, line, profile, input, draftText, copyPath);
+  };
   for (let round = 0; round < MAX_TRIES; round++) {
     // The first Enter goes, read or not. Later ones go only where a fresh read shows the box still
     // holds exactly the trigger; an empty or unreadable box waits another window, and gets no key.
@@ -624,7 +650,10 @@ export async function deliverTrigger(
     }
     await maybeRestore();
     const verified = await verify(host, pane, line, profile, before, BACKOFF_MS[round] ?? 9000, afterDraft());
-    if (verified !== null) return { outcome: 'delivered', tries, ...verified, ...(draft === undefined ? {} : { draft }) };
+    if (verified !== null) {
+      await restoreOnDelivered();
+      return { outcome: 'delivered', tries, ...verified, ...(draft === undefined ? {} : { draft }) };
+    }
     seen = look(host, pane, line, profile, afterDraft());
     if (seen.state === 'dialog') {
       // A dialog took the box between the tries: the draft was either put back already or cannot
@@ -642,7 +671,10 @@ export async function deliverTrigger(
   if (seen.state === 'empty' || seen.state === 'unread') {
     const spent = BACKOFF_MS.slice(0, MAX_TRIES).reduce((sum, ms) => sum + ms, 0);
     const late = await verify(host, pane, line, profile, before, Math.max(0, VERIFY_TOTAL_MS - spent), afterDraft());
-    if (late !== null) return { outcome: 'delivered', tries, ...late, ...(draft === undefined ? {} : { draft }) };
+    if (late !== null) {
+      await restoreOnDelivered();
+      return { outcome: 'delivered', tries, ...late, ...(draft === undefined ? {} : { draft }) };
+    }
     seen = look(host, pane, line, profile, afterDraft());
     // A dialog that came up during the late window is why the seat was not reached, exactly as
     // one met between the tries: it is never the box's verdict.
@@ -661,6 +693,7 @@ export async function deliverTrigger(
   // taken but not yet confirmed (the watch confirms it later). A box that cannot be read keeps
   // the status-alone judgement the window already made: nothing shows the line was taken.
   if (seen.state === 'empty' || seen.state === 'other') {
+    await restoreOnDelivered();
     return { outcome: 'delivered', tries, evidence: 'taken', prior: before, reason: TAKEN_REASON, ...(draft === undefined ? {} : { draft }) };
   }
   if (draftText !== undefined && copyPath !== undefined && input !== null && !restored) {

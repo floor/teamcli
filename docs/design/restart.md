@@ -90,7 +90,8 @@ Without `--abandon`:
   team restart: <seat> is <state>; left as it is
   ```
 - `unsent` keeps that refusal where a faithful copy cannot be made — a CLI whose profile has no
-  `input` block, a seat herdr reports mid-turn, a box behind a fold marker or a paste chip, or a
+  `input` block, a seat herdr reports mid-turn, a box behind a fold marker or a paste chip, a box
+  drawn over more than one row (where a soft wrap cannot be told from a newline), or a
   box whose rows cannot be read. The box's own reason follows the box words where there is one,
   and the owner's two ways out are named:
   ```
@@ -103,8 +104,10 @@ Without `--abandon`:
 
 An idle seat holding unsent text is restarted, not refused. The run, in order:
 
-1. Reads the box with its styling and captures its rows — the same capture a delivery makes: a
-   fold marker, a paste chip, and a box whose rows cannot be read are refused, never guessed.
+1. Reads the box with its styling and captures its row — the same capture a delivery makes: a
+   fold marker, a paste chip, a box drawn over more than one row (a soft wrap and a newline draw
+   alike, so the rows cannot be copied faithfully), and a box whose rows cannot be read are
+   refused, never guessed.
 2. Writes the text to `<state dir>/restart-drafts/<session>/<seat>.draft` (0600, its folders
    `0700`) under the session run lock, before anything is closed. An identical copy already
    there is reused; one holding different text is an earlier run's and is never overwritten — the
@@ -118,8 +121,8 @@ An idle seat holding unsent text is restarted, not refused. The run, in order:
 4. Closes the old workspace without typing into it — the copied text is what waits for the new
    pane, so no exit sequence is typed over it — and relaunches as usual.
 5. Once the new pane reaches `ready`, waits for herdr to report it `idle` or `done` and pastes the
-   text back with a bracketed paste, multi-line included, reading the box back as the same rows
-   (a CLI that folds the paste is read by its paste chip's line count) for up to two seconds.
+   text back with a bracketed paste, reading the box back as the same row (a CLI that folds the
+   paste is read by its paste chip's line count) for up to two seconds.
    - Read back: the copy is removed and the run prints `<seat>: unsent text pasted back`.
    - Not read back: the copy stays, and the run prints `<seat>: the unsent text could not be
      pasted back (<reason>); its copy is at <path>` and names it in the log. The seat still
