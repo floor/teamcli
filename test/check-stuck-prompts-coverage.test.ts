@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runTeamCheck } from '../src/check/team.ts';
+import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { STATE_FILE, emptySession, updateState, type SeatState } from '../src/state.ts';
@@ -104,6 +105,13 @@ function run(args: { json?: boolean } = {}, caller?: { kind: 'owner' } | { kind:
   return { code, out: io.out, err: io.err };
 }
 
+async function readStatus(): Promise<{ code: number; out: string; err: string }> {
+  const sources: StatusSources = { live: () => live, branch: () => 'main', standing: () => standing, now: () => NOW, home: dir };
+  const io = testIo(dir, { kind: 'owner' });
+  const code = await runStatus([], io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
 // The three ways the pane stops being the seat: herdr no longer lists it, it runs a process the
 // record does not name, and it is back at its shell. Each screen still shows the permission
 // dialog the CLI drew before it ended; none may become a prompt line.
@@ -135,7 +143,7 @@ test('a pane running a process the record does not name keeps its process row, a
   expect(out).not.toContain('Write(synthetic-note.txt)');
 });
 
-test('a temporary seat whose pane is back at its shell makes no stuck line of the check\'s own', () => {
+test('a temporary seat whose pane is back at its shell keeps no prompt row from its scrollback', () => {
   live = {
     ...built(),
     agents: [...built().agents, agent('claude-acme-tmp-1', 'w6')],
@@ -145,8 +153,36 @@ test('a temporary seat whose pane is back at its shell makes no stuck line of th
   // No recorded identity: the bare-shell branch, not the pid verdict, is what excludes this one.
   recordTemporary('claude-acme-tmp-1', 'w6:p1');
   const { out } = run();
+  // Neither the check's own line nor `compare()`'s plain temporary row: the pane is a shell.
   expect(out).not.toContain('stuck at a permission prompt');
+  expect(out).not.toContain('waits at a permission prompt');
   expect(out).not.toContain('Write(synthetic-note.txt)');
+});
+
+// `status` prints the same temporary row from the same comparison: the gate decides there too,
+// and the row's own word stays what the record's clock and herdr make it.
+
+test('the status report names a temporary prompt only while the recorded process is in the pane', async () => {
+  live = {
+    ...built(),
+    agents: [...built().agents, agent('claude-acme-tmp-1', 'w6')],
+    screens: { 'w6:p1': PERMISSION },
+    processes: { 'w6:p1': { shell: 10, foreground: [10] } },
+  };
+  recordTemporary('claude-acme-tmp-1', 'w6:p1', { launched: { shell: 10, cli: [11] } });
+  const shell = await readStatus();
+  expect(shell.out).toContain('claude-acme-tmp-1');
+  expect(shell.out).not.toContain('waits at a permission prompt');
+  expect(shell.out).not.toContain('Write(synthetic-note.txt)');
+
+  live = {
+    ...built(),
+    agents: [...built().agents, agent('claude-acme-tmp-1', 'w6')],
+    screens: { 'w6:p1': PERMISSION },
+    processes: { 'w6:p1': { shell: 10, foreground: [10, 11] } },
+  };
+  const held = await readStatus();
+  expect(held.out).toContain('claude-acme-tmp-1 waits at a permission prompt: its lead\'s to answer, or its owner\'s');
 });
 
 // The safety floor's live region. A window with no rule line is a dialog that fills the pane and
@@ -288,9 +324,11 @@ test('the real live read reads a temporary seat\'s pane, and only while the reco
   // Herdr names the seat on another pane: the state's pane is not read, and nothing is named.
   expect(parsed.stale.reads).toEqual([]);
   expect(parsed.stale.out).not.toContain('stuck at');
-  // The pane is read as the temporary seat's own, and the shell in it keeps the dialog out.
+  // The pane is read as the temporary seat's own, and the shell in it keeps the dialog out of
+  // the whole difference output, `compare()`'s plain temporary row included.
   expect(parsed.shell.reads).toContain('w6:p1');
   expect(parsed.shell.out).not.toContain('stuck at a permission prompt');
+  expect(parsed.shell.out).not.toContain('waits at a permission prompt');
   expect(parsed.shell.out).not.toContain('Write(synthetic-note.txt)');
   // The recorded CLI pids are in front: read, and named.
   expect(parsed.held.reads).toContain('w6:p1');
