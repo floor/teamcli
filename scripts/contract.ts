@@ -15,18 +15,27 @@
 // (`args.rest[1]`) to it. Nothing is repeatable: each parser stores
 // one value per name.
 //
+// Every command also carries who may run it: the gate row the command-to-
+// capability map (src/permissions/map.ts) holds for its word, kind and reason,
+// and `unlisted` where the map holds no row — the map is closed, so its silence
+// is not an admission and the contract never reads it as one.
+//
 //   bun scripts/contract.ts
 //   bun scripts/contract.ts --check
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript';
+import { COMMAND_GATES } from '../src/permissions/map.ts';
 
 const JSON_REL = 'contract/cli.json';
 const MARKDOWN_REL = 'docs/reference/cli.md';
 
 type Flag = { name: string; takesValue: boolean; repeatable: boolean; hidden: boolean };
 type Positional = { name: string; optional: boolean; repeatable: boolean };
+/** Who may run one command, as the map states it: the gate's kind, the map's own sentence, and —
+ *  where the module refuses a run with no terminal — the route its `detachedRefusal` prints. */
+type Who = { gate: string; why: string; terminal?: { who: string; where: string } };
 type Node = {
   name: string;
   hidden: boolean;
@@ -36,6 +45,9 @@ type Node = {
   subcommands: Node[];
   /** A required word after a positional. Omitted when the command has none, so other commands' keys stay as they are. */
   literals?: string[];
+  /** The who-may-run row: the command's own, or `command:subcommand` for a verb that gates
+   *  differently. Omitted on the program, which is no word of its own. */
+  who?: Who;
 };
 type Contract = { program: Node; commands: Node[] };
 
@@ -476,14 +488,17 @@ function commandNode(
   const ownLines = lines.filter((line) => line.subcommand === null);
   const subcommands = [...fromSource].sort(cmp).map((sub): Node => {
     const subLines = lines.filter((line) => line.subcommand === sub);
-    return {
-      name: sub,
-      hidden: subLines.length === 0,
-      usage: subLines.map((line) => line.line),
-      flags: flagsOn(subLines, helpFlags(help, texts), rel),
-      positionals: mergePositionals(subLines),
-      subcommands: [],
-    };
+    return withWho(
+      {
+        name: sub,
+        hidden: subLines.length === 0,
+        usage: subLines.map((line) => line.line),
+        flags: flagsOn(subLines, helpFlags(help, texts), rel),
+        positionals: mergePositionals(subLines),
+        subcommands: [],
+      },
+      `${name}:${sub}`,
+    );
   });
 
   const node: Node = {
@@ -605,6 +620,30 @@ function emptyNode(name: string, hidden: boolean, usage: string[]): Node {
   return { name, hidden, usage, flags: [], positionals: [], subcommands: [] };
 }
 
+/**
+ * The word's who-may-run row. The map holds one for every command and every subcommand, and its
+ * kind and `why` are copied as they stand — the contract repeats the decision record, it does
+ * not reword it. A word the map does not name stops generation: the map is closed on purpose (a
+ * word it does not name is refused by the resolver, not judged), so a command added to the CLI
+ * without a row must never reach the adapter as a tool. Naming the word here is the failure.
+ */
+function whoOf(key: string): Who {
+  const gate = COMMAND_GATES[key];
+  if (gate === undefined) {
+    throw new Error(`the command-to-capability map holds no row for "${key}": every command and subcommand the contract exposes needs one`);
+  }
+  // The terminal requirement is copied with the row: the module's `detachedRefusal` reads the
+  // same route, so a run with no terminal is refused exactly as the command refuses it.
+  return gate.terminal === undefined
+    ? { gate: gate.kind, why: gate.why }
+    : { gate: gate.kind, why: gate.why, terminal: gate.terminal };
+}
+
+function withWho(node: Node, key: string = node.name): Node {
+  node.who = whoOf(key);
+  return node;
+}
+
 export function extract(root: string = rootOf(), overrides?: ReadonlyMap<string, string>): Contract {
   const once = repeatable(root, overrides);
   const cliText = load(root, 'src/cli.ts', overrides);
@@ -632,19 +671,21 @@ export function extract(root: string = rootOf(), overrides?: ReadonlyMap<string,
   }
 
   const commands: Node[] = table.map((entry) =>
-    commandNode(entry.name, false, entry.rel, load(root, entry.rel, overrides), after, programUsage),
+    withWho(commandNode(entry.name, false, entry.rel, load(root, entry.rel, overrides), after, programUsage)),
   );
   for (const entry of dispatch.hidden) {
     if (table.some((command) => command.name === entry.name)) throw new Error(`src/cli.ts: ${entry.name} is listed and hidden`);
     commands.push(
-      entry.rel
-        ? commandNode(entry.name, true, entry.rel, load(root, entry.rel, overrides), [], programUsage)
-        : emptyNode(entry.name, true, []),
+      withWho(
+        entry.rel
+          ? commandNode(entry.name, true, entry.rel, load(root, entry.rel, overrides), [], programUsage)
+          : emptyNode(entry.name, true, []),
+      ),
     );
   }
   for (const word of [...new Set(dispatch.helpWords)].sort(cmp)) {
     if (commands.some((command) => command.name === word)) throw new Error(`src/cli.ts: ${word} is already a command`);
-    commands.push(emptyNode(word, true, [programLine]));
+    commands.push(withWho(emptyNode(word, true, [programLine])));
   }
   commands.sort((a, b) => cmp(a.name, b.name));
 
@@ -685,6 +726,12 @@ function renderNode(node: Node, level: number): string[] {
   if (node.usage.length === 0) lines.push('Usage: none', '');
   else lines.push('Usage:', '', ...node.usage.map((line) => `    ${line}`), '');
   if (node.literals && node.literals.length > 0) lines.push(`Literal: ${node.literals.map((word) => `\`${word}\``).join(', ')}`, '');
+  if (node.who) {
+    lines.push(`${'#'.repeat(level + 1)} Who may run it`, '', `\`${node.who.gate}\` — ${node.who.why}`, '');
+    if (node.who.terminal) {
+      lines.push(`A run with no terminal is refused: only ${node.who.terminal.who} runs this, from ${node.who.terminal.where}`, '');
+    }
+  }
   lines.push(`${'#'.repeat(level + 1)} Flags`, '');
   if (node.flags.length === 0) lines.push('None.', '');
   else {
