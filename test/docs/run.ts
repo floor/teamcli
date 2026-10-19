@@ -26,6 +26,7 @@ import { runInit } from '../../src/commands/init.ts';
 import { runMcp } from '../../src/commands/mcp.ts';
 import { runRegister } from '../../src/commands/register.ts';
 import { runReply } from '../../src/commands/reply.ts';
+import { runResume } from '../../src/commands/resume.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRename } from '../../src/commands/rename.ts';
 import { runRestart } from '../../src/commands/restart.ts';
@@ -40,6 +41,7 @@ import { runUp } from '../../src/commands/up.ts';
 import { runMessages } from '../../src/commands/messages.ts';
 import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
+import { runPause } from '../../src/commands/pause.ts';
 import { runPlan } from '../../src/commands/plan.ts';
 import { runProc } from '../../src/commands/proc.ts';
 import { runProjects } from '../../src/commands/projects.ts';
@@ -262,6 +264,11 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runFeed(rest, io, { home: fixture.home, poll: async () => false });
     case 'hold':
       return runHold(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'pause':
+      // The page's clock is pinned, so the record's `at` is the page's instant, not today's.
+      return runPause(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'resume':
+      return runResume(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'raise':
       // The page's clock is pinned, so the hour's merge window is read against it. No
       // notification source: a doc run writes no machine notification.
