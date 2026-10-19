@@ -188,6 +188,28 @@ export const EVENT_THRESHOLDS_SETTING = {
 } as const;
 
 /**
+ * The seven event thresholds as catalogue policies, in the order `team policy view` lists them:
+ * each field's signed policy name. The prompt-escalation window is not one of them in this
+ * release; `src/policy/thresholds.ts` reads a resolved chain through this map, so a number is
+ * named once here and the policy catalogue and every reader take it from the same place.
+ */
+export const EVENT_THRESHOLD_POLICIES = {
+  thread_ttl_seconds: 'event-thread-ttl-seconds',
+  thread_cap: 'event-thread-cap',
+  retention_days: 'event-retention-days',
+  held_threshold_seconds: 'event-held-threshold-seconds',
+  unreachable_threshold_seconds: 'event-unreachable-threshold-seconds',
+  idle_threshold_seconds: 'event-idle-threshold-seconds',
+  reconcile_interval_seconds: 'event-reconcile-interval-seconds',
+} as const;
+
+/** One field of the threshold set an owner may set through `team policy set`. */
+export type EventThresholdField = keyof typeof EVENT_THRESHOLD_POLICIES;
+
+/** The catalogued policy name of one threshold field. */
+export type EventThresholdPolicyName = (typeof EVENT_THRESHOLD_POLICIES)[EventThresholdField];
+
+/**
  * Whether a kind is privileged under a list of patterns. A pattern is an exact kind or a prefix
  * ending in `*` (`team.grant-*`); the release kinds use the two forms the draft names. The list
  * in force is the release defaults grown by the owner's additions (`growPrivilegedKinds`).

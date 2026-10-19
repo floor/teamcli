@@ -112,6 +112,8 @@ export type StartBusInput = {
   home?: string;
   stderr: (text: string) => void;
   reconcileIntervalMs?: number;
+  /** The owner's held threshold (`event-held-threshold-seconds`); the release default when absent. */
+  heldThresholdSeconds?: number;
   bufferLimit?: number;
   maxLogBytes?: number;
   keptLogFiles?: number;
@@ -638,6 +640,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         now: now(),
         maxBytes: input.maxLogBytes,
         kept: input.keptLogFiles,
+        ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
       });
       return res.ok ? res.raised : [];
