@@ -555,6 +555,73 @@ describe('reportUnreadDrops', () => {
     expect(said).toEqual([`lead: a message from scout was still unread after 21 min; reported to scout of beta and lead`]);
   });
 
+  test('a team record whose root derives another identity routes nothing', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const beta = join(made.root, '..', 'beta');
+    mkdirSync(join(beta, '.agents'), { recursive: true });
+    const betaRoot = realpathSync(beta);
+    const betaId = teamIdOf(betaRoot);
+    const gamma = join(made.root, '..', 'gamma');
+    mkdirSync(join(gamma, '.agents'), { recursive: true });
+    const gammaRoot = realpathSync(gamma);
+    const scout = registerSeat(made.home, betaId, 'scout', 'beta');
+    // The record is stored under beta's id but points at gamma's root: an identity that does not
+    // agree with itself must route a signed sender into neither checkout.
+    upsertTeam(made.home, betaId, {
+      project: 'beta',
+      session: 'beta',
+      root: gammaRoot,
+      lobby: 'beta-lobby',
+      roster: [{ agent: scout, seat: 'scout', role: 'builder' }],
+    });
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from scout\n\nforeign', new Date(NOW.getTime() - 21 * MIN), 'scout', scout);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    expect(existsSync(join(gammaRoot, '.agents', 'messages', 'scout'))).toBe(false);
+    expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
+    const toLead = mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body;
+    expect(toLead).toContain(
+      `team ${JSON.stringify(betaId)} records root ${JSON.stringify(gammaRoot)}, whose own identity is ${JSON.stringify(teamIdOf(gammaRoot))}`,
+    );
+    expect(toLead).toContain('so this report goes to the team\'s lead only');
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('reported to lead only');
+  });
+
+  test('a roster with more than one entry for the sender routes nothing', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const beta = join(made.root, '..', 'beta');
+    mkdirSync(join(beta, '.agents'), { recursive: true });
+    const betaRoot = realpathSync(beta);
+    const betaId = teamIdOf(betaRoot);
+    const scout = registerSeat(made.home, betaId, 'scout', 'beta');
+    upsertTeam(made.home, betaId, {
+      project: 'beta',
+      session: 'beta',
+      root: betaRoot,
+      lobby: 'beta-lobby',
+      roster: [
+        { agent: scout, seat: 'scout', role: 'builder' },
+        { agent: scout, seat: 'scout', role: 'builder' },
+      ],
+    });
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from scout\n\nforeign', new Date(NOW.getTime() - 21 * MIN), 'scout', scout);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
+    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(
+      `team ${JSON.stringify(betaId)} lists 2 roster entries for agent ${scout} at seat "scout"`,
+    );
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('reported to lead only');
+  });
+
   test('an unresolved sender is reported to the lead only, never to a same-named local seat', () => {
     const made = world();
     // The team file declares a local `helper`: the name alone must never route the report to it.

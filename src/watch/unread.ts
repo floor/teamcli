@@ -351,13 +351,15 @@ type ReportResolution = {
  * sender is never routed by name: the signed `from` alone could name a same-named seat here or in
  * another team, so a record without an agent id, or whose agent record, team record or roster
  * entry does not pin the same team, seat and session, is reported to the lead only, with the
- * missing metadata in the words.
+ * missing metadata in the words. The identity is exact: the team record's own root must derive
+ * the team id the agent names, and the roster must hold exactly one entry for that agent at that
+ * seat — a root whose identity is another team, or an ambiguous roster, routes nothing.
  */
 function reportTargets(scene: RetryScene, payload: RecordPayload, home: string): ReportResolution {
   const targets: ReportTarget[] = [];
   const seen = new Set<string>();
   const add = (target: ReportTarget): void => {
-    const key = `${target.root}\u0000${target.to}`;
+    const key = `${target.root}\u0000${target.session}\u0000${target.to}`;
     if (seen.has(key)) return;
     seen.add(key);
     targets.push(target);
@@ -390,17 +392,26 @@ function reportTargets(scene: RetryScene, payload: RecordPayload, home: string):
     } else {
       try {
         const team = getTeam(home, agent.reach.team);
-        const roster = team?.roster.find((entry) => entry.agent === payload.from_id && entry.seat === payload.from);
         if (team === null) {
           unresolved = `agent ${payload.from_id} names team ${JSON.stringify(agent.reach.team)}, which this home's registry does not hold`;
         } else if (team.root === '') {
           unresolved = `team ${JSON.stringify(agent.reach.team)} has no canonical root in this home's registry`;
+        } else if (teamIdOf(team.root) !== agent.reach.team) {
+          // The record is stored under one id and its root derives another: one of the two is
+          // not the team the agent names, and an identity that does not agree with itself routes
+          // nothing.
+          unresolved = `team ${JSON.stringify(agent.reach.team)} records root ${JSON.stringify(team.root)}, whose own identity is ${JSON.stringify(teamIdOf(team.root))}`;
         } else if (!Object.hasOwn(team.lobbies, agent.reach.session)) {
           unresolved = `agent ${payload.from_id} names session ${JSON.stringify(agent.reach.session)}, which team ${JSON.stringify(agent.reach.team)} does not record`;
-        } else if (roster === undefined) {
-          unresolved = `team ${JSON.stringify(agent.reach.team)} does not list agent ${payload.from_id} at seat ${JSON.stringify(payload.from)}`;
         } else {
-          add({ root: team.root, session: agent.reach.session, to: payload.from, label: `${payload.from} of ${team.project}` });
+          const roster = team.roster.filter((entry) => entry.agent === payload.from_id && entry.seat === payload.from);
+          if (roster.length === 0) {
+            unresolved = `team ${JSON.stringify(agent.reach.team)} does not list agent ${payload.from_id} at seat ${JSON.stringify(payload.from)}`;
+          } else if (roster.length > 1) {
+            unresolved = `team ${JSON.stringify(agent.reach.team)} lists ${String(roster.length)} roster entries for agent ${payload.from_id} at seat ${JSON.stringify(payload.from)}`;
+          } else {
+            add({ root: team.root, session: agent.reach.session, to: payload.from, label: `${payload.from} of ${team.project}` });
+          }
         }
       } catch (error) {
         // An unreadable registry is not a route: the lead is told, with the reason.
