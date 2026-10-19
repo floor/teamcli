@@ -218,6 +218,13 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   /** Optional custom refusal reason when `parseValue(raw)` returns null. */
   valueProblem?: (raw: unknown) => string | null;
   /**
+   * Optional: merges a lower declaration into the value in force above it before the chain moves
+   * on. A sparse value names only some fields, and the fields it leaves out inherit the value in
+   * force (the release default for the first declaration) instead of being reset. When absent,
+   * the normalized declaration is the value in force.
+   */
+  inherit?: (higher: V, lower: V) => V;
+  /**
    * Returns true when `lower` (with `lowerExpiry`) is within (tighter than or equal to)
    * `higher` (with `higherExpiry`).
    */
@@ -349,8 +356,9 @@ function parseDeliveryTimeoutEntries(raw: unknown): Map<DeliveryTimeoutRoute, nu
   return entries;
 }
 
-/** The budgets a normalized `delivery-timeout` value carries; a route the word leaves out keeps
- *  the release default, so every in-force value is a complete map. */
+/** The budgets a `delivery-timeout` value fills out with the release defaults. In force, a route
+ *  a lower word leaves out inherits the budget set above it (`inheritDeliveryTimeout`); this
+ *  fills only the routes no level in the chain named at all. */
 export function deliveryTimeoutOf(value: unknown): Record<DeliveryTimeoutRoute, number> | null {
   const entries = parseDeliveryTimeoutEntries(value);
   if (entries === null) return null;
@@ -359,14 +367,36 @@ export function deliveryTimeoutOf(value: unknown): Record<DeliveryTimeoutRoute, 
   return budgets;
 }
 
-/** The canonical value: the complete map, in route order (`socket=15,mcp-inbox=15,typed=15`). */
+/** The complete map, in route order (`socket=15,mcp-inbox=15,typed=15,native=15`). */
 function formatDeliveryTimeout(budgets: Readonly<Record<DeliveryTimeoutRoute, number>>): string {
   return DELIVERY_TIMEOUT_ROUTES.map((route) => `${route}=${String(budgets[route])}`).join(',');
 }
 
+/** A word kept to the routes it names, in route order, so the resolver can inherit the rest. */
+function formatNamedDeliveryTimeout(entries: ReadonlyMap<DeliveryTimeoutRoute, number>): string {
+  return DELIVERY_TIMEOUT_ROUTES.filter((route) => entries.has(route))
+    .map((route) => `${route}=${String(entries.get(route))}`)
+    .join(',');
+}
+
 function parseDeliveryTimeout(raw: unknown): string | null {
-  const budgets = deliveryTimeoutOf(raw);
-  return budgets === null ? null : formatDeliveryTimeout(budgets);
+  const entries = parseDeliveryTimeoutEntries(raw);
+  return entries === null ? null : formatNamedDeliveryTimeout(entries);
+}
+
+/**
+ * A lower word inherits every route it leaves out from the value in force above it, so a team
+ * word `typed=4` under an entity `socket=5` keeps socket at 5 rather than resetting it to the
+ * release default. The value in force after the merge is always a complete map.
+ */
+function inheritDeliveryTimeout(higher: string, lower: string): string {
+  const budgets: Record<DeliveryTimeoutRoute, number> = { ...DELIVERY_TIMEOUT_DEFAULTS };
+  for (const source of [higher, lower]) {
+    const entries = parseDeliveryTimeoutEntries(source);
+    if (entries === null) continue;
+    for (const [route, seconds] of entries) budgets[route] = seconds;
+  }
+  return formatDeliveryTimeout(budgets);
 }
 
 function deliveryTimeoutProblem(raw: unknown): string | null {
@@ -376,7 +406,7 @@ function deliveryTimeoutProblem(raw: unknown): string | null {
     .map((item) => item.split('=')[0]?.trim() ?? '');
   if (routes.includes('socket-accepted')) return 'socket-accepted is not available in this release';
   for (const route of routes) {
-    if (route === 'drop' || route === 'native' || route === 'durable-copy') {
+    if (route === 'drop' || route === 'durable-copy') {
       return `route "${route}" has no live receipt wait and no attempt budget`;
     }
   }
@@ -393,11 +423,12 @@ function deliveryTimeoutProblem(raw: unknown): string | null {
 export const DELIVERY_ESCALATION_SECONDS = 300;
 
 /**
- * The routes `delivery-timeout` may budget: each leg with a live transport attempt. A route with
- * no live receipt wait — `drop`, `native`, `durable-copy` — is not in the map, and a word naming
- * one is refused.
+ * The routes `delivery-timeout` may budget: every leg with a live transport attempt. `native`
+ * (the CLI's own enqueue or spawn) counts: it has no read acknowledgement, but the attempt can
+ * still hang, so the budget bounds it. `drop` has no live wait at all, and a word naming it — or
+ * a route this release does not carry — is refused.
  */
-export const DELIVERY_TIMEOUT_ROUTES = ['socket', 'mcp-inbox', 'typed'] as const;
+export const DELIVERY_TIMEOUT_ROUTES = ['socket', 'mcp-inbox', 'typed', 'native'] as const;
 export type DeliveryTimeoutRoute = (typeof DELIVERY_TIMEOUT_ROUTES)[number];
 
 /** The reviewed attempt budget per route: fifteen seconds each (Atlas timing decision). */
@@ -405,6 +436,7 @@ export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, nu
   socket: 15,
   'mcp-inbox': 15,
   typed: 15,
+  native: 15,
 };
 
 /**
@@ -512,15 +544,15 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
       lower.length > 0
       && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
-  // The attempt budget per route: one map, `route=<seconds>` entries separated by commas, with
-  // any route the word leaves out keeping the release default. It is the TOTAL budget for one
-  // attempt at that route — probe, connect, write and any receipt the transport requires — and a
-  // low-level capability may only shorten the remaining budget. The post-submit read-receipt
-  // window is not part of it (`team send --wait` owns that, and a receipt wait is never shorter
-  // than the attempt it follows). `deliveryTimeoutInForce` in `src/policy/delivery.ts` reads the
-  // resolved value; a level may only shorten each route against the value in force, and a word
-  // that leaves a route out restates it at the release default, so it must name the routes it
-  // means to keep at a shortened value.
+  // The attempt budget per route: one map, `route=<seconds>` entries separated by commas. It is
+  // the TOTAL budget for one attempt at that route — probe, connect, write and any receipt the
+  // transport requires — and a low-level capability may only shorten the remaining budget. The
+  // post-submit read-receipt window is not part of it (`team send --wait` owns that, and a
+  // receipt wait is never shorter than the attempt it follows). `native` is budgeted too: it has
+  // no read acknowledgement, but the CLI's enqueue or spawn can hang and the attempt is bounded.
+  // A route a word leaves out inherits the budget in force above it, so a level never has to
+  // restate the routes it keeps. `deliveryTimeoutInForce` in `src/policy/delivery.ts` reads the
+  // resolved value; a level may only shorten each route against the value in force.
   'delivery-timeout': {
     name: 'delivery-timeout',
     kind: 'enforced',
@@ -529,7 +561,8 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryTimeout,
     valueProblem: deliveryTimeoutProblem,
-    // Every route in the lower word is at or below the value in force for that route.
+    inherit: inheritDeliveryTimeout,
+    // Every route in the merged value is at or below the value in force for that route.
     isWithin: (lower: string, higher: string) => {
       const lowerBudgets = deliveryTimeoutOf(lower);
       const higherBudgets = deliveryTimeoutOf(higher);
