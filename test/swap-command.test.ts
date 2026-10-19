@@ -469,6 +469,19 @@ describe('team swap now and --run', () => {
     expect(queue().lead!.forced).toMatchObject({ by: 'owner', at: NOW.toISOString() });
   });
 
+  test('a forced run with herdr unreadable exits 1 and leaves the forced record standing', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    const world = fakeHerdr({ unreadable: true });
+    const forced = await swap(['now', 'lead'], OWNER, { sources: world.sources });
+    expect(forced.code).toBe(1);
+    expect(forced.err).toContain('herdr cannot be read, so the forced swap cannot run now');
+    // The force is written before the run: the record outlives the failed run, still forced,
+    // for the watch or a later `--run`. The refusal is a partial effect, not a no-change one.
+    expect(queue().lead!.forced).toMatchObject({ by: 'owner', at: NOW.toISOString() });
+  });
+
   test('the owner forces a swap that was not queued by taking the rule recipe', async () => {
     place();
     setRule('*=!anthropic');

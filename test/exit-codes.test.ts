@@ -4593,10 +4593,29 @@ seats:
     return show(await swapped(place, ['queue', 'lead']), 'swap queued: lead');
   });
   scene('swap.forced', async (place) => {
-    write(place, SWAP_TEAM);
+    approve(place, SWAP_TRUST(place));
     swapRule(place);
     await swapped(place, ['queue', 'lead']);
-    return show(await swapped(place, ['now', 'lead']), 'swap forced: lead');
+    const oldPane = 'w9:p1';
+    let typed = '';
+    let shelled = false;
+    const ran = await swapped(place, ['now', 'lead'], owner, {
+      agents: () => [{ ...agent('lead'), pane: oldPane }],
+      launch: downLaunch({
+        typeText: (_session, pane, text) => {
+          if (pane === oldPane) typed = text;
+          return true;
+        },
+        pressEnter: (_session, pane) => {
+          if (pane === oldPane) shelled = true;
+          return true;
+        },
+      }),
+      screenText: (_session, pane) => (pane === oldPane ? (typed === '' ? IDLE : claudeBox(typed)) : undefined),
+      foreground: (_session, pane) => (pane === oldPane && shelled ? ['zsh'] : ['claude']),
+    });
+    expect(ran.out).toContain('swapped: lead in w1:p1 (read-back unread)');
+    return show(ran, 'swap forced: lead');
   });
   scene('swap.cancelled', async (place) => {
     write(place, SWAP_TEAM);
