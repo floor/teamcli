@@ -93,6 +93,12 @@ export type EventReadResult =
       ok: true;
       events: SignedEventRecord[];
       unverified: number;
+      /** The signatures this read checked. A read that extended a matching checkpoint checks only
+       *  the records after its last verified sequence; a full read checks every record. */
+      checked: number;
+      /** Whether this read verified the whole retained log, because no checkpoint was kept for it
+       *  or the checkpoint did not match the retained bytes (a trim, a rewrite, another key). */
+      full: boolean;
       oldestSeq: number | null;
       newestSeq: number | null;
       path: string;
@@ -107,6 +113,8 @@ export type CursorReadResult =
       cursor: number;
       oldestSeq: number | null;
       newestSeq: number | null;
+      checked: number;
+      full: boolean;
     }
   | {
       ok: true;
@@ -518,9 +526,44 @@ export function verifySignedEvent(record: SignedEventRecord, home: string): bool
   return verifyDomain(EVENT_DOMAIN, record.payload as unknown as Json, record.signature, state.key);
 }
 
+/** The verification checkpoint kept for one retained log: the highest sequence this process
+ *  verified, a SHA-256 over the raw lines of every retained record at or below it, and the verified
+ *  records themselves. Reconcile passes and subscriptions reuse it instead of checking signatures
+ *  they have already checked. The digest is what makes that safe: the bytes it covers are the ones
+ *  the checkpoint was built from, so a trim, a rewrite, a deleted record, or one altered in place
+ *  changes it, and the read that sees the change verifies the whole log again. */
+type ReadCheckpoint = {
+  keyPrint: string;
+  seq: number;
+  digest: string;
+  events: SignedEventRecord[];
+};
+
+const readCheckpoints = new Map<string, ReadCheckpoint>();
+
+type RetainedLine = { raw: string; parsed: SignedEventRecord | null };
+
+/** SHA-256 over the raw lines of every record at or below `upTo`, in retained order. File
+ *  boundaries are not part of the digest: a rotation that keeps every byte keeps the digest, while
+ *  a segment dropped or a file rewritten changes it. */
+function prefixDigest(lines: RetainedLine[], upTo: number): string {
+  const hash = createHash('sha256');
+  for (const line of lines) {
+    if (line.parsed === null || line.parsed.payload.seq > upTo) continue;
+    hash.update(line.raw, 'utf8');
+    hash.update('\n', 'utf8');
+  }
+  return hash.digest('hex');
+}
+
 /** Reads all retained event log files (`events.jsonl.2`, `.1`, `events.jsonl`) in sequence order,
  *  verifying each record's signature against the checkout's message key. Unverified or malformed
- *  lines are counted in `unverified` and never returned as events. */
+ *  lines are counted in `unverified` and never returned as events.
+ *
+ *  Verification is incremental: the retained lines at or below the checkpoint's last verified
+ *  sequence are pinned by its digest, and only the records after it are checked against the key.
+ *  When the log has no checkpoint, the key changed, or the digest does not match the retained
+ *  bytes, the whole log is verified (`full: true`) and the checkpoint is rebuilt. */
 export function readEvents(
   project: string,
   root: string,
@@ -543,10 +586,7 @@ export function readEvents(
   }
   files.push(path);
 
-  const keyState = messageKeyState(home);
-  const events: SignedEventRecord[] = [];
-  let unverified = 0;
-
+  const lines: RetainedLine[] = [];
   for (const candidate of files) {
     const problem = fileProblem(candidate);
     if (problem !== null) return { ok: false, reason: problem };
@@ -555,22 +595,84 @@ export function readEvents(
     if (text === null) return { ok: false, reason: 'the event log could not be read' };
     for (const rawLine of text.split('\n')) {
       if (rawLine.trim() === '') continue;
-      const parsed = parseSignedEventLine(rawLine);
-      if (parsed === null) {
-        unverified += 1;
-        continue;
-      }
-      if (keyState.kind !== 'key' || !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)) {
-        unverified += 1;
-        continue;
-      }
-      events.push(parsed);
+      lines.push({ raw: rawLine, parsed: parseSignedEventLine(rawLine) });
     }
   }
 
+  const keyState = messageKeyState(home);
+  const keyPrint = keyPrintOf(home);
+  const cacheKey = `${storeDir}\u0000${String(kept)}`;
+  const checkpoint = readCheckpoints.get(cacheKey);
+
+  const verifyAll = (): { events: SignedEventRecord[]; unverified: number; checked: number } => {
+    const verified: SignedEventRecord[] = [];
+    let unverified = 0;
+    let checked = 0;
+    for (const line of lines) {
+      if (line.parsed === null) {
+        unverified += 1;
+        continue;
+      }
+      checked += 1;
+      if (keyState.kind !== 'key' || !verifyDomain(EVENT_DOMAIN, line.parsed.payload as unknown as Json, line.parsed.signature, keyState.key)) {
+        unverified += 1;
+        continue;
+      }
+      verified.push(line.parsed);
+    }
+    return { events: verified, unverified, checked };
+  };
+
+  let events: SignedEventRecord[];
+  let unverified: number;
+  let checked: number;
+  let full = true;
+  const matched =
+    checkpoint !== undefined &&
+    checkpoint.keyPrint === keyPrint &&
+    prefixDigest(lines, checkpoint.seq) === checkpoint.digest;
+  if (matched && checkpoint !== undefined) {
+    // Every retained record at or below the checkpoint's sequence is byte for byte the one it was
+    // verified as; only the records past it are checked now. A parsed record at or below the
+    // sequence that the checkpoint does not hold was unverified when it was built, and the bytes
+    // have not changed since, so it is still unverified.
+    full = false;
+    events = checkpoint.events.slice();
+    unverified = 0;
+    checked = 0;
+    let prefixParsed = 0;
+    for (const line of lines) {
+      if (line.parsed === null) {
+        unverified += 1;
+        continue;
+      }
+      if (line.parsed.payload.seq <= checkpoint.seq) {
+        prefixParsed += 1;
+        continue;
+      }
+      checked += 1;
+      if (keyState.kind !== 'key' || !verifyDomain(EVENT_DOMAIN, line.parsed.payload as unknown as Json, line.parsed.signature, keyState.key)) {
+        unverified += 1;
+        continue;
+      }
+      events.push(line.parsed);
+    }
+    unverified += prefixParsed - checkpoint.events.length;
+  } else {
+    ({ events, unverified, checked } = verifyAll());
+  }
+
+  const highest = events.reduce((max, event) => Math.max(max, event.payload.seq), 0);
+  readCheckpoints.set(cacheKey, {
+    keyPrint,
+    seq: highest,
+    digest: prefixDigest(lines, highest),
+    events: events.slice(),
+  });
+
   const oldestSeq = events.length > 0 ? events[0]!.payload.seq : null;
   const newestSeq = events.length > 0 ? events[events.length - 1]!.payload.seq : null;
-  return { ok: true, events, unverified, oldestSeq, newestSeq, path };
+  return { ok: true, events, unverified, checked, full, oldestSeq, newestSeq, path };
 }
 
 /** Whether the retained `team.event-log-dropped` records cover every sequence in `from`..`to`.
@@ -629,6 +731,8 @@ export function readEventsFromCursor(
     cursor: nextCursor,
     oldestSeq,
     newestSeq,
+    checked: read.checked,
+    full: read.full,
   };
 }
 
