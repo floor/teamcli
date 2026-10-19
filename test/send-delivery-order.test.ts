@@ -1110,6 +1110,18 @@ describe('the dry run names only the legs this build can walk', () => {
     expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
   });
 
+  test('a word naming only the headless-resume leg is honoured, and the dry run finds no channel this build walks', async () => {
+    // `headless-resume` is a leg a word may add; this build carries no headless runtime, so the
+    // order in force is that leg alone and nothing of it is a channel this run could take.
+    const w = world();
+    const host = walker(w, { seat: ['headless-resume'] });
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
+  });
+
   test('a seat that watches nothing is named without the drop leg', async () => {
     // The muse seat installs no watcher: its shape leaves drop out of the order, so the dry run
     // names the inbox and the typed fallback behind it, and never the drop file.
@@ -1174,6 +1186,21 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
       "team send: lead: unreachable: no leg of its delivery order took the send (native: unavailable; the native leg is the sending session's own SendMessage)\n",
     );
     expect(host.dials()).toBe(0);
+    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+  });
+  test('a word naming only the headless-resume leg ends unreachable, typing nothing into the seat', async () => {
+    const w = world();
+    const host = { ...walker(w, { seat: ['headless-resume'] }), waitMs: 0 };
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toBe(
+      'team send: lead: unreachable: no leg of its delivery order took the send (headless-resume: this build carries no headless resume runtime)\n',
+    );
+    expect(host.typed).toEqual([]);
+    expect(host.frames).toEqual([]);
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 });

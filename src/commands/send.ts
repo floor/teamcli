@@ -87,8 +87,9 @@ line to the team log.
 A send walks the receiving seat's delivery order — mcp-inbox, typed, drop by
 default. A level of that seat's own chain, entity, project, team, seat, may drop
 legs from the order or put the legs it keeps in a different order, and may add
-only native, the sender's own frame: a word naming a leg the order does not have,
-or naming one twice, is set aside and the order in force stands. Each leg in turn
+native, the sender's own frame, headless-resume, a headless runtime's own turn,
+or place socket anywhere: a word naming a leg the order does not have, or naming
+one twice, is set aside and the order in force stands. Each leg in turn
 either takes the send, which ends the walk, or definitely cannot take it, which
 hands the send to the next leg and is recorded as a failure. A typed leg that
 finds no live agent — no agent carries the seat's name in its session, or the
@@ -898,6 +899,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         continue;
       }
       failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
+      continue;
+    }
+    if (leg === 'headless-resume') {
+      // The seat's own CLI resumed headlessly for one turn: no TUI pane, so no keystroke. This
+      // build carries no headless runtime yet, so the declared leg is recorded as unavailable and
+      // the walk moves on; it never falls through to the typed leg in its place.
+      failures.push('headless-resume: this build carries no headless resume runtime');
       continue;
     }
     // The drop leg: the same 0600 drop file the typed leg writes, and no keystroke at all — no

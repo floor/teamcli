@@ -14,7 +14,8 @@ seat's own folder, read from `git remote get-url origin` there. The module prove
 chooser collapsed on that repo before it types, and refuses with nothing typed when the CLI's
 list does not hold it. The receiving seat's
 delivery order decides the channel: with no declaration it is `mcp-inbox`, then `typed`, then
-`drop`; `native` is never in that default, and only a declared word can add it. Each leg in
+`drop`; `native` and `headless-resume` are never in that default, and only a declared word can
+add either. Each leg in
 turn either takes the send, which ends the walk, or
 definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
 the history line names the channel the send went by and the legs that failed before it. A typed

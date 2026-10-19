@@ -1,4 +1,5 @@
 import type { YamlEntry, YamlNode } from '../yaml.ts';
+import { parseMeasure } from './sections/units.ts';
 import type { Deprecation, Problem } from './types.ts';
 
 export type Fields = Map<string, YamlEntry>;
@@ -83,12 +84,8 @@ export class Check {
   measure(entry: YamlEntry | undefined, name: string, units: Record<string, number>, example: string): number | undefined {
     if (!entry) return undefined;
     const node = entry.value;
-    const raw = node.kind === 'scalar' ? node.raw : '';
-    const match = /^([0-9]+(?:\.[0-9]+)?)([A-Za-z%]+)$/.exec(raw);
-    const unit = match?.[2];
-    if (match && unit !== undefined && unit in units && node.kind === 'scalar' && !node.quoted) {
-      return Number(match[1]) * (units[unit] as number);
-    }
+    const value = node.kind === 'scalar' && !node.quoted ? parseMeasure(node.raw, units) : null;
+    if (value !== null) return value;
     this.fail(node.line, `${name} needs a value with its unit (${Object.keys(units).join(', ')}), such as ${example}`);
     return undefined;
   }

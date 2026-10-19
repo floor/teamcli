@@ -276,12 +276,15 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
  * sender's own cross-session SendMessage, recorded by the sender with `--confirm`; `mcp-inbox`,
  * the seat's own MCP inbox; `typed`, the 0600 drop file and one composer trigger line; `drop`, the
  * same 0600 drop file and no keystroke at all — for a receiver that watches its own drop folder,
- * or a pane that must not be typed into. `socket` and `native` are distinct legs: the socket leg
- * is this build's own frame on the receiver's socket, the native leg the sender's own call.
+ * or a pane that must not be typed into; `headless-resume`, the receiving seat's own CLI resumed
+ * headlessly for one turn, with no TUI pane typed into. `socket` and `native` are distinct legs:
+ * the socket leg is this build's own frame on the receiver's socket, the native leg the sender's
+ * own call. `headless-resume` is nobody's default: only a word that names it reaches it, and this
+ * build carries no headless runtime yet, so the walk records the leg as unavailable and moves on.
  */
-export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop';
+export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume'];
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: mcp-inbox,
@@ -295,8 +298,11 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-i
  * there, but nothing wakes a seat that is idle. A seat that watches nothing never walks this leg
  * (`src/send/delivery.ts` leaves it out of that seat's order). The `native` leg is not in the
  * default: a level that names it is the sender choosing the cross-session SendMessage and
- * recording the delivery itself, so `native` is the one leg a declared word may add
- * (`src/policy/types.ts`). The `socket` leg is not in this fallback either: `team send` walks it
+ * recording the delivery itself, so `native` is a leg a declared word may add
+ * (`src/policy/types.ts`). The `headless-resume` leg is not in the fallback and no implied default
+ * adds it: a level that wants it names it, and a declared word may add it
+ * (`src/policy/types.ts`); until the receiving seat's runtime carries one, the walk records the
+ * leg as unavailable rather than typing into the seat for it. The `socket` leg is not in this fallback either: `team send` walks it
  * first only when the receiver itself declares `crossSessionInbound: accept` and no level of the
  * chain names an order — the one implied default that adds it (`src/commands/send.ts`). A
  * declared word may place `socket` anywhere or leave it out. The chain is the receiving seat's
