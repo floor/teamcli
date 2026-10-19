@@ -258,6 +258,9 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
         hold: {
           type: 'object',
         },
+        pause: {
+          type: 'object',
+        },
         procs: {
           type: 'array',
           items: { type: 'object' },
@@ -302,6 +305,9 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
     notice: { type: ['string', 'null'] },
+    pause: {
+      type: 'object',
+    },
     seats: {
       type: 'array',
       items: {
@@ -673,6 +679,70 @@ export const HOLD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
         by: { type: 'string', minLength: 1 },
         at: { type: 'string', minLength: 1 },
         until: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+});
+
+/** One stop point a pause records: the seat, and what its record and worktree held when the
+ *  pause was written. Every field but the seat is absent when the tool held nothing for it. */
+const PAUSE_STOP_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    stage: { type: 'string', enum: ['launched', 'named', 'ready'] },
+    branch: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+    last_active: { type: 'string', minLength: 1 },
+  },
+};
+
+/** Published `--json` output schema for `team pause` (`schema/pause.schema.json`). */
+export const PAUSE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.pause',
+  fileName: 'pause.schema.json',
+  title: 'team pause --json output',
+  statuses: ['paused'],
+  required: ['project', 'session', 'target', 'value', 'pause'],
+  properties: {
+    target: { type: 'string', const: 'team' },
+    value: { type: ['string', 'null'] },
+    pause: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at', 'stops'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+        reason: { type: 'string', minLength: 1 },
+        stops: { type: 'array', items: PAUSE_STOP_SCHEMA_FRAGMENT },
+      },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team resume` (`schema/resume.schema.json`): the record
+ *  that was cleared, stop points and all, so the caller keeps what the pause held. */
+export const RESUME_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.resume',
+  fileName: 'resume.schema.json',
+  title: 'team resume --json output',
+  statuses: ['resumed'],
+  required: ['project', 'session', 'target', 'value', 'resumed'],
+  properties: {
+    target: { type: 'string', const: 'team' },
+    value: { type: 'null' },
+    resumed: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at', 'stops'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+        reason: { type: 'string', minLength: 1 },
+        stops: { type: 'array', items: PAUSE_STOP_SCHEMA_FRAGMENT },
       },
     },
   },
@@ -1775,6 +1845,8 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DELEGATE_OUTPUT_SCHEMA,
   REVOKE_OUTPUT_SCHEMA,
   HOLD_OUTPUT_SCHEMA,
+  PAUSE_OUTPUT_SCHEMA,
+  RESUME_OUTPUT_SCHEMA,
   RAISE_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,

@@ -639,6 +639,30 @@ Usage:
 
 None.
 
+## `pause`
+
+Hidden: no
+
+Usage:
+
+    team pause [<team>] [--reason <text>] [--all] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--reason` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `team` | yes | no |
+
 ## `plan`
 
 Hidden: no
@@ -1109,6 +1133,29 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | no | no |
+
+## `resume`
+
+Hidden: no
+
+Usage:
+
+    team resume [<team>] [--all] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `team` | yes | no |
 
 ## `revoke`
 

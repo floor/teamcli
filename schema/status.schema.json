@@ -210,6 +210,9 @@
         "hold": {
           "type": "object"
         },
+        "pause": {
+          "type": "object"
+        },
         "procs": {
           "type": "array",
           "items": {

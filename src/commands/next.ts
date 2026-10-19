@@ -7,7 +7,7 @@
 // and this build does not write to a tracker. `team plan` prints the takeable queue and claims
 // nothing. `--wait` re-reads the source at `tasks.cadence` while a pass finds nothing takeable;
 // without the key it refuses, and a stop ends the wait with one line.
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
 import type { BrokerRequest } from '../broker/protocol.ts';
@@ -22,11 +22,13 @@ import {
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
+import { plainText } from '../launch/plain.ts';
 import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
 import { claimLocal, releaseLocal } from '../tasks/lease.ts';
+import { pauseText, readState, type PauseRecord } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 
 export const USAGE = `Usage: team next [--mine | --release] [--wait] [--json]
@@ -148,7 +150,7 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
  * `undefined`, and its empty answer stays the one stand-down answer.
  */
 type Hold = {
-  loaded: { team: TeamFile; root: string };
+  loaded: { team: TeamFile; root: string; path: string };
   tasks: NonNullable<TeamFile['tasks']>;
   sources: NextSources;
   mine: boolean;
@@ -165,7 +167,7 @@ type Hold = {
  */
 async function pass(
   io: Io,
-  loaded: { team: TeamFile; root: string },
+  loaded: { team: TeamFile; root: string; path: string },
   tasks: NonNullable<TeamFile['tasks']>,
   sources: NextSources,
   mine: boolean,
@@ -174,6 +176,24 @@ async function pass(
   emit: Emit,
   hold: Hold | undefined,
 ): Promise<number> {
+  // The team's pause stops every claim; `--release` still runs, because unlinking the lease a
+  // seat holds is how a paused seat lets go. A state that can't be read claims nothing either:
+  // the pause is unknown, and an unknown stop is not an absent one.
+  if (!release) {
+    let standing: PauseRecord | undefined;
+    try {
+      standing = readState(dirname(loaded.path)).pause;
+    } catch (error) {
+      return file(io, plainText(error instanceof Error ? error.message : String(error)), emit.json);
+    }
+    if (standing !== undefined) {
+      const message = `the team is paused (${pauseText(standing)}); nothing new is claimed until \`team resume\``;
+      if (emit.json) writeJsonError(io, 'next.paused', message, 'team resume');
+      else io.stderr(`team next: ${message}\n`);
+      // exit: next.paused
+      return 1;
+    }
+  }
   if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold);
   const registry = sources.registry ?? fileRegistry;
   const adapter = registry[tasks.source];
