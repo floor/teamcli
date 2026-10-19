@@ -27,9 +27,10 @@ export const USAGE = `Usage: team daemon status [--json]
        team daemon install [--root <folder>] [--dry-run] [--json]
        team daemon uninstall [--json]
 
-One machine-wide daemon serves every team and clone on this machine over the one machine
-socket. \`run\` is the foreground process a system service manager starts; it hosts the existing
-send and bus servers in this one process. Repeat \`--root\` to host more than one checkout.
+One machine-wide daemon serves every team and clone on this machine. It answers its own
+protocol on the one machine socket, and for now it also hosts each checkout's existing send
+and bus endpoints in the same process, so no second or third daemon process runs. Repeat
+\`--root\` to host more than one checkout.
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
 it after a failure; \`uninstall\` removes it. \`status\` prints one line: running, not running, or
 unknown.
