@@ -941,19 +941,6 @@ async function executeQueuedSend(
   // that a running watch scans, so no pending record is written beside it and these lines
   // promise no retry. When the daemon is wired in, write the record where the watch reads.
   const candidateDropPath = join(stateDropDir, msgId);
-  // The wake names the sender from the send's own record: the caller seat the daemon was asked
-  // to deliver for, and the team it runs under. Nothing in the body decides the name.
-  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project });
-  if (trigger === null) {
-    return {
-      v: 1,
-      ok: false,
-      id: null,
-      seat: seatName,
-      outcome: 'refused',
-      detail: `${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`,
-    };
-  }
 
   let dropPath: string;
   try {
@@ -988,6 +975,15 @@ async function executeQueuedSend(
     // what happened and promises no retry.
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'held', detail, drop_path: dropPath };
   };
+
+  // The wake names the sender from the send's own record: the caller seat the daemon was asked
+  // to deliver for, and the team it runs under. Nothing in the body decides the name. The drop is
+  // already written, so a wake that cannot carry the name is refused as held with the drop kept
+  // and named, never typed nameless.
+  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project });
+  if (trigger === null) {
+    return recordHeld(`${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was typed`);
+  }
 
   const recordUnreachable = (detail: string, via?: 'typed'): DaemonSendResponse => {
     const entry: HistoryEntry = {

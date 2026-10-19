@@ -58,16 +58,18 @@ export type TriggerSender = { seat: string; team: string };
 /**
  * One line naming the drop file and, when the send knows it, the sender: `From
  * <seat>@<team>: read <path> and do that.` The sender is the record's own, so a name typed into
- * the body cannot change who the wake says wrote it. A caller with no message sender (a work
- * nudge), or a path too long for the named form, keeps the earlier form, `Read <path> and do
- * that.`, which receivers still read. Null when the line would be longer than `TRIGGER_MAX` or
- * would not be one line; the body is never part of the line.
+ * the body cannot change who the wake says wrote it. A wake for a message never drops the name to
+ * make it fit: when the named line would be longer than `TRIGGER_MAX` or would not be one line,
+ * this returns null and the caller refuses, keeping the written drop. The earlier form, `Read
+ * <path> and do that.`, is used only by callers with no message sender (a work nudge); receivers
+ * still read it during the transition.
  */
 export function triggerLine(path: string, sender?: TriggerSender): string | null {
-  const named = sender === undefined ? null : `From ${sender.seat}@${sender.team}: read ${path} and do that.`;
-  if (named !== null && !named.includes('\n') && named.length <= TRIGGER_MAX) return named;
-  // A path long enough that the sender cannot fit keeps the earlier form rather than refusing a
-  // send that worked before it: receivers read both forms during the transition.
+  if (sender !== undefined) {
+    const named = `From ${sender.seat}@${sender.team}: read ${path} and do that.`;
+    if (named.includes('\n') || named.length > TRIGGER_MAX) return null;
+    return named;
+  }
   const line = `Read ${path} and do that.`;
   if (line.includes('\n') || line.length > TRIGGER_MAX) return null;
   return line;

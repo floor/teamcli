@@ -49,12 +49,26 @@ test('a wake with a sender names its seat and team; one without keeps the old fo
   );
 });
 
-test('a wake past the measured limit is refused; a sender that cannot fit keeps the old form', () => {
-  const tooLong = `/drops/${'x'.repeat(TRIGGER_MAX)}`;
-  expect(triggerLine(tooLong, { seat: 'tester-2', team: 'teamcli' })).toBeNull();
-  // The named form is 18 characters longer; this path leaves room for one and not both.
-  const tight = `/drops/${'x'.repeat(164)}`;
-  expect(triggerLine(tight, { seat: 'tester-2', team: 'teamcli' })).toBe(`Read ${tight} and do that.`);
-  // A sender that is not one clean line never reaches the pane; the old form still does.
-  expect(triggerLine('/drops/a', { seat: 'tester\n2', team: 'teamcli' })).toBe('Read /drops/a and do that.');
+test('a named wake fits at exactly the measured limit and is refused one character past it', () => {
+  const sender = { seat: 'tester-2', team: 'teamcli' };
+  // `From <seat>@<team>: read <path> and do that.` is 41 characters around a path for this
+  // sender: 159 makes exactly 200, 160 makes 201.
+  const fits = `/${'x'.repeat(158)}`;
+  const over = `/${'x'.repeat(159)}`;
+  const named = `From tester-2@teamcli: read ${fits} and do that.`;
+  expect(named.length).toBe(TRIGGER_MAX);
+  expect(triggerLine(fits, sender)).toBe(named);
+  expect(triggerLine(over, sender)).toBeNull();
+  // A path that only fits the nameless form is refused, not written nameless: a wake for a
+  // message always names its sender.
+  const oldFits = `/${'x'.repeat(TRIGGER_MAX - 'Read  and do that.'.length - 1)}`;
+  expect(`Read ${oldFits} and do that.`.length).toBe(TRIGGER_MAX);
+  expect(triggerLine(oldFits)).toBe(`Read ${oldFits} and do that.`);
+  expect(triggerLine(oldFits, sender)).toBeNull();
+  expect(triggerLine(`/${'x'.repeat(TRIGGER_MAX)}`, sender)).toBeNull();
+});
+
+test('a sender that is not one clean line is refused, never written nameless', () => {
+  expect(triggerLine('/drops/a', { seat: 'tester\n2', team: 'teamcli' })).toBeNull();
+  expect(triggerLine('/drops/a', { seat: 'tester-2', team: 'team\ncli' })).toBeNull();
 });
