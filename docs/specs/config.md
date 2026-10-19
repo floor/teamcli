@@ -106,7 +106,7 @@ nothing.
 | effort | seat | the profile's levels (for example low, medium, high, xhigh, max) | from the role or team | restart + resume / next turn |
 | cli | seat | a known profile | — | restart (new conversation) |
 | launch | seat | an adapter launch line (escape hatch) | from the account | restart + resume |
-| account | seat | an account of the entity (Runtime amendment 01) | from the team | restart + resume |
+| account | seat | an account of the entity (Runtime commitment 50) | from the team | restart + resume |
 | nickname | seat | unique in the team, never `lead` | none | at once |
 | delivery_order | seat, team, project, entity | legs: native, mcp-inbox, drop, typed (tighten only) | native, mcp-inbox, typed, drop | at once |
 | human | seat | true / false | false | at once |
@@ -118,7 +118,7 @@ nothing.
 
 ## 7. Open points
 
-Storage (settled 2026-10-19, OD-20261018-08 and the architect's ruling): settings sit beside policies in the registry's own signed records: entity in entities.yaml (<entity>.settings), project in projects.yaml (projects.<id>.settings), team in the registry's team record (teams.yaml teams.<id>.settings, never the team file), seat in agents/<agentId>.yaml (settings). One hierarchy, inheritance by absence, a separate config signature domain. A multi-key write is atomic per record, and a write across levels is applied lowest level first. A change whose signed generation has no config.changed event is reconciled by the bus's reconcile pass, which appends one marked reconciled.
+Storage (settled 2026-10-19, OD-20261018-08 and the orchestrator's ruling): settings sit beside policies in the registry's own signed records: entity in entities.yaml (<entity>.settings), project in projects.yaml (projects.<id>.settings), team in the registry's team record (teams.yaml teams.<id>.settings, never the team file), seat in agents/<agentId>.yaml (settings). One hierarchy, inheritance by absence, a separate config signature domain. A multi-key write is atomic per record, and a write across levels is applied lowest level first. A change whose signed generation has no config.changed event is reconciled by the bus's reconcile pass, which appends one marked reconciled.
 
 1. A setting at `project` level for a team that spans projects: does the team's project win, or does the seat's?
 2. Bulk changes across seats (`team settings set <seat> …` one at a time): a `role` level, or a selector?
@@ -133,7 +133,7 @@ Storage (settled 2026-10-19, OD-20261018-08 and the architect's ruling): setting
   team, project and entity levels; a built-in public-domain universe or the entity's own, made with
   `team universes add`; none by default; a change applies at once, the next `team add` draws from it,
   and it never renames existing seats. A planned row: no key of this name is read at the tag.
-- 2026-10-19: the storage open point settled (OD-20261018-08 and the architect's ruling): settings
+- 2026-10-19: the storage open point settled (OD-20261018-08 and the orchestrator's ruling): settings
   sit beside policies in the registry's own signed records — entity, project, team (never the team
   file) and seat — one hierarchy, inheritance by absence, a separate config signature domain; a
   multi-key write is atomic per record, a cross-level write lowest level first, and a signed change

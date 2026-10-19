@@ -4,7 +4,7 @@ updated: 2026-10-19
 kind: spec-draft
 status: draft
 read-at: int/0.5.1 (8acb470b), unreleased
-for: Amendment 01 to Communication (module 002, v2 draft)
+for: Communication (module 002), the event half of a bidirectional team send (commitments 17–34)
 public: not yet; staged in the private docs; ported after review with no private link
 ---
 
