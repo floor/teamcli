@@ -8,6 +8,7 @@
 import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
 import * as projects from '../registry/projects.ts';
+import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 
@@ -230,20 +231,42 @@ export function registerRename(
  * Its pane is cleared either way: the pane is gone, and a later `send` must not type into whatever
  * the host reuses its id for. Nothing is written for a seat the registry never knew, nor for one
  * whose agent lives in another session than the one the command acted on.
+ *
+ * The session registry's record ends first, whatever the agent registry knows: the session is
+ * the CLI process this command stopped, and its record names why (`why`, the word the design
+ * note fixes). A registry that cannot be written is a note, as above; the end still happened.
  */
-export function registerEnd(input: RegistryTeam, seat: string, ending: Ending): { note: string } | null {
+export function registerEnd(
+  input: RegistryTeam,
+  seat: string,
+  ending: Ending,
+  why: SessionEndReason = 'owner-stop',
+): { note: string } | null {
+  const notes: string[] = [];
+  const closed = endSession({
+    home: input.home,
+    root: input.root,
+    team: input.team,
+    session: input.session ?? input.team.session,
+    seat,
+    reason: why,
+  });
+  if ('note' in closed) notes.push(closed.note);
   try {
     const teamId = teamIdOf(input.root);
     const known = findAgent(input.home, { team: teamId, seat });
-    if (!known) return null;
+    if (!known) return notes.length === 0 ? null : { note: notes.join('; ') };
     // A stop in one session never ends the agent that now lives in another: the (team, seat) is
     // one agent, and its `reach.session` says where it is. Absent, the command acted on the file's.
-    if (known.reach.session !== (input.session ?? input.team.session)) return null;
+    if (known.reach.session !== (input.session ?? input.team.session)) {
+      return notes.length === 0 ? null : { note: notes.join('; ') };
+    }
     updateAgent(input.home, known.id, { lifecycle: ending, reach: { ...known.reach, pane: null } });
     if (ending === 'retired') writeRoster(input, teamId, seat, null);
-    return null;
+    return notes.length === 0 ? null : { note: notes.join('; ') };
   } catch (error) {
-    return { note: noteOf(error) };
+    notes.push(noteOf(error));
+    return { note: notes.join('; ') };
   }
 }
 
@@ -251,24 +274,38 @@ export function registerEnd(input: RegistryTeam, seat: string, ending: Ending): 
  * A session that is not running: every agent of the team that was launched in it is stopped and
  * its pane cleared, whether or not the state still knew its seat. Used by `down` for a session
  * found already dead. Agents of the team in another session are left as they are.
+ *
+ * Every open session record the registry holds for this team and herdr session ends too, as
+ * `owner-stop`: the command stopped a session whose processes are gone.
  */
-export function registerSessionEnd(input: RegistryTeam): { note: string } | null {
+export function registerSessionEnd(input: RegistryTeam, why: SessionEndReason = 'owner-stop'): { note: string } | null {
+  const notes: string[] = [];
+  const closed = endSession({
+    home: input.home,
+    root: input.root,
+    team: input.team,
+    session: input.session ?? input.team.session,
+    reason: why,
+  });
+  if ('note' in closed) notes.push(closed.note);
   try {
     const teamId = teamIdOf(input.root);
     const session = input.session ?? input.team.session;
     for (const agent of readAgents(input.home)) {
       if (agent.reach.team !== teamId || agent.reach.session !== session || agent.lifecycle !== 'running') continue;
-      updateAgent(input.home, agent.id, { lifecycle: 'stopped', reach: { pane: null } });
+      updateAgent(input.home, agent.id, { lifecycle: 'stopped', reach: { ...agent.reach, pane: null } });
     }
-    return null;
+    return notes.length === 0 ? null : { note: notes.join('; ') };
   } catch (error) {
-    return { note: noteOf(error) };
+    notes.push(noteOf(error));
+    return { note: notes.join('; ') };
   }
 }
 
-/** The seats `up` left standing, written once at the end of its run. A seat the file stops, or one
- *  that is not ready, is ended as `stopped`; a ready one is registered or re-pointed. The team
- *  record is stopped when no seat is left running. */
+/** The seats `up` left standing, written once at the end of its run. A seat the file stops is
+ *  ended as `stopped`; a ready one is registered or re-pointed. A seat not yet ready — launched,
+ *  named, held at a dialog — keeps the record its launch wrote: only a real stop or `down` ends
+ *  a session. The team record is stopped when no seat is left running. */
 export function registerRun(
   input: RegistryTeam,
   seats: ReadonlyArray<{ seat: Seat; pane: string | null; handle?: string }>,
@@ -276,11 +313,14 @@ export function registerRun(
   const notes: string[] = [];
   let running = 0;
   for (const { seat, pane, handle } of seats) {
-    if (seat.stopped || pane === null) {
+    if (seat.stopped) {
       const ended = registerEnd(input, seat.name, 'stopped');
       if (ended) notes.push(ended.note);
       continue;
     }
+    // A seat still finding its feet has a live session, even when this run did not see it ready:
+    // ending it here would close a record the process still fills, with no start to reopen it.
+    if (pane === null) continue;
     const made = registerLaunch(input, seat, pane, handle);
     if ('note' in made) notes.push(made.note);
     else running += 1;

@@ -55,6 +55,7 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -1456,6 +1457,23 @@ function hostOf(input: {
           }
         }
       }
+    },
+    // The session registry records this seat's launch, with the id TeamCLI set where the CLI
+    // takes one; a registry that cannot be written is a note in the run's log.
+    sessionStarted(name, started) {
+      if (name !== seat.name) return;
+      const began = beginSession({
+        home: input.home,
+        root: input.root,
+        team: input.team,
+        session,
+        seat,
+        pane: started.pane,
+        ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
+        ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+        now: input.now(),
+      });
+      if ('note' in began) logLine(dir, 'add', input.caller, began.note, input.now());
     },
     running(name) {
       if (!running.some((item) => item.name === name)) running.push({ name, vendor: seat.vendor, temporary: Boolean(temporary) });
