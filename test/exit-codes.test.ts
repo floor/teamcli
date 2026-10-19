@@ -66,6 +66,7 @@ import { runUsage } from '../src/commands/usage.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { runWorktree, type WorktreeSources } from '../src/commands/worktree.ts';
 import { main, reportFailure, version } from '../src/cli.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
@@ -79,12 +80,12 @@ import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { writeGrant } from '../src/permissions/grants.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
+import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { analyze, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
@@ -1826,6 +1827,48 @@ scene('seats.not-yours', async (place) => {
   scene('config.shown', async (place) => show(await configRun(place, ['keys']), 'delivery_order'));
 }
 
+/** A home whose registry holds one signed seat setting for `lead`, tampered so the record no
+ *  longer verifies: the settings reads must refuse it rather than fall back to the file. */
+function tamperedSeatSetting(place: Place): void {
+  installKey(place.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const agentId = registerAgent(place.home, {
+    name: 'Lead One',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  }).id;
+  upsertTeam(place.home, teamIdOf(place.root), {
+    project: 'acme',
+    session: 'acme',
+    root: place.root,
+    lobby: '',
+    roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
+  });
+  const plan = planConfigSet(place.home, {
+    level: 'seat',
+    target: agentId,
+    settings: [{ key: 'model', value: 'claude-opus-5-5' }],
+  });
+  if (!plan.ok) throw new Error(`plan refused: ${plan.why}`);
+  const written = writeConfigSet(place.home, plan, { now: NOW });
+  if (!written.ok) throw new Error(`write refused: ${written.why}`);
+  const path = join(agentsDir(place.home), `${agentId}.yaml`);
+  const text = readFileSync(path, 'utf8');
+  // The fixture's launch line carries the same model name, so the tamper targets the settings
+  // entry's own `value:` line; the first match would land on `launch` and leave the record
+  // verifying.
+  const tampered = text.replace('value: "claude-opus-5-5"', 'value: "claude-haiku-5-5"');
+  if (tampered === text) throw new Error('the record has no value to tamper');
+  writeFileSync(path, tampered);
+}
+
 {
   async function settingsRun(
     place: Place,
@@ -1862,6 +1905,11 @@ scene('seats.not-yours', async (place) => {
   scene('settings.shown', async (place) => {
     write(place, TEAM);
     return show(await settingsRun(place, ['lead']), 'delivery_order');
+  });
+  scene('settings.source', async (place) => {
+    write(place, TEAM);
+    tamperedSeatSetting(place);
+    return show(await settingsRun(place, ['lead']), 'signature verification failed for setting "model"');
   });
 }
 
@@ -1917,6 +1965,14 @@ scene('seats.not-yours', async (place) => {
   scene('seat.shown', async (place) => {
     write(place, TEAM);
     return show(await seatRun(place, ['lead']), 'delivery_order');
+  });
+  scene('seat.source', async (place) => {
+    write(place, TEAM);
+    tamperedSeatSetting(place);
+    return show(
+      await seatRun(place, ['lead'], owner, { ...statusSources(quiet), home: place.home }),
+      'signature verification failed for setting "model"',
+    );
   });
 }
 

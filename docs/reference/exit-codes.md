@@ -470,6 +470,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `seat.invocation` | `seat` | 2 | the invocation is not one of the command's forms | `team seat` |
 | `seat.not-a-repo` | `seat` | 2 | the directory is not inside a git repository | `team seat lead` |
 | `seat.not-yours` | `seat` | 2 | the team is not the caller's to read | `team seat lead` |
+| `seat.source` | `seat` | 2 | a signed settings record can't be read or does not verify | `team seat lead` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
@@ -509,6 +510,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `settings.invocation` | `settings` | 2 | the invocation is not one of the command's forms | `team settings` |
 | `settings.not-a-repo` | `settings` | 2 | the directory is not inside a git repository | `team settings lead` |
 | `settings.not-yours` | `settings` | 2 | the team is not the caller's to read | `team settings lead` |
+| `settings.source` | `settings` | 2 | a signed settings record can't be read or does not verify | `team settings lead` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |

@@ -3250,6 +3250,13 @@
       "trigger": "team seat lead"
     },
     {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.source",
+      "meaning": "a signed settings record can't be read or does not verify",
+      "trigger": "team seat lead"
+    },
+    {
       "code": 0,
       "command": "seats",
       "id": "seats.shown",
@@ -3520,6 +3527,13 @@
       "command": "settings",
       "id": "settings.not-yours",
       "meaning": "the team is not the caller's to read",
+      "trigger": "team settings lead"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.source",
+      "meaning": "a signed settings record can't be read or does not verify",
       "trigger": "team settings lead"
     },
     {

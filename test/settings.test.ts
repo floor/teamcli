@@ -5,11 +5,15 @@
 // that is not the caller's).
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSettings, USAGE } from '../src/commands/settings.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
+import { agentsDir, registerAgent, type AgentInit } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { installKey } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -207,5 +211,104 @@ describe('refusals', () => {
     const result = await run(['lead', '--file', '.agents/team.yaml'], { kind: 'pane', pane: 'w9:p1' });
     expect(result.code).toBe(1);
     expect(result.err).toContain('team settings:');
+  });
+});
+
+describe('signed seat records', () => {
+  function agentInit(): AgentInit {
+    return {
+      name: 'Lead One',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'w3:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    };
+  }
+
+  /** Signs one seat setting and returns the file it landed in. */
+  function signedSeatSetting(value = 'claude-opus-5-5'): string {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const agentId = registerAgent(home, agentInit()).id;
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme',
+      session: 'acme',
+      root,
+      lobby: '',
+      roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
+    });
+    const plan = planConfigSet(home, {
+      level: 'seat',
+      target: agentId,
+      settings: [{ key: 'model', value }],
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) throw new Error('plan refused');
+    const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T10:00:00Z') });
+    expect(written.ok).toBe(true);
+    return join(agentsDir(home), `${agentId}.yaml`);
+  }
+
+  /** Rewrites the record's signed value in place. The fixture's `launch` line carries the same
+   *  model name, so the tamper targets the settings entry's own `value:` line rather than the
+   *  first match, which would land on `launch` and leave the record verifying. */
+  function tamper(path: string): void {
+    const text = readFileSync(path, 'utf8');
+    const tampered = text.replace('value: "claude-opus-5-5"', 'value: "claude-haiku-5-5"');
+    expect(tampered).not.toBe(text);
+    writeFileSync(path, tampered);
+  }
+
+  test('the record wins the key and names its file, in the table and in --json', async () => {
+    const path = signedSeatSetting();
+    const table = await run(['lead']);
+    expect(table.code).toBe(0);
+    expect(table.out).toContain('seat record');
+
+    const result = await run(['lead', '--json']);
+    expect(result.code).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      settings: { key: string; value: unknown; source: string; applies: string; source_file?: string }[];
+    }>(result.out, {
+      type: 'object',
+      required: ['settings'],
+      properties: { settings: { type: 'array' } },
+    });
+    expect(doc.settings.find((entry) => entry.key === 'model')).toEqual({
+      key: 'model',
+      value: 'claude-opus-5-5',
+      source: 'seat record',
+      applies: 'restart-resume',
+      source_file: path,
+    });
+    expect(doc.settings.find((entry) => entry.key === 'nickname')).toEqual({
+      key: 'nickname',
+      value: 'Atlas',
+      source: 'team file',
+      applies: 'at-once',
+    });
+  });
+
+  test('a record that does not verify refuses the read and names the file', async () => {
+    const path = signedSeatSetting();
+    tamper(path);
+    const result = await run(['lead']);
+    expect(result.code).toBe(2);
+    expect(result.out).toBe('');
+    expect(result.err).toContain(path);
+    expect(result.err).toContain('signature verification failed for setting "model"');
+  });
+
+  test('a tampered record under --json carries settings.source', async () => {
+    const path = signedSeatSetting();
+    tamper(path);
+    const result = await run(['lead', '--json']);
+    expect(result.code).toBe(2);
+    assertJsonErrorShape(result.out, { id: 'settings.source', messageContains: 'signature verification failed' });
   });
 });

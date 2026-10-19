@@ -93,6 +93,10 @@
           "source": {
             "type": "string",
             "enum": [
+              "entity record",
+              "project record",
+              "team record",
+              "seat record",
               "team file",
               "team default",
               "default",
@@ -105,6 +109,10 @@
               "restart-resume",
               "at-once"
             ]
+          },
+          "source_file": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

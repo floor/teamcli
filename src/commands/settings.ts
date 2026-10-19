@@ -8,7 +8,7 @@
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
-import { composeSeatConfig } from '../config/compose.ts';
+import { readSeatSettings } from '../config/read.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
@@ -118,7 +118,23 @@ export async function runSettings(
 
   if (!json && current.notice !== undefined) io.stdout(`${current.notice}\n`);
 
-  const rows = composeSeatConfig(seat, team.deliveryOrder);
+  const read = readSeatSettings({
+    home,
+    root: current.root,
+    project: team.project,
+    seat,
+    teamDeliveryOrder: team.deliveryOrder,
+  });
+  if (!read.ok) {
+    if (json) {
+      writeJsonError(io, 'settings.source', read.refusals.map((one) => one.why).join('; '), null);
+    } else {
+      for (const refusal of read.refusals) io.stderr(`team settings: ${refusal.why}\n`);
+    }
+    // exit: settings.source
+    return 2;
+  }
+  const rows = read.rows;
   if (json) {
     writeJson(io, 'team.settings', {
       format: 1,
@@ -129,6 +145,7 @@ export async function runSettings(
         value: row.value,
         source: row.origin,
         applies: row.applies,
+        ...(row.sourceFile !== undefined ? { source_file: row.sourceFile } : {}),
       })),
     });
   } else {

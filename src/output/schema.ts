@@ -5,6 +5,19 @@ import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';
 import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
+/** The `source` words a settings row prints: a signed record's level, the team file's entry,
+ *  its team order, the release default, or no value at all. */
+const CONFIG_SOURCE_WORDS = [
+  'entity record',
+  'project record',
+  'team record',
+  'seat record',
+  'team file',
+  'team default',
+  'default',
+  'none',
+];
+
 export interface CommandSchemaSpec {
   /** Schema identifier, e.g. `'team.status'` or `'team.error'`. */
   name: string;
@@ -1937,8 +1950,9 @@ export const SETTINGS_OUTPUT_SCHEMA: CommandSchemaSpec = {
             type: ['string', 'boolean', 'array', 'null'],
             items: { type: 'string', enum: [...DELIVERY_LEGS] },
           },
-          source: { type: 'string', enum: ['team file', 'team default', 'default', 'none'] },
+          source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+          source_file: { type: 'string', minLength: 1 },
         },
       },
     },
@@ -2002,8 +2016,9 @@ export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
             type: ['string', 'boolean', 'array', 'null'],
             items: { type: 'string', enum: [...DELIVERY_LEGS] },
           },
-          source: { type: 'string', enum: ['team file', 'team default', 'default', 'none'] },
+          source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+          source_file: { type: 'string', minLength: 1 },
         },
       },
     },

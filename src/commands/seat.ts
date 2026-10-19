@@ -9,7 +9,7 @@ import { watchInForceOf } from '../approve/approval.ts';
 import { runAdd } from './add.ts';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
-import { composeSeatConfig } from '../config/compose.ts';
+import { readSeatSettings } from '../config/read.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
@@ -194,7 +194,23 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   }
 
   const turn = turnOf(row, dir, session, now);
-  const settings = composeSeatConfig(declared, team.deliveryOrder);
+  const settingsRead = readSeatSettings({
+    home: sources.home ?? null,
+    root,
+    project: team.project,
+    seat: declared,
+    teamDeliveryOrder: team.deliveryOrder,
+  });
+  if (!settingsRead.ok) {
+    if (json) {
+      writeJsonError(io, 'seat.source', settingsRead.refusals.map((one) => one.why).join('; '), null);
+    } else {
+      for (const refusal of settingsRead.refusals) io.stderr(`team seat: ${refusal.why}\n`);
+    }
+    // exit: seat.source
+    return 2;
+  }
+  const settings = settingsRead.rows;
 
   if (json) {
     writeJson(io, 'team.seat', {
@@ -207,6 +223,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
         value: entry.value,
         source: entry.origin,
         applies: entry.applies,
+        ...(entry.sourceFile !== undefined ? { source_file: entry.sourceFile } : {}),
       })),
       status: statusJson(row),
       turn,

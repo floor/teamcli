@@ -9,10 +9,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSeat, USAGE } from '../src/commands/seat.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { cliHookStatePath } from '../src/launch/cli-hook.ts';
+import { agentsDir, registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { SESSIONS_FILE } from '../src/sessions/registry.ts';
-import { storePath } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
+import { installKey } from '../src/store/keys.ts';
+import { storePath } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
 
@@ -285,6 +289,74 @@ describe('--json', () => {
     expect(doc.turn).toBeNull();
     expect('cost' in doc).toBe(false);
     expect('tokens' in doc).toBe(false);
+  });
+});
+
+describe('a signed seat record', () => {
+  /** Signs one seat setting for `lead` and returns the file it landed in. */
+  function signedSeatSetting(): string {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const agentId = registerAgent(home, {
+      name: 'Lead One',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    }).id;
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme',
+      session: 'acme',
+      root,
+      lobby: '',
+      roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
+    });
+    const plan = planConfigSet(home, {
+      level: 'seat',
+      target: agentId,
+      settings: [{ key: 'model', value: 'claude-opus-5-5' }],
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) throw new Error('plan refused');
+    const written = writeConfigSet(home, plan, { now: NOW });
+    expect(written.ok).toBe(true);
+    return join(agentsDir(home), `${agentId}.yaml`);
+  }
+
+  test('wins its key in the five settings and names its file in --json', async () => {
+    const path = signedSeatSetting();
+    const table = await run(['lead']);
+    expect(table.code).toBe(0);
+    expect(table.out).toContain('seat record');
+
+    const result = await run(['lead', '--json']);
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out) as { settings: Record<string, unknown>[] };
+    expect(doc.settings.map((entry) => entry.key)).toEqual([
+      'model',
+      'effort',
+      'nickname',
+      'delivery_order',
+      'human',
+    ]);
+    expect(doc.settings.find((entry) => entry.key === 'model')).toEqual({
+      key: 'model',
+      value: 'claude-opus-5-5',
+      source: 'seat record',
+      applies: 'restart-resume',
+      source_file: path,
+    });
+    expect(doc.settings.find((entry) => entry.key === 'nickname')).toEqual({
+      key: 'nickname',
+      value: 'Atlas',
+      source: 'team file',
+      applies: 'at-once',
+    });
   });
 });
 
