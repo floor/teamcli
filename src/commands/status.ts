@@ -16,7 +16,7 @@ import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, holdText, liveHold, liveProcs, pidAlive, readState, type HoldRecord, type SessionState } from '../state.ts';
+import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -180,6 +180,8 @@ export interface StatusJson {
   budgets?: BudgetRow[];
   /** Present while a hold stands and has not lapsed (`team hold`). */
   hold?: HoldRecord;
+  /** Present while the team is paused (`team pause`), with its stop points. */
+  pause?: PauseRecord;
   /** The live records of `team proc`, present only when the session's seats hold some. */
   procs?: Array<{
     name: string;
@@ -342,6 +344,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
   if (hold) comparison.notes.unshift(holdText(hold));
+  // The pause stands above both: it is the one note that says why no seat takes work.
+  const pause = whole.pause;
+  if (pause) comparison.notes.unshift(pauseText(pause));
   // What the seats recorded with `team proc add`: one note per live process, read the same way
   // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
   // write to clear. The reading is the note and the document, one derivation for both.
@@ -421,6 +426,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       notice: current.notice ?? null,
       ...(budgets.length ? { budgets } : {}),
       ...(hold ? { hold } : {}),
+      ...(pause ? { pause } : {}),
       ...(procs.length ? { procs } : {}),
     });
   } else {

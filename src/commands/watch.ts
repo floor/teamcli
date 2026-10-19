@@ -551,7 +551,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       } else {
         silent = false;
         noteWorked(dir, session, live, sources.now());
-        const state = readState(dir).sessions[session] ?? emptySession();
+        const whole = readState(dir);
+        const state = whole.sessions[session] ?? emptySession();
         const now = sources.now().getTime();
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the
         // pass reads what they read, and nothing else. Only their state is ever said — a
@@ -600,6 +601,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           team, state, live, machine, now, memory,
+          // The team's pause is the project's, not this session's: every watch of the project
+          // stops nudging, and a foreign watch's notice is dropped where every other work drop
+          // of that watch is.
+          pause: whole.pause ?? null,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
           liveness: {
             machine: machineLiveness(sources.home),
