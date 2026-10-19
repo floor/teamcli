@@ -47,6 +47,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   borrow each other's numbers. `--json` carries the same facts under `teams[].seats`, with the
   session registry's own `measured` / `estimated` / `unknown` word, so every surface prints the
   same mark for the same figure.
+- **`team check` names a seat held at a prompt.** The pass that reads the team's differences now
+  names each seat that sits at a prompt on the pane the state records for it, one line per seat,
+  read through the watch's own screen reader and only while that pane still holds the process team
+  launched: a pane back at its shell, one running a process the record does not name with no
+  stored session showing continuity, or a record with no identity whose pane holds a bare shell is
+  not read for a prompt at all, so a dialog left in a dead or replaced pane's scrollback is not a
+  seat held at one. The line gives the seat, the prompt's kind — a permission prompt, a trust
+  prompt, a quota prompt with the reset time the screen shows, the CLI's own exit question, or an
+  unrecognised screen that quotes the safety floor's row — the command the screen shows when the
+  profile's trace reader finds one, and the record's `last active` age: that age dates the
+  record, and the line never claims the prompt itself has waited that long. A permission prompt is
+  its lead's to answer; a trust prompt, a quota screen, a confirm prompt or an unrecognised one is
+  the owner's, and a confirm prompt also closes with `team down --abandon`, a quota screen with
+  the reset it names. The check answers nothing, types nothing and writes nothing: the pane's own
+  reader takes the act. Where `status`'s plain permission or trust row would name the same seat
+  the check replaces it, so a held seat is named once, and `status` itself now reads a prompt only
+  where the seat's process runs, for a declared seat and a temporary one alike. A temporary seat
+  is read the same way from its record, with its like-seat's CLI. `--json` renders each line's
+  `what` as it stands, cleaned with the report's own plain-line reader.
 
 ### Changed
 
