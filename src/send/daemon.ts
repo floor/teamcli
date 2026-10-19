@@ -103,6 +103,10 @@ export type DaemonSendRequest = {
    *  <reason>`: the daemon writes the history line this send ends in, and the failures travel
    *  with it. Absent when the walk had none. */
   failed?: string[];
+  /** The caller's walk holds a leg after the typed leg. A typed leg that finds no live agent
+   *  typed nothing, so the daemon writes no history line for that ending and answers
+   *  `fall_through`: the caller records the reason and carries the send to that leg. */
+  fallthrough?: true;
   /** The address the caller wrote, when it was not the resolved seat's own name — a `@<nickname>`,
    *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id — and the registry id it resolved
    *  to. The history line keeps both beside `to`, the seat. */
@@ -141,6 +145,10 @@ export type DaemonSendResponse =
       outcome: 'held' | 'unreachable' | 'timeout' | 'refused';
       detail: string;
       drop_path?: string;
+      /** The typed leg found no live agent and typed nothing; the caller's walk holds a leg
+       *  behind it, which carries the send. No history line was written here: the leg that
+       *  takes the send writes the one line. */
+      fall_through?: true;
     }
   | {
       v: 1;
@@ -875,6 +883,12 @@ async function executeQueuedSend(
   if (!found.ok) {
     if (found.kind === 'refused') {
       return { v: 1, ok: false, id: null, seat: seatName, outcome: 'refused', detail: found.reason };
+    }
+    // Nothing was typed and no drop file was written here: the caller's walk has a leg behind
+    // the typed one, and it records the reason and carries the send there. A typed leg with
+    // nothing behind it is the walk's last leg, and its line is written below as before.
+    if (request.fallthrough === true) {
+      return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason, fall_through: true };
     }
     appendHistory(team.project, root, host.home, {
       ts: host.now().toISOString(),

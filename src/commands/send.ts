@@ -84,8 +84,11 @@ legs from the order or put the legs it keeps in a different order, and may add
 only native, the sender's own frame: a word naming a leg the order does not have,
 or naming one twice, is set aside and the order in force stands. Each leg in turn
 either takes the send, which ends the walk, or definitely cannot take it, which
-hands the send to the next leg and is recorded as a failure; the typed leg is
-terminal, taking the send or ending the walk unreachable. The drop
+hands the send to the next leg and is recorded as a failure. A typed leg that
+finds no live agent — no agent carries the seat's name in its session, or the
+session cannot be read — types nothing and hands the send to the next leg, its
+reason recorded as \`typed: <reason>\`; once it types, its own outcome is the
+send's. The drop
 leg writes the same 0600 drop file and types nothing at all. A seat the file marks
 human: true walks the drop leg alone, whatever its delivery order or the default
 says: every other leg is kept out — each one's reason is recorded — and the walk
@@ -134,8 +137,8 @@ The outcome is one of eight, and none of them is silent:
                the screen that never came and the one line that repairs it
   timeout      --wait: the record was sent, and no reply record on the thread arrived
                within the window (exit 1); the thread stays open
-  unreachable  the channel did not confirm (exit 1): the session is not running, no
-               live agent carries the seat's name, the pane is one of those dialogs,
+  unreachable  no leg could take the send (exit 1): the typed leg found no live
+               agent and no leg stood behind it, the pane is one of those dialogs,
                or the pane would not take the trigger. A compose seat refuses here,
                naming the repair, when the module stopped before typing anything
   refused      nothing was sent (exit 1): not a declared seat, a trigger that would
@@ -709,8 +712,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
   // the send ends the walk; a leg that definitely cannot take it hands the send to the next
-  // one and its reason joins `failures`, which every history line this walk writes carries;
-  // the typed leg is terminal, taking the send or ending the walk unreachable. The drop leg
+  // one and its reason joins `failures`, which every history line this walk writes carries.
+  // The typed leg looks for a live agent before it types; one it cannot find is a leg that
+  // definitely cannot take the send, so the walk moves on with the reason recorded. Once the
+  // typed leg types, its own outcome is the send's. The drop leg
   // writes the typed leg's own file and stops there, with nothing typed. The mcp-inbox leg
   // takes the send only while the seat's own inbox server is listening, and is otherwise
   // recorded and passed. The native leg is skipped while SOCKET_SEND is off — the frame path is
@@ -804,16 +809,28 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
     const viaDaemon = to.cross || compose !== null || wait
       ? null
-      : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
+      : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) });
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
+      // A daemon that found no live agent typed nothing: when a leg still stands behind the
+      // typed one, the failure joins the walk and the send goes on to it. The daemon wrote no
+      // history line for this ending — the leg that takes the send writes the one line.
+      if (viaDaemon.outcome === 'unreachable' && viaDaemon.fall_through === true) {
+        failures.push(`typed: ${viaDaemon.detail}`);
+        continue;
+      }
       return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, startedAt, socketNote ?? undefined);
     }
     // The pane is read live, by the seat's name: a record's recorded pane may have been closed or
     // reused since it was written, and a trigger typed into a pane another seat now holds would
-    // reach that seat. A name the session does not list is unreachable, never typed into.
+    // reach that seat. A name the session does not list is never typed into; when no leg stands
+    // behind the typed leg that is the walk's ending, and when one does the send goes on to it.
     const found: Found = findAgent(host, to.session, to.seat);
     if (!found.ok) {
       if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
+      if (at + 1 < walk.length) {
+        failures.push(`typed: ${found.reason}`);
+        continue;
+      }
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) };
       appendHistory(to.project, to.root, host.home, entry);
       return unreachable(io, dir, who, to.seat, found.reason, host, report);
@@ -869,11 +886,10 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, callerNative: bo
   if (first === undefined) return 'no leg of its delivery order this build can walk';
   // The drop leg is a file and no keystroke: it always takes the send, so nothing stands behind it.
   if (first === 'drop') return 'a 0600 drop file with nothing typed into the pane';
-  // The typed leg is terminal: a leg after it is never reached, so it is not named.
-  const terminal = walkable.indexOf('typed');
-  const reached = terminal < 0 ? walkable : walkable.slice(0, terminal + 1);
-  if (reached.length === 1) return words(first);
-  return `${words(first)}, falling back to ${reached.slice(1).map(words).join(', then ')}`;
+  // Every leg of the order is named: the typed leg hands the send to a leg behind it when it
+  // finds no live agent, so nothing after it is dropped from the walk's description.
+  if (walkable.length === 1) return words(first);
+  return `${words(first)}, falling back to ${walkable.slice(1).map(words).join(', then ')}`;
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */

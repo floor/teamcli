@@ -20,7 +20,8 @@ import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readTriggerLine } from '../src/send/native.ts';
-import { signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, writeRecord } from '../src/send/record.ts';
+import { readHistory } from '../src/send/history.ts';
+import { readRecord, signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, verifyRecord, writeRecord } from '../src/send/record.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import {
@@ -295,7 +296,7 @@ seats:
     expect(run(command)).toBe('');
   }, 60_000);
 
-  test('a seat the session does not list is unreachable, and no drop is written', async () => {
+  test('a seat the session does not list takes the default walk to the drop leg: signed record, sent (unconfirmed), nothing typed', async () => {
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
     const host: SendHost = {
@@ -319,11 +320,67 @@ seats:
       home,
     };
 
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
+
+    // The typed leg found no live agent, so it typed nothing and handed the send to the drop leg
+    // behind it: the file is the channel, and the sender's side knows only the unconfirmed end.
+    expect(io.out).toContain('sent (unconfirmed)');
+    expect(typed).toEqual([]);
+    const dir = dropsAt();
+    const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
+    if (id === undefined) throw new Error('the send wrote no drop');
+    // The record is signed and bound to this seat, checkout and session — the seat's own read
+    // would verify it and deliver the body.
+    const held = readRecord(join(dir, id), id);
+    const key = messageKeyState(home);
+    if (!held.ok || held.record === null || key.kind !== 'key') throw new Error('the drop record does not read');
+    expect(verifyRecord(held.record, key.key)).toBe(true);
+    expect(held.record.payload).toMatchObject({ to: SEAT, session: SESSION });
+    expect(realpathSync(held.record.payload.root)).toBe(realpathSync(project));
+    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home).map((one) => one.id)).toEqual([id]);
+    // The drop was not read, and nothing claims it was.
+    expect(existsSync(receiptPath(dir, id))).toBe(false);
+    // The reason the typed leg passed rides the one history line the drop leg wrote.
+    const history = readHistory('acme', project, home);
+    if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
+    const entry = history.entries.filter((one) => one.id === id).at(-1);
+    if (entry === undefined) throw new Error('the send wrote no history line');
+    expect(entry.outcome).toBe('sent (unconfirmed)');
+    expect(entry.via).toBe('drop');
+    const reason = (entry.failed ?? []).find((one) => one.startsWith('typed: '));
+    expect(reason).toBe('typed: no live agent carries that name in the session');
+  });
+
+  test('a [typed]-only order with no live agent is unreachable, and no drop is written', async () => {
+    const io = testIo(project, { kind: 'owner' });
+    const typed: { pane: string; text: string }[] = [];
+    const host: SendHost = {
+      agents: () => [],
+      processInfo: () => ({ shell: 1, foreground: [2] }),
+      socketsDir: join(base, 'sockets'),
+      delivery: { seat: ['typed'] },
+      deliver: async () => {
+        throw new Error('the typed leg must not dial a socket');
+      },
+      native: {
+        typeText: (_session, pane, text) => {
+          typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: () => true,
+        status: () => 'idle',
+        wait: async () => {},
+        paneText: () => '',
+      },
+      now: () => NOW,
+      home,
+    };
+
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(1);
 
-    // The typed leg is terminal: a name the session does not list ends the walk unreachable,
-    // never typed blind and never quietly downgraded to a drop file.
-    expect(io.err).toContain('no live agent carries that name in the session');
+    // Nothing stands behind the typed leg: no live agent ends the walk unreachable, never typed
+    // blind and never quietly downgraded to a drop file.
+    expect(io.err).toContain('unreachable: no live agent carries that name in the session');
     expect(typed).toEqual([]);
     expect(existsSync(dropsAt()) ? readdirSync(dropsAt()).filter((name) => MESSAGE_ID.test(name)) : []).toEqual([]);
   });

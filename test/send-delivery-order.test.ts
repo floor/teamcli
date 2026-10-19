@@ -974,7 +974,7 @@ describe('the dry run names only the legs this build can walk', () => {
     const code = await runSend(['lead', 'hello', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
@@ -1047,7 +1047,7 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
     const code = await runSend(['native', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
     expect(io.err).toBe('');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropDir(w.root, 'native'))).toBe(false);

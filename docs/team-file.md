@@ -419,8 +419,9 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
 is an ordinary change, and a file that writes none reads as the default order.
 Omitted, the order is `mcp-inbox`, then `typed`, then `drop`; `native` is never in the default,
-and only a declared word can add it. The typed leg is terminal, so a walk reaches `drop` only
-when it comes before `typed` or `typed` is left out.
+and only a declared word can add it. A typed leg that finds no live agent types nothing and
+hands the send to the leg behind it, recording `typed: <reason>`; a walk reaches `drop` when
+the legs before it did not take the send, or when the order puts `drop` before `typed`.
 
 ```yaml
 delivery_order: [typed]

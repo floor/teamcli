@@ -17,9 +17,10 @@ delivery order decides the channel: with no declaration it is `mcp-inbox`, then 
 `drop`; `native` is never in that default, and only a declared word can add it. Each leg in
 turn either takes the send, which ends the walk, or
 definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
-the history line names the channel the send went by and the legs that failed before it. The
-typed leg is terminal: the record and one trigger line, the channel a send ends in when no
-earlier leg of the order took it.
+the history line names the channel the send went by and the legs that failed before it. A typed
+leg that finds no live agent — no agent carries the seat's name in its session, or the session
+cannot be read — types nothing and hands the send to the next leg, its reason recorded as
+`typed: <reason>`; once it types, its own outcome is the send's.
 
 The drop leg writes that same record and types nothing at all — no trigger line, no socket
 frame, nothing read from a pane — so a receiver that watches its own drop folder finds the
@@ -35,8 +36,8 @@ hands the body to the turn. A running `team watch` promotes the send on that rec
 when thirty minutes have passed is given up on with the file's path: the marker is cleared, the
 watch says the send was not read, and the record stays in the folder — never typed, and never
 called lost.
-Because the typed leg is terminal, a walk reaches `drop` only when it comes before `typed` or
-`typed` is left out. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
+A walk reaches `drop` when the legs before it did not take the send — the inbox had no live
+listener and the typed leg found no live agent — or when the order puts `drop` before `typed`. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
 from the order or put the legs it keeps in a different order, and may add only `native`, the
 sender's own frame: a word naming any other leg the order in force does not have is set aside
 and the order in force stands. The
@@ -168,8 +169,8 @@ record's own, when there is one (`thread` is the thread id on an answered wait);
 error document instead — `{error: {id, message, repair}}` — and stderr stays empty.
 `--dry-run` resolves the seat and names the channel its walk would take — the first leg it can
 walk and the fallbacks behind it, in order, with `native` left out while no socket write is
-made: `the seat's own MCP inbox, falling back to a 0600 drop file, with nothing typed into the
-pane, then a 0600 drop file and one trigger line` for a plain send today, the native handoff
+made: `the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line, then a
+0600 drop file, with nothing typed into the pane` for a plain send today, the native handoff
 then that chain for a sender whose own file declares Claude Code and a receiver whose order
 adds `native`, and only an order that keeps no leg this build can walk prints `no leg of its
 delivery order this build can walk`. It
@@ -493,7 +494,8 @@ proves nothing by its status, and a status that moved under a dialog counts for 
 transcript can show that seat took this line. An unverified send writes one line to `team.log`
 for the orchestrator.
 
-`unreachable` is the seat not reached: no live agent of that name, a screen that is one of the
+`unreachable` is the seat not reached: no live agent of that name when no leg stands behind the
+typed one, a screen that is one of the
 dialogs listed above, the held-message dialog — the sentence on a screen with no live composer to
 read — or a pane that would not take the trigger, and a walk that ran out of legs is unreachable
 too, printing `no leg of its delivery order took the send` with the legs that failed. `timeout`
@@ -641,7 +643,7 @@ A dry run of the same send names the walk and writes nothing:
 ```console
 $ team send claude-keeper "is the gate green?" --wait --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written
+claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written
 exit 0
 ```
 
@@ -780,6 +782,6 @@ exit 1
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: dry-run: codex via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written
+gpt-reviewer: dry-run: codex via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written
 exit 0
 ```
