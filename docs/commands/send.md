@@ -166,9 +166,9 @@ folder is a pointer, not a brief: the send warns on stderr, naming the pointer a
 the brief itself — with `--brief <file>` or its text in the body — and still sends exactly what
 it was given. A prose body that merely mentions such a path draws no warning. `--brief` reads
 the receiving team's `brief-transport` before it writes anything: `file` and `message` both send
-the whole body as an ordinary send, while `memory` refuses the send — no drop, no state or
-history line, no fallback — because no runtime in this build proves that transport keeps nothing
-on disk. An ordinary send that names no brief never reads the policy. `--timeout` is a
+the whole body as an ordinary send, while `memory` refuses the send (exit `send.brief-memory`,
+1) — no drop, no state or history line, no fallback — because no runtime in this build proves
+that transport keeps nothing on disk. An ordinary send that names no brief never reads the policy. `--timeout` is a
 whole number of seconds, 1 to 86,400, and is only meaningful with
 `--wait`; without it a wait runs 120 seconds. `--json` prints one document instead of the lines: the action surface and the outcome in one —
 `{format, dry_run, status, action_summary, project, session, seat, channel, ids, thread?, reply?, plan?}` —

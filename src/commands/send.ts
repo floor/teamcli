@@ -685,9 +685,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       now: host.now(),
     });
     if (transport.transport === 'memory') {
-      if (report.json) writeJsonError(io, 'send.refused', `refused: ${MEMORY_TRANSPORT_UNSUPPORTED}`);
+      if (report.json) writeJsonError(io, 'send.brief-memory', `refused: ${MEMORY_TRANSPORT_UNSUPPORTED}`);
       else io.stderr(`team send: refused: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`);
-      return 1; // exit: send.refused
+      return 1; // exit: send.brief-memory
     }
   }
   let body: string;
