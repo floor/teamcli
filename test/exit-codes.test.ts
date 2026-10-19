@@ -3769,6 +3769,15 @@ scene('daemon.not-owner', async (place) =>
     'only the owner installs or removes the machine daemon',
   ));
 scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
+scene('daemon.run-root', async (place) =>
+  show(
+    await daemonRan(place, ['run', '--root', join(place.home, 'missing-checkout')], owner, {
+      start: async () => {
+        throw new Error('a start must not run when a named root cannot be read');
+      },
+    }),
+    'missing-checkout',
+  ));
 scene('daemon.run-failed', async (place) =>
   show(
     await daemonRan(place, ['run'], owner, {

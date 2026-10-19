@@ -1,5 +1,5 @@
 // Wire protocol v1 of the one machine-wide TeamCLI daemon (send, bus, broker and task-next
-// merged behind `~/.config/teamcli/daemon.sock`). One newline-delimited JSON request in, one
+// merged behind `<home>/.config/team/daemon.sock`). One newline-delimited JSON request in, one
 // response line out, in that order.
 //
 // This first slice is HEALTH ONLY. The transport bound the socket to one UID (mode 0600 in a

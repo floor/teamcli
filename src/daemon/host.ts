@@ -323,6 +323,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const sendHandles: SendDaemonHandle[] = [];
   const busHandles: BusHandle[] = [];
 
+  // Staged limitation, and the exact block the extraction replaces: the machine protocol
+  // socket is the daemon's own endpoint, but send and bus still have no machine route, so this
+  // one process hosts each checkout's existing send and bus listeners beside it. N checkouts
+  // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
+  // delivery and a shared per-seat queue behind the relay package boundary.
   for (const rootArg of input.roots) {
     const status: MachineRootStatus = { root: rootArg, team: null, send: 'failed', bus: 'failed', why: null };
     const loaded = loadTeamFile(rootArg, { home });

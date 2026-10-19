@@ -1,6 +1,7 @@
 // One health reading of the machine-wide TeamCLI daemon, for `team status`, `team check` and
 // every other reader (B4's consumer contract: running, pid, since, startedBy, a probe that just
-// answered, the heartbeat time, and any stuck request). A crash is launchd's job; a hang is not,
+// answered, the heartbeat time, and any stuck request). A crash is the system service manager's
+// job; a hang is not,
 // so a process that exists but does not answer the probe is reported as running with an
 // unanswered probe, never as healthy and never as not running. An unreadable state record or an
 // unreadable socket is `unknown` — cannot tell — never `not-running`.

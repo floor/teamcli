@@ -27,9 +27,10 @@ export const USAGE = `Usage: team daemon status [--json]
        team daemon install [--root <folder>] [--dry-run] [--json]
        team daemon uninstall [--json]
 
-One machine-wide daemon serves every team and clone on this machine over the one machine
-socket. \`run\` is the foreground process a system service manager starts; it hosts the existing
-send and bus servers in this one process. Repeat \`--root\` to host more than one checkout.
+One machine-wide daemon serves every team and clone on this machine. It answers its own
+protocol on the one machine socket, and for now it also hosts each checkout's existing send
+and bus endpoints in the same process, so no second or third daemon process runs. Repeat
+\`--root\` to host more than one checkout.
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
 it after a failure; \`uninstall\` removes it. \`status\` prints one line: running, not running, or
 unknown.
@@ -127,6 +128,15 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.verb === 'uninstall' && parsed.dryRun) return '--dry-run belongs to install';
   if (parsed.verb === 'uninstall' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'uninstall' && parsed.startedBy !== undefined) return '--started-by belongs to run';
+  if (
+    parsed.verb === 'run' &&
+    parsed.startedBy !== undefined &&
+    parsed.startedBy !== 'service-manager' &&
+    parsed.startedBy !== 'manual' &&
+    parsed.startedBy !== 'team-up'
+  ) {
+    return '--started-by takes service-manager, manual or team-up';
+  }
   return null;
 }
 
@@ -253,6 +263,14 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       return 1;
     }
     const named = rootsOf(parsed, io, home);
+    // A named root that cannot be read is refused rather than silently dropped: the service
+    // unit's checkout list is validated when it is written, and a missing checkout must be
+    // visible instead of starting a daemon that hosts nothing.
+    if ('problem' in named && parsed.roots.length > 0) {
+      refuse(io, parsed.json, 'daemon', { id: 'daemon.run-root', message: named.problem, repair: null });
+      // exit: daemon.run-root
+      return 2;
+    }
     const roots = 'problem' in named ? [] : named.roots;
     const started = await (sources.start ?? startMachineDaemon)({
       home,
