@@ -9,9 +9,11 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
+import { readEvents } from '../src/bus/log.ts';
 import { runSettings, USAGE } from '../src/commands/settings.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { SETTINGS_CHANGE_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { agentsDir, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { installKey } from '../src/store/keys.ts';
@@ -71,9 +73,10 @@ const OWNER: Caller = { kind: 'owner' };
 async function run(
   argv: string[],
   caller: Caller = OWNER,
+  now: Date = new Date('2026-10-19T10:00:00Z'),
 ): Promise<{ code: number; out: string; err: string }> {
   const io = testIo(root, caller);
-  const code = await runSettings(argv, io, { home, now: new Date('2026-10-19T10:00:00Z') });
+  const code = await runSettings(argv, io, { home, now });
   return { code, out: io.out, err: io.err };
 }
 
@@ -427,6 +430,51 @@ describe('the write verbs', () => {
       source: 'team file',
       applies: 'at-once',
     });
+  });
+
+  test('an unset is stamped with the clock it ran at, not the date the setting was written', async () => {
+    registerLead();
+    const setAt = new Date('2026-10-19T18:00:00Z');
+    const unsetAt = new Date('2026-10-20T09:00:00Z');
+    expect((await run(['set', 'lead', 'nickname=Hera'], OWNER, setAt)).code).toBe(0);
+    expect((await run(['unset', 'lead', 'nickname'], OWNER, unsetAt)).code).toBe(0);
+
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    const unset = read.events.find(
+      (entry) => entry.payload.kind === 'config.changed' && String(entry.payload.record_id).endsWith(':unset'),
+    );
+    expect(unset?.payload.ts).toBe(unsetAt.toISOString());
+  });
+
+  test('a policy expired at the command clock does not govern the write', async () => {
+    writeFileSync(
+      join(root, '.agents', 'team.yaml'),
+      TEAM.replace('project: acme\n', 'project: acme\nentity: lab\n').replace('delivery_order: [mcp-inbox, typed]\n', ''),
+    );
+    registerLead();
+    const policy = writePolicySet(
+      home,
+      {
+        level: 'entity',
+        target: 'lab',
+        name: 'delivery-order',
+        value: ['mcp-inbox'],
+        expiry: '2026-11-01T00:00:00Z',
+      },
+      { now: new Date('2026-10-01T00:00:00Z') },
+    );
+    expect(policy.ok).toBe(true);
+
+    // Control: before the expiry the same word is a loosening and is refused.
+    const beforeExpiry = await run(['set', 'lead', 'delivery_order', 'mcp-inbox,drop'], OWNER, new Date('2026-10-25T00:00:00Z'));
+    expect(beforeExpiry.code).toBe(1);
+    expect(beforeExpiry.err).toContain('loosens policy "delivery-order" in force at level entity');
+
+    // At a clock past the expiry the policy is read as unset and no longer governs.
+    const afterExpiry = await run(['set', 'lead', 'delivery_order', 'mcp-inbox,drop'], OWNER, new Date('2026-12-01T00:00:00Z'));
+    expect(afterExpiry.code).toBe(0);
   });
 
   test('--dry-run prints the change and leaves the record bytes alone', async () => {

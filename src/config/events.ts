@@ -11,7 +11,8 @@ import { appendEvent, type EventAppendInput, type EventAppendResult } from '../b
 import type { ConfigKey, ConfigLevel, ConfigValue } from './registry.ts';
 
 export type ConfigChange = {
-  /** When the record was written: the signed record's own date. */
+  /** When the change ran: the signed record's own date for a set; for an unset, the command's
+   *  clock, because the removed record's date says when the value was written, not taken away. */
   ts: string;
   session: string;
   level: ConfigLevel;

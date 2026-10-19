@@ -32,7 +32,7 @@ import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
-import { loadAndResolvePolicyChain } from '../policy/index.ts';
+import { loadAndResolvePolicyChain, logExpiredPoliciesOnce } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 
@@ -402,15 +402,21 @@ function executeWrite(
     const pairs = (parsed as { pairs: { key: string; value: string }[] }).pairs;
     const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: pairs });
     if (!plan.ok) return planExit(io, json, plan.kind, plan.why);
-    const chain = loadAndResolvePolicyChain({
-      home,
-      entity: team.entity ?? found.entity,
-      projectId: found.projectId,
-      teamRoot: current.root,
-      team,
-      agentId,
-      seat,
-    });
+    const chain = loadAndResolvePolicyChain(
+      {
+        home,
+        entity: team.entity ?? found.entity,
+        projectId: found.projectId,
+        teamRoot: current.root,
+        team,
+        agentId,
+        seat,
+      },
+      { now },
+    );
+    // A policy whose expiry has passed at this command's own clock does not govern the write,
+    // and the log says so once instead of leaving the reader to guess why it stopped applying.
+    logExpiredPoliciesOnce(join(current.root, '.agents'), chain.expired, now);
     const roster = addressedRoster(home, current.root, team);
     if ('error' in roster) return planExit(io, json, 'source', roster.error);
     const checked: PlannedConfigSetting[] = [];
@@ -538,7 +544,7 @@ function executeWrite(
     if (written.kind === 'value') return notSetExit(io, json, written.why);
     return planExit(io, json, written.kind, written.why);
   }
-  const notice = recordRemovals(current, home, seat.name, agentId, removed);
+  const notice = recordRemovals(current, home, seat.name, agentId, removed, now);
   logLine(
     join(current.root, '.agents'),
     'settings',
@@ -610,11 +616,14 @@ function recordRemovals(
   seatName: string,
   agentId: string,
   removed: readonly PlannedConfigSetting[],
+  now: Date,
 ): string | null {
   const failures: string[] = [];
   for (const setting of removed) {
     const appended = appendConfigChanged(current.team.project, current.root, home, {
-      ts: setting.previous?.date ?? new Date().toISOString(),
+      // An unset leaves no signed record behind, so the clock is the command's own: the date the
+      // removed record carried says when the value was set, not when it was taken away.
+      ts: now.toISOString(),
       session: current.team.session,
       level: 'seat',
       target: agentId,
