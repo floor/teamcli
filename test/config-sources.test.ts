@@ -234,20 +234,26 @@ describe('the seat record', () => {
     expect(readFileSync(path, 'utf8')).toBe(before);
   });
 
-  test('a record signed for the seat name is read and planned by agent id', () => {
+  test('a record signed for the seat name is refused: a seat record belongs to its agent id', () => {
     const agentId = seatAgent('worker');
     injectSeatRecord(agentId, { key: 'nickname', value: 'wren', target: 'worker' });
 
+    // The same word signed for a seat name would verify in every team with a seat of that name;
+    // the agent id is the one owner a seat keeps for life, so nothing else is accepted.
     const read = readSeatConfigSource(home, agentId, 'worker');
-    expect(read.ok).toBe(true);
-    expect(read.settings[0]?.target).toBe('worker');
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.why).toContain('signed for target "worker"');
 
-    // A write plan knows only the agent id; the agent file's own `reach.seat` supplies the name
-    // the record was signed for, so the same record verifies.
     const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'nickname', value: 'wren' }] });
-    expect(plan.ok).toBe(true);
-    if (!plan.ok) return;
-    expect(plan.settings[0]?.previous?.target).toBe('worker');
+    expect(plan.ok).toBe(false);
+  });
+
+  test('a roster agent that is not an agent id is refused before a path is built', () => {
+    const read = readSeatConfigSource(home, '../../another-agent');
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.why).toContain('not an agent id');
   });
 
   test('a seat declared before it is launched plans, from the roster or the team file', () => {

@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { entitiesPath } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { grantsDir } from '../grant.ts';
-import { agentsDir, getAgent, updateAgent } from '../registry/agents.ts';
+import { agentsDir, getAgent, isAgentId, updateAgent } from '../registry/agents.ts';
 import { get as getProject, projectsFile, upsertProject } from '../registry/projects.ts';
 import { getTeam, readTeams, teamsFile, upsertTeam } from '../registry/teams.ts';
 import { bumpGeneration, keyOf, keyState } from '../store/keys.ts';
@@ -72,8 +72,8 @@ export type ConfigChainInput = {
   projectId?: string | null;
   teamId?: string | null;
   agentId?: string | null;
-  /** The seat's name, when known: a seat-level record may be signed for the seat name as well
-   *  as for the agent id, as a policy record may. */
+  /** The seat's name, when known: it names the level's target while the seat has no agent record.
+   *  A signed record always verifies against the agent id, never the name. */
   seatName?: string | null;
 };
 
@@ -470,7 +470,9 @@ export function readTeamConfigSource(home: string = homedir(), teamId: string | 
 
 /**
  * Reads the seat-level settings for `agentId` from `<home>/.config/team/agents/<agentId>.yaml`.
- * A seat-level record may be signed for the agent id or for the seat name, as a policy one may.
+ * A record is signed for the agent id and nothing else: a record signed for a seat name would
+ * verify in every team that has a seat of that name, so its owner is the id a seat keeps for
+ * life. A roster line that is not an agent id is refused before a path is built from it.
  */
 export function readSeatConfigSource(
   home: string = homedir(),
@@ -479,6 +481,15 @@ export function readSeatConfigSource(
 ): ConfigSourceRead {
   const target = agentId ?? seatName;
   if (!agentId) return { ok: true, level: 'seat', target, settings: [] };
+  if (!isAgentId(agentId)) {
+    return {
+      ok: false,
+      level: 'seat',
+      target: agentId,
+      why: `the registry names "${agentId}" as a seat's agent, and that is not an agent id`,
+      settings: [],
+    };
+  }
   const path = `${agentsDir(home)}/${agentId}.yaml`;
   if (!existsSync(path)) return { ok: true, level: 'seat', target, settings: [] };
   let text: string;
@@ -496,14 +507,7 @@ export function readSeatConfigSource(
   if (!isMap(root)) {
     return { ok: false, level: 'seat', target, source: path, why: `${path}: expected a map`, settings: [] };
   }
-  // A seat-level record may be signed for the agent id or for the seat name, as a policy record
-  // may. The agent file itself names its seat in `reach`, so a caller that knows only the agent
-  // id (a write plan) accepts the same signed record the seat-named read does.
-  const targets = new Set<string>([agentId]);
-  if (seatName) targets.add(seatName);
-  const reach = root.reach;
-  if (isMap(reach) && typeof reach.seat === 'string' && reach.seat !== '') targets.add(reach.seat);
-  return verifySettingsMap(home, 'seat', [...targets], path, root.settings);
+  return verifySettingsMap(home, 'seat', [agentId], path, root.settings);
 }
 
 /** Reads all four settings sources for a chain context. */
@@ -621,7 +625,12 @@ function readTargetSource(home: string, level: ConfigLevel, target: string, seat
     case 'entity': return readEntityConfigSource(home, target);
     case 'project': return readProjectConfigSource(home, target);
     case 'team': return readTeamConfigSource(home, target);
-    case 'seat': return readSeatConfigSource(home, target, seatName ?? null);
+    case 'seat':
+      // A seat-level write target may be a seat name no agent record exists for yet (the bootstrap
+      // ruling): the name reads as no settings, and no path is built from it. The chain passes the
+      // registry's agent id here, and readSeatConfigSource refuses a value that is not one.
+      if (!isAgentId(target)) return { ok: true, level: 'seat', target, settings: [] };
+      return readSeatConfigSource(home, target, seatName ?? null);
   }
 }
 
