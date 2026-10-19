@@ -49,6 +49,7 @@ import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPause } from '../../src/commands/pause.ts';
 import { runPlan } from '../../src/commands/plan.ts';
+import { runQueue } from '../../src/commands/queue.ts';
 import { runPolicy } from '../../src/commands/policy.ts';
 import { runProc } from '../../src/commands/proc.ts';
 import { runProjects } from '../../src/commands/projects.ts';
@@ -370,6 +371,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runNext(rest, io, { home: fixture.home, now: () => Date.parse(spec.now) });
     case 'plan':
       return runPlan(rest, io, { home: fixture.home, now: () => Date.parse(spec.now) });
+    case 'queue':
+      return runQueue(rest, io, { home: fixture.home });
     case 'policy':
       // The owner's signed declarations live under the fixture's own home; the clock is the
       // page's, so a declaration's `date` is the page's instant.

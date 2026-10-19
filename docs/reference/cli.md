@@ -1295,6 +1295,83 @@ Usage:
 
 None.
 
+## `queue`
+
+Hidden: no
+
+Usage:
+
+    team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]
+    team queue list [--json]
+
+### Who may run it
+
+`any-caller` — list reads the local task queue from the checkout and asks no caller; add is the owner's or a seat of this team's, on the pane the state records for it
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `add`
+
+Hidden: no
+
+Usage:
+
+    team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]
+
+#### Who may run it
+
+`owner-or-own-team` — adding to the local queue is the owner's or a declared seat's; the module refuses a seat the state cannot place on its recorded pane
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--assignee` | yes | no | no |
+| `--help` | no | no | no |
+| `--id` | yes | no | no |
+| `--json` | no | no | no |
+| `--priority` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `title` | no | no |
+
+### `list`
+
+Hidden: no
+
+Usage:
+
+    team queue list [--json]
+
+#### Who may run it
+
+`any-caller` — the listing reads the checkout and the queue only, and asks for no session and no terminal
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `raise`
 
 Hidden: no
