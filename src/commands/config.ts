@@ -1,7 +1,7 @@
 // `team config` — the settings registry above a seat. This release ships the read-only half the
 // approved minimum needs: `keys` lists what may be set, at which levels, under which policy. The
-// value verbs (`get`, `set`, `unset`) arrive with the wider key set and the signed-record store,
-// both still open in the decision.
+// value verbs (`get`, `set`, `unset`) arrive with the wider key set: every key in this release's
+// registry is a seat key, so no level above a seat holds one to get or set.
 //
 // The command reads no team file: the registry is the same for every project.
 

@@ -3,8 +3,9 @@
 // and target it was set for, the setter, the date and the key generation — signed under its own
 // domain, so a settings record can never be read as a policy record or the other way round.
 //
-// These are the primitives only. Where a record is kept, how a chain of levels composes, and how
-// the team file's fields migrate into records are decisions this release has not taken; a reader
+// These are the primitives only. Where a record is kept and how a chain of levels composes are
+// the storage ruling's, in sources.ts: the registry's own records, inheritance by absence. How
+// the team file's fields migrate into records is a decision this release has not taken; a reader
 // that finds a record verifies it first and refuses a record that does not verify, and never
 // reads half of one.
 
