@@ -434,8 +434,18 @@ return.
 `held` is nothing sent: the message is safely on disk — or, on the socket's path, in the frame the
 receiving session's held-message dialog keeps for a person to let through — the run exits 1, and
 the reason it prints says what held it. A socket write the dialog keeps is `held (socket)`, and
-nothing is typed into the blocked box while the dialog stands. A pane whose composer already holds unsent text is left alone before the run
-types anything (`the composer already holds unsent text`). The trigger line is what the composer
+nothing is typed into the blocked box while the dialog stands. Unsent text does not hold the
+delivery. When the CLI's profile carries a measured `input` surface — clear keys, an optional
+mid-turn key, bracketed paste — the text is copied beside the drop file (`<drop>.draft`), the box
+is cleared with the profile's keys (the mid-turn key while the seat is working, never the
+interrupt key), the trigger is typed and pressed Enter, and the text is pasted back exactly, its
+rows unchanged (multi-line included). A copy already beside the drop holding different text is
+never overwritten: the run holds and names it. Where the CLI has no measured keys, the box cannot
+be copied faithfully (a fold marker, a paste chip, a row the reader cannot read), the mid-turn key
+is missing, or the box will not empty, the run holds before typing anything (`the composer
+already holds unsent text…`), and the reason says why. The run's receipt says where the text went
+(`the unsent text was pasted back`, or `...; its copy is at <path>`), and a not-submitted run puts
+the text back before saying so. The trigger line is what the composer
 is read back for: before Enter the run checks the composer holds it, and a composer that does not
 takes no Enter (`the composer read-back did not match the trigger`); the trigger line is the
 only text a second Enter is ever pressed for.
