@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { plantRecord } from '../src/commands/messages.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -598,6 +599,13 @@ describe('the watch seam', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  /** A signed owner message left unread in one seat's drop folder, as a send would leave it. */
+  function waitingMail(id: string, to: string): void {
+    plantRecord(dir, dir, 'acme-web', to, id, 'from the owner — admitted by: the owner\n\nread this and report', {
+      from: 'owner', rule: 'the owner writes to any seat', at: new Date(clock).toISOString(),
+    });
+  }
+
   test('the direct route is called for each idle episode and no work drop is typed', async () => {
     const pushWork: WorkPush = async (request) => {
       pushed.push(request);
@@ -619,5 +627,28 @@ describe('the watch seam', () => {
     expect(typed.filter((line) => line.includes('and do that.'))).toEqual([]);
     expect(existsSync(join(dir, '.agents', 'send-drops', 'acme-web', 'deepseek-acme'))).toBe(false);
     expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(2);
+  });
+
+  test('an unread record does not ring a seat whose work episode the dispatcher owns', async () => {
+    waitingMail('ring-1', 'deepseek-acme');
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources());
+    expect(code).toBe(0);
+    // The queue holds t1 and no route is wired: the seat's episode is the dispatcher's, and its
+    // undelivered outcome is announced there. The unread record waits for its seat; it never
+    // becomes a second typed path into the same episode.
+    expect(typed.filter((line) => line.includes('Team: run team drops --read'))).toEqual([]);
+    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(2);
+  });
+
+  test('a stamped idle seat outside any work episode is still rung', async () => {
+    rmSync(join(dir, '.agents', 'queue.yaml'));
+    waitingMail('ring-3', 'deepseek-acme-2');
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources());
+    expect(code).toBe(0);
+    // The guard is narrow: with nothing to dispatch and a truthful clock, the mail ring is the
+    // one typed path left, and it types.
+    expect(typed.some((line) => line.includes('Team: run team drops --read --seat deepseek-acme-2'))).toBe(true);
   });
 });
