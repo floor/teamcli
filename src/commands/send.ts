@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve, sep } from 'node:path';
+import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientSend } from '../client/send.ts';
@@ -892,7 +893,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // it waits on the thread, so it skips the handoff and continues the walk.
       if (callerNative && !wait) {
         const fallback = fallbackAfterNative(walk, at);
-        const off = handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
+        const off = await handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
         if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
         if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
         failures.push(`native: ${off.reason}`);
@@ -1091,25 +1092,39 @@ function recordOf(msgId: string, to: Aim, body: string, from: string, admission:
   };
 }
 
+/** The record a leg wrote, with its signed text: the socket leg carries those bytes in its frame
+ *  attempt's message. */
+type RecordWritten = { ok: true; path: string; existing?: true; record: string } | { ok: false; reason: string };
+
 /**
  * Writes the signed record under the leg's own lock, before the leg's transport action. Every
  * ending that says "nothing was sent" happens above this call, and every leg that takes the send
- * has the record on disk first. A record already at the id is this message's (`ensureRecord`): a
- * walk that falls from the socket to the typed leg writes one record, not two.
+ * has the record on disk first. The write is the relay package's (`stage`), with the record's
+ * bytes as this build signs them. A name already held by a regular file is left untouched by the
+ * relay and judged here by `ensureRecord`, so a duplicate id is this message's record exactly as
+ * before: a walk that falls from the socket to the typed leg writes one record, not two.
  */
-function writeSendRecord(dropDir: string, payload: RecordPayload, home: string): { ok: true; path: string } | { ok: false; reason: string } {
+async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date): Promise<RecordWritten> {
   let signed: SignedRecord;
   try {
     signed = signRecord(payload, home);
   } catch {
     return { ok: false, reason: 'the record could not be signed' };
   }
-  const written = ensureRecord(dropDir, signed);
-  if (!written.ok) return { ok: false, reason: written.reason };
-  return { ok: true, path: written.path };
+  const record = `${JSON.stringify(signed, null, 2)}\n`;
+  const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
+  if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
+  if (staged.receipt.existing) {
+    // Admission still decides whether the file at the name is this message's record: `ensureRecord`
+    // reads it and, while the name is held, writes nothing.
+    const held = ensureRecord(dropDir, signed);
+    if (!held.ok) return { ok: false, reason: held.reason };
+    return { ok: true, path: held.path, existing: true, record };
+  }
+  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record };
 }
 
-function handOff(
+async function handOff(
   storeProject: string,
   storeRoot: string,
   from: string,
@@ -1119,7 +1134,7 @@ function handOff(
   fallback: readonly PendingNativeFallbackLeg[],
   dropDir: string,
   host: SendHost,
-): HandOff {
+): Promise<HandOff> {
   if (!admission.ok) return { kind: 'refused', why: 'the send was not admitted' };
   const body = payload.body;
   const found = findAgent(host, to.session, to.seat);
@@ -1164,10 +1179,11 @@ function handOff(
   // The signed record the native leg transports, under the handoff's own id: the receiver can
   // read the message before the sender's own SendMessage carries the line, and a handoff that
   // expires leaves the message where `team messages` reads it.
-  const signed = writeSendRecord(
+  const signed = await writeSendRecord(
     dropDir,
     { ...payload, id, body: stamped, thread, at: host.now().toISOString() },
     host.home,
+    host.now,
   );
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
@@ -1781,9 +1797,19 @@ async function deliverDropped(
     } catch {
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
+    }
+    // The drop leg's one route attempt. The durable copy is the route: stored by the write above
+    // and confirmed by `deliver`, which returns `held` — a copy is never a delivery.
+    const attempt = await relayDeliver(
+      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
+      { id: msgId, record: written.record },
+      { now: host.now },
+    );
+    if (attempt.outcome === 'refused') {
+      return refuse(io, dir, who, `${seatName}: the record could not be written (${attempt.reason}); nothing was sent`, host, report);
     }
     if (!human) {
       // Written before the send returns: a watcher that reads the drop a moment later still finds
@@ -1881,7 +1907,7 @@ async function deliverNative(
     } catch {
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
     }
@@ -2020,7 +2046,7 @@ async function deliverInbox(
     } catch {
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
     }
@@ -2098,7 +2124,7 @@ async function deliverComposeSeat(
     } catch {
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
     }
@@ -2567,15 +2593,26 @@ async function deliverSocketFrame(
   }
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
-  const written = writeSendRecord(join(to.dir, 'send-drops', to.session, to.seat), payload, host.home);
+  const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
+  const written = await writeSendRecord(copy.dir, payload, host.home, host.now);
   if (!written.ok) return { kind: 'fallback', reason: `the record could not be written (${written.reason})` };
-  let taken = await host.deliver(first.path, frame);
-  if (!taken.ok && first.recorded) {
+  // One frame on the socket, through the relay's socket route. The caller's own dial is handed in,
+  // so an injected host's transport is the transport this attempt uses. A recorded address whose
+  // write refuses gets the same one live re-resolution it always did, as a second attempt.
+  const message = { id: msgId, record: written.record, frame };
+  let taken = await relayDeliver(
+    { route: 'socket', socket: first.path, runtime: to.cli, copy },
+    message,
+    { now: host.now, dial: host.deliver },
+  );
+  if (taken.outcome !== 'delivered' && first.recorded) {
     const processes = host.processInfo(to.session, found.pane);
     const live = processes === null ? null : socketOf(host, processes);
-    if (live !== null && live !== first.path) taken = await host.deliver(live, frame);
+    if (live !== null && live !== first.path) {
+      taken = await relayDeliver({ route: 'socket', socket: live, runtime: to.cli, copy }, message, { now: host.now, dial: host.deliver });
+    }
   }
-  if (!taken.ok) return { kind: 'fallback', reason: taken.reason };
+  if (taken.outcome !== 'delivered') return { kind: 'fallback', reason: taken.reason };
   logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
   if (await heldAtDialog(to.session, found.pane, host)) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
