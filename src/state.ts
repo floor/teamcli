@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
+import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
 import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
@@ -13,8 +14,7 @@ import { cleanClassification, type Classification } from './launch/progress.ts';
 
 export const SEAT_ID_PATTERN = /^seat_[0-9a-f]{12}$/;
 
-/** The id a general-brief delivery names: the lowercase UUID every drop record is named by. */
-export const BRIEF_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export { BRIEF_ID_PATTERN };
 
 export function isSeatId(value: unknown): value is string {
   return typeof value === 'string' && SEAT_ID_PATTERN.test(value);
@@ -29,10 +29,36 @@ export type RetainedSeat = {
   last_active?: string;
 };
 
-/** One seat's general-brief delivery: the record's id and when the seat received it. */
+/**
+ * One seat's general-brief claim. `id` and `at` were the whole record before claims existed; a
+ * claim written by an older build keeps them and carries none of the fields below, so it is
+ * readable but stale — no reader serves it and the check names the seat until a delivery writes
+ * a current claim. The claim is written before the drop and finalized (`stage: 'ready'`) once
+ * the drop verifies, so a launch that dies between the two leaves a claim the next launch can
+ * repair rather than a silent gap. `superseded` keeps the newest 50 earlier ids, bounded so the
+ * state file cannot grow with a recovery loop.
+ */
 export type BriefRecord = {
   id: string;
   at: string;
+  /** Delivery lifetime: kept across a reword, minted again for a new seat or a recovery. */
+  incarnation?: string;
+  /** The runtime epoch a running reader was started with; a receipt counts only while it matches. */
+  epoch?: string;
+  /** The delivered body's sha256, as the claim records it. */
+  sha256?: string;
+  /** Delivery attempt: 0 on the first, one more for each recovery from a held name. */
+  attempt?: number;
+  /** `claimed` while the drop is being written; `ready` once it was read back and verified. */
+  stage?: 'claimed' | 'ready';
+  /** The seat handle the launch wrote the drop for, when the registry had one. */
+  seat_handle?: string;
+  /** The pane the delivery's launch was recording, when it named one. */
+  pane?: string;
+  /** The pane's root process id at delivery, so a replaced pane can be told from the same one. */
+  pane_root_pid?: number;
+  /** Earlier ids this claim replaced, oldest first, newest 50 kept. */
+  superseded?: readonly string[];
 };
 
 export type SeatState = {
@@ -338,10 +364,40 @@ export function stopText(stop: PauseStop): string {
   return `stop ${stop.seat}: ${at.length > 0 ? at.join(', ') : 'no record'}`;
 }
 
+const BRIEF_SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * One brief claim as the state may hold it, or null when the entry does not hold an id and a
+ * time at all. A field that is not the shape this build writes is dropped, not the whole claim:
+ * an entry an older build wrote (`{id, at}` alone) stays readable as a stale claim, never served
+ * and never deleted, so an upgrade cannot silently erase which seats received the old brief.
+ */
+function cleanedBrief(brief: unknown): BriefRecord | null {
+  if (!brief || typeof brief !== 'object') return null;
+  const raw = brief as Record<string, unknown>;
+  if (!isBriefId(raw.id) || typeof raw.at !== 'string' || Number.isNaN(Date.parse(raw.at))) return null;
+  const claim: BriefRecord = { id: raw.id, at: raw.at };
+  if (isBriefIncarnation(raw.incarnation)) claim.incarnation = raw.incarnation;
+  if (isBriefEpoch(raw.epoch)) claim.epoch = raw.epoch;
+  if (typeof raw.sha256 === 'string' && BRIEF_SHA256_PATTERN.test(raw.sha256)) claim.sha256 = raw.sha256;
+  if (typeof raw.attempt === 'number' && Number.isInteger(raw.attempt) && raw.attempt >= 0) claim.attempt = raw.attempt;
+  if (raw.stage === 'claimed' || raw.stage === 'ready') claim.stage = raw.stage;
+  if (isSeatId(raw.seat_handle)) claim.seat_handle = raw.seat_handle;
+  if (typeof raw.pane === 'string' && raw.pane !== '') claim.pane = raw.pane;
+  if (typeof raw.pane_root_pid === 'number' && Number.isInteger(raw.pane_root_pid) && raw.pane_root_pid > 0) {
+    claim.pane_root_pid = raw.pane_root_pid;
+  }
+  if (Array.isArray(raw.superseded)) {
+    const ids: string[] = [];
+    for (const id of raw.superseded) if (isBriefId(id) && !ids.includes(id)) ids.push(id);
+    if (ids.length > 0) claim.superseded = ids.slice(-50);
+  }
+  return claim;
+}
+
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
-export function readState(dir: string): State {
-  const path = join(dir, STATE_FILE);
+export function readState(dir: string): State {  const path = join(dir, STATE_FILE);
   if (!existsSync(path)) return { format: 1, sessions: {} };
   let parsed: unknown;
   try {
@@ -386,22 +442,16 @@ export function readState(dir: string): State {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);
       }
     }
-    // A brief delivery enters from the file like every other value, and is cleaned here: the id
-    // is the record id the drop leg writes, and the time must parse. A seat name is a key, never
-    // a path, so any non-empty one stands; only a launch writes the map.
+    // A brief claim enters from the file like every other value, and is cleaned here: the id is
+    // the record id the drop leg writes, the time must parse, and every field this build does not
+    // know the shape of is dropped rather than trusted. A seat name is a key, never a path, so any
+    // non-empty one stands; only a launch writes the map. An entry with no id or no parseable time
+    // is not a claim at all and is dropped; an old `{id, at}` entry is kept as a stale claim.
     if (session.briefs && typeof session.briefs === 'object') {
       for (const [seat, brief] of Object.entries(session.briefs)) {
-        if (
-          seat === '' ||
-          !brief ||
-          typeof brief !== 'object' ||
-          typeof brief.id !== 'string' ||
-          !BRIEF_ID_PATTERN.test(brief.id) ||
-          typeof brief.at !== 'string' ||
-          Number.isNaN(Date.parse(brief.at))
-        ) {
-          delete session.briefs[seat];
-        }
+        const claim = seat === '' ? null : cleanedBrief(brief);
+        if (claim === null) delete session.briefs[seat];
+        else session.briefs[seat] = claim;
       }
     } else if (session.briefs !== undefined) {
       delete session.briefs;

@@ -23,6 +23,7 @@
 import { type KeyObject } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { messageKeyOf, messageKeyState, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
@@ -31,6 +32,9 @@ import { dropMessage } from './native.ts';
 /** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
  *  `thread-close`. */
 export const RECORD_KIND = 'message';
+
+/** The delivered body's digest, as a brief's record and receipt carry it. */
+const BRIEF_SHA256 = /^[0-9a-f]{64}$/;
 
 /** The `kind` a thread's close carries. A close is not a message and never carries a body. */
 export const CLOSE_KIND = 'thread-close';
@@ -63,6 +67,10 @@ export type RecordPayload = {
   thread: string;
   /** The id of the record this one answers, on a reply only. */
   in_reply_to?: string;
+  /** A general seat brief's delivery: the delivered body's sha256 and the lifetime it belongs
+   *  to. Ordinary messages carry neither; a brief's record carries both. */
+  brief_sha256?: string;
+  incarnation?: string;
 };
 
 export type SignedRecord = { payload: RecordPayload; signature: string };
@@ -81,6 +89,15 @@ export type ReceiptPayload = {
   root: string;
   session: string;
   at: string;
+  /** A brief read's binding: the claim it was served under. An ordinary message's receipt has
+   *  none. The epoch is the one field the receipt comparison makes, so a receipt written by a
+   *  process started under another epoch does not count for the current claim. */
+  brief_sha256?: string;
+  incarnation?: string;
+  brief_epoch?: string;
+  /** Diagnostics the read copied from the seat's record, when it had them. */
+  brief_seat_handle?: string;
+  brief_pane_root_pid?: number;
 };
 
 export type SignedReceipt = { payload: ReceiptPayload; signature: string };
@@ -137,6 +154,13 @@ export function recordPayloadOf(value: unknown): RecordPayload | null {
   }
   if (value.from_id === undefined || value.to_id === undefined) return null;
   if (value.in_reply_to !== undefined && !nonEmpty(value.in_reply_to)) return null;
+  // A brief's record carries both binding fields or neither: a record with only one is not one
+  // this version wrote, and an ordinary message carries neither.
+  const brief = value.brief_sha256 !== undefined || value.incarnation !== undefined;
+  if (brief) {
+    if (typeof value.brief_sha256 !== 'string' || !BRIEF_SHA256.test(value.brief_sha256)) return null;
+    if (!isBriefIncarnation(value.incarnation)) return null;
+  }
   const payload: RecordPayload = {
     kind: RECORD_KIND,
     id: value.id as string,
@@ -152,6 +176,10 @@ export function recordPayloadOf(value: unknown): RecordPayload | null {
     thread: value.thread as string,
   };
   if (value.in_reply_to !== undefined) payload.in_reply_to = value.in_reply_to as string;
+  if (brief) {
+    payload.brief_sha256 = value.brief_sha256 as string;
+    payload.incarnation = value.incarnation as string;
+  }
   return payload;
 }
 
@@ -173,7 +201,20 @@ export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
     if (!nonEmpty(value[field])) return null;
   }
   if (!Number.isFinite(Date.parse(value.at as string))) return null;
-  return {
+  // A brief read's binding is all three fields or none: the receipt the inbox writes for a brief
+  // carries them, and no ordinary receipt does.
+  const hasBrief = value.brief_sha256 !== undefined || value.incarnation !== undefined || value.brief_epoch !== undefined;
+  if (hasBrief) {
+    if (typeof value.brief_sha256 !== 'string' || !BRIEF_SHA256.test(value.brief_sha256)) return null;
+    if (!isBriefIncarnation(value.incarnation)) return null;
+    if (!isBriefEpoch(value.brief_epoch)) return null;
+  }
+  if (value.brief_seat_handle !== undefined && !nonEmpty(value.brief_seat_handle)) return null;
+  if (value.brief_pane_root_pid !== undefined
+    && (typeof value.brief_pane_root_pid !== 'number' || !Number.isInteger(value.brief_pane_root_pid) || value.brief_pane_root_pid <= 0)) {
+    return null;
+  }
+  const payload: ReceiptPayload = {
     kind: 'receipt',
     status: value.status as ReceiptStatus,
     id: value.id as string,
@@ -182,6 +223,14 @@ export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
     session: value.session as string,
     at: value.at as string,
   };
+  if (hasBrief) {
+    payload.brief_sha256 = value.brief_sha256 as string;
+    payload.incarnation = value.incarnation as string;
+    payload.brief_epoch = value.brief_epoch as string;
+  }
+  if (value.brief_seat_handle !== undefined) payload.brief_seat_handle = value.brief_seat_handle as string;
+  if (value.brief_pane_root_pid !== undefined) payload.brief_pane_root_pid = value.brief_pane_root_pid as number;
+  return payload;
 }
 
 export function signedReceiptOf(value: unknown): SignedReceipt | null {
@@ -348,7 +397,7 @@ export function recordHolds(path: string, expected: RecordPayload, home: string)
   const read = readRecord(path, expected.id);
   if (!read.ok || read.record === null) return false;
   const held = read.record.payload;
-  const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'in_reply_to'] as const;
+  const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'in_reply_to', 'brief_sha256', 'incarnation'] as const;
   for (const field of fields) if (held[field] !== expected[field]) return false;
   if (!sameFolder(held.root, expected.root)) return false;
   return verifyRecord(read.record, key.key);
@@ -424,7 +473,10 @@ export function readClose(path: string, expectedId?: string): CloseRead {
 /**
  * Whether the receipt at `path` is this message's `status` receipt: the id, seat, checkout and
  * session on it match, and the message key signed it. A receipt for another message or checkout
- * is not counted, and an unreadable one changes nothing.
+ * is not counted, and an unreadable one changes nothing. For a brief's read, `brief` names the
+ * claim it must have been served under: the incarnation and delivered body's digest must be the
+ * claim's, and so must the runtime epoch — the one field a brief receipt is compared on, so a
+ * receipt written by a process started under the old claim does not count for the new one.
  */
 export function receiptHolds(
   path: string,
@@ -432,6 +484,7 @@ export function receiptHolds(
   status: ReceiptStatus,
   context: StatusContext,
   key: KeyObject,
+  brief?: BriefBinding,
 ): boolean {
   const held = heldAt(path);
   if (held.kind !== 'file') return false;
@@ -450,18 +503,23 @@ export function receiptHolds(
   if (payload.id !== id || payload.status !== status) return false;
   if (payload.to !== context.to || payload.session !== context.session) return false;
   if (!sameFolder(payload.root, context.root)) return false;
+  if (brief !== undefined) {
+    if (payload.incarnation !== brief.incarnation) return false;
+    if (payload.brief_sha256 !== brief.sha256) return false;
+    if (payload.brief_epoch !== brief.epoch) return false;
+  }
   return verifyReceipt(receipt, key);
 }
 
 /**
  * The message's status, derived from the receipts beside it and moving forward only: the highest
  * receipt that verifies stands, and no file present is `sent`. A status is never edited onto the
- * record itself.
+ * record itself. `brief` narrows a brief's receipt to the claim it was served under.
  */
-export function statusOf(dropDir: string, id: string, context: StatusContext, key: KeyObject): MessageStatus {
+export function statusOf(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): MessageStatus {
   let status: MessageStatus = 'sent';
   for (const candidate of RECEIPT_STATUSES) {
-    if (receiptHolds(receiptFile(dropDir, id, candidate), id, candidate, context, key)) status = candidate;
+    if (receiptHolds(receiptFile(dropDir, id, candidate), id, candidate, context, key, brief)) status = candidate;
   }
   return status;
 }
@@ -472,8 +530,8 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
  * inbox, `team drops` and the watch give — a file at a receipt's name that the message key did not
  * sign, or one that names another message, seat, checkout or session, proves nothing.
  */
-export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject): boolean {
-  const status = statusOf(dropDir, id, context, key);
+export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
+  const status = statusOf(dropDir, id, context, key, brief);
   return status === 'read' || status === 'replied';
 }
 
@@ -488,9 +546,13 @@ export function isRead(dropDir: string, id: string, context: StatusContext, key:
  * follow it or take a name this key does not own, and the inbox refuses the same path before it
  * calls here. Every status has its own name, so a later writer can never overwrite a receipt with
  * a lower status: a second reader of a message that was already read, or answered, adds nothing
- * and the derived status never moves backward.
+ * and the derived status never moves backward. `brief` is passed only for a brief's read: the
+ * receipt then counts only when it was written under the same claim, and a regular file at the
+ * name that verifies for the message but not for this claim is refused rather than replaced —
+ * the name is occupied by a read of another delivery, and only the rollout's recovery may move
+ * past it.
  */
-export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: string): RecordWrite {
+export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: string, brief?: BriefBinding): RecordWrite {
   const id = receipt.payload.id;
   const status = receipt.payload.status;
   if (!recordNameOk(id)) return { ok: false, reason: 'the receipt id cannot be a file name' };
@@ -499,7 +561,10 @@ export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: stri
   if (held.kind !== 'missing' && held.kind !== 'file') {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
-  if (receivedAt(path, receipt, home)) return { ok: true, path, existing: true };
+  if (receivedAt(path, receipt, home, brief)) return { ok: true, path, existing: true };
+  if (brief !== undefined && held.kind === 'file') {
+    return { ok: false, reason: 'the read receipt name is held by a file that does not verify for this brief' };
+  }
   try {
     dropMessage(dropDir, `${id}.${status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch {
@@ -509,14 +574,15 @@ export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: stri
 }
 
 /** Whether the file at a receipt's name already is the receipt about to be written: it verifies
- *  with this checkout's message key for this message, status, seat, checkout and session. A link
- *  is not a file and never verifies; a regular file naming anything else proves nothing for this
- *  receipt and is replaced. */
-function receivedAt(path: string, receipt: SignedReceipt, home: string): boolean {
+ *  with this checkout's message key for this message, status, seat, checkout and session — and,
+ *  for a brief, for this claim. A link is not a file and never verifies; a regular file naming
+ *  anything else proves nothing for this receipt and is replaced, except where a brief's claim
+ *  makes the name occupied. */
+function receivedAt(path: string, receipt: SignedReceipt, home: string, brief?: BriefBinding): boolean {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return false;
   const { id, status, to, root, session } = receipt.payload;
-  return receiptHolds(path, id, status, { to, root, session }, key.key);
+  return receiptHolds(path, id, status, { to, root, session }, key.key, brief);
 }
 
 /**
