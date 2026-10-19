@@ -7,6 +7,7 @@ import {
   MAX_TRIES,
   VERIFY_TOTAL_MS,
   bindPane,
+  captureDraft,
   deliverTrigger,
   dropIdOf,
   showsDrop,
@@ -19,6 +20,10 @@ import { claudeBox } from './helpers.ts';
 // with a faint suggestion, and the same screen with its input row replaced.
 const FIXTURES = join(import.meta.dir, 'fixtures', 'claude-code', '2.1.289');
 const capture = (name: string): string => readFileSync(join(FIXTURES, name), 'utf8').replace(/\r\n/g, '\n');
+// The later captures, taken on claude-code 2.1.303 through herdr 0.7.1: the composer's row shape
+// is the same; what they add is a draft of several rows.
+const LATER = join(import.meta.dir, 'fixtures', 'claude-code', '2.1.303');
+const captureLater = (name: string): string => readFileSync(join(LATER, name), 'utf8').replace(/\r\n/g, '\n');
 const IDLE = capture('idle-suggestion-ansi.txt');
 const PROMPT = '\u276f\u00a0';
 const INPUT_ROW = IDLE.split('\n').findIndex((row) => row.startsWith(PROMPT));
@@ -527,11 +532,15 @@ describe('unsent text in the box', () => {
     }
   });
 
-  test('a multi-line draft comes back exactly, blank row included', async () => {
+  test('a multi-line draft from a real capture comes back exactly, blank row included', async () => {
     const sidecar = dropSidecar();
     try {
+      // Taken from claude-code 2.1.303 on herdr 0.7.1: four composer rows typed line by line,
+      // one of them blank. The capture reads as the draft's own rows.
+      const screen = captureLater('unsent-multiline-ansi.txt');
       const draft = 'first row\nsecond row\n\nfourth row';
-      const cli = draftCli({ screen: claudeBox(draft), draft });
+      expect(captureDraft('claude-code', screen)).toEqual({ text: draft });
+      const cli = draftCli({ screen, draft });
       const result = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
       expect(result.outcome).toBe('delivered');
       expect(result.draft).toEqual({ restored: true });
