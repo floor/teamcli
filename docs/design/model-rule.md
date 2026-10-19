@@ -97,8 +97,8 @@ The record is cleaned at the state read door like every other outside value.
   whose watch is not running.
 
 `team status` shows each queued swap and what it waits for. `team next` refuses to claim a
-task for a seat that waits on a swap, and the watch types no work drop into it, so the seat
-takes no new task while the swap waits (OD-20261019-02).
+task for a seat that waits on a swap, and the watch sends it no work — typed or pushed — so the
+seat takes no new task while the swap waits (OD-20261019-02).
 
 ## The boundary, the wait and the run
 

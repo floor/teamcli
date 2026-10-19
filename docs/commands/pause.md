@@ -3,9 +3,9 @@
 A pause stops the team taking new work. It lives in the team state
 (`.agents/team.state.json`), never in the team file: the file waits for the owner's approval, and a
 stop that waits is no stop. While the record stands, `team next` claims nothing and `team watch`
-types no work nudge — each seat that takes work is told once, when the pause lands, to finish the
-step it is on. `team status` and `team seats` print the pause above their rows. `team resume`
-clears it and restarts the queue.
+sends no work — a push or a typed nudge — each seat that takes work being told once, when the
+pause lands, to finish the step it is on. `team status` and `team seats` print the pause above
+their rows. `team resume` clears it and restarts the queue.
 
 The pause records a stop point for every declared seat that is not a human's: what the seat's
 record held when the pause landed (its stage and last activity) and the worktree it was given (its

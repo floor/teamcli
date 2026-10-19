@@ -5,23 +5,36 @@ screens, the file, the record, the machine — prints what is wrong, and removes
 whose end holds. A temporary seat is left as it is: the owner removes it.
 
 A report is never typed into a seat. It goes to `.agents/team.log` and to the desktop
-notification; the operator reads the log. The watch types two fixed lines of its own — the ring
-and a work drop's line — and neither carries a report's text; a held send's retry and the wake of
-a seat whose message has gone unread type the sender's own trigger line, which names the drop and
-carries no report either. A message already waiting under
+notification; the operator reads the log. The watch's fixed typed lines are the ring, a pause
+notice, a held send's retry and the wake of a seat whose message has gone unread; none carries a
+report's text, and the retry and the wake name the drop rather than the body. An automatic work
+request is not typed at all. Every pass reads one shared idle snapshot and asks the direct send
+route to deliver the work prompt; `watch.nudge`, when the file sets it, is the body, and when the
+file omits it the body is the fixed line `Team watch: reports are waiting in .agents/team.log`.
+The snapshot counts a seat idle only when it is declared, exactly one herdr agent carries its
+name, herdr reports that agent idle or done, its screen is an empty prompt, the seat is not the
+lead, the operator, a human's pane, parked, stopped or waiting on a swap, and its persisted
+activity clock parses and is older than the `idle-threshold` policy's window (300s when nothing
+declares one). A seat with no readable clock, an unknown window or an unreadable source
+is asked nothing and typed at by nobody: absence of truthful idle evidence is suppression, never
+a guess. Each idle seat spends one attempt per idle episode, a refusal included; a route that is
+absent or refuses leaves one signed Runtime mailbox record for the team lead and the main
+orchestrator, and nothing is typed for the seat. An actionable reading with no takeable record
+leaves one signed record per idle stretch that it found nothing queued, and none under a pause;
+a seat still idle a minute after an accepted wake, with no live lease and no activity clock past
+the wake, is recorded once and not woken again in that episode.
+
+A message already waiting under
 `.agents/messages/<seat>/` is the ring: when that seat's box is an empty idle prompt, the watch
 types the seat's own read — `Team: run team drops --read --seat <seat> --session <session>` — and
-not the body. The work
-drop reaches each idle worker once `idle_first` has passed and again every `idle_repeat` when
-that is set: `watch.nudge`, when the file sets it, is its body, and when the file omits it the
-body is the fixed line `Team watch: reports are waiting in .agents/team.log`. The body goes to
-the same drop file `team send` uses, and the pane receives one short line naming that file. Both
-texts are taken from the live file, so they do not wait for a record; a missing record does not
-stop the ring either. It types nothing into a screen it can't read as an empty idle prompt, so a
-permission dialog and a half-typed sentence are left alone. The operator, the orchestrator, and
-the pane the watch itself is running in are never the target of a work drop, and a pane that is
-in a dialog or already holds unsent text is not either. The ring goes only to the message's
-recipient, and only when that box is free. A box that already holds the ring this watch typed is
+not the body. A seat whose idle episode the dispatcher owns this pass is not rung: that episode
+is delivered, or reported undelivered, by the dispatcher. Both texts are taken from the live
+file, so they do not wait for a record; a missing record does not stop the ring either. The
+watch types nothing into a screen it can't read as an empty idle prompt, so a
+permission dialog and a half-typed sentence are left alone. The operator and the orchestrator are
+never the target of the dispatcher's push, and a pane that is in a dialog or already holds unsent
+text is not either. The ring goes only to the
+message's recipient, and only when that box is free. A box that already holds the ring this watch typed is
 sent, not typed into twice — and only by the watch process that typed it: the same text from
 anyone else, or found after a restart, is its owner's, and is never sent or cleared. An attention
 report — a permission prompt, a question, a vendor notice, an unknown screen, unsent text — is
@@ -52,11 +65,19 @@ Writes `.agents/team.state.json` (the pane it runs in, the workspace, its pid an
 a pass; a temporary seat's `worked` and `own_commits` when it sees them; the accounts' latest screen
 readings and the money the spend checks read), `.agents/team.log` (every line it prints), the
 owner's mailbox `.agents/messages/owner/` when this watch is the owner's delivery path (one signed
-record per event delivered to the owner, at once or as the pass's digest), and, through herdr: the
-typed line and its Enter — a work drop's line naming its file, or the ring — and the seats' sidebar
-lines — the workspace title from the file, and the display line from the file and the pane's
+record per event delivered to the owner, at once or as the pass's digest), the direct send's
+signed record and its transport marker under `.agents/send-drops/<session>/<seat>/` when the
+dispatcher pushes an idle seat, and, through herdr: the typed line and its Enter — a pause
+notice's line naming its drop, a held send's retry, the unread wake, or the ring — and the seats'
+sidebar lines — the workspace title from the file, and the
+display line from the file and the pane's
 screen; it paints them on its first cycle and again when the title, the model or the effort
 changes.
+
+The pane watch is the path this build ships. A daemon-hosted watch lifecycle — the same pass
+driven by the daemon's fixed heartbeat tick, with an existing pane watch held as a standby until
+the transfer is proven — is forthcoming: it is not released, and its live activation is not
+proven.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone
@@ -130,7 +151,7 @@ repair is to stop it and run `team up`.
 | --- | --- |
 | `--session <name>` | the herdr session to watch, instead of `team.session` |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
-| `--no-nudge` | the owner's. Type nothing into any pane: no work prompt and no message ring. The reports still go to the log, and a report for the owner is still a desktop notification |
+| `--no-nudge` | the owner's. Type nothing into any pane: no pause notice, no message ring, no held-send retry and no unread wake, and the dispatcher dispatches nothing at all. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
 | `--json` | not used on the daemon loop: the flag is an invocation refusal, one `team.error` document on stdout with stderr empty, and exit 2 |
 | `--help`, `-h` | the usage — the exits below in its last lines — and exit 0 |
@@ -174,7 +195,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> is still at a <prompt> prompt after <n> minutes: the team's lead has not cleared it, and the entity's lead and the owner are told` | a permission, vendor-notice or rate-limit prompt held for `prompt_escalation_seconds` (5m in this release): once per prompt, the team's lead having cleared none of it |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is neither idle, done, working nor blocked; a seat whose profile says herdr cannot report it is read from its screen, so this is said only when that screen cannot be read either |
-| `<seat> holds text in its input box that was never sent` | unsent text for `watch.unsent_after`; the watch's own nudge never sends or clears text it cannot show it typed itself (a held-send retry is a delivery, which copies the owner's text and puts it back) |
+| `<seat> holds text in its input box that was never sent` | unsent text for `watch.unsent_after`; the watch's own typed line never sends or clears text it cannot show it typed itself (a held-send retry is a delivery, which copies the owner's text and puts it back) |
 | `<seat> has been idle since the watch started` | quiet for `watch.idle_first`, and never seen working (reported to its lead once; repeated every `watch.idle_repeat` when set) |
 | `<seat> has been idle for <n> minutes` | quiet for `watch.idle_first` since its last turn (reported to its lead once per idle period; repeated every `watch.idle_repeat` when set) |
 | `<seat> has been idle for <n> minutes — reported to the owner` (or `… since the watch started — reported to the owner`) | the same idle period, quiet for `watch.idle_owner`: said once per idle period, and it is the owner's |
@@ -262,22 +283,25 @@ report this watch also publishes as an event is rung once and recorded once: the
 already made is not repeated when the event's copy comes back on the bus, and that copy's record is
 the one in the mailbox.
 
-The watch types two fixed lines, and never a report: the ring, when a message waits for a seat,
-and a work drop's line, when an idle worker is due one. A retry types a third, the seat's own
-drop read — `Run team drops --read --seat <seat> --session <session> and do that.` — for a drop
-this watch is delivering, and the unread wake types that same line for a seat whose message has
-been unread for `watch.unread_after` (ten minutes by default). The lines around them:
+The watch types fixed lines, and never a report: the ring, when a message waits for a seat; a
+pause notice, when a pause lands; a retry, the seat's own drop read — `Run team drops --read
+--seat <seat> --session <session> and do that.` — for a drop this watch is delivering; and the
+unread wake, the same line for a seat whose message has been unread for `watch.unread_after`
+(ten minutes by default). Automatic work is never typed: the dispatcher's own lines below say
+what it did instead. The lines around them:
 
 | Line | Made when |
 | --- | --- |
 | `watching the session "<session>" every <n>s` | at the start; `, without nudges` is added by `--no-nudge` |
-| `nudged <seat>: <the work drop's body>` | the work drop's line was typed into an idle worker and sent; its body is `watch.nudge`, or the fixed line `Team watch: reports are waiting in .agents/team.log` when the file omits it |
-| `nudged <seat> (its own unsent line was already in its box): <the body>` | the box still held the line this same watch process had typed, its Enter never sent; that line is sent instead of typed again |
-| `nudge not typed (--no-nudge): <the body>` | `--no-nudge`, with a work drop due; nothing is typed and no drop is written |
+| `nudged <seat>: <the pause notice>` | a pause stands and the notice was typed into a seat that takes work and sent; a paused pass types no work prompt |
+| `nudged <seat> (its own unsent line was already in its box): <the pause notice>` | the box still held the line this same watch process had typed, its Enter never sent; that line is sent instead of typed again |
+| `nudge not typed (--no-nudge): <the body>` | `--no-nudge`, with the pause notice due; nothing is typed and no drop is written |
 | `ring not typed (--no-nudge): Team: run team drops --read --seat <seat> --session <session>` | `--no-nudge`, with a message waiting and the seat's box free; nothing is typed and the record stays |
 | `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the line is tried again on the next pass |
-| `rang <seat>: Team: run team drops --read --seat <seat> --session <session>` | a message was already waiting and that seat's box was an empty idle prompt; the line was typed and sent, and the body was not |
+| `rang <seat>: Team: run team drops --read --seat <seat> --session <session>` | a message was already waiting, that seat's box was an empty idle prompt, and the dispatcher did not own an episode for it that pass; the line was typed and sent, and the body was not |
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
+| `<seat>: its work was not dispatched directly (<why>); nothing was typed for it this episode` | the shared idle reading counted the seat idle with takeable work, and the direct route was absent or refused, once per idle episode |
+| `<seat> was not told: <why>` / `<role> <seat> was not told: <why>` | a dispatcher record could not be written to the team lead or the main orchestrator; the target and the reason are named, and no identity is invented in its place |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |
 | `<account>: its check is unreadable` | the check command failed, timed out, or printed something other than one to three lines for a subscription or one line for a spend account; its output is never logged |
 | `the check for <account> is unapproved; that account reads unknown` | the check's file changed since the record was written, or no record holds it: it is not run |
@@ -297,7 +321,15 @@ been unread for `watch.unread_after` (ten minutes by default). The lines around 
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
 
-A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, the watch types the seat's own read — `Team: run team drops --read --seat <seat> --session <session>` — and not the body. `--no-nudge` types neither line. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. A work drop wins the pane: a pass that types one does not also type the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes a seat's record there; the owner's
+The dispatcher also leaves signed records in the team lead's and the main orchestrator's
+mailboxes, and their bodies are its words, not console lines: `<project>: <seat> is idle with
+takeable work but was not told directly (<why>); nothing was typed for it`; `<project>: <n> idle,
+nothing queued (<names>)`, once per continuous idle stretch and not under a pause; and
+`<project>: <seat> accepted a work wake a minute ago and is still idle with no observed claim; it
+will not be woken again in this idle episode`, once, when a pass at least a minute after an
+accepted wake finds no live lease and no activity clock at or past the wake.
+
+A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, the watch types the seat's own read — `Team: run team drops --read --seat <seat> --session <session>` — and not the body. `--no-nudge` types neither line. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. A seat whose idle episode the dispatcher owns this pass is not rung either: that episode is delivered, or reported undelivered, by the dispatcher, and an unread record waiting is not a second typed wake. The episode stays the dispatcher's whether the route delivered or refused, so neither case types the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes a seat's record there; the owner's
 mailbox is the one the Runtime writes. A report is never typed. A seat the team file marks `human: true` is never typed into: a work drop or ring addressed there is not typed, and the report says whose pane was spared; a held send's retry is given up on with the reason, and its message waits in the drop file.
 
 A held send is not a report either. When `team send` found the box busy — a draft, a dialog, a trigger the seat did not take — it ended `held`, `not-submitted` or `unreachable` and left the drop and a record beside it. Each pass delivers one such drop per seat once that seat's box is free — an empty idle prompt, the same trigger still in it unsent, or text its owner left, which the pass copies beside the drop, clears with the profile's measured keys and pastes back exactly as `team send` does; a box it can neither claim nor copy faithfully is left alone — bounded at three typed tries and thirty minutes from the send, and a drop that runs out is named by its path so the message can be sent again. A message the delivery order's `mcp-inbox` leg left is not typed while the seat's own client may still read it: the watch promotes a receipt once — one `delivered (read)` history line, nothing typed — and a message still unread ten minutes after the send is handed to the same retry, whose history line records `failed: mcp-inbox: no receipt within 10m`. A message the delivery order's `drop` leg left is never typed, on that schedule or any other: its marker waits for the seat's own signed receipt, and thirty minutes after the send it is given up on with the drop file's path. A typed record always goes before an inbox one, so an inbox message never delays a held send's retry. `--no-nudge` types nothing, so it retries nothing; the promotion types nothing either way and runs in that watch too.
@@ -465,7 +497,7 @@ $ team watch ; echo "exit $?"
 exit 0
 ```
 
-`--no-nudge` keeps the reports and skips both typed lines — for a watch that must not type into a
+`--no-nudge` keeps the reports and skips every typed line — for a watch that must not type into a
 seat. The report is the same line either way: it never had one of its own.
 
 ```console screens="claude-keeper=question"

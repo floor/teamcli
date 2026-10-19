@@ -105,7 +105,7 @@ budgets:                      # the owner's: reserve or floor per account, marks
   the lobby the registry recorded for the session and over the defaults, and setting it records
   that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
 - `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
-  the watch's reports and nudges. `leads: true` on a seat is the same lead, spelled on the seat
+  the watch's reports. `leads: true` on a seat is the same lead, spelled on the seat
   the way `coordinator:` names it. `assistant: true` marks a seat as its entity's assistant — the
   one seat `team send` admits to its entity's main coordinator, by its place in the chain and
   never by a role's name. At most one seat of a file carries the mark, and never a seat with

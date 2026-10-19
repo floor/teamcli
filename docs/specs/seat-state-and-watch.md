@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-10-18
+updated: 2026-10-20
 kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75)
@@ -16,7 +16,9 @@ This spec covers the word a seat's state is read as, the sources it is read from
 ranking, the thresholds that bound the reading, the sixteen checks the watch runs, the reports it
 makes, and the fixed lines it may type. It leaves the launch steps that record a seat's pane
 to the launch spec, the records that hold the state to the registry spec, and the admission rules
-that let a seat act to the Kernel. It says what the code at the tag does, in the code's words.
+that let a seat act to the Kernel. It says what the code at the tag does, in the code's words;
+one section and one rule (§3.10, rule 15) record a change made after the tag and not released,
+and both are marked as such.
 
 ## 2. Terms
 
@@ -29,7 +31,12 @@ that let a seat act to the Kernel. It says what the code at the tag does, in the
 - **liveness windows**: idle-to-lead, idle-to-owner and unknown-to-blind, in whole seconds.
 - **check**: one named module in the watch's pass; sixteen run.
 - **report**: `{ key, text, to }`; `to` is `operator` or `owner`.
-- **nudge**: the one fixed work line the watch types into an idle worker.
+- **nudge**: the one fixed work line the watch types into an idle worker. Post-tag (§3.10) it is
+  the body the dispatcher's direct route carries, and the watch types nothing of it.
+- **dispatcher**: the watch's one path from an idle seat with takeable work to a direct push
+  (post-tag, §3.10).
+- **episode**: one seat's continuous idle stretch in a watch process; one attempt is spent per
+  episode, a refusal included (§3.10).
 - **ring**: the one fixed line the watch types when a message waits for a seat.
 - **held send**: a send held as a drop while a pane was busy, whose trigger the watch may type.
 - **pass**: one interval's reading of the seats, the file, the state and the machine.
@@ -218,6 +225,10 @@ the pass.
 
 The watch types fixed lines and never a report.
 
+Post-tag (§3.10), the nudge arm below is no longer typed: the idle-work dispatcher carries its
+body over the direct route, and the typed lines that remain are the ring, the pause notice, the
+held-send retry and the unread wake.
+
 - **The nudge**: the work drop's line, typed into an idle worker. Its body is the file's
   `watch.nudge`, or the fixed line `Team watch: reports are waiting in .agents/team.log` when
   the file omits it.
@@ -309,6 +320,57 @@ relaunch. The observed model is not stored on the agent record: the commit-signa
 model match needs it, and the place it is kept is an open point of the Runtime text (§10,
 question 11).
 
+### 3.10 The idle-work dispatcher (post-tag, unreleased)
+
+This section records a change made after the tag and not released. It does not describe
+`52db9b75`: §3.6 is the tag's typing contract, and this section supersedes its first arm (the
+nudge) when it lands.
+
+The watch reads one shared snapshot per pass (`src/watch/idle-work.ts`, `idleWorkReport`), the
+same reading `status` and `check` use, and takes no picker of its own:
+
+- The idle window is the `idle-threshold` policy (a duration with its unit, or whole seconds;
+  300 s when nothing declares one), resolved to the team level. A chain that cannot be read
+  carries `threshold_unknown`, and the dispatcher acts on nothing.
+- A seat is idle only when it is declared and not human, parked, stopped, waiting on a swap, the
+  lead or the operator; exactly one agent carries its name; herdr says `idle` or `done`; its
+  screen reads the empty prompt; and its persisted `last_active` parses and is older than the
+  window. A seat with no parseable stamp is not idle: absence of truthful idle evidence is
+  suppression, never a guessed clock.
+- `takeable` is the records at least one idle seat could claim under the picker's rules, minus
+  ids a live lease holds. A paused team's count is zero. A team whose file names a tracker, or
+  whose file source is missing, outside the root or not a list, reads `null` (unknown), and the
+  dispatcher acts on nothing rather than calling it empty.
+
+For each idle seat the dispatcher makes one attempt per idle episode, a refusal included and
+spent before the route is called. The route is the sources' own direct push (`pushWork`), which
+carries the seat, its pane, its CLI and the rendered body — `watch.nudge` with `<your seat name>`
+replaced by the seat's name, or the fixed line `Team watch: reports are waiting in
+.agents/team.log` when the file sets none. The send the watch runs in its own process stages
+its signed record in the seat's `send-drops` folder and walks only the routes that reach a live
+receiver without a keystroke (`socket`, `headless-resume`); the watch types nothing. A route that
+is absent, refuses or throws leaves one signed Runtime mailbox record for the team lead and one
+for the main orchestrator, deduplicated when they are the same target, and types nothing; a
+target the registry cannot map is named as missing, never replaced by an owner or a guessed
+seat. A wake the route accepted is checked at the first pass at least a minute later: a live
+lease the seat holds, or an activity clock at or past the wake, settles it silently; otherwise
+one still-idle record is written and the episode wakes the seat no more.
+
+An actionable reading with zero takeable records writes one aggregate record per continuous idle
+stretch — `<project>: <n> idle, nothing queued (<names>)` — and none under a pause, whose own
+notices are the word. The stretch's signature is the idle seats and their clocks, so a changed
+cast is a new stretch.
+
+Automatic work is never typed by the watch: the pass's own work-entry typing and the status
+engine's automatic-work nudges are drained without typing. The typed lines that remain are the
+ring, the pause notice, the held-send retry and the unread wake (§3.6); the ring is suppressed
+for a seat whose idle episode the dispatcher owns that pass. The dispatcher publishes no bus
+event kind and invents none.
+
+Hosting: the daemon-hosted watch lifecycle — the same pass driven by the daemon's fixed
+heartbeat tick, with an existing pane watch held as a standby until the transfer is proven — is
+forthcoming. It is not released, and its live activation is not proven.
+
 ## 4. Commands and options
 
     team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]
@@ -388,6 +450,16 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
     into the team file.** A screen that cannot be read keeps the file's display; an effort word
     once seen stays until a later screen shows a different one. *Source:* `src/labels/observe.ts`,
     `src/watch/seat-label.ts`, `src/status/statusline.ts`. *Proof:* `test/labels-observe.test.ts`.
+15. **(post-tag, unreleased) Automatic work MUST go through the direct route, never a keystroke.**
+    The watch MUST read the shared idle snapshot once per pass and act only on a truthful
+    reading: no parseable `last_active`, an unknown window or an unreadable source yields no
+    attempt, and a paused team yields none. It MUST make one attempt per idle episode, a refusal
+    spent before the route is called, and MUST reach the seat only through the sources' direct
+    push; a route that is absent or refuses MUST leave a signed mailbox record for the team lead
+    and the main orchestrator, and type nothing. The ring MUST NOT be typed for a seat whose
+    episode the dispatcher owns that pass. *Source:* `src/watch/dispatch.ts`,
+    `src/watch/idle-work.ts`, `src/commands/watch.ts`. *Proof:* `test/watch-dispatch.test.ts`,
+    `test/send-no-dial.test.ts`, `test/watch-work-nudge.test.ts`, `test/pause-flow.test.ts`.
 
 ## 6. Registries
 
@@ -448,3 +520,10 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
   and rate limits sit under the optional `provider-error` check; the idle report's repeat is the
   one exception to the once-until-cleared rule; and the held-send retry is a third typing path
   with its marker.
+- **Post-tag change recorded** (the implementing builder, 2026-10-20): §3.10 and rule 15 record the idle-work
+  dispatcher as implemented after `v0.5.0 (52db9b75)` and not released — one shared snapshot per
+  pass, a truthful reading or none, one direct-route attempt per idle episode (a refusal
+  included), signed mailbox records on absent or refused routes, the still-idle check, the
+  empty-source notice, and the retirement of automatic work typing. The tag's §3.6 and rule 9
+  stand as read-at-the-tag text; daemon hosting is forthcoming and its live activation is not
+  proven.

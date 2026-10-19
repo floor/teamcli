@@ -1,8 +1,8 @@
 # team resume
 
 `team resume` clears the pause that `team pause` placed and restarts the queue: `team next` claims
-again and the watch nudges idle seats again. It prints the record it removed, with the stop points
-the pause held, so the lead knows where every seat stopped. A resume when no pause stands writes
+again and the watch dispatches work to idle seats again. It prints the record it removed, with
+the stop points the pause held, so the lead knows where every seat stopped. A resume when no pause stands writes
 nothing and is refused.
 
 ## Synopsis
