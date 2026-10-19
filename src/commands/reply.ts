@@ -29,6 +29,15 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../client/inbox.ts';
+import {
+  CLIENT_SLICE_CLIENT_ID,
+  CLIENT_SLICE_ENTITY,
+  activeClientGrant,
+  readClientGrant,
+  resolveEntityCoordinator,
+  withClientGrantLock,
+} from '../client/records.ts';
 import { callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, standingOf, type Caller } from '../caller.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -45,6 +54,7 @@ import { senderHeader } from '../send/admit.ts';
 import { namingFor } from '../send/names.ts';
 import { appendHistory } from '../send/history.ts';
 import {
+  CLIENT_REPLY_RULE,
   closeFile,
   readClose,
   readRecord,
@@ -235,6 +245,9 @@ function threadStateOf(
   key: KeyObject,
   now: Date,
   thresholds: Pick<EventThresholds, 'thread_ttl_seconds' | 'thread_cap'>,
+  /** Records on the thread that live outside the seat folders — the verified replies in a
+   *  client's inbox. The seat path passes none and reads exactly as before. */
+  extra: readonly { at: string }[] = [],
 ): ThreadState {
   let count = 0;
   let latest = 0;
@@ -255,6 +268,11 @@ function threadStateOf(
     if (close.payload.thread !== thread) continue;
     if (close.payload.session !== session || !samePath(close.payload.root, root)) continue;
     if (verifyClose(close, key)) closed = true;
+  }
+  for (const record of extra) {
+    count += 1;
+    const at = Date.parse(record.at);
+    if (Number.isFinite(at) && at > latest) latest = at;
   }
   if (closed) return { open: false, reason: 'close' };
   if (latest > 0 && now.getTime() - latest >= thresholds.thread_ttl_seconds * 1_000) {
@@ -281,6 +299,13 @@ function closedWords(
 function refused(io: Io, json: boolean, message: string): number {
   refuse(io, json, 'reply', { id: 'reply.refused', message, repair: null });
   return 1; // exit: reply.refused
+}
+
+/** A refusal on a thread an external client opened: its own id, so a seat and a client thread
+ *  never read as the same refusal. Exit 1, always. */
+function clientRefused(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'reply', { id: 'reply.client-refused', message, repair: null });
+  return 1; // exit: reply.client-refused
 }
 
 /** A team file this run cannot read: nothing is wrong with the pair, the run can't start.
@@ -405,11 +430,16 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   const found = lookup.found;
   const answered = found.record.payload;
 
+  // A record a client wrote is answered under the client thread's own id in every refusal; the
+  // binding checks below are the first place the two paths differ, so they pick their id here.
+  const clientThread = answered.from_client !== undefined;
   if (answered.session !== session) {
-    return refused(io, json, `record ${id} is bound to session "${answered.session}", not to "${session}"`);
+    const why = `record ${id} is bound to session "${answered.session}", not to "${session}"`;
+    return clientThread ? clientRefused(io, json, why) : refused(io, json, why);
   }
   if (!samePath(answered.root, root)) {
-    return refused(io, json, `record ${id} is bound to another checkout`);
+    const why = `record ${id} is bound to another checkout`;
+    return clientThread ? clientRefused(io, json, why) : refused(io, json, why);
   }
 
   // The thread's life and cap are the owner's event thresholds, read from the caller's own chain:
@@ -492,6 +522,177 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
       to: null,
       rule: null,
       reply: null,
+      at,
+    }, `${contextLine(team.project, session)}\n${summary}\n`);
+  }
+
+  // ---- a thread an external client opened ------------------------------------------------
+  //
+  // The answered record carries `from_client`: the pair is seat -> client, admitted by the
+  // originating grant itself. No seat admission rule is consulted, no other grant is scanned
+  // for, and a later grant never reauthorizes an old thread. The writer is exactly the
+  // recipient the origin grant signs, on an open thread, under the grant lock.
+  if (answered.from_client !== undefined) {
+    if (caller.kind !== 'seat') {
+      return clientRefused(io, json, `a client thread is answered by its recipient seat, not by ${describeCaller(caller)}; nothing was written`);
+    }
+    if (placed.kind !== 'seat' || callerVerdict(placed, me, standing).kind !== 'ok') {
+      raiseSecurityRefusal(team, root, host.home, dir, placed, 'placement', null, host.now());
+      return clientRefused(io, json, `seat ${me} is not this call on its own pane and session; this call is ${describeCaller(placed)}`);
+    }
+    const origin = readClientGrant(host.home, answered.from_client.grant_id);
+    if (!origin.ok) {
+      return clientRefused(
+        io,
+        json,
+        `the thread's originating grant ${answered.from_client.grant_id} does not verify in the canonical store: ${origin.why}; nothing was written`,
+      );
+    }
+    const grant = origin.grant;
+    if (answered.from_client.client_id !== CLIENT_SLICE_CLIENT_ID || grant.clientId !== CLIENT_SLICE_CLIENT_ID) {
+      return clientRefused(
+        io,
+        json,
+        `this build answers one client principal, "${CLIENT_SLICE_CLIENT_ID}"; this thread names "${answered.from_client.client_id}"${grant.clientId === answered.from_client.client_id ? '' : ` and its grant names "${grant.clientId}"`}; nothing was written`,
+      );
+    }
+    if (grant.entity !== CLIENT_SLICE_ENTITY) {
+      return clientRefused(io, json, `this build answers one entity, "${CLIENT_SLICE_ENTITY}"; the grant ${grant.grantId} names "${grant.entity}"; nothing was written`);
+    }
+    if (grant.vocabulary !== 2 || !grant.allowedOps.includes('send') || !grant.allowedOps.includes('messages')) {
+      return clientRefused(
+        io,
+        json,
+        `the thread's grant ${grant.grantId} is send-only; only a v2 grant with send and messages opens a client thread a seat may answer. The owner issues a new grant with --inbox, and the client starts a new thread; v1 sends stay valid; nothing was written`,
+      );
+    }
+    if (answered.thread !== answered.id) {
+      return clientRefused(io, json, `record ${id} answers another record; a client thread is the client's own opening record, and only it is answered; nothing was written`);
+    }
+    if (answered.to_id === null) {
+      return clientRefused(io, json, `record ${id} carries no to_id; the recipient the grant signs cannot be matched to it; nothing was written`);
+    }
+    const resolved = resolveEntityCoordinator(host.home, grant.entity);
+    if (!resolved.ok) {
+      return clientRefused(io, json, `the entity coordinator cannot be resolved: ${resolved.why}; nothing was written`);
+    }
+    const coordinator = resolved.coordinator;
+    if (
+      coordinator.teamId !== grant.teamId ||
+      coordinator.recipientSeat !== grant.recipientSeat ||
+      coordinator.recipientId !== grant.recipientId
+    ) {
+      return clientRefused(
+        io,
+        json,
+        `the registry no longer names the coordinator and recipient the grant ${grant.grantId} signs; a changed binding makes the thread unanswerable; nothing was written`,
+      );
+    }
+    if (!samePath(coordinator.teamRoot, root) || coordinator.session !== session) {
+      return clientRefused(io, json, `the grant's coordinator lives in another checkout or session than this record; a changed binding makes the thread unanswerable; nothing was written`);
+    }
+    if (answered.to !== grant.recipientSeat || answered.to !== coordinator.recipientSeat) {
+      raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', `client:${grant.clientId}`, host.now());
+      return clientRefused(io, json, `record ${id} is addressed to "${answered.to}", not to the coordinator seat "${coordinator.recipientSeat}"; nothing was written`);
+    }
+    if (answered.to_id !== grant.recipientId || answered.to_id !== coordinator.recipientId) {
+      raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', `client:${grant.clientId}`, host.now());
+      return clientRefused(io, json, `record ${id} was addressed to agent ${answered.to_id}, and the current grant binds ${coordinator.recipientId}; nothing was written`);
+    }
+    if (me !== grant.recipientSeat || me !== coordinator.recipientSeat) {
+      raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', `client:${grant.clientId}`, host.now());
+      return clientRefused(io, json, `seat ${me} is not the recipient of the client thread; only ${coordinator.recipientSeat} answers it; nothing was written`);
+    }
+    const agent = findAgent(host.home, { team: coordinator.teamId, seat: me });
+    if (agent === null || agent.id !== grant.recipientId) {
+      return clientRefused(io, json, `seat ${me} has no registered agent record in team ${coordinator.teamId} naming ${grant.recipientId}; a reply never claims an identity it does not have; nothing was written`);
+    }
+    // The thread's life counts the verified replies in the client inbox too: they are records
+    // on the thread that the seat-folder scan cannot see.
+    const inbox = ensureClientInbox(root, session, grant.clientId);
+    if (!inbox.ok) return clientRefused(io, json, `the client inbox cannot be used: ${inbox.why}; nothing was written`);
+    const scanned = scanClientInbox({ home: host.home, root, session, clientId: grant.clientId, key });
+    if (!scanned.ok) return clientRefused(io, json, `${scanned.why}; nothing was written`);
+    const onThread = scanned.scan.shown.filter((reply) => reply.thread === answered.id).map((reply) => ({ at: reply.at }));
+    const threadNow = threadStateOf(root, session, answered.id, key, host.now(), thresholds.thresholds, onThread);
+    if (!threadNow.open) {
+      return clientRefused(
+        io,
+        json,
+        `${closedWords(answered.id, threadNow.reason ?? 'close', thresholds.thresholds)}; a client thread is answered only while it is open, never reopened; nothing was written`,
+      );
+    }
+
+    const replyId = host.newId?.() ?? randomUUID();
+    const naming = namingFor({ home: host.home, root, viewerTeam: coordinator.teamId, seat: me, file: team });
+    const body = `${senderHeader(agent, CLIENT_REPLY_RULE, naming)}\n${text}`;
+    const payload: RecordPayload = {
+      kind: 'message',
+      id: replyId,
+      to: `client:${grant.clientId}`,
+      to_id: null,
+      root,
+      session,
+      at,
+      body,
+      from: me,
+      from_id: grant.recipientId,
+      rule: CLIENT_REPLY_RULE,
+      thread: answered.id,
+      in_reply_to: answered.id,
+      to_client: { client_id: grant.clientId, grant_id: grant.grantId },
+    };
+    type Locked = { ok: true } | { ok: false; why: string };
+    let locked: Locked;
+    try {
+      // Lock order is grant lock -> seat lock. No path takes a seat lock and then the grant
+      // lock, so this direction is the only one there is.
+      locked = withClientGrantLock(host.home, (): Locked => {
+        const active = activeClientGrant(host.home, { grant, signature: origin.signature }, host.now());
+        if (!active.ok) {
+          return { ok: false, why: `the originating grant ${grant.grantId} is not active: ${active.why}; nothing was written` };
+        }
+        const seatLock = acquireSeatLock(dir, session, me);
+        if (!('release' in seatLock)) {
+          return { ok: false, why: `${me}: another command holds it (pid ${String(seatLock.held)}); nothing was written` };
+        }
+        try {
+          sealDropTree(dir, session, me);
+          const placedInbox = ensureClientInbox(root, session, grant.clientId);
+          if (!placedInbox.ok) return { ok: false, why: `the client inbox cannot be used: ${placedInbox.why}; nothing was written` };
+          const signed = signRecord(payload, host.home);
+          const wrote = writeClientInboxFile(placedInbox.dir, replyId, `${JSON.stringify(signed, null, 2)}\n`);
+          if (wrote === 'exists') return { ok: false, why: `client ${grant.clientId}: a record already holds the id ${replyId}; nothing was written` };
+          if (wrote !== 'written') return { ok: false, why: 'the record could not be written; nothing was written' };
+          // The answered record moves to `replied`: a seat-side annotation beside the client's
+          // opening record, signed with `to` the original recipient seat, as every reply's is.
+          const receipt = signReceiptPayload({ kind: 'receipt', status: 'replied', id: answered.id, to: me, root, session, at }, host.home);
+          writeReceipt(recordDir(root, session, me), receipt, host.home);
+          return { ok: true };
+        } catch {
+          return { ok: false, why: 'the record could not be written; nothing was written' };
+        } finally {
+          seatLock.release();
+        }
+      });
+    } catch (error) {
+      return clientRefused(io, json, error instanceof Error ? `${error.message}; nothing was written` : 'the client grant lock could not be taken; nothing was written');
+    }
+    if (!locked.ok) return clientRefused(io, json, locked.why);
+    logLine(dir, 'reply', who, `client:${grant.clientId}: replied`, host.now());
+    const summary = `client:${grant.clientId}: replied`;
+    return written(io, json, {
+      format: 1,
+      status: 'replied',
+      action_summary: summary,
+      project: team.project,
+      session,
+      record: replyId,
+      thread: answered.id,
+      in_reply_to: answered.id,
+      to: `client:${grant.clientId}`,
+      rule: CLIENT_REPLY_RULE,
+      reply: text,
       at,
     }, `${contextLine(team.project, session)}\n${summary}\n`);
   }

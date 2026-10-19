@@ -1513,6 +1513,66 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for the client read
+ *  (`schema/messages-client.schema.json`): the `team.messages.client` document, rows and the
+ *  optional ack fact. It carries the key-isolation line the invocation always declares. */
+export const CLIENT_MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.messages.client',
+  fileName: 'messages-client.schema.json',
+  title: 'team messages --client --json output',
+  required: ['format', 'project', 'session', 'client', 'rows', 'notes', 'differences', 'summary', 'counts', 'key_isolation'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    client: { type: 'string', minLength: 1 },
+    rows: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'from', 'to', 'sent', 'sent_display', 'status'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          from: { type: ['string', 'null'] },
+          to: { type: ['string', 'null'] },
+          sent: { type: ['string', 'null'] },
+          sent_display: { type: 'string', minLength: 1 },
+          status: { type: 'string', enum: ['shown', 'refused'] },
+          body: { type: 'string' },
+        },
+      },
+    },
+    notes: { type: 'array', items: { type: 'string' } },
+    differences: { type: 'array', items: DIFFERENCE_SCHEMA_FRAGMENT },
+    summary: SUMMARY_SCHEMA_FRAGMENT,
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['messages', 'shown', 'refused'],
+      properties: {
+        messages: { type: 'integer', minimum: 0 },
+        shown: { type: 'integer', minimum: 0 },
+        refused: { type: 'integer', minimum: 0 },
+      },
+    },
+    // Present when the read named `--ack`: the receipt's own outcome, including the idempotent
+    // repeat (`already-acked`) and a receipt that does not verify (`refused`).
+    ack: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'status', 'written'],
+      properties: {
+        id: { type: 'string', minLength: 1 },
+        status: { type: 'string', enum: ['acknowledged', 'already-acked', 'refused'] },
+        written: { type: 'boolean' },
+        message: { type: 'string' },
+      },
+    },
+    key_isolation: { type: 'string', minLength: 1 },
+  },
+};
+
 /** Published `--json` output schema for `team drops` (`schema/drops.schema.json`). */
 export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.drops',
@@ -2426,6 +2486,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   REGISTER_OUTPUT_SCHEMA,
   ASK_SHOW_OUTPUT_SCHEMA,
   MESSAGES_OUTPUT_SCHEMA,
+  CLIENT_MESSAGES_OUTPUT_SCHEMA,
   DROPS_OUTPUT_SCHEMA,
   BRIEF_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,

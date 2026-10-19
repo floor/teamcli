@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { runClientMessages } from '../client/inbox.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import {
@@ -503,10 +504,23 @@ function bodyLines(body: string): string[] {
  * ring asks the recipient's pane, and the receipt records that a process was shown the body.
  */
 export async function runMessages(argv: string[], io: Io, sources: MessagesSources = realSources): Promise<number> {
-  const args = readArgs(argv, [], ['json']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
+  // The client read is dispatched on raw argv, before the seat parser and before any team file:
+  // a client's identity is the grant and the key, never the folder this runs in, so no seat-path
+  // reading may run first. The closed client option set is parsed by its own command module.
+  const clientFlag = argv.some((arg) => arg === '--client' || arg.startsWith('--client='));
+  const keyFlag = argv.some((arg) => arg === '--key' || arg.startsWith('--key='));
+  if (clientFlag || keyFlag) {
+    return runClientMessages(
+      readArgs(argv, ['client', 'key', 'since', 'ack', 'limit', 'request-id'], ['json']),
+      io,
+      sources,
+      json,
+    );
+  }
+  const args = readArgs(argv, [], ['json']);
   if (args.error || args.rest.length) {
     const problem = args.error ?? `unexpected "${args.rest[0]}"`;
     if (json) {
