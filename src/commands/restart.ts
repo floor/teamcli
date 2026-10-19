@@ -392,6 +392,10 @@ export type PerformInput = {
   recorded: SeatState | undefined;
   agents: readonly HerdrAgent[];
   abandon: boolean;
+  /** The swap observed the screen at the CLI's rate limit or provider error: that pane cannot
+   *  finish its task and cannot answer, so it is closed without typing. Every other blocked
+   *  screen — permission, trust, question, exit question, vendor notice — keeps its refusal. */
+  broken?: boolean;
   owner: boolean;
   callerText: string;
   standing: Standing;
@@ -468,7 +472,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     : out;
 
   // Inspect the target seat's current pane before any preflight or stop.
-  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources);
+  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true);
   if (inspected.kind === 'replaced') return { kind: 'replaced' };
   if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
   if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
@@ -556,7 +560,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (freshAgents === null) return { kind: 'herdr' };
     const freshSession = readState(dir).sessions[session] ?? emptySession();
     const freshRecorded = freshSession.seats[name];
-    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources);
+    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true);
     if (rechecked.kind === 'replaced') return { kind: 'replaced' };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
     if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
@@ -595,7 +599,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         });
         const fresh = sources.agents(session);
         if (fresh === null) return { kind: 'herdr' };
-        const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources);
+        const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true);
         if (seen.kind === 'replaced') return { kind: 'replaced' };
         if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
         if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
@@ -625,7 +629,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           keep: false,
           // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
           // says "close without typing" here, and the owner's own `--abandon` stays what it was.
-          abandon: (abandon || stopObs.unrecognised !== undefined) && stopObs.where !== 'free',
+          // A broken screen (rate limit or provider error) gets the same close: nothing is typed
+          // into a pane whose conversation cannot answer.
+          abandon: (abandon || stopObs.unrecognised !== undefined || stopObs.brokenScreen) && stopObs.where !== 'free',
           closeUnasked: abandon,
           unasked: `team ${input.command} ${name} --abandon closes it`,
         });
@@ -911,6 +917,9 @@ type InspectedSeat =
       atExitQuestion: boolean;
       /** herdr's own status, when the screen is not recognised but herdr says idle or done. */
       unrecognised?: string;
+      /** The screen reads as the CLI's rate limit or provider error and the caller observed it:
+       *  the pane cannot answer, so it is closed without typing and never refused as busy. */
+      brokenScreen: boolean;
     };
 
 function inspectSeat(
@@ -922,6 +931,7 @@ function inspectSeat(
   abandon: boolean,
   owner: boolean,
   sources: RestartSources,
+  broken = false,
 ): InspectedSeat {
   const proc = recorded?.launched && recorded.pane && sources.upLaunch.processInfo
     ? sources.upLaunch.processInfo(session, recorded.pane)
@@ -946,7 +956,7 @@ function inspectSeat(
   }
   const agent = matched[0];
   if (!agent) {
-    return { kind: 'ok', agent: undefined, where: 'free', exitInBox: false, atExitQuestion: false };
+    return { kind: 'ok', agent: undefined, where: 'free', exitInBox: false, atExitQuestion: false, brokenScreen: false };
   }
 
   const liveCwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
@@ -966,6 +976,11 @@ function inspectSeat(
       home: sources.home,
     });
   const clearable = holdsExit && profile?.exitClear !== null;
+  // A broken seat is closed without typing: the screen is at the CLI's rate limit or provider
+  // error and the caller observed it (`broken`), so the pane cannot run a turn and cannot answer
+  // an exit. The screen is read again here, so a seat that recovered between the observation and
+  // this inspection is no longer treated as broken. The other blocked screens keep their refusal.
+  const brokenScreen = broken && (screen.kind === 'provider error' || screen.kind === 'rate limit');
 
   if (abandon && !owner && where === 'working') {
     return { kind: 'abandon-working' };
@@ -981,9 +996,10 @@ function inspectSeat(
       exitInBox: false,
       atExitQuestion: false,
       unrecognised: agent.status,
+      brokenScreen: false,
     };
   }
-  if (where !== 'free' && where !== 'exited' && !abandon && !clearable) {
+  if (where !== 'free' && where !== 'exited' && !abandon && !clearable && !brokenScreen) {
     const way = where !== 'unknown'
       ? ''
       : owner
@@ -1003,6 +1019,7 @@ function inspectSeat(
     where,
     exitInBox: clearable,
     atExitQuestion: screen.kind === 'exit question',
+    brokenScreen,
   };
 }
 

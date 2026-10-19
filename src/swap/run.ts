@@ -199,10 +199,15 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
   // Resume the recorded conversation when the CLI stays the same and keeps sessions. Otherwise
   // ask the old conversation for a handover: the CLI changed, or a fresh conversation would lose
   // the context anyway. The path is the record's own when it named one, so a retry after a busy
-  // turn offers the same file and a handover already written is used without asking again.
+  // turn offers the same file and a handover already written is used without asking again. A
+  // broken screen is never asked: it cannot answer, and typing there would burn the bounded wait
+  // on a dead pane. The swap runs at once with no handover, as the design's broken-seat clause
+  // says it must.
   const resume = resumeIdFor(input, declared, swap);
   let handover: { path: string; waitMs: number } | undefined;
-  if (resume === undefined) {
+  if (resume === undefined && observed.broken) {
+    logLine(dir, 'swap', input.by, `${name}: no handover is asked; the screen is at a rate limit or provider error`, current);
+  } else if (resume === undefined) {
     const path = swap.handover ?? handoverPath(dir, name, current);
     if (swap.handover === undefined) noteHandover(dir, name, swap.queuedAt, path);
     handover = { path, waitMs: HANDOVER_WAIT_MS };
@@ -229,6 +234,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
     recorded: readState(dir).sessions[session]?.seats[name],
     agents,
     abandon: false,
+    broken: observed.broken,
     owner: input.owner || swap.reason !== 'config',
     callerText: input.by,
     standing: approvalStanding(root, home),
