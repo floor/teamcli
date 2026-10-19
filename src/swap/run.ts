@@ -7,7 +7,8 @@
 // whether it is due, whether the conversation resumes or a handover is asked for, and what the
 // new screen says the model is.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ceilingsOf } from '../approve/approval.ts';
 import { performRestart, type ReadBack, type RestartSources } from '../commands/restart.ts';
 import { hasSeat, rewriteSeatModel, type SeatModelFields } from '../file/lines.ts';
@@ -20,12 +21,14 @@ import { latestSessionOf } from '../sessions/registry.ts';
 import { readState, type QueuedSwap } from '../state.ts';
 import { approvalStanding } from '../store/store.ts';
 import { liveLeaseOf } from '../tasks/lease.ts';
+import { seatHasAssignedWorkOnDisk } from '../watch/status-events.ts';
 import { finishSwap, handoverPath, needsHandover, noteHandover, queuedSwaps, swapDue } from './queue.ts';
 
 /** What one observation says about a seat, in the words `swapDue` reads. `boundary` is the mark
- *  the watch makes itself: quiet, no turn, no dialog, no task lease. The work drop the design
- *  also names never waits on a swap's seat, because the watch types none into a seat whose swap
- *  is queued — so a run never starts one that was still waiting. */
+ *  the watch makes itself: quiet, no turn, no dialog, no task lease, no assigned work on disk
+ *  and no work drop still in the seat's folder. The watch types no *new* work drop into a seat
+ *  whose swap is queued, but a drop delivered before the record was queued — or a message sent
+ *  past the queue — can still be waiting, and the stop must not cut a task it wakes. */
 export type SwapObservation = {
   running: boolean;
   quiet: boolean;
@@ -91,8 +94,6 @@ export type SwapRunOptions = {
    *  force is the owner's word); a `config` swap does only when its caller was the owner. */
   owner: boolean;
   now(): Date;
-  /** Only these seats: the watch hands the pass's own set. Absent, every record is read. */
-  seats?: ReadonlySet<string>;
 };
 
 /**
@@ -105,6 +106,9 @@ export function observeSwap(
   seat: Seat,
   root: string,
   now: Date,
+  /** The team's project: with `sources.home` it reaches the entity event log the assigned-work
+   *  check reads beside the project's own. */
+  project: string,
 ): SwapObservation | null {
   const agents = sources.agents(session);
   if (agents === null) return null;
@@ -133,20 +137,48 @@ export function observeSwap(
   // A broken seat cannot finish its task: the two states `provider-error` already reads. It
   // swaps at once rather than waiting for a boundary it may never reach.
   const broken = screen.kind === 'provider error' || screen.kind === 'rate limit';
-  const boundary = quiet && !working && !prompt && liveLeaseOf(root, seat.name, now.getTime()) === null;
+  // A quiet screen is not the whole boundary: work can wait on disk with no turn running — a
+  // live lease, an assigned worktree or temporary task, an unacked message drop (all read by the
+  // one assigned-work check the status engine already uses) and a work drop the watch wrote
+  // before the record was queued. None of them is a turn, but starting one is exactly what the
+  // stop would cut.
+  const assigned = seatHasAssignedWorkOnDisk(root, session, seat.name, now.getTime(), {
+    project,
+    home: sources.home,
+  });
+  const boundary = quiet && !working && !prompt
+    && liveLeaseOf(root, seat.name, now.getTime()) === null
+    && !assigned
+    && !workDropWaiting(root, session, seat.name);
   return { running: true, quiet, working, prompt, unsent, broken, boundary };
 }
 
-/** The queued swaps of this team that are due now, run one at a time. The queue is re-read
- *  before every record, so a swap cancelled or re-queued by another process while this run
- *  stops one seat does not start another seat on a stale record. A record for a seat the file
- *  no longer declares or has signed off is handed to `runOneSwap` all the same: the run reports
- *  it and removes a record the file has no seat for, and no run ever launches over a sign-off. */
+/** Whether a work drop the watch wrote still waits in the seat's folder. A work drop carries no
+ *  receipt — nothing marks one read — so a file still there is the only sign available, and the
+ *  safe reading is that the seat may still take it. A drop long consumed can therefore delay the
+ *  boundary path, never the swap: past `swap-wait-seconds` the run goes without it. */
+function workDropWaiting(root: string, session: string, seat: string): boolean {
+  const dir = join(root, '.agents', 'send-drops', session, seat);
+  try {
+    return readdirSync(dir).some((name) => name.startsWith('work-'));
+  } catch {
+    // A folder that cannot be read holds no drop this observation can see.
+    return false;
+  }
+}
+
+/** The queued swaps of this team, in seat order, run one at a time. Every record is read, never
+ *  only the seats herdr currently lists: a record for a seat that is down, signed off, human or
+ *  no longer in the file must still be handled — reported, kept or cleaned up — instead of being
+ *  skipped for as long as its seat is not live. The queue is re-read before every record, so a
+ *  swap cancelled or re-queued by another process while this run stops one seat does not start
+ *  another seat on a stale record. A record for a seat the file no longer declares or has signed
+ *  off is handed to `runOneSwap` all the same: the run reports it and removes a record the file
+ *  has no seat for, and no run ever launches over a sign-off. */
 export async function runDueSwaps(input: SwapRunOptions): Promise<SwapRunResult[]> {
   const results: SwapRunResult[] = [];
   const names = queuedSwaps(readState(input.dir)).map(([seat]) => seat);
   for (const seat of names) {
-    if (input.seats !== undefined && !input.seats.has(seat)) continue;
     const held = readState(input.dir).swaps?.[seat];
     if (!held) continue;
     const result = await runOneSwap(input, seat, held);
@@ -181,9 +213,16 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
     return { kind: 'failed', seat: name, why };
   }
 
-  const observed = observeSwap(sources, session, declared, root, now());
+  const observed = observeSwap(sources, session, declared, root, now(), team.project);
   if (observed === null) {
     return { kind: 'retry', seat: name, why: 'herdr cannot be read; the queue stands' };
+  }
+  // A seat herdr does not list has no pane this run can inspect or stop, and no turn to wait
+  // on. The record is the project's and outlives `down` and `up` (the queue's own rule), so the
+  // swap waits here, truthfully, and runs once the seat is up — it never launches a pane it
+  // could not observe, and a force does not turn this into a blind launch either.
+  if (!observed.running) {
+    return { kind: 'wait', seat: name, why: 'the seat is not running; the swap waits for its pane (team up starts it)' };
   }
   if (!swapDue(swap, observed, now())) return { kind: 'wait', seat: name, why: waitWhy(swap, observed, now()) };
 
@@ -266,13 +305,8 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
           : handover !== undefined
             ? 'fresh conversation; no handover was written'
             : 'fresh conversation';
-      // The file's write failed: the new pane runs, but the team file still declares the old
-      // model. The request is not done, and no line says it swapped.
-      if (performed.declareFailure !== undefined) {
-        const said = `the team file was not rewritten (${performed.declareFailure}); the swap failed`;
-        logLine(dir, 'swap', input.by, `${name}: ${said}`, now());
-        return { kind: 'failed', seat: name, why: said };
-      }
+      // A declaration whose write failed never reaches here: the run aborts before the launch
+      // (the ruling of 2026-10-19), so a ready result always names a file that was rewritten.
       // The screen shows another model: the swap failed, the queue record stands, and nothing
       // says it swapped. A completion here would hide a seat running the wrong model.
       if (performed.readBack.kind === 'mismatch') {
@@ -388,8 +422,9 @@ export function seatOf(declared: Seat, swap: QueuedSwap): Seat {
 /**
  * The file's new declaration, written after the old pane is closed and before the launch, which
  * reads the file's own words. The write is validated whole (`writeTeamFile`), so a recipe the
- * schema refuses leaves the file as it was and the launch goes on from the queued words; a seat
- * taken out of the file since the queue was written is said, never re-added.
+ * schema refuses leaves the file as it was; a seat taken out of the file since the queue was
+ * written is said, never re-added. A failure is the caller's abort: nothing is launched from a
+ * file the run could not rewrite (the ruling of 2026-10-19).
  */
 function declareRecipe(path: string, name: string, fields: SeatModelFields): { ok: true } | { ok: false; why: string } {
   let text: string;

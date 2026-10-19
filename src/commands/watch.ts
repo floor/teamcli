@@ -925,7 +925,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               by: 'the watch',
               owner: false,
               now: sources.now,
-              seats: new Set(live.agents.flatMap((agent) => (agent.name === null ? [] : [agent.name]))),
             });
             // A ready swap is said once per new pane; a failure or a read-back mismatch once per
             // record's own words — the queue retries a busy turn silently, and the queue itself

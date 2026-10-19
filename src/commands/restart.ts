@@ -413,8 +413,10 @@ export type PerformInput = {
    *  the stop, and the wait is bounded. */
   handover?: { path: string; waitMs: number };
   /** Writes the team file's new declaration, after the old pane is closed and before the hooks
-   *  and the launch — the launch reads the file's own words. A failure is logged and the launch
-   *  goes on: the seat is already down. */
+   *  and the launch — the launch reads the file's own words. A failure is a truthful abort: the
+   *  sequence ends before the hooks, the brief and the launch, and the caller reports it as a
+   *  refusal. A swap keeping its queue record on that abort is the caller's rule (the ruling of
+   *  2026-10-19). */
   declare?: () => { ok: true } | { ok: false; why: string };
   now(): Date;
   sources: RestartSources;
@@ -439,9 +441,6 @@ export type PerformResult =
       oldPane: string;
       pane: string;
       readBack: ReadBack;
-      /** The team-file declaration's write failed: the pane runs, but the file still names the
-       *  old model. A caller must not call the request done on this. */
-      declareFailure?: string;
       /** The handover file the launch was actually given. Absent when the bounded wait ended
        *  without one, so a caller never reports a handover that was only asked for. */
       handover?: string;
@@ -674,19 +673,18 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     }
 
     // The team file's new declaration lands after the old pane is closed and before the hooks
-    // and the launch, which reads the file's own words. A write that fails is said and logged,
-    // and the launch goes on: the seat is already down. The failure is carried on the ready
-    // result so the caller does not mark the request done on a file that still names the old
-    // model.
-    let declareFailure: string | undefined;
+    // and the launch, which reads the file's own words. A write that fails is a truthful abort:
+    // the run ends non-zero and launches nothing — a swap's queue record stands and the failure
+    // is reported (the ruling of 2026-10-19). The seat is already down either way, so the next
+    // `team up` starts it from the file the run actually holds.
     if (input.declare) {
       const wrote = input.declare();
       if (!wrote.ok) {
-        declareFailure = wrote.why;
-        const said = `the team file was not rewritten (${wrote.why}); the launch uses the queued recipe`;
+        const said = `the team file was not rewritten (${wrote.why}); nothing was launched`;
         if (json) notes.push(said);
         else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
         logLine(dir, input.command, who, said, sources.now());
+        return { kind: 'not-ready', message: said };
       }
     }
 
@@ -804,7 +802,6 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       oldPane,
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
-      ...(declareFailure === undefined ? {} : { declareFailure }),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
     };
   } finally {
