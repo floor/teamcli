@@ -58,6 +58,7 @@ import {
 } from '../send/record.ts';
 
 export const USAGE = `Usage: team messages [--json]
+Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]
 
 Exits 0 when the inbox is read, 1 when the caller, team file, or message record is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;

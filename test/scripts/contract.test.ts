@@ -59,6 +59,71 @@ test('contract:check fails when a command option list is broken by hand', () => 
   expect(result.message).toContain('contract:check: failed');
 });
 
+test('a command with two parser forms carries both usage lines and the union of their flags', () => {
+  const contract = JSON.parse(readFileSync(join(root, 'contract/cli.json'), 'utf8')) as {
+    commands: {
+      name: string;
+      usage: string[];
+      flags: { name: string; takesValue: boolean; hidden: boolean }[];
+    }[];
+  };
+  const messages = contract.commands.find((command) => command.name === 'messages');
+  expect(messages?.usage).toEqual([
+    'team messages [--json]',
+    'team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]',
+  ]);
+  // The flags are the union of the two readArgs calls, never a whitelist: the client form's six
+  // valued options and the --json switch both forms share.
+  expect((messages?.flags ?? []).filter((flag) => !flag.hidden).map((flag) => [flag.name, flag.takesValue])).toEqual([
+    ['--ack', true],
+    ['--client', true],
+    ['--help', false],
+    ['--json', false],
+    ['--key', true],
+    ['--limit', true],
+    ['--request-id', true],
+    ['--since', true],
+  ]);
+  expect((messages?.flags ?? []).filter((flag) => flag.hidden).map((flag) => flag.name)).toEqual(['-h']);
+});
+
+test('a parser form the usage lines do not declare is refused', () => {
+  const rel = 'src/commands/messages.ts';
+  const source = readFileSync(join(root, rel), 'utf8');
+  const needle = ' [--request-id <id>]';
+  expect(source).toContain(needle);
+  const broken = source.replace(needle, '');
+  let message = '';
+  try {
+    renderContract(root, new Map([[rel, broken]]));
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  expect(message).toContain('--request-id');
+  expect(message).toContain('has no usage line declaring that form');
+});
+
+test('an option that is a value in one parser form and a switch in another is refused', () => {
+  const rel = 'src/commands/messages.ts';
+  const source = readFileSync(join(root, rel), 'utf8');
+  const needle = "readArgs(argv, [], ['json'])";
+  expect(source).toContain(needle);
+  const broken = source.replace(needle, "readArgs(argv, [], ['json', 'request-id'])");
+  expect(() => renderContract(root, new Map([[rel, broken]]))).toThrow(/--request-id is both a value and a boolean/);
+});
+
+test('two parser forms of the same shape are refused as ambiguous', () => {
+  const rel = 'src/commands/messages.ts';
+  const source = readFileSync(join(root, rel), 'utf8');
+  const needle = "readArgs(argv, [], ['json'])";
+  expect(source).toContain(needle);
+  const broken = source.replace(
+    needle,
+    "readArgs(argv, ['client', 'key', 'since', 'ack', 'limit', 'request-id'], ['json'])",
+  );
+  expect(() => renderContract(root, new Map([[rel, broken]]))).toThrow(/two readArgs calls declare the same form/);
+});
+
 test('the check script exits 0 on this tree', () => {
   const result = spawnSync('bun', ['scripts/contract.ts', '--check'], { cwd: root, encoding: 'utf8' });
   expect(result.status).toBe(0);

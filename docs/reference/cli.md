@@ -568,7 +568,7 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--inbox] [--json]
 
 ### Who may run it
 
@@ -584,6 +584,7 @@ Usage:
 | `--entity` | yes | no | no |
 | `--expires` | yes | no | no |
 | `--help` | no | no | no |
+| `--inbox` | no | no | no |
 | `--json` | no | no | no |
 | `--name` | yes | no | no |
 | `--public-key` | yes | no | no |
@@ -857,6 +858,7 @@ Hidden: no
 Usage:
 
     team messages [--json]
+    team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]
 
 ### Who may run it
 
@@ -866,8 +868,14 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--ack` | yes | no | no |
+| `--client` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--limit` | yes | no | no |
+| `--request-id` | yes | no | no |
+| `--since` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
