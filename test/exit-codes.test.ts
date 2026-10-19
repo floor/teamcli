@@ -47,6 +47,7 @@ import { runHold } from '../src/commands/hold.ts';
 import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
+import { runDevelopmentMode } from '../src/commands/development-mode.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
@@ -1231,6 +1232,28 @@ scene('conformance-adapter.finished', async () => {
   const code = await proc.exited;
   const out = await new Response(proc.stdout).text();
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
+});
+
+scene('development-mode.done', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--show'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'would set the machine development mode to local-fast',
+  );
+});
+scene('development-mode.refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'off'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'only the owner switches the machine development mode',
+  );
+});
+scene('development-mode.invocation', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'maybe'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'the mode must be one of local-fast|pr-per-change|off',
+  );
 });
 
 scene('doctor.invocation', async (place) => {
@@ -5723,6 +5746,16 @@ analyzerTest('a throw in an imported helper is covered by team.command-threw', (
   files.set('src/commands/gate-throw.ts', "export function gateThrow(): void {\n  throw new Error('gate');\n}\n");
   expect(problems({ files })).toEqual([]);
   expect(analyze(files).coveredThrows.some((item) => item.file === 'src/commands/gate-throw.ts' && item.id === 'team.command-threw')).toBe(true);
+});
+
+analyzerTest('a plain-JS import is outside the contract: not read, and a return through it is refused', () => {
+  const files = withDoctor(
+    "  if (argv[0] === '--gate-plain') plainSignal();\n  if (argv[0] === '--gate-plain-code') return plainCode();\n",
+    "import { plainCode, plainSignal } from './plain-signal.js';\n",
+  );
+  const found = problems({ files });
+  expect(found.some((line) => line.includes("can't read this file"))).toBe(false);
+  expect(found.some((line) => line.includes(UNREADABLE))).toBe(true);
 });
 
 analyzerTest('a default-parameter call fails the check', () => {

@@ -12,7 +12,19 @@
 // whole proof. The listener belongs to the receiving session's host; this package opens no
 // server.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createConnection } from 'node:net';
 import { join } from 'node:path';
 
@@ -84,9 +96,10 @@ export function capabilities(runtime, version) {
 
 /**
  * Writes the durable signed copy — whole, mode 0600, never through a link — and reports where it
- * landed. A regular file already at the name is `existing`: the relay does not read it and does
- * not replace it, because whether that file is this message's record is the caller's admission
- * to make. A link, FIFO, folder or other holder at the name is refused.
+ * landed. The write is create-or-match: the copy is published under an exclusive hard link, so a
+ * regular file already at the name is read without following anything, and only identical bytes
+ * are `existing`. Different bytes are refused and left untouched, as is a link, FIFO, folder or
+ * other holder. A file that vanishes between the link and the read is retried, not overwritten.
  */
 export async function stage(copy, message, options = {}) {
   const at = nowOf(options);
@@ -98,15 +111,22 @@ export async function stage(copy, message, options = {}) {
     return { outcome: 'refused', reason: 'the signed record is missing' };
   }
   const path = copyPath(copy);
-  const held = heldAt(path);
-  if (held === 'file') return { outcome: 'stored', receipt: { copy: path, existing: true, at } };
-  if (held !== 'missing') return { outcome: 'refused', reason: 'a file that is not a record already holds that id' };
-  try {
-    writeCopy(copy.dir, path, message.record);
-  } catch {
-    return { outcome: 'refused', reason: 'the record could not be written' };
+  for (let tries = 0; tries < 3; tries += 1) {
+    const held = heldAt(path);
+    if (held !== 'missing') {
+      const matched = matchOrRefuse(path, held, message.record, at);
+      // `null` means the holder vanished under us; the next pass publishes again.
+      if (matched !== null) return matched;
+      continue;
+    }
+    const made = publishCopy(copy.dir, path, message.record);
+    if (made === 'published') return { outcome: 'stored', receipt: { copy: path, at } };
+    if (made === 'error') return { outcome: 'refused', reason: 'the record could not be written' };
+    // Another writer won the name between the lstat and the link. Judge its bytes; never replace.
+    const matched = matchOrRefuse(path, heldAt(path), message.record, at);
+    if (matched !== null) return matched;
   }
-  return { outcome: 'stored', receipt: { copy: path, at } };
+  return { outcome: 'refused', reason: 'the record could not be written' };
 }
 
 /** One route attempt. Never falls back, never reorders. */
@@ -202,22 +222,98 @@ function heldAt(path) {
   return 'other';
 }
 
-/** Writes the record whole: a temporary file at mode 0600 in the record's own folder, renamed
- *  onto its name. The folder is created and kept at 0700. */
-function writeCopy(dir, path, record) {
-  mkdirSync(dir, { recursive: true });
-  chmodSync(dir, 0o700);
-  const tmp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(tmp, record, { flag: 'wx', mode: 0o600 });
-  chmodSync(tmp, 0o600);
+/**
+ * Judges the holder of a name: identical bytes are `existing`; different bytes, or a holder that
+ * is not a regular file, are refused and left untouched. `null` means the holder disappeared
+ * between the check and the read — the caller may publish again, never overwrite.
+ */
+function matchOrRefuse(path, held, record, at) {
+  if (held === 'missing') return null;
+  if (held !== 'file') return { outcome: 'refused', reason: 'a file that is not a record already holds that id' };
+  const read = readHeldRecord(path);
+  if (read.kind === 'missing') return null;
+  if (read.kind === 'not-file') return { outcome: 'refused', reason: 'a file that is not a record already holds that id' };
+  if (read.kind === 'unreadable') return { outcome: 'refused', reason: 'the file that already holds that id could not be read' };
+  if (read.bytes.equals(Buffer.from(record, 'utf8'))) {
+    return { outcome: 'stored', receipt: { copy: path, existing: true, at } };
+  }
+  return { outcome: 'refused', reason: 'a different record already holds that id', receipt: { copy: path, at } };
+}
+
+/**
+ * Reads the holder without following a link, and only if it is a regular file. `O_NONBLOCK` keeps
+ * a FIFO swapped in after the lstat from blocking the open; the fstat refuses it as not a file.
+ */
+function readHeldRecord(path) {
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+  let fd;
   try {
-    renameSync(tmp, path);
+    fd = openSync(path, flags);
   } catch (error) {
+    const code = error?.code;
+    if (code === 'ENOENT') return { kind: 'missing' };
+    if (code === 'ELOOP') return { kind: 'not-file' };
+    return { kind: 'unreadable' };
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return { kind: 'not-file' };
+    return { kind: 'bytes', bytes: readFileSync(fd) };
+  } catch {
+    return { kind: 'unreadable' };
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // The read's answer is the caller's.
+    }
+  }
+}
+
+/**
+ * Publishes the record whole: a temporary file at mode 0600 in the record's own folder, linked
+ * onto its name. `linkSync` is the no-clobber step — it fails `EEXIST` rather than replacing a
+ * winner — and the link only ever exposes complete bytes. The folder is created and kept at 0700.
+ */
+function publishCopy(dir, path, record) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o700);
+  } catch {
+    return 'error';
+  }
+  const tmp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+  let fd;
+  try {
+    fd = openSync(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
+    writeFileSync(fd, record);
+    chmodSync(tmp, 0o600);
+    closeSync(fd);
+    fd = undefined;
+  } catch {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The write's error is the one reported.
+      }
+    }
     try {
       unlinkSync(tmp);
     } catch {
-      // The rename's error is the one the caller sees.
+      // The write's error is the one reported.
     }
-    throw error;
+    return 'error';
+  }
+  try {
+    linkSync(tmp, path);
+    return 'published';
+  } catch (error) {
+    return error?.code === 'EEXIST' ? 'exists' : 'error';
+  } finally {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // The link's answer is the caller's.
+    }
   }
 }
