@@ -250,6 +250,7 @@ function ready(
     commit: parsed.commit,
     version: parsed.version,
     now: sources.now?.() ?? Date.now(),
+    env: io.env,
   });
   if (!result.ok) return sliceRefuse(io, json, result.refusal);
   const event = result.event;
@@ -298,6 +299,7 @@ function install(
     commit: parsed.commit,
     version: parsed.version,
     now: sources.now?.() ?? Date.now(),
+    env: io.env,
   });
   if (!result.ok) return sliceRefuse(io, json, result.refusal);
   const event = result.event;

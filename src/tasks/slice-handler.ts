@@ -11,11 +11,15 @@ import { approvalDifferencesOf } from '../approve/approval.ts';
 import {
   anotherPaneRefusal,
   callerVerdict,
+  logTag,
   noPaneRefusal,
   standingOf,
   type Caller,
 } from '../caller.ts';
+import { devModeCallerGate, devModeState } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
+import type { Io } from '../io.ts';
+import { logLine } from '../log.ts';
 import { approvalStanding } from '../store/store.ts';
 import { recordGreenSliceInstall, recordGreenSliceReady, type GreenSliceEvent, type GreenSliceInstall, type GreenSliceReady, type GreenSliceRecorded } from './green-slices.ts';
 import { liveLeaseOf } from './lease.ts';
@@ -74,6 +78,10 @@ export type SliceInput = SliceWords & {
   described: string;
   /** The instant the lease and the journal are judged against. */
   now: number;
+  /** The environment the central dev-mode resolver reads (`TEAMCLI_DEV_MODE`). Absent, the
+   *  variable admits nothing here and a governing `dev-mode` policy still decides. Identity is
+   *  never read from it. */
+  env?: Pick<Io, 'env'>['env'];
 };
 
 /**
@@ -109,10 +117,11 @@ export function readySlice(team: TeamFile, root: string, input: SliceInput): Sli
 
 /**
  * The installer's explicit acknowledgment that a commit is installed: the owner, or the one seat
- * the file names with an `installer:` that is part of the approval in force, on its recorded
- * pane. Running the event is the acknowledgment; no merge, clock or version comparison stands in
- * for it, and `installedBy` is the verified caller, never an argument. The task need not still be
- * in the queue — the acknowledgment is of the commit.
+ * the file names with an `installer:` that is part of the approval in force (or, while dev mode
+ * is on at this team's place, the live validated section), on its recorded pane. Running the
+ * event is the acknowledgment; no merge, clock or version comparison stands in for it, and
+ * `installedBy` is the verified caller, never an argument. The task need not still be in the
+ * queue — the acknowledgment is of the commit.
  */
 export function installSlice(team: TeamFile, root: string, home: string, input: SliceInput): SliceResult<GreenSliceInstall> {
   if (sourceOf(team) === null) return refuse('queue.source', LINEAR_REFUSAL);
@@ -154,9 +163,12 @@ function readySeat(team: TeamFile, root: string, input: SliceInput): { ok: true;
 
 /**
  * Who may record an install: the owner, or the one seat the file designates, on its recorded
- * pane, while that designation is the approved one. A designation the owner has not approved —
- * a hand edit since the last approval, or no approval in force at all — admits nobody but the
- * owner: the file cannot make itself an installer.
+ * pane, while that designation is the approved one or dev mode is on at this team's place. A
+ * designation the owner has not approved — a hand edit since the last approval, or no approval in
+ * force at all — admits nobody but the owner: the file cannot make itself an installer. Under
+ * dev mode the live file's validated designation stands instead, and the admission is logged with
+ * the verified caller; every check above it — the declared seat, its recorded pane, the exact
+ * `installer:` name — stands unchanged, so no other seat gains anything.
  */
 function installSeat(
   team: TeamFile,
@@ -181,11 +193,21 @@ function installSeat(
   if (team.installer !== named.name) {
     return refuse('queue.installer', `only the owner or ${team.installer}, the designated installer, records an install; this call is seat ${named.name}`);
   }
-  if (!designationApproved(root, team, home)) {
-    return refuse('queue.installer', 'the installer designation is not the approved one: only the owner records an install until the owner approves the file');
+  if (designationApproved(root, team, home)) return { ok: true, name: named.name };
+  // The live validated installer section stands under dev mode, resolved at this team's place by
+  // the one central reader: signed machine provenance, and a chain that will not read is off, not
+  // a release default. The admission is the declared, placed seat above — never a wider privilege.
+  const state = devModeState({ env: input.env ?? {} }, { home, team, root, now: new Date(input.now) });
+  if (!state.on) return refuse('queue.installer', UNAPPROVED_INSTALLER);
+  const warning = devModeCallerGate(state, UNAPPROVED_INSTALLER);
+  if (warning !== null) {
+    logLine(join(root, '.agents'), 'queue install', logTag(input.caller), `${warning}; admitted as installer`, new Date(input.now));
   }
   return { ok: true, name: named.name };
 }
+
+const UNAPPROVED_INSTALLER =
+  'the installer designation is not the approved one: only the owner records an install until the owner approves the file';
 
 /** Whether the `installer:` section the live file reads is the one the last verified approval
  *  sealed. No verified approval, or a changed section, is not approved: the install gate then

@@ -14,9 +14,11 @@ import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
 import { runQueue, USAGE } from '../src/commands/queue.ts';
+import { entitiesPath } from '../src/entities.ts';
 import { loadTeamFile, NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { GREEN_SLICE_OUTPUT_SCHEMA, QUEUE_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { pendingGreenSlices, type GreenSliceEvent } from '../src/tasks/green-slices.ts';
@@ -119,8 +121,15 @@ function writeQueue(text: string): void {
   writeFileSync(queueFile(), text);
 }
 
-async function run(argv: string[], caller: Caller = lead, cwd = root, now: number = NOW) {
+async function run(
+  argv: string[],
+  caller: Caller = lead,
+  cwd = root,
+  now: number = NOW,
+  env: Record<string, string | undefined> = {},
+) {
   const io = testIo(cwd, caller);
+  io.env = env;
   const code = await runQueue(argv, io, { home, now: () => now });
   return { code, out: io.out, err: io.err };
 }
@@ -158,6 +167,25 @@ function approve(): void {
     loaded.team.seats,
     home,
   );
+}
+
+/** The audit lines the commands wrote beside the team file. */
+function logOf(): string {
+  const path = join(root, '.agents', 'team.log');
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+}
+
+/** A governing `dev-mode` at the team level, or the failure that kept it from being written.
+ *  The target is the root the command loads (git's realpath), not the fixture's raw tmpdir. */
+function governDevMode(value: 'on' | 'off'): void {
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  const written = writePolicySet(
+    home,
+    { level: 'team', target: loaded.root, teamRoot: loaded.root, name: 'dev-mode', value },
+    { now: new Date(NOW) },
+  );
+  if (!written.ok) throw new Error(written.why);
 }
 
 function writeTeam(text: string): void {
@@ -622,6 +650,53 @@ describe('team queue install', () => {
     expect(installed.code).toBe(0);
   });
 
+  test('dev mode on admits the declared, placed installer while the designation is unapproved, and audits the caller', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    governDevMode('on');
+    const installed = await run(['install', 'q1', '--commit', 'abcdef1'], worker);
+    expect(installed.code).toBe(0);
+    expect(journal()?.events.at(-1)).toMatchObject({ kind: 'install', installedBy: 'worker' });
+    expect(logOf()).toContain('queue install [worker] warning: the installer designation is not the approved one');
+    expect(logOf()).toContain('dev mode continues (dev-mode on at team level); admitted as installer');
+  });
+
+  test('dev mode off keeps the unapproved refusal even with the variable set, and writes no audit line', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    governDevMode('off');
+    const refused = await run(['install', 'q1', '--commit', 'abcdef1'], worker, root, NOW, { TEAMCLI_DEV_MODE: '1' });
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('the installer designation is not the approved one');
+    expect(journal()?.events.map((event) => event.kind)).toEqual(['ready']);
+    expect(logOf()).toBe('');
+  });
+
+  test('an unreadable dev-mode policy chain fails closed, even with the variable set', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    governDevMode('on');
+    writeFileSync(entitiesPath(home), 'floor: [unclosed\n');
+    const refused = await run(['install', 'q1', '--commit', 'abcdef1'], worker, root, NOW, { TEAMCLI_DEV_MODE: '1' });
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('the installer designation is not the approved one');
+    expect(journal()?.events.map((event) => event.kind)).toEqual(['ready']);
+    expect(logOf()).toBe('');
+  });
+
+  test('dev mode admits only the declared installer on its recorded pane', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    governDevMode('on');
+    const byLead = await run(['install', 'q1', '--commit', 'abcdef1'], lead);
+    expect(byLead.code).toBe(1);
+    expect(byLead.err).toContain('only the owner or worker, the designated installer, records an install; this call is seat lead');
+    const elsewhere = await run(
+      ['install', 'q1', '--commit', 'abcdef1'],
+      { kind: 'seat', name: 'worker', pane: 'w9:p1', session: 'acme' },
+    );
+    expect(elsewhere.code).toBe(1);
+    expect(elsewhere.err).toContain(anotherPaneRefusal('worker', 'w2:p1'));
+    expect(journal()?.events.map((event) => event.kind)).toEqual(['ready']);
+    expect(logOf()).toBe('');
+  });
+
   test('the designated seat must stand on the pane the state records', async () => {
     await prepared(`${TEAM}installer: worker\n`);
     approve();
@@ -815,6 +890,26 @@ describe('the daemon-facing slice boundary', () => {
       event: { kind: 'install', task: 'q1', commit: 'abcdef1', installedBy: 'worker' },
     });
     expect(journal()?.events.at(-1)).toMatchObject({ kind: 'install', installedBy: 'worker' });
+  });
+
+  test('the host door reads dev mode from its environment and admits the live installer section', () => {
+    prepared(`${TEAM}installer: worker\n`);
+    const result = installSlice(teamOf(), root, home, {
+      task: 'q1',
+      commit: 'abcdef1',
+      version: version(),
+      caller: worker,
+      described: 'worker',
+      now: NOW,
+      env: { TEAMCLI_DEV_MODE: '1' },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'recorded',
+      event: { kind: 'install', task: 'q1', commit: 'abcdef1', installedBy: 'worker' },
+    });
+    expect(logOf()).toContain('queue install [worker]');
+    expect(logOf()).toContain('dev mode continues');
   });
 
   test('a linear source is refused before any caller is judged', () => {
