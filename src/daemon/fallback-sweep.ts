@@ -4,6 +4,11 @@
 // `dueAt`, its `escalatedAt` and a delivery's cancellation stay authoritative, and `escalateDue`
 // remains the one reader of the signed delay and the one writer of the event.
 //
+// A pass is non-blocking by design (`lockWaitMs: 0`): the key lock of a message another live
+// holder is working is deferred to the next existing heartbeat tick, never waited on, so one busy
+// message can neither stall the daemon's event loop — and with it health and delivery — nor emit a
+// refusal or a repeated event. The other roots and keys in the same pass keep moving.
+//
 // A pass runs on a caller-free `EscalationContext`. A daemon fires markers a host already
 // recorded, so it has no verified seat to pass and must not invent one: the event's sender is the
 // tag fixed in the marker at its first fact, and `noteTransport` — the transport path — still
@@ -36,7 +41,8 @@ export type FallbackSweepResult = {
  * is refused by name and swept not at all — a root the daemon never validated contributes
  * nothing. A throw inside one root's pass is reported for that root and never stops another root
  * or the heartbeat that called this. Each pass hands `escalateDue` that root's validated team, so
- * the delay reader resolves that root's chain, and no `Caller`, so no identity is fabricated.
+ * the delay reader resolves that root's chain, and no `Caller`, so no identity is fabricated. The
+ * key lock is taken with `waitMs: 0`, so a busy episode is deferred to the next tick, not waited on.
  */
 export function sweepFallbackEscalations(input: {
   home: string;
@@ -62,7 +68,10 @@ export function sweepFallbackEscalations(input: {
       entry = given;
     }
     try {
-      const report = escalateDue({ team: entry.team, root: entry.root, home: input.home, now: input.now }, { at });
+      const report = escalateDue(
+        { team: entry.team, root: entry.root, home: input.home, now: input.now },
+        { at, lockWaitMs: 0 },
+      );
       roots.push({ root: entry.root, report, why: null });
     } catch (error) {
       roots.push({

@@ -78,7 +78,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
 import { deliveryEscalationDelay, type DeliveryEscalationSource } from '../policy/delivery.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { withLock } from '../state.ts';
+import { LockBusyError, withLock } from '../state.ts';
 import { appendStoreLine, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
 
@@ -231,6 +231,9 @@ export type EscalationEntry = {
 export type EscalationReport = {
   escalated: EscalationEntry[];
   refused: { messageId: string; recipient: CanonicalRecipient; reason: string }[];
+  /** Episodes this pass skipped because another live holder kept their key lock: ordinary
+   *  contention, left to the next pass, never an event or a refusal. */
+  deferred: { messageId: string; recipient: CanonicalRecipient }[];
   /** Markers a pass found but could not trust. They are reported, never overwritten. */
   unreadable: string[];
   /** How many trusted markers the pass read, due or not. */
@@ -556,11 +559,18 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
  * refused and left pending, so a pass under a repaired registry can still raise it. When the
  * escalation delay cannot be resolved, no escalation is scheduled — fail closed — and the refusal
  * is reported; a later pass under a readable chain schedules it from the original failure time.
+ *
+ * `lockWaitMs: 0` makes the pass non-blocking: a key another live holder keeps is reported as
+ * `deferred` and left to a later pass, so a scheduler tick never waits on a busy message.
  */
-export function escalateDue(ctx: EscalationContext, options: { at?: Date } = {}): EscalationReport {
+export function escalateDue(
+  ctx: EscalationContext,
+  options: { at?: Date; lockWaitMs?: number } = {},
+): EscalationReport {
   const at = options.at ?? ctx.now();
   const atIso = at.toISOString();
-  const report: EscalationReport = { escalated: [], refused: [], unreadable: [], scanned: 0 };
+  const lockWaitMs = options.lockWaitMs ?? 10_000;
+  const report: EscalationReport = { escalated: [], refused: [], deferred: [], unreadable: [], scanned: 0 };
 
   for (const found of markersUnder(ctx.root)) {
     if (found.kind === 'unreadable') {
@@ -570,8 +580,14 @@ export function escalateDue(ctx: EscalationContext, options: { at?: Date } = {})
     const { recipient, messageId } = found.marker;
     let step: EscalationStep;
     try {
-      step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso));
+      step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso), lockWaitMs);
     } catch (error) {
+      if (error instanceof LockBusyError) {
+        // A live holder is working this episode: ordinary contention. Leave it to the next pass,
+        // keep the other markers moving, and record no refusal and no event for it.
+        report.deferred.push({ messageId, recipient });
+        continue;
+      }
       step = { kind: 'refused', reason: errorMessage(error) };
     }
     if (step.kind === 'none') continue;
@@ -855,12 +871,19 @@ function verifies(record: SignedEventRecord, home: string): boolean {
   }
 }
 
-/** The lock's directory, unique per canonical episode key, under the project's state store. */
-function withKeyLock<T>(ctx: EscalationContext, recipient: CanonicalRecipient, messageId: string, work: () => T): T {
+/** The lock's directory, unique per canonical episode key, under the project's state store. A
+ *  caller that must not block passes `waitMs: 0`; a live holder then raises `LockBusyError`. */
+function withKeyLock<T>(
+  ctx: EscalationContext,
+  recipient: CanonicalRecipient,
+  messageId: string,
+  work: () => T,
+  waitMs = 10_000,
+): T {
   const storeDir = dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
   const ladder = ensureStoreLadder(storeDir, ctx.home);
   if (ladder !== null) throw new Error(ladder);
-  return withLock(join(storeDir, 'locks', `fallback-${episodeHash(recipient, messageId)}`), work, { waitMs: 10_000 });
+  return withLock(join(storeDir, 'locks', `fallback-${episodeHash(recipient, messageId)}`), work, { waitMs });
 }
 
 function errorMessage(error: unknown): string {

@@ -722,12 +722,32 @@ function takeOver(path: string, holder: number): boolean {
   return true;
 }
 
+/** A lock another live holder keeps: the work did not run and may be retried once it is released.
+ *  A scheduler that must not block catches this and defers the work to its next pass. */
+export class LockBusyError extends Error {
+  readonly path: string;
+  readonly holder: number | null;
+  constructor(path: string, holder: number | null) {
+    super(
+      holder === null
+        ? `${path} is held and its holder is not readable yet; try again when it is done`
+        : `another team command (pid ${holder}) holds ${path}; try again when it is done`,
+    );
+    this.name = 'LockBusyError';
+    this.path = path;
+    this.holder = holder;
+  }
+}
+
 // One writer at a time. The lock file holds its holder's pid; a lock whose holder is dead is
-// taken over, and `onStale` is told.
+// taken over, and `onStale` is told. `waitMs: 0` tries once and throws `LockBusyError` at the
+// first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
+// a later tick without blocking its event loop.
 export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
   mkdirSync(dir, { recursive: true });
   const path = join(dir, LOCK_FILE);
-  const deadline = Date.now() + (options.waitMs ?? 5000);
+  const waitMs = options.waitMs ?? 5000;
+  const deadline = Date.now() + waitMs;
   for (;;) {
     try {
       const fd = openSync(path, 'wx');
@@ -743,12 +763,13 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
         continue; // released between the two calls
       }
       if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
-        if (Date.now() > deadline) throw new Error(`another team command (pid ${holder}) holds ${path}; try again when it is done`);
+        if (waitMs === 0 || Date.now() > deadline) throw new LockBusyError(path, holder);
         pause(50);
         continue;
       }
       // A dead holder, or a lock file too young to hold its pid yet.
       if (!Number.isInteger(holder) && Date.now() - statSync(path).mtimeMs < 1000) {
+        if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
       }

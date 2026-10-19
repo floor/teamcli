@@ -1,23 +1,38 @@
 // The daemon fallback sweep's focused fixtures: the heartbeat's one pass fires an episode exactly
 // at its durable due instant (never before, never twice), leaves one event and one mailbox, a
 // restart resumes from the marker alone, a delivery before the due instant cancels the
-// escalation, a root whose team file does not validate is refused and swept nothing, and close
-// stops the sweep with the heartbeat. Every home is a synthetic tmp directory.
+// escalation, a root whose team file does not validate is refused and swept nothing, a key lock
+// another holder keeps defers the episode to a later tick instead of stalling the heartbeat, and
+// close stops the sweep with the heartbeat. Every home is a synthetic tmp directory.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
 import { messageFile } from '../src/commands/messages.ts';
 import { sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
+import { probeDaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
+import { daemonLogPath } from '../src/daemon/paths.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   escalatedRecordId,
   escalationMailboxId,
+  fallbackKeyOf,
   markerPathOf,
   noteTransport,
   type CanonicalRecipient,
@@ -25,6 +40,8 @@ import {
   type FallbackMarker,
   type TransportFact,
 } from '../src/send/fallback-events.ts';
+import { historyPath } from '../src/send/history.ts';
+import { LOCK_FILE } from '../src/state.ts';
 
 const TEAM_YAML = `format: 1
 entity: floor
@@ -168,6 +185,60 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   throw new Error('the condition did not hold before the deadline');
 }
 
+function escalationEvents(world: World, messageId = 'm-001') {
+  return verifiedEvents(world).filter((event) => event.payload.record_id === escalatedRecordId(world.recipient, messageId));
+}
+
+function daemonLog(world: World): string {
+  const path = daemonLogPath(world.home);
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+}
+
+function countOf(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+/** The module's key-lock directory for one episode: `fallback-<16 hex of the canonical key>`.
+ *  A fixture that holds this lock must hold the same one `escalateDue` takes; if the derivation
+ *  drifts the episode escalates while "held" and the test fails loudly. */
+function episodeLockDir(world: World, messageId = 'm-001'): string {
+  const digest = createHash('sha256').update(fallbackKeyOf(world.recipient, messageId)).digest('hex').slice(0, 16);
+  return join(dirname(historyPath(world.team.project, world.root, world.home)), 'locks', `fallback-${digest}`);
+}
+
+/** A real second process that takes the episode's key lock and holds it until the fixture says
+ *  release. It reports readiness from inside the lock, so the test's first daemon tick always
+ *  meets a live holder. */
+const HOLDER_SOURCE = (stateModule: string): string => `import { existsSync, writeFileSync } from 'node:fs';
+import { withLock } from ${JSON.stringify(stateModule)};
+
+const [lockDir, readyPath, releasePath] = process.argv.slice(2);
+withLock(
+  lockDir,
+  () => {
+    writeFileSync(readyPath, 'held\\n');
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(releasePath) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  },
+  { waitMs: 5_000 },
+);
+`;
+
+function holdEpisodeLock(world: World): { readyPath: string; releasePath: string; exit: Promise<number> } {
+  const base = dirname(world.root);
+  const scriptPath = join(base, 'hold-fallback-lock.ts');
+  const readyPath = join(base, 'holder.ready');
+  const releasePath = join(base, 'holder.release');
+  writeFileSync(scriptPath, HOLDER_SOURCE(join(import.meta.dir, '..', 'src', 'state.ts')));
+  const proc = Bun.spawn([process.execPath, scriptPath, episodeLockDir(world), readyPath, releasePath], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+  });
+  return { readyPath, releasePath, exit: proc.exited };
+}
+
 describe('the daemon fallback sweep', () => {
   test('fires once at the durable due instant, with one event and one mailbox', () => {
     const world = makeWorld();
@@ -290,5 +361,83 @@ describe('the daemon fallback sweep', () => {
     const marker = readMarker(world, 'm-002');
     expect(marker.dueAt).toBe(new Date(Date.parse(due) + 300_000).toISOString());
     expect(marker.escalatedAt).toBeUndefined();
+  });
+
+  test('a key lock another live holder keeps defers the episode, never waits on it', () => {
+    const world = makeWorld();
+    const first = noteTransport(world.ctx, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+    const due = new Date(Date.parse(first.dueAt!)).toISOString();
+
+    const lockDir = episodeLockDir(world);
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, LOCK_FILE), `${String(process.pid)}\n`);
+    const began = Date.now();
+    const busy = sweepAt(world, due);
+    expect(Date.now() - began).toBeLessThan(1_000);
+    expect(busy.why).toBeNull();
+    expect(busy.report!.deferred).toHaveLength(1);
+    expect(busy.report!.deferred[0]!.messageId).toBe('m-001');
+    expect(busy.report!.escalated).toHaveLength(0);
+    expect(busy.report!.refused).toHaveLength(0);
+    expect(mailboxCount(world)).toBe(0);
+    expect(readMarker(world).escalatedAt).toBeUndefined();
+
+    // The holder is done: the next pass fires the same episode exactly once.
+    unlinkSync(join(lockDir, LOCK_FILE));
+    const freed = sweepAt(world, due);
+    expect(freed.report!.deferred).toHaveLength(0);
+    expect(freed.report!.escalated).toHaveLength(1);
+    expect(freed.report!.escalated[0]!.event.payload.record_id).toBe(escalatedRecordId(world.recipient, 'm-001'));
+    expect(mailboxCount(world)).toBe(1);
+  });
+
+  test('a lock held by another process defers the escalation without stalling the heartbeat', async () => {
+    const world = makeWorld();
+    const failedAt = new Date(Date.now() - 301_000).toISOString();
+    const first = noteTransport(world.ctx, fact(world, { at: failedAt }));
+    if (!first.ok) throw new Error(first.reason);
+
+    const holder = holdEpisodeLock(world);
+    await waitFor(() => existsSync(holder.readyPath), 5_000);
+
+    const started = await startMachineDaemon({
+      home: world.home,
+      roots: [world.root],
+      version: '0.5.3-fallback-sweep-hold-test',
+      heartbeatMs: 10,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // Health answers and the heartbeat keeps moving while the message lock is held: with a
+      // blocking lock wait this probe would time out behind it.
+      const probe = await probeDaemonHealth(started.daemon.socketPath);
+      expect(probe.kind).toBe('answered');
+      const firstBeat = started.daemon.health().heartbeatAt;
+      await waitFor(() => started.daemon.health().heartbeatAt !== firstBeat, 1_000);
+
+      expect(mailboxCount(world)).toBe(0);
+      expect(escalationEvents(world)).toHaveLength(0);
+      expect(readMarker(world).escalatedAt).toBeUndefined();
+      // Ordinary contention is deferred quietly: no refusal and no sweep line.
+      expect(daemonLog(world)).not.toContain('fallback sweep');
+
+      // Releasing the lock lets a later existing tick fire the escalation exactly once.
+      writeFileSync(holder.releasePath, 'release\n');
+      await holder.exit;
+      await waitFor(() => mailboxCount(world) === 1, 5_000);
+      expect(escalationEvents(world)).toHaveLength(1);
+      expect(readMarker(world).escalatedAt).not.toBeUndefined();
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(mailboxCount(world)).toBe(1);
+      expect(escalationEvents(world)).toHaveLength(1);
+      expect(countOf(daemonLog(world), 'escalated 1')).toBe(1);
+    } finally {
+      writeFileSync(holder.releasePath, 'release\n');
+      await holder.exit.catch(() => 0);
+      await started.daemon.close();
+    }
   });
 });
