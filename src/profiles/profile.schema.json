@@ -88,7 +88,7 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "minItems": 1,
-          "description": "arguments appended to the launch line; {seat}, {session}, {command} and {entry} are filled from the launch"
+          "description": "arguments appended to the launch line; {seat}, {session}, {command} and {entry} are filled from the launch, and {file_args} is the server's --file pair as array elements when the launch named the team file, nothing otherwise"
         },
         "add": {
           "type": "array",

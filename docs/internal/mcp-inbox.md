@@ -25,9 +25,9 @@ Every row was measured on this machine on 2026-10-18 with the binary's own `--ve
 A route the launch line carries writes no file. A route that is a file is written in the seat's
 own folder, before the launch command runs, so the client starts with the server in place. The
 team the registration serves is the team file the launch read, passed to the registration; a
-file route names that path to the server (`--file <path>`), because a seat whose folder is a
-lobby has no team file of its own. With no launch file the registration reads the folder's own
-team file, as the server does.
+file route runs `mcp add ... --file <path>`, and a launch-line route puts the same pair in the
+server arguments it configures, because a seat whose folder is a lobby has no team file of its
+own. With no launch file the registration reads the folder's own team file, as the server does.
 
 ## What launch writes, and where it refuses
 

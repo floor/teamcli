@@ -19,7 +19,8 @@ proves a read of a record the server authenticated.
 
 A seat's launch registers the server with its CLI where a run measured a route. A codex seat's
 launch line carries the registration itself — two `-c` values naming the server and this
-install's runner, and no file written into the seat's folder. A gemini or grok seat's launch
+install's runner, and no file written into the seat's folder; the team file the launch read is
+named there too, in the server's own arguments. A gemini or grok seat's launch
 runs that CLI's own `mcp add -s project` in the seat's folder, naming the same runner, and the
 file the command writes is the CLI's own project settings (`.gemini/settings.json`,
 `.grok/config.toml`). A cursor seat's launch merges the server into the seat's own

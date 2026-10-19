@@ -31,7 +31,7 @@ describe('Codex launch and captured screens', () => {
         '-c',
         'mcp_servers.team_inbox.command="{command}"',
         '-c',
-        'mcp_servers.team_inbox.args=["{entry}","mcp","serve","--seat","{seat}"]',
+        'mcp_servers.team_inbox.args=["{entry}","mcp","serve","--seat","{seat}"{file_args}]',
       ],
       add: null,
       target: null,
@@ -49,6 +49,41 @@ describe('Codex launch and captured screens', () => {
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
       + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper"]\'',
     );
+  });
+  test('a launch that read a team file names it to the server, inside the -c array', () => {
+    expect(
+      launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, {
+        seat: 'helper',
+        session: 'acme',
+        command: '/opt/bun',
+        entry: '/src/cli.ts',
+        file: '/tmp/my project/.agents/team.yaml',
+      }),
+    ).toBe(
+      'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen'
+      + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
+      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--file","/tmp/my project/.agents/team.yaml"]\'',
+    );
+  });
+  test('a plan for a seat in a lobby carries the team file onto the codex launch line', () => {
+    const plan = upPlan({
+      root: '/tmp/acme', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+      teamFile: '/tmp/acme/.agents/team.yaml',
+      seats: [{
+        name: 'coder',
+        cli: 'codex',
+        launch: 'codex',
+        cwd: '/tmp/team-lobbies/teamcli',
+        label: 'coder',
+        stopped: false,
+        rules: 'Rules.',
+        repairLine: '`team remove coder --keep` then `team add coder`',
+      }],
+    });
+    const launch = plan.find((step) => step.do?.do === 'launch');
+    expect(launch?.do).toMatchObject({ do: 'launch', seat: 'coder', teamFile: '/tmp/acme/.agents/team.yaml' });
+    const command = launch?.kind === 'run' ? launch.argv.at(-1) ?? '' : '';
+    expect(command).toContain('"--file","/tmp/acme/.agents/team.yaml"');
   });
   test.each([
     ['idle', 'idle'], ['unsent', 'unsent'], ['working', 'working'],
