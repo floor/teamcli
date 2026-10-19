@@ -134,6 +134,74 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       await started.daemon.close();
     }
   });
+
+  test('malformed, non-object and oversized request lines keep their refusal bytes', async () => {
+    const { root, home } = scratch();
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 10_000,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      const machine = daemonSocketPath(home);
+      const refusal = (message: string): Record<string, unknown> => ({
+        v: 1,
+        id: '',
+        ok: false,
+        error: { code: 'daemon.bad-frame', message },
+      });
+      expect(await request(machine, 'this is not json')).toEqual(refusal('the request line is not JSON'));
+      expect(await request(machine, '42')).toEqual(refusal('the request is not a JSON object'));
+      // The frame limit counts the newline: 65,536 buffered characters pass the frame check and
+      // are refused by the protocol parser as a non-JSON line.
+      expect(await request(machine, 'x'.repeat(65_535))).toEqual(refusal('the request line is not JSON'));
+      // One character more is over the limit and refused before the newline search.
+      expect(await request(machine, 'x'.repeat(65_536))).toEqual(refusal('the request line exceeds the frame limit'));
+    } finally {
+      await started.daemon.close();
+    }
+  });
+
+  test('a caller field stays untrusted, and close destroys an idle connection', async () => {
+    const { root, home } = scratch();
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 10_000,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    const machine = daemonSocketPath(home);
+    const { connect } = await import('node:net');
+    const idle = connect({ path: machine });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        idle.on('error', reject);
+        idle.on('connect', () => resolve());
+      });
+      const forged = await request(
+        machine,
+        JSON.stringify({ v: 1, id: 'h1', op: 'health', scope: { seat: 'forged' }, caller: { seat: 'forged' } }),
+      );
+      expect(forged).toMatchObject({ v: 1, id: 'h1', ok: true });
+      expect(JSON.stringify(forged)).not.toContain('forged');
+      const closed = new Promise<boolean>((resolve) => {
+        idle.on('close', () => resolve(true));
+        setTimeout(() => resolve(false), 500);
+      });
+      await started.daemon.close();
+      expect(await closed).toBe(true);
+    } finally {
+      await started.daemon.close();
+      idle.destroy();
+    }
+  });
 });
 
 describe('the service adapter writes and registers one user unit, neutrally', () => {
