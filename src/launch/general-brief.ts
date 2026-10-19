@@ -43,6 +43,15 @@ export const GENERAL_BRIEF_RULE = 'the launch delivers it to every seat of its t
  *  no one to reach, and `team reply` says so rather than writing to a seat that does not exist. */
 export const GENERAL_BRIEF_FROM = 'the launch';
 
+/**
+ * Whether a verified record is the launch's general seat brief. A brief's read is bound to the
+ * seat's current claim, so only the seat's own readers (`team drops --read`, `inbox_read`) serve
+ * one; the checkout-wide `team messages` mailbox uses this to skip it before its manual gate.
+ */
+export function isGeneralBriefRecord(payload: Pick<RecordPayload, 'from' | 'rule'>): boolean {
+  return payload.from === GENERAL_BRIEF_FROM && payload.rule === GENERAL_BRIEF_RULE;
+}
+
 const BRIEF_SHA256 = /^[0-9a-f]{64}$/;
 
 /**

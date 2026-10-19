@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvents } from '../src/bus/log.ts';
 import { findRoot } from '../src/file/load.ts';
 import { messageFile, plantMessage, plantRecord, receiptFile, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
+import { generalBriefRecord } from '../src/launch/general-brief.ts';
 import { listUnread, readMessage } from '../src/mcp/inbox.ts';
-import { receiptFile as recordReceiptFile, signReceiptPayload, statusOf, writeReceipt } from '../src/send/record.ts';
+import { receiptFile as recordReceiptFile, signReceiptPayload, signRecord, statusOf, writeReceipt, writeRecord } from '../src/send/record.ts';
 import { keyFingerprint, keyOf, MESSAGE_DOMAIN, messageKeyOf, messageKeyPath, messageKeyState, signDomain } from '../src/store/keys.ts';
 import { MESSAGES_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { testIo } from './helpers.ts';
@@ -786,5 +787,131 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     // One signed read receipt stands, it verifies, and no publisher's temp is left behind.
     expect(statusOf(scene.dropDir, ID, scene.context, messageKey())).toBe('read');
     expect(readdirSync(scene.dropDir).filter((name) => name.endsWith('.new'))).toEqual([]);
+  });
+
+  // A general seat brief is waiting for the seat's own turn-start reader: its receipt is bound to
+  // the seat's current claim, so this checkout-wide reading skips it rather than spend the id.
+  /** One signed general seat brief waiting in `seat`'s drop folder, at the pinned instant. */
+  function plantBrief(found: string, seat: string): ReturnType<typeof generalBriefRecord> {
+    const brief = generalBriefRecord({
+      to: seat,
+      root: found,
+      session: 'acme',
+      at: NOW.toISOString(),
+      incarnation: 'inc_aaaaaaaaaaaa',
+    });
+    const written = writeRecord(recordDir(found, 'acme', seat), signRecord(brief, home));
+    if (!written.ok) throw new Error(written.reason);
+    return brief;
+  }
+
+  test('a waiting general seat brief is skipped, and the ordinary record beside it is served', async () => {
+    project();
+    const found = findRoot(root);
+    if (!found) throw new Error('not a checkout');
+    plantRecord(home, found, 'acme', 'lead', 'm1', BODY, { from: 'harness', at: '2026-10-04T09:00:00.000Z' });
+    const brief = plantBrief(found, 'worker');
+    const workerDrop = recordDir(found, 'acme', 'worker');
+
+    const result = await run();
+    expect(result.code).toBe(0);
+    expect(result.err).toBe('');
+    expect(result.out).toContain(`lead/m1:\n${BODY}`);
+    expect(result.out).toContain(
+      "note: worker: the general seat brief is not shown here; the seat's own turn-start reader serves it.",
+    );
+    expect(result.out).not.toContain(brief.id);
+    expect(result.out).not.toContain('admitted by:');
+    expect(result.out.endsWith('1 message\n')).toBe(true);
+
+    // The ordinary record's receipt stands; the brief's id is still waiting for its own reader.
+    expect(statusOf(recordDir(found, 'acme', 'lead'), 'm1', { to: 'lead', root: found, session: 'acme' }, messageKey())).toBe('read');
+    expect(existsSync(recordReceiptFile(workerDrop, brief.id, 'read'))).toBe(false);
+    expect(listUnread(workerDrop, { to: 'worker', root: found, session: 'acme' }, home).map((message) => message.id)).toEqual([brief.id]);
+  });
+
+  test('a mailbox holding only a general seat brief reads zero messages and names the seat', async () => {
+    project();
+    const found = findRoot(root);
+    if (!found) throw new Error('not a checkout');
+    plantBrief(found, 'worker');
+
+    const result = await run();
+    expect(result).toEqual({
+      code: 0,
+      out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\n' +
+        "note: worker: the general seat brief is not shown here; the seat's own turn-start reader serves it.\n\n" +
+        '0 messages\n',
+      err: '',
+    });
+
+    const json = await runJson();
+    expect(json.code).toBe(0);
+    expect(json.err).toBe('');
+    const doc = assertMatchesOutputSchema<MessagesDoc>(json.out, MESSAGES_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      format: 1,
+      project: 'acme',
+      session: 'acme',
+      rows: [],
+      notes: ["worker: the general seat brief is not shown here; the seat's own turn-start reader serves it."],
+      differences: [],
+      summary: { differences: 0, owner_differences: 0 },
+      counts: { messages: 0, shown: 0, refused: 0 },
+    });
+  });
+
+  test('a general seat brief that does not verify is refused before the skip', async () => {
+    project();
+    const found = findRoot(root);
+    if (!found) throw new Error('not a checkout');
+    const brief = generalBriefRecord({
+      to: 'worker',
+      root: found,
+      session: 'acme',
+      at: NOW.toISOString(),
+      incarnation: 'inc_bbbbbbbbbbbb',
+    });
+    // The message key exists, so the run reaches verification; the signature is the approval key's.
+    messageKeyOf(home);
+    const written = writeRecord(recordDir(found, 'acme', 'worker'), {
+      payload: brief,
+      signature: signDomain(MESSAGE_DOMAIN, brief, keyOf(home)),
+    });
+    if (!written.ok) throw new Error(written.reason);
+
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.err).toBe('');
+    expect(result.out).toContain(`worker/${brief.id}`);
+    expect(result.out).toContain("the signature is not the message key's");
+    expect(result.out).not.toContain('the general seat brief is not shown here');
+    expect(result.out).not.toContain('admitted by:');
+    expect(existsSync(recordReceiptFile(recordDir(found, 'acme', 'worker'), brief.id, 'read'))).toBe(false);
+  });
+
+  test('a general seat brief already served leaves the zero-message reading unchanged', async () => {
+    project();
+    const found = findRoot(root);
+    if (!found) throw new Error('not a checkout');
+    const brief = plantBrief(found, 'worker');
+    const workerDrop = recordDir(found, 'acme', 'worker');
+    const served = writeReceipt(workerDrop, signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: brief.id,
+      to: 'worker',
+      root: found,
+      session: 'acme',
+      at: '2026-10-04T09:01:00.000Z',
+    }, home), home);
+    expect(served.ok).toBe(true);
+
+    expect(await run()).toEqual({
+      code: 0,
+      out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n',
+      err: '',
+    });
+    expect(existsSync(recordReceiptFile(workerDrop, brief.id, 'read'))).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientMessages } from '../client/inbox.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
+import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
 import {
@@ -702,11 +703,13 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   /** Older-store messages, whose body prints first and whose receipt is written after stdout. */
   const legacyShown: Candidate[] = [];
   const differences: OutputDifference[] = [];
+  /** Seats whose waiting general seat brief this mailbox does not serve, in first-seen order. */
+  const briefSeats: string[] = [];
   for (const candidate of waiting) {
     const result = problemOf(candidate, root, session, state.key);
-    const parsedLike = candidate.store === 'record'
-      ? (signedRecordOf(readJson(candidate.path))?.payload ?? null)
-      : messagePayload(readJson(candidate.path));
+    const recordPayload =
+      candidate.store === 'record' ? (signedRecordOf(readJson(candidate.path))?.payload ?? null) : null;
+    const parsedLike = candidate.store === 'record' ? recordPayload : messagePayload(readJson(candidate.path));
     if ('text' in result) {
       rows.push({
         id: candidate.id,
@@ -731,6 +734,12 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         object: { id: candidate.id, seat: candidate.seat, path: mailboxPath(candidate) },
         now,
       });
+      continue;
+    }
+    if (recordPayload !== null && isGeneralBriefRecord(recordPayload)) {
+      // A brief's read is bound to the seat's current claim and belongs to the seat's own reader.
+      // This checkout-wide mailbox writes no receipt for one, so the seat's reader still serves it.
+      if (!briefSeats.includes(candidate.seat)) briefSeats.push(candidate.seat);
       continue;
     }
     if (candidate.store === 'record') {
@@ -768,6 +777,9 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     shownBodies.push({ candidate, body: result.body });
     if (candidate.store === 'legacy') legacyShown.push(candidate);
   }
+  const notes = briefSeats.map(
+    (seat) => `${seat}: the general seat brief is not shown here; the seat's own turn-start reader serves it.`,
+  );
   if (json) {
     writeJson(io, 'team.messages', {
       format: 1 as const,
@@ -785,7 +797,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
           ...(body !== undefined ? { body } : {}),
         };
       }),
-      notes: [],
+      notes,
       differences: differences.map(toJsonDifference),
       // The envelope's `summary` is the reading's difference counts, the stable key every reading
       // envelope carries; the table's own counts live beside it under `counts`.
@@ -797,7 +809,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       },
     });
   } else {
-    io.stdout(renderMailbox(loaded.team.project, session, rows, shownBodies, differences, [], ttyStyle(io), naming));
+    io.stdout(renderMailbox(loaded.team.project, session, rows, shownBodies, differences, notes, ttyStyle(io), naming));
   }
   // The older store keeps its original order: its body printed first, so its receipt is written
   // after stdout returns. Transport-tree records published and flushed theirs before the body.

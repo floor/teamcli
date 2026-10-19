@@ -113,9 +113,10 @@ the brief's sha256, the incarnation, the runtime epoch, the attempt and the stag
 ### The receipt
 
 Lives beside the record at `.agents/messages/<seat>/<id>.read.json`, written by `team messages`
-only once the body has been displayed; signed under the receipt domain with the same message key,
-never the approval key. A record that does not verify shows nothing and writes nothing. Fields
-(`src/commands/messages.ts`):
+only once the body has been displayed — never for a general seat brief, whose read only
+`inbox_read` or `team drops --read` writes under the claim (see below); signed under the receipt
+domain with the same message key, never the approval key. A record that does not verify shows
+nothing and writes nothing. Fields (`src/commands/messages.ts`):
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|

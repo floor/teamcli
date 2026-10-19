@@ -62,6 +62,18 @@ that does not verify for this message is not proof the content went unserved —
 that happened, so it is preserved and the record is a `refused` row with no body, and the
 difference tells the caller to inspect the file rather than remove it. A link, a FIFO or a folder
 at either name is refused the same way.
+
+A waiting general seat brief is not a message this mailbox serves. Its read is bound to the seat's
+current claim — the incarnation, the delivered digest and the runtime epoch — so only the seat's
+own readers write that receipt, `team drops --read` and the inbox's `inbox_read`. The run verifies
+the record like any other, then skips it: no row, no body, no receipt, and no claim or state read.
+One note names each seat it skipped — `<seat>: the general seat brief is not shown here; the
+seat's own turn-start reader serves it.` — in the text reading and in `notes` under `--json`. The
+skip comes after verification, so a brief that does not verify is still a refused row with its
+difference and its `record.invalid` event. The counts stay `messages = shown + refused`: a skipped
+brief is in neither. A brief that already has a receipt is skipped by the waiting filter before
+this point, and no receipt is ever rewritten.
+
 The second run, once every waiting record has a receipt, prints the zero-message reading: the
 table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
