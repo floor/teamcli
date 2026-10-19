@@ -837,6 +837,87 @@ export const ISSUES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team sessions` (`schema/sessions.schema.json`). */
+export const SESSIONS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.sessions',
+  fileName: 'sessions.schema.json',
+  title: 'team sessions --json output',
+  required: ['format', 'by', 'seat', 'sessions'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    by: { type: ['string', 'null'], enum: ['model', 'team', 'entity', null] },
+    seat: { type: ['string', 'null'] },
+    sessions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'seat', 'team', 'project', 'cli', 'lab', 'account', 'herdr_session', 'started', 'ended', 'reason'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          seat: { type: 'string', minLength: 1 },
+          nickname: { type: 'string', minLength: 1 },
+          team: { type: 'string', minLength: 1 },
+          project: { type: 'string', minLength: 1 },
+          entity: { type: 'string', minLength: 1 },
+          cli: { type: 'string', minLength: 1 },
+          lab: { type: 'string', minLength: 1 },
+          model: { type: 'string', minLength: 1 },
+          version: { type: 'string', minLength: 1 },
+          effort: { type: 'string', minLength: 1 },
+          account: { type: 'string', minLength: 1 },
+          herdr_session: { type: 'string', minLength: 1 },
+          pane: { type: 'string', minLength: 1 },
+          workspace: { type: 'string', minLength: 1 },
+          cli_session: { type: 'string', minLength: 1 },
+          resumable: { type: 'boolean' },
+          resume_until: { type: 'string', minLength: 1 },
+          handover: { type: 'string', minLength: 1 },
+          previous: { type: 'string', minLength: 1 },
+          next: { type: 'string', minLength: 1 },
+          started: { type: 'string', minLength: 1 },
+          ended: { type: ['string', 'null'] },
+          reason: {
+            type: ['string', 'null'],
+            enum: ['swap', 'restart', 'crash', 'owner-stop', 'quota', null],
+          },
+          note: { type: 'string', minLength: 1 },
+          tokens: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['source'],
+            properties: {
+              in: { type: 'integer', minimum: 0 },
+              out: { type: 'integer', minimum: 0 },
+              cached: { type: 'integer', minimum: 0 },
+              source: { type: 'string', enum: ['measured', 'estimated'] },
+            },
+          },
+          cost: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['amount', 'currency', 'source'],
+            properties: {
+              amount: { type: 'number', minimum: 0 },
+              currency: { type: 'string', minLength: 1 },
+              source: { type: 'string', enum: ['measured', 'estimated'] },
+            },
+          },
+          links: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              commits: { type: 'array', items: { type: 'string', minLength: 1 } },
+              prs: { type: 'array', items: { type: 'string', minLength: 1 } },
+              releases: { type: 'array', items: { type: 'string', minLength: 1 } },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team plan` (`schema/plan.schema.json`). */
 export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.plan',
@@ -1853,6 +1934,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   RELEASE_OUTPUT_SCHEMA,
   POLICY_OUTPUT_SCHEMA,
   ISSUES_OUTPUT_SCHEMA,
+  SESSIONS_OUTPUT_SCHEMA,
   FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,

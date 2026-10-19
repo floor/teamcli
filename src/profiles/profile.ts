@@ -1,4 +1,5 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
@@ -200,6 +201,48 @@ export function supportsCliHook(cli: string): boolean {
  */
 export function supportsSessionName(cli: string): boolean {
   return cli === 'claude-code';
+}
+
+/** True when the CLI takes the session id on its launch line, so TeamCLI sets it rather than
+ *  reading the CLI's own session files afterwards. Measured from `claude --help` on 2.1.303:
+ *
+ *      --session-id <uuid>                   Use a specific session ID for the conversation
+ *                                            (must be a valid UUID)
+ */
+export function supportsSessionId(cli: string): boolean {
+  return cli === 'claude-code';
+}
+
+/** True when the CLI keeps its sessions to resume by id, which is what makes a session's id
+ *  worth recording. Measured from `claude --help` on 2.1.303:
+ *
+ *      -r, --resume [value]                  Resume a conversation - provide a session ID
+ *                                            or interactively select a conversation
+ */
+export function supportsSessionResume(cli: string): boolean {
+  return cli === 'claude-code';
+}
+
+/** The session id a launch line already names with `--session-id`, if it names one. */
+export function launchSessionId(command: string): string | undefined {
+  const match = /(?:^|\s)--session-id(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$)/.exec(command);
+  return match?.[1];
+}
+
+/**
+ * The command a pane runs, with the session id TeamCLI sets where the CLI takes one. The id is
+ * appended after every other argument, so the plan (`team up --dry-run`, `team add`) keeps the
+ * deterministic line it had and each launch gets its own id. A line that already names a session
+ * id, resumes one (`--resume`/`-r`) or continues one (`--continue`/`-c`) is left as it is: the
+ * id it names is the one recorded, and a resumed conversation is not a new session.
+ */
+export function withLaunchSession(cli: string, command: string): { command: string; sessionId?: string } {
+  if (!supportsSessionId(cli)) return { command };
+  const named = launchSessionId(command);
+  if (named !== undefined) return { command, sessionId: named };
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return { command };
+  const sessionId = randomUUID();
+  return { command: `${command} --session-id ${sessionId}`, sessionId };
 }
 
 /** True when the CLI accepts an effort override flag on its launch line. */

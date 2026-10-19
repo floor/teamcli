@@ -36,6 +36,7 @@ import { deliverGeneralBrief } from '../../src/launch/general-brief.ts';
 import { signRecord } from '../../src/send/record.ts';
 import { runList } from '../../src/commands/list.ts';
 import { runSeats } from '../../src/commands/seats.ts';
+import { runSessions } from '../../src/commands/sessions.ts';
 import { runStatus } from '../../src/commands/status.ts';
 import { runUp } from '../../src/commands/up.ts';
 import { runMessages } from '../../src/commands/messages.ts';
@@ -111,6 +112,60 @@ function normalize(text: string, page: { fixture: Fixture }): string {
     .replace(/^(\s+)[0-9a-f]{7,40} /gm, '$1<sha> ');
 }
 
+/**
+ * The session registry the page declares: one `start` event per record and, when the record
+ * names an `ended`, its `end` event — the two lines the launch and stop commands append. The
+ * seat's cli, lab, model, version and account come from the team file; a field the page names
+ * replaces it.
+ */
+function seedSessions(page: Page): void {
+  const team = page.team;
+  if (team === null) throw new Error('fixture: sessions needs a team file');
+  const file = join(storePath(team.project, page.fixture.root, page.fixture.home), 'sessions.jsonl');
+  mkdirSync(dirname(file), { recursive: true });
+  const lines: string[] = [];
+  page.spec.sessions.forEach((one, index) => {
+    const seat = team.seats.find((candidate) => candidate.name === one.seat);
+    if (!seat) throw new Error(`fixture: sessions[${String(index)}] names no seat of the file`);
+    const id = one.id ?? `ses_${(index + 1).toString(16).padStart(12, '0')}`;
+    const model = one.model ?? seat.model;
+    const version = one.version ?? seat.version;
+    const effort = one.effort ?? seat.effort;
+    lines.push(JSON.stringify({
+      event: 'start',
+      ts: one.started,
+      id,
+      ...(team.entity === null ? {} : { entity: team.entity }),
+      project: team.inProject ?? team.project,
+      team: team.project,
+      seat: seat.name,
+      ...(seat.nickname === undefined ? {} : { nickname: seat.nickname }),
+      cli: seat.cli,
+      lab: seat.vendor,
+      ...(model ? { model } : {}),
+      ...(version ? { version } : {}),
+      ...(effort ? { effort } : {}),
+      account: seat.account ?? seat.vendor,
+      herdr_session: page.session,
+      ...(one.pane === undefined ? {} : { pane: one.pane }),
+      ...(one.workspace === undefined ? {} : { workspace: one.workspace }),
+      ...(one.cli_session === undefined ? {} : { cli_session: one.cli_session, resumable: true }),
+    }));
+    if (one.ended !== undefined) {
+      lines.push(JSON.stringify({
+        event: 'end',
+        ts: one.ended,
+        id,
+        reason: one.reason ?? 'owner-stop',
+        ...(one.tokens === undefined ? {} : { tokens: one.tokens }),
+        ...(one.cost === undefined ? {} : { cost: one.cost }),
+        ...(one.links === undefined ? {} : { links: one.links }),
+      }));
+    }
+  });
+  writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o600 });
+}
+
 async function setup(page: Page): Promise<void> {
   const { fixture } = page;
   const loaded = loadTeamFile(fixture.root, { home: fixture.home });
@@ -184,8 +239,11 @@ async function setup(page: Page): Promise<void> {
     });
   }
 
-  if (page.spec.approved && page.team) {
-    const parts: string[] = [];
+  // The session registry a page declares, written into the fixture home's own store before any
+  // example runs — the file `up`, `restart` and `down` append to on a real machine.
+  if (page.spec.sessions.length > 0) seedSessions(page);
+
+  if (page.spec.approved && page.team) {    const parts: string[] = [];
     const io: Io = {
       stdout: (text) => parts.push(text),
       stderr: (text) => parts.push(text),
@@ -324,6 +382,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRelease(rest, io, world.releaseFetch(), world.releaseKeyReader());
     case 'seats':
       return runSeats(rest, io, { ...world.statusSources(), wait: async () => false });
+    case 'sessions':
+      return runSessions(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'status':
       return runStatus(rest, io, world.statusSources());
     case 'list':

@@ -1,7 +1,7 @@
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, versionVerdict } from '../profiles/profile.ts';
+import { profileFor, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -22,6 +22,7 @@ import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
+import type { SessionEndReason } from '../sessions/registry.ts';
 
 export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'provider error' | 'rate limit' | 'unsent' | 'unknown';
 
@@ -139,6 +140,22 @@ export type Host = {
       waiting?: WaitingRecord | null;
       /** How this launch leaves the seat watching for drops (`CliWatcher`). */
       watcher?: CliWatcher;
+    },
+  ): void;
+  /**
+   * A seat's launch command has started in `pane`: the session registry records the session's
+   * start, with the id TeamCLI set where the CLI takes one. Called after the pane run succeeded
+   * and before the seat is counted running; a command that did not run starts no session.
+   */
+  sessionStarted?(
+    seat: string,
+    started: {
+      pane: string;
+      workspace?: string;
+      command: string;
+      cli_session?: string;
+      /** Why the open session this launch replaces ended, when this run closed it on purpose. */
+      replaces?: SessionEndReason;
     },
   ): void;
   /** The seat is really running, so the next seat's ceiling check counts it. */
@@ -852,11 +869,23 @@ export async function executePlan(
           if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
         }
         const here = place(op.seat, op.pane);
-        if (!here || !host.paneRun(session, here.pane, op.command)) {
+        // The session id is minted here, not in the plan: the plan's command stays the
+        // deterministic line a dry run prints, and each launch gets its own id.
+        const launch = withLaunchSession(op.cli ?? '', op.command);
+        if (!here || !host.paneRun(session, here.pane, launch.command)) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
           break;
         }
+        host.sessionStarted?.(op.seat, {
+          pane: here.pane,
+          ...(here.workspace === undefined ? {} : { workspace: here.workspace }),
+          command: launch.command,
+          ...(launch.sessionId === undefined ? {} : { cli_session: launch.sessionId }),
+          // A launch that follows a repair this run made on purpose replaces a session it chose
+          // to close: its record ends as a swap, never as a crash, and the new one links to it.
+          ...(relaunched.get(op.seat) === 'drift' ? { replaces: 'swap' as const } : {}),
+        });
         host.running(op.seat);
         // The watcher is what this run left beside the seat: a hook the map installed, an MCP
         // inbox the launch registered, or nothing. Written even when the launch path had no
