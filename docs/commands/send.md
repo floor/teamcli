@@ -271,12 +271,21 @@ no caller check.
 | the owner | any agent |
 | an orchestrator | an orchestrator of its own team or entity |
 | a team's orchestrator or operator | any seat of its own team |
+| a seat whose line writes `role: operator` | another such seat of its own team |
 | an assistant seat | its entity's main coordinator |
 | any seat | its own team's orchestrator |
 | a caller an owner-signed grant names for `send` | what the grant names |
 
 A team's leads brief its own seats directly; another team's seats are reached through that team's
 orchestrator, or by an owner-signed grant naming the pair.
+
+The operator pair is the one rule that reads a role's word: two seats of one team whose file
+writes `role: operator` on their lines may write to each other, and to each other only. It is not
+the operator place above — that place is a seat the file names, and reaches every seat of its team
+on its own — and the word is no lead, no assistant and no reach anywhere else. The pair never
+crosses teams: another team's operator is reached through that team's orchestrator or a grant. A
+send between them is admitted, written down and logged exactly as any other: the header names the
+rule and the history line lands in the receiving team's store.
 
 An assistant seat is the seat its file marks `assistant: true` — a place in the chain and a
 capability, never a role's name: the entity's assistant is the first mark found walking its teams
@@ -286,9 +295,10 @@ whose files mark none has no assistant for the rule to admit.
 Which seat leads a team — the seat these rules call its orchestrator — is read the same way: the
 lead the file declares, by the `leads: true` mark or the legacy `coordinator:` key a 0.3.5/0.4
 file still writes, carried onto the record's roster line as `leads: true`; a registry written
-before the mark existed is answered from the file. A role word names nothing on its own, in any
+before the mark existed is answered from the file. A role word admits nothing else, in any
 language: a seat called `orchestrator`, or one whose role is written `coordinator`, leads nothing
-without one of those two places.
+without one of those two places — the operator pair above is the one decision a role's own word
+makes.
 
 An owner-signed grant is a record in the owner's grants folder (`~/.config/team/grants/`, the
 same folder the standing create-grants live in), naming the pair it admits and when it stops:
@@ -506,6 +516,24 @@ seats:
     version: "5.5"
     launch: claude --model claude-opus-5-5
     delivery_order: [native, typed]
+
+  - role: operator
+    name: operator-a
+    label: operator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+
+  - role: operator
+    name: operator-b
+    label: operator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
 ```
 
 A plain send walks the default order — the seat's own inbox, then its drop folder, then the
@@ -517,6 +545,17 @@ which a running watch records as one `delivered (read)` history line.
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
 team beacon, session "beacon"
 claude-keeper: sent (unconfirmed) (drop, 0 ms)
+exit 0
+```
+
+Two seats of one team whose lines both write `role: operator` write to each other — the one rule
+a role's own word decides, and it never crosses teams. The send is admitted, delivered and logged
+like any other:
+
+```console caller=operator-a
+$ team send operator-b "the handover is ready" ; echo "exit $?"
+team beacon, session "beacon"
+operator-b: sent (unconfirmed) (drop, 0 ms)
 exit 0
 ```
 
@@ -588,7 +627,9 @@ team beacon, session "beacon"
   claude-keeper  @agamemnon  coordinator  beacon   socket
   gpt-reviewer   -           reviewer     beacon   typed
   claude-scribe  -           implementer  beacon   socket
-3 seats
+  operator-a     -           operator     beacon   socket
+  operator-b     -           operator     beacon   socket
+5 seats
 exit 0
 ```
 
@@ -631,9 +672,27 @@ $ team send --list --json ; echo "exit $?"
       "project": "beacon",
       "reach": "socket",
       "stopped": false
+    },
+    {
+      "name": "operator-a",
+      "nickname": null,
+      "cli": "claude-code",
+      "role": "operator",
+      "project": "beacon",
+      "reach": "socket",
+      "stopped": false
+    },
+    {
+      "name": "operator-b",
+      "nickname": null,
+      "cli": "claude-code",
+      "role": "operator",
+      "project": "beacon",
+      "reach": "socket",
+      "stopped": false
     }
   ],
-  "summary": "3 seats"
+  "summary": "5 seats"
 }
 exit 0
 ```
@@ -648,7 +707,7 @@ A refused send's document carries the structured error, no ids and no reply:
   },
   "error": {
     "id": "send.refused",
-    "message": "refused: nobody: it is not a declared seat; the file's seats are claude-keeper, gpt-reviewer, claude-scribe",
+    "message": "refused: nobody: it is not a declared seat; the file's seats are claude-keeper, gpt-reviewer, claude-scribe, operator-a, operator-b",
     "repair": null
   }
 }
@@ -658,7 +717,7 @@ A name the file does not carry is refused, and the file's seats are named:
 
 ```console
 $ team send nobody "hello" ; echo "exit $?"
-team send: refused: nobody: it is not a declared seat; the file's seats are claude-keeper, gpt-reviewer, claude-scribe
+team send: refused: nobody: it is not a declared seat; the file's seats are claude-keeper, gpt-reviewer, claude-scribe, operator-a, operator-b
 exit 1
 ```
 

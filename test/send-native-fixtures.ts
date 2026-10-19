@@ -21,7 +21,22 @@ export function filed(body: string): string {
 
 export type World = { root: string; dir: string; sockets: string; home: string; cleanup: () => void };
 
-function teamFile(root: string, lobby: string, order: readonly string[]): string {
+/** One more file line, launched as a Claude Code seat: the role word a scene wants to give it. */
+export type ExtraSeat = { name: string; role: string };
+
+function teamFile(root: string, lobby: string, order: readonly string[], extraSeats: readonly ExtraSeat[]): string {
+  const extra = extraSeats
+    .map(
+      (seat) => `  - role: ${seat.role}
+    name: ${seat.name}
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+`,
+    )
+    .join('');
   return `format: 1
 project: acme
 coordinator: lead
@@ -54,7 +69,7 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
-# The team's word is the walk these scenes resolve. The plain-send suites keep the typed trigger:
+${extra}# The team's word is the walk these scenes resolve. The plain-send suites keep the typed trigger:
 # the inbox is tried and skipped for want of a listener, then the line is typed, and the default's
 # drop step stays out. The native suite declares native first, because the handoff is the leg a
 # declared order is what puts in the walk.
@@ -62,7 +77,7 @@ delivery_order: [${order.join(', ')}]
 `;
 }
 
-export function world(order: readonly string[] = ['mcp-inbox', 'typed']): World {
+export function world(order: readonly string[] = ['mcp-inbox', 'typed'], extraSeats: readonly ExtraSeat[] = []): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-native-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
@@ -71,7 +86,7 @@ export function world(order: readonly string[] = ['mcp-inbox', 'typed']): World 
   mkdirSync(sockets, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home), order));
+  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home), order, extraSeats));
   return {
     root,
     dir: join(root, '.agents'),

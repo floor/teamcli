@@ -60,10 +60,12 @@ left the seat's input box, and the pane is not a dialog this command already cla
 (question, permission, trust, vendor notice, provider error, rate limit). A screen that
 is one of those is not reached: the kind and the drop path are named, and nothing
 further is pressed. Who may call it is the registry's decision, default deny: the
-owner; an orchestrator to an orchestrator of its own team or entity; an assistant
-seat to its entity's coordinator; any seat to its own team's orchestrator; or an
-owner-signed grant naming send. The record is signed with the checkout's
-message key, and its payload names the sender and the rule that admitted it. --list sends nothing: it prints
+owner; an orchestrator to an orchestrator of its own team or entity; an orchestrator
+or operator to a seat of its own team; a seat whose role is operator to another such
+seat of its own team; an assistant seat to its entity's coordinator; any seat to its
+own team's orchestrator; or an owner-signed grant naming send. The record is signed
+with the checkout's message key, and its payload names the sender and the rule that
+admitted it. --list sends nothing: it prints
 the file's seats and the seats of the other teams of the same entity, each
 with the project its team sits in — another team's seat reads <seat>@<team> —
 and needs no caller check. --dry-run resolves the seat and the
@@ -2387,7 +2389,9 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
  *  `coordinator:` key a 0.3.5/0.4 file still uses — named it. The receiving team's file is read for
  *  the same reason: its registry roster may have been written before the `leads` capability existed,
  *  so the record alone cannot say who leads it, and a send keyed on the record would refuse a lead
- *  whose file names one. The role is never read on either side.
+ *  whose file names one. A roster line's role word is read only by the operator pair, on both
+ *  sides and from the file's line where it writes one; every other rule reads a place, a
+ *  capability or a grant.
  */
 function admitRecordsOf(home: string, team: TeamFile, teamId: string, target: Target | null): AdmitTeams {
   const records = readTeams(home);
@@ -2408,7 +2412,9 @@ function admitRecordsOf(home: string, team: TeamFile, teamId: string, target: Ta
  *  operator, and the roster — the store's agent lines for the team, with the file's own seats
  *  behind them. A file seat carries `leads` where the file resolved it as the lead (from the
  *  `leads` mark or the legacy `coordinator:` key alike), so the project rules and the lead rule
- *  read the file's own place in the chain, never a role's word. An `entity:` the file names wins;
+ *  read the file's own place in the chain, never a role's word; the one rule that does read a role
+ *  word, the operator pair, gets the word the file writes today on a store line. An `entity:` the
+ *  file names wins;
  *  a file that names none keeps the entity the registry recorded, the precedence the listing and
  *  the nickname scope read — a key left out of the seed never erases a recorded entity. */
 function overlayTeam(home: string, records: AdmitTeams, team: TeamFile, teamId: string): void {
@@ -2418,8 +2424,12 @@ function overlayTeam(home: string, records: AdmitTeams, team: TeamFile, teamId: 
   const roster: AdmitTeam['roster'] = [];
   for (const agent of readAgents(home)) {
     if (agent.lifecycle === 'retired' || agent.reach.team !== teamId) continue;
+    // The file's line is the seat's present word: a role it writes now decides as it writes it,
+    // and the signing role the record was registered under stands only where the file no longer
+    // declares the seat.
+    const line = team.seats.find((seat) => seat.name === agent.reach.seat);
     roster.push({
-      agent: agent.id, seat: agent.reach.seat, role: agent.signing.role,
+      agent: agent.id, seat: agent.reach.seat, role: line?.role ?? agent.signing.role,
       ...(agent.reach.seat === assistantSeat ? { assistant: true } : {}),
     });
   }
