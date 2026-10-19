@@ -5,15 +5,21 @@
 // only that gate: the placement, CLI, record and scope checks stay.
 //
 // The owner's urgent widening (OD-20261019-49) adds a second, narrower admission: while dev mode
-// is `on`, a placed seat that is the team's orchestrator — the file's resolved lead, whether it
+// is `on`, a placed seat that is a team's orchestrator — the file's resolved lead, whether it
 // was spelled by `coordinator:` or by `leads: true` — may run the owner-only authority edits —
 // grant, delegate, revoke, policy set/unset, `check --repair`, `remove --abandon`, `down
 // --abandon`, `broker` and `tempo` — and each admitted run prints the same `dev mode continues`
-// warning and writes the same audit line (the command, the caller, and dev mode's source). Every
-// team's own lead is admitted on its own team's commands, and the main orchestrator on the main
-// team's. The role alone is never the proof: the caller must be placed on its recorded pane in
-// the team's session. Swap guards, load guards, the public-action refusals and every other owner
-// gate are untouched; with dev mode `off` every one of these gates refuses exactly as before.
+// warning and writes the same audit line (the command, the caller, and dev mode's source). The
+// team a lead stands in is found twice: the file the command runs against, in its own session;
+// and, when that file does not name the caller, the main team above it — a registered team whose
+// root strictly contains the target's, whose file names the same entity and makes the caller its
+// orchestrator, in that team's own session. The second is what admits the main orchestrator
+// across teams: it runs a project team's command from the main team's session, where its own
+// approved file and state place it. A lead outside that scope — a sibling team's, another
+// entity's — is no admission. The role alone is never the proof: the caller must be placed on
+// the pane its own team's state records for it, in that team's session. Swap guards, load
+// guards, the public-action refusals and every other owner gate are untouched; with dev mode
+// `off` every one of these gates refuses exactly as before.
 //
 // The environment variable `TEAMCLI_DEV_MODE=1` stays for compatibility and is honoured only
 // while no `dev-mode` value is set anywhere in the chain (`devModeGoverned` false): the
@@ -32,7 +38,7 @@ import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { callerOf, callerVerdict, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
 import { loadTeamFile, findRoot } from './file/load.ts';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import {
   DEV_MODE_OPERATIONS,
   loadAndResolvePolicyChain,
@@ -41,7 +47,7 @@ import {
   type PolicyLoadRefusal,
 } from './policy/index.ts';
 import { byName, ofTeam, projectIdOf } from './registry/projects.ts';
-import { teamIdOf } from './registry/teams.ts';
+import { readTeams, teamIdOf } from './registry/teams.ts';
 
 /** The commands whose caller gate dev mode lifts: the interface's one list (`policy/types.ts`). */
 export const DEV_MODE_COMMANDS = DEV_MODE_OPERATIONS;
@@ -179,17 +185,83 @@ export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}):
   return variableOnly(envSet);
 }
 
-/** The role that admits an owner-only command under dev mode: the team's resolved lead — the
- *  file's `orchestrator`, whether it was spelled by `coordinator:` or by `leads: true`. That is
- *  the team lead of this file; every team's own lead is admitted on its own team's commands, and
- *  the main orchestrator on the main team's. Any other seat, the operator included, is no
- *  admission: the file names exactly one lead, and the registry silently mirrors it, so the
- *  approved file — not a possibly stale derived record — is what the gate reads. */
+/** The role that admits an owner-only command under dev mode: a team's resolved lead — the
+ *  file's `orchestrator`, whether it was spelled by `coordinator:` or by `leads: true`. The
+ *  target team's own file is asked first; a lead the registry places in another team (the main
+ *  orchestrator, above the project teams) is admitted too, because the command it runs may
+ *  belong to any team. Any other seat, the operator included, is no admission: the file names
+ *  exactly one lead, and the registry silently mirrors it, so the approved file — not a possibly
+ *  stale derived record — is what the gate reads. */
 export type DevModeOwnerRole = 'orchestrator';
 
 /** The role `name` holds in this team, or null. */
 export function devModeOwnerRoleOf(name: string, team: TeamFile): DevModeOwnerRole | null {
   return name === team.orchestrator ? 'orchestrator' : null;
+}
+
+/** A proven role: the caller as the team's own session placed it, and the role its file gives it. */
+type DevModeOwnerProof = { role: DevModeOwnerRole; caller: Caller };
+
+/** The target team's own lead, placed in the target team's session. */
+function roleAtTarget(
+  caller: Caller,
+  options: { team: TeamFile; dir: string },
+): DevModeOwnerProof | null {
+  if (caller.kind !== 'seat') return null;
+  const role = devModeOwnerRoleOf(caller.name, options.team);
+  if (role === null) return null;
+  const at = standingOf(options.dir, options.team.session, caller);
+  return callerVerdict(caller, caller.name, at).kind === 'ok' ? { role, caller } : null;
+}
+
+/**
+ * The same proof for the main orchestrator, whose team sits above the target's: a team the
+ * registry holds whose root strictly contains the target root, whose file names the caller its
+ * orchestrator, whose session places the caller, and whose state records the pane it stands on.
+ * The two files must name the same entity, so a lead outside the target's entity is no
+ * admission. This is the route the live repair needs — the main orchestrator runs from the main
+ * team's session, above the project teams whose commands it may run. Every step is a proof the
+ * registry alone cannot give: the placement comes from the walk in that session, the role from
+ * the team's live file, and the pane from the team's own state. A registry or a file that cannot
+ * be read admits nobody, and a name alone never does.
+ */
+function roleElsewhere(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  options: { home?: string; root: string; team: TeamFile },
+): DevModeOwnerProof | null {
+  if (options.home === undefined) return null;
+  let records: ReturnType<typeof readTeams>;
+  try {
+    records = readTeams(options.home);
+  } catch {
+    return null;
+  }
+  for (const record of Object.values(records)) {
+    if (!holds(record.root, options.root)) continue;
+    const placed = callerOf(io, record.session);
+    if (placed.kind !== 'seat' || placed.session !== record.session) continue;
+    let loaded: ReturnType<typeof loadTeamFile>;
+    try {
+      loaded = loadTeamFile(record.root, { home: options.home });
+    } catch {
+      continue;
+    }
+    if (!loaded.ok) continue;
+    if (loaded.team.entity === null || loaded.team.entity !== options.team.entity) continue;
+    const role = devModeOwnerRoleOf(placed.name, loaded.team);
+    if (role === null) continue;
+    const at = standingOf(dirname(loaded.path), record.session, placed);
+    if (callerVerdict(placed, placed.name, at).kind !== 'ok') continue;
+    return { role, caller: placed };
+  }
+  return null;
+}
+
+/** Whether `parent` strictly contains `child`, both resolved: the main team sits in the folder
+ *  that holds the project teams' checkouts. */
+function holds(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 /** The result of asking whether dev mode admits this caller to an owner-only gate. */
@@ -205,11 +277,14 @@ export type DevModeOwnerLift = {
 const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning: null, caller, role: null });
 
 /**
- * Whether dev mode admits `caller` to one owner-only command. The caller must be a placed seat in
- * the team's own session, on the pane the state records for it; its name must be the team's
- * resolved lead; and dev mode must be `on` for the caller's place. The owner is not this path's to admit — the command's own `isOwner` answers first — and
- * a no-terminal or unplaced caller never is. An admitted run logs the same warning the folded
- * caller gate logs, with the command and the caller, and the command prints it to stderr.
+ * Whether dev mode admits a caller to one owner-only command. The caller must be a placed seat:
+ * the target team's orchestrator on the pane the target state records for it in the target
+ * session, or — the main orchestrator's route — a lead of another team the registry holds, on
+ * the pane that team's own state records, in that team's session; and dev mode must be `on` for
+ * the caller's place. The owner is not this path's to admit — the command's own `isOwner`
+ * answers first — and a no-terminal or unplaced caller never is. An admitted run logs the same
+ * warning the folded caller gate logs, with the command and the caller, and the command prints
+ * it to stderr.
  */
 export function devModeOwnerLift(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
@@ -225,7 +300,6 @@ export function devModeOwnerLift(
   },
 ): DevModeOwnerLift {
   const caller = callerOf(io, options.team.session);
-  if (caller.kind !== 'seat') return NO_LIFT(caller);
   const state = devModeState(io, {
     ...(options.home !== undefined ? { home: options.home } : {}),
     team: options.team,
@@ -233,13 +307,11 @@ export function devModeOwnerLift(
     ...(options.now !== undefined ? { now: options.now } : {}),
   });
   if (!state.on) return NO_LIFT(caller);
-  const role = devModeOwnerRoleOf(caller.name, options.team);
-  if (role === null) return NO_LIFT(caller);
-  const at = standingOf(options.dir, options.team.session, caller);
-  if (callerVerdict(caller, caller.name, at).kind !== 'ok') return NO_LIFT(caller);
+  const proof = roleAtTarget(caller, options) ?? roleElsewhere(io, options);
+  if (proof === null) return NO_LIFT(caller);
   const warning = `warning: ${options.refusal}; dev mode continues${devModeLevelNote(state)}`;
-  logLine(options.dir, options.command, logTag(caller), `${warning}; admitted as ${role}`, options.now);
-  return { lifted: true, warning, caller, role };
+  logLine(options.dir, options.command, logTag(proof.caller), `${warning}; admitted as ${proof.role}`, options.now);
+  return { lifted: true, warning, caller: proof.caller, role: proof.role };
 }
 
 /**
