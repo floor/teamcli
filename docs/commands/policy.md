@@ -13,10 +13,26 @@ policy declarations (`team policy set` and `team policy unset`).
 `<level>` is one of `entity`, `project`, `team`, or `seat` (or `seat:<name>`).
 Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross-teams`,
 `state-trace-window-seconds`, `state-blind-after-seconds`, `state-hook-working-seconds`,
-`liveness-idle-lead-seconds`, `liveness-idle-owner-seconds`, `delivery-order`).
+`liveness-idle-lead-seconds`, `liveness-idle-owner-seconds`, `delivery-order`,
+`event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
+`event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
+`event-idle-threshold-seconds`, `event-reconcile-interval-seconds`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
+
+The seven `event-*` policies are the owner's event thresholds: how long an unanswered thread
+stays open (72 hours by default), how many records a thread may hold (50), how many days the
+event log keeps (30), when a held record reaches the lead (600 seconds), when a seat that watches
+nothing reads `unreachable` (600 seconds), when an idle seat's lead is told (300 seconds), and how
+often the bus reconciles (120 seconds). Each takes a whole number — seconds, or days for
+`event-retention-days`, records for `event-thread-cap`; a seconds value may be written with an
+`s` suffix. The three delay thresholds — `event-held-threshold-seconds`,
+`event-unreachable-threshold-seconds` and `event-idle-threshold-seconds` — may only be shortened:
+a value above the release default is refused, and so is a level's word that lengthens the one
+above it. The shorter field spellings (`held_threshold_seconds`, `thread-ttl`, …) are accepted
+and written back under the canonical name. `team bus` reads the held, retention and reconcile
+numbers when it starts, and `team reply` reads the thread life and cap from the caller's chain.
 
 ## Who may run it
 

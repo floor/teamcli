@@ -1,4 +1,4 @@
-// The output contract for `team pr check` (`docs/reference/output.md` row 22): the plain report
+// The output contract for `team pr check` (`docs/reference/output.md` row 24): the plain report
 // is one `difference:` block per finding with its `repair:` and `who:`, then the closing summary
 // line; `--json` is the registered `team.pr` document; a refusal is the `team.error` document on
 // stdout, stderr empty.

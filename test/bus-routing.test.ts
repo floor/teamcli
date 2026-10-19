@@ -65,9 +65,9 @@ describe('the default routing table', () => {
     expect(EVENT_ROUTING_DEFAULTS['seat.blocked']).toEqual(['lead', 'operator']);
   });
 
-  test('seat.working and seat.idle reach nobody until a level adds somebody', () => {
+  test('seat.working reaches nobody until a level adds somebody; seat.idle reaches the lead', () => {
     expect(EVENT_ROUTING_DEFAULTS['seat.working']).toEqual([]);
-    expect(EVENT_ROUTING_DEFAULTS['seat.idle']).toEqual([]);
+    expect(EVENT_ROUTING_DEFAULTS['seat.idle']).toEqual(['lead']);
   });
 
   test('message.arrived is not a routing decision and is not in the table', () => {

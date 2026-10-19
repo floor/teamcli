@@ -100,7 +100,9 @@ export function findRoot(cwd: string): string | null {
 export function loadTeamFile(cwd: string, options: { file?: string; home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {}): LoadResult {
   let path: string;
   let root: string;
-  if (options.file) {
+  // A named file is read and only that file: an empty name is not "no name", it names the
+  // folder it resolves to, and a folder, a missing file or an unreadable one is a refusal.
+  if (options.file !== undefined) {
     path = isAbsolute(options.file) ? options.file : resolve(cwd, options.file);
     const folder = dirname(path);
     root = folder.endsWith('.agents') ? dirname(folder) : folder;
@@ -133,14 +135,21 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
       path,
       errors: [{
         line: 0,
-        message: options.file
+        message: options.file !== undefined
           ? `no team file at ${options.file}`
           : 'no team file here; it is private to each clone: run `team init`, or `team init --restore` to bring back the copy this machine stored',
       }],
     };
   }
   // One read. Callers that store the text (approve) use this string, the one that was validated.
-  const text = readFileSync(path, 'utf8');
+  // A path that cannot be read — a folder, a denied file — is a refusal, never a fallback to the
+  // folder this command started in.
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
+  }
   const result = validateTeamFile(text, { home: options.home, fs: options.fs, root });
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };

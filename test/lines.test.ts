@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clearStopped, hasSeat, markStopped, restoreSeat, rewriteCount, seatBlocks, seatIsStopped, takeOut } from '../src/file/lines.ts';
+import { clearStopped, copySeat, hasSeat, markStopped, restoreSeat, rewriteCount, seatBlocks, seatIsStopped, takeOut } from '../src/file/lines.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { writeTeamFile } from '../src/file/write.ts';
 
@@ -112,6 +112,54 @@ seats:
     expect(hasSeat(stopped, 'helper')).toBe(true);
     expect(seatIsStopped(stopped, 'helper')).toBe(true);
     expect(stopped).toContain('\n    stopped: true\n');
+  });
+
+  test('a copied seat takes the source under a new name and title, and taking it out restores the file', () => {
+    const text = `format: 1
+seats:
+  - role: coordinator
+    name: lead
+    label: lead
+    cli: claude-code
+  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    stopped: true
+    # the seat stays in this order
+`;
+    const edited = copySeat(text, 'worker', 'helper');
+    expect(hasSeat(edited, 'helper')).toBe(true);
+    expect(edited).toContain('    name: helper\n    label: helper\n');
+    // The copy starts now; the source keeps its stopped line.
+    expect(seatIsStopped(edited, 'helper')).toBe(false);
+    expect(seatIsStopped(edited, 'worker')).toBe(true);
+    // The copy sits under the source, before the comment that trails it.
+    expect(edited.indexOf('name: helper')).toBeLessThan(edited.indexOf('# the seat stays in this order'));
+    // The copy is the only change: taking it back out gives the file byte for byte.
+    expect(takeOut(edited, 'helper')).toBe(text);
+  });
+
+  test('a copy of a counted seat is one seat: the count is split, and the copy has no count', () => {
+    const edited = copySeat(counted, 'deepseek', 'helper');
+    expect(edited).not.toContain('count:');
+    // The split keeps the source's other instance, and the copy is one entry of its own.
+    expect(hasSeat(edited, 'deepseek-2')).toBe(true);
+    expect(edited.match(/name: helper/g)).toHaveLength(1);
+    expect(edited).toContain('label: helper');
+    // A comment beside the source stays beside the source: the split writes it on both source
+    // instances, and the copy carries fields only.
+    expect(edited.match(/# kept with the entry/g)).toHaveLength(2);
+    expect(seatIsStopped(edited, 'helper')).toBe(false);
+  });
+
+  test('a source with no label is copied with the new name as its title', () => {
+    const text = `seats:
+  - name: helper
+    cli: claude-code
+`;
+    const edited = copySeat(text, 'helper', 'helper-2');
+    expect(edited).toContain('  - name: helper-2\n    label: helper-2\n    cli: claude-code\n');
   });
 
   test('restoring one removed instance of a count entry inserts that instance only', () => {

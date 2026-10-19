@@ -15,6 +15,7 @@ import { lobbyOf } from '../src/lobby/recorded.ts';
 import { rulesFilePath } from '../src/launch/rules-file.ts';
 import { writeGrant } from '../src/permissions/grants.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { readStoreSessions, sessionsPath } from '../src/sessions/registry.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
@@ -195,6 +196,16 @@ describe('trust dialog resume and pane naming', () => {
     expect(runIdx).toBeGreaterThan(renameIdx);
     expect(readIdx).toBeGreaterThan(runIdx);
     expect(panes.get('w2:p1')?.name).toBe('operator-1');
+
+    // The dialog this run timed out at is a live session, not an end: the record its launch
+    // wrote stays open, so reaching the prompt later continues the same session, never a gap.
+    const held = readStoreSessions(sessionsPath(w.team, w.root, w.home), w.home);
+    expect(held.ok).toBe(true);
+    const dialog = held.ok ? held.sessions.find((one) => one.seat === 'operator-1') : undefined;
+    expect(dialog).toBeDefined();
+    expect(dialog?.pane).toBe('w2:p1');
+    expect(dialog?.ended).toBeUndefined();
+    expect(dialog?.reason).toBeUndefined();
   });
 
   test('(1a) up finds a waiting-for-trust seat by its recorded pane even when unnamed, and finishes rename, metadata, and rules delivery', async () => {

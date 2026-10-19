@@ -55,6 +55,9 @@ function hostOf(scene: RetryScene, session: string): DeliverHost {
     status: (id) => scene.sources.status(id, session),
     wait: (ms) => scene.sources.sleep(ms),
     readAnsi: (id) => scene.sources.screen(id, session),
+    ...(scene.sources.sendKey
+      ? { sendKey: (id: string, key: string) => scene.sources.sendKey!(id, key, session) }
+      : {}),
   };
 }
 
@@ -315,10 +318,14 @@ async function expireOne(
         if (pane !== undefined && line !== null) {
           const status = scene.sources.status(pane, record.session);
           const screen = scene.sources.screen(pane, record.session);
+          const kind = screen === null ? null : readScreen(record.cli, screen).kind;
+          // Unsent text goes to the delivery below, which copies it beside the drop, clears the
+          // box, delivers and pastes it back — or holds where this CLI has no measured way into
+          // its box. A dialog is never typed into.
           const free =
             screen !== null &&
             (status === 'idle' || status === 'done') &&
-            readScreen(record.cli, screen).kind === 'idle';
+            (kind === 'idle' || kind === 'unsent');
           if (free) {
             const result = await deliverTrigger(hostOf(scene, record.session), pane, line, record.cli);
             if (result.outcome === 'delivered') {

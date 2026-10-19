@@ -18,7 +18,7 @@ import { livenessOf, type LivenessThresholds, type SettingLevel, type StateThres
 import { stateThresholds, thresholdRefusals, type ThresholdRefusal } from '../settings/resolve.ts';
 import { watchWords } from '../settings/declared.ts';
 import type { Tempo } from '../file/sections/tempo.ts';
-import type { SessionState } from '../state.ts';
+import { pauseText, type PauseRecord, type SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
 import { seatModel } from '../status/statusline.ts';
@@ -54,6 +54,28 @@ import { teamIdle } from './checks/team-idle.ts';
 import { unsent } from './checks/unsent.ts';
 import type { Machine } from './machine.ts';
 import { readScreen, statusRow, type Screen } from './screen.ts';
+export {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isScreenVerifiedStatusCli,
+  isStatusWaiterSeat,
+  reconcileStatusWithScreen,
+  seatHasAssignedWorkOnDisk,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+} from './status-events.ts';
 
 // What the watch remembers between passes. It lives in the watch's process: a restarted watch
 // starts its timers again, and reports again what is still true.
@@ -238,6 +260,12 @@ export type PassInput = {
   quotaFor?: (cli: string) => readonly QuotaPattern[];
   /** Unacked messages already verified. Omitted, the pass rings nothing. */
   mailbox?: readonly MailboxWaiting[];
+  /**
+   * The team's pause, when one stands. It replaces the work nudges of this pass with one notice
+   * per non-human seat: the team is stopped, finish the step in hand and take nothing new. A
+   * human seat's pane is never typed into, exactly as it is never nudged.
+   */
+  pause?: PauseRecord | null;
 };
 
 // One pass of the watch. Pure: it reads what it is handed and changes only `memory`.
@@ -263,6 +291,7 @@ export function pass({
   readScreen: read = readScreen,
   quotaFor: patternsOf = shippedQuota,
   mailbox = [],
+  pause,
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
@@ -566,7 +595,16 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, work: workDrops(team, live, observations, watch, now, memory, read), ring, mailboxNote, readings, machineReadings, labels, refusals: refused };
+  return {
+    reports,
+    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read) : workDrops(team, live, observations, watch, now, memory, read),
+    ring,
+    mailboxNote,
+    readings,
+    machineReadings,
+    labels,
+    refusals: refused,
+  };
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a seat whose pane is
@@ -616,6 +654,46 @@ function workDrops(
       cli: obs.cli,
       body: body.replaceAll('<your seat name>', obs.name),
     });
+  }
+  return due;
+}
+
+/**
+ * The pause's own drops: one notice per non-human agent seat, at the first quiet prompt after the
+ * pause was placed, and never twice for the same pause. The notice says what the pause means for
+ * the seat — finish the step in hand, take nothing new, hold no lock — and names the way out.
+ * Leads, parked and stopped seats and a human seat's pane are skipped exactly as `workDrops`
+ * skips them; a dialog or a box holding unsent text is left alone and tried again next pass. The
+ * stamps are keyed by the pause instant, so a resume and a later pause notice again.
+ */
+function pauseDrops(
+  team: TeamFile,
+  live: Live,
+  observations: SeatObservation[],
+  pause: PauseRecord,
+  now: number,
+  memory: Memory,
+  read: (cli: string, screen: string | undefined) => Screen,
+): PassResult['work'] {
+  const slot = (memory.slots['pause-notice'] ??= {}) as { at?: string; seats?: Record<string, number> };
+  if (slot.at !== pause.at) {
+    slot.at = pause.at;
+    slot.seats = {};
+  }
+  const told = (slot.seats ??= {});
+  const body = `Team watch: ${pauseText(pause)} — finish the step you are on, take nothing new, and hold no lock until \`team resume\``;
+  const due: PassResult['work'] = [];
+  for (const obs of observations) {
+    const fileSeat = team.seats.find((item) => item.name === obs.name);
+    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
+    if (live.agents.filter((agent) => agent.name === obs.name).length !== 1) continue;
+    if (told[obs.name] !== undefined) continue;
+    const quiet = (obs.agent.status === 'idle' || obs.agent.status === 'done') && !obs.working && !obs.prompt;
+    if (!quiet) continue;
+    const screen = read(obs.cli, live.screens[obs.agent.pane]);
+    if (screen.kind !== 'idle') continue;
+    told[obs.name] = now;
+    due.push({ pane: obs.agent.pane, seat: obs.name, cli: obs.cli, body: body.replaceAll('<your seat name>', obs.name) });
   }
   return due;
 }

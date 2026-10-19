@@ -10,9 +10,10 @@
 // A route that lives on the launch line needs no file: the profile names the values, and the
 // launch carries them. The client is told this install's own runner — the executable and its
 // entry script — so the inbox server starts whether or not `team` is on the PATH. The seat is
-// the only binding the launch states; the session is the team file's in the seat's folder,
-// read the way the server itself reads it, so the drop folder the server serves is the
-// sender's.
+// the only binding the launch states; the session is the team file's the launch read, so the
+// drop folder the server serves is the sender's. A seat whose pane folder is a lobby has no
+// team file of its own: the launch passes the file it resolved, and the registration names it
+// to the server too, so neither reads the seat's folder for the team.
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -28,9 +29,11 @@ export type InboxRun = { code: number | null };
 
 const SERVER_NAME = 'team-inbox';
 
-/** The arguments the inbox server is started with, after the entry script. */
-export function inboxServeArgs(seat: string, session: string): string[] {
-  return ['mcp', 'serve', '--seat', seat, '--session', session];
+/** The arguments the inbox server is started with, after the entry script. `file` is the team
+ *  file the launch read; the server resolves the team from it, whatever folder the client
+ *  starts it in. */
+export function inboxServeArgs(seat: string, session: string, file?: string): string[] {
+  return ['mcp', 'serve', '--seat', seat, '--session', session, ...(file === undefined ? [] : ['--file', file])];
 }
 
 /** This install's runner: the executable and the entry script it runs. Resolved from this
@@ -62,6 +65,10 @@ export function registerInbox(input: {
   cli: string;
   seat: string;
   cwd: string;
+  /** The team file the seat's launch read: the registration and the server it names resolve
+   *  the team from it, so a seat whose folder is a lobby registers like any other. Absent: the
+   *  folder's own team file, read as the server reads it. */
+  file?: string;
   /** Runs a command in the seat's folder; tests pass their own. Absent: the real one. */
   run?: (command: string, args: readonly string[], cwd: string) => InboxRun;
 }): InboxRegistration | null {
@@ -75,18 +82,36 @@ export function registerInbox(input: {
     folder = '';
   }
   if (!folder) return { ok: false, reason: 'its folder could not be read' };
-  // The server resolves the team from the folder it starts in; a folder with no team file
-  // makes it refuse, so nothing is registered there. Its session is the file's own, which the
-  // server reads too.
-  const loaded = loadTeamFile(folder);
-  if (!loaded.ok) return { ok: false, reason: 'no team file could be read from its folder' };
-  const place: InboxPlace = { seat: input.seat, session: loaded.team.session, ...selfRunner() };
+  // The launch's own team file when it names one; otherwise the folder's, read the way the
+  // server itself reads it. A folder with no team file makes the server refuse, so nothing is
+  // registered there: the seat stays on its drop and typed legs.
+  const loaded = input.file === undefined ? loadTeamFile(folder) : loadTeamFile(folder, { file: input.file });
+  if (!loaded.ok) {
+    return { ok: false, reason: input.file === undefined ? 'no team file could be read from its folder' : 'the team file its launch read could not be read' };
+  }
+  const place: InboxPlace = {
+    seat: input.seat,
+    session: loaded.team.session,
+    // The launch's file, named to the server: it starts in the seat's folder (a lobby has no
+    // team file), and reads the team from this path instead.
+    ...(input.file === undefined ? {} : { file: loaded.path }),
+    ...selfRunner(),
+  };
   const target = block.file ?? block.target;
   if (target === null) return null;
   const refused = ignoreProblem(folder, target);
   if (refused !== null) return { ok: false, reason: refused };
   if (block.file !== null) return writeConfigFile(folder, block.file, place);
-  const args = block.add!.map((word) => fillInboxPlace(word, place));
+  // `{file}` is a whole word: it is the launch's `--file <path>` pair, and nothing at all when
+  // the launch named no file.
+  const args: string[] = [];
+  for (const word of block.add!) {
+    if (word === '{file}') {
+      if (place.file !== undefined) args.push('--file', place.file);
+      continue;
+    }
+    args.push(fillInboxPlace(word, place));
+  }
   const run = input.run ?? ((command, argv) => runIn(folder)(command, argv));
   const result = run(profile.binary, args, folder);
   if (result.code !== 0) {
@@ -170,7 +195,7 @@ function writeConfigFile(folder: string, file: string, place: InboxPlace): Inbox
       ...(servers as Record<string, unknown>),
       [SERVER_NAME]: {
         command: place.command,
-        args: [place.entry, ...inboxServeArgs(place.seat, place.session)],
+        args: [place.entry, ...inboxServeArgs(place.seat, place.session, place.file)],
       },
     },
   };

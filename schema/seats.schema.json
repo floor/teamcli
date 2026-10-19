@@ -49,6 +49,9 @@
         "null"
       ]
     },
+    "pause": {
+      "type": "object"
+    },
     "seats": {
       "type": "array",
       "items": {

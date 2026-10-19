@@ -74,6 +74,7 @@ import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
+import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
@@ -138,9 +139,10 @@ export type Launch = {
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
   /** Registers the seat's team inbox with its CLI, in the seat's folder, before its launch
-   *  command. Null when the profile carries no file route; a refusal leaves the seat on its
-   *  drop and typed legs. Absent on a world that registers nothing: fake launches and reads. */
-  registerInbox?(cli: string, seat: string, cwd: string): InboxRegistration | null;
+   *  command. `teamFile` is the team file the run read; the seat's folder may be a lobby with
+   *  none. Null when the profile carries no file route; a refusal leaves the seat on its drop
+   *  and typed legs. Absent on a world that registers nothing: fake launches and reads. */
+  registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
@@ -210,7 +212,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
+  registerInbox: (cli, seat, cwd, teamFile) =>
+    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
@@ -1312,6 +1315,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     watchAlive,
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
+    teamFile: loaded.path,
     cliHooks,
   });
 
@@ -1574,7 +1578,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       },
       paneRun: launch.paneRun,
       ...(launch.registerInbox
-        ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+        ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
         : {}),
       ...(launch.reportDisplayAgent
         ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
@@ -1723,6 +1727,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           if (replaced) forgetLaunchedPane(sources.home, replaced, session);
           noteLaunchedPane(sources.home, loaded.path, patch.pane, session);
         }
+      },
+      // The session registry records the launch itself, with the id TeamCLI set where the CLI
+      // takes one; a registry that cannot be written is a note in the run's log, never a refusal.
+      sessionStarted(name, started) {
+        const seat = team.seats.find((item) => item.name === name);
+        if (!seat) return;
+        const began = beginSession({
+          home: sources.home,
+          root,
+          team,
+          session,
+          seat,
+          pane: started.pane,
+          ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
+          ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+          ...(started.replaces === undefined ? {} : { replaces: started.replaces }),
+          now: now(),
+        });
+        if ('note' in began) logLine(dir, 'up', callerLabel(caller), `${name}: ${began.note}`, now());
       },
       running(name) {
         if (running.some((item) => item.name === name)) return;
