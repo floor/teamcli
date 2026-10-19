@@ -16,6 +16,7 @@ import { buildCommandOutputSchema, POLICY_OUTPUT_SCHEMA } from '../src/output/in
 import {
   DEV_MODE_OPERATIONS,
   loadAndResolvePolicyChain,
+  normalizePolicyName,
   planPolicySet,
   POLICY_CATALOGUE,
   POLICY_LEVELS,
@@ -180,6 +181,45 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(POLICY_CATALOGUE['dev-mode'].levels).toEqual(['entity', 'project', 'team']);
     expect(POLICY_CATALOGUE['dev-mode'].defaultValue).toBe('off');
     expect(POLICY_CATALOGUE['dev-mode'].gateLifting).toBe(true);
+  });
+
+  test('daemon.broker is a feature gate above the seat, on by default and switchable only off', () => {
+    const spec = POLICY_CATALOGUE['daemon.broker'];
+    expect(spec.kind).toBe('enforced');
+    expect(spec.levels).toEqual(['entity', 'project', 'team']);
+    expect(spec.defaultValue).toBe('on');
+    expect(spec.gateLifting).toBe(false);
+    expect(normalizePolicyName('daemon_broker')).toBe('daemon.broker');
+    expect(normalizePolicyName('daemon-broker')).toBe('daemon.broker');
+    expect(spec.parseValue('on')).toBe('on');
+    expect(spec.parseValue('off')).toBe('off');
+    expect(spec.parseValue('auto')).toBeNull();
+
+    const absent = resolvePolicy('daemon.broker', []);
+    expect(absent.ok).toBe(true);
+    if (absent.ok) expect(absent.effective.value).toBe('on');
+
+    const off = resolvePolicy('daemon.broker', [
+      { name: 'daemon.broker', value: 'on', level: 'entity', setter: 'owner', date: '2026-10-20T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.broker', value: 'off', level: 'team', setter: 'owner', date: '2026-10-20T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(off.ok).toBe(true);
+    if (off.ok) expect(off.effective.value).toBe('off');
+
+    const backOn = resolvePolicy('daemon.broker', [
+      { name: 'daemon.broker', value: 'off', level: 'entity', setter: 'owner', date: '2026-10-20T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.broker', value: 'on', level: 'project', setter: 'owner', date: '2026-10-20T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(backOn.ok).toBe(false);
+    if (!backOn.ok) {
+      expect(backOn.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'daemon.broker', higherLevel: 'entity', lowerLevel: 'project' });
+    }
+
+    const seatLevel = resolvePolicy('daemon.broker', [
+      { name: 'daemon.broker', value: 'off', level: 'seat', setter: 'owner', date: '2026-10-20T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(seatLevel.ok).toBe(false);
+    if (!seatLevel.ok) expect(seatLevel.refusals[0]?.message).toContain('allowed: entity, project, team');
   });
 
   test('absent declarations resolve to the release default, and off for gate-lifting policies', () => {

@@ -102,6 +102,7 @@ export const ENFORCED_POLICY_NAMES = [
   'event-reconcile-interval-seconds',
   'model-rule',
   'swap-wait-seconds',
+  'daemon.broker',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -141,6 +142,8 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
   brief_transport: 'brief-transport',
+  daemon_broker: 'daemon.broker',
+  'daemon-broker': 'daemon.broker',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -515,6 +518,22 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parsePositiveSeconds,
     isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The machine daemon's broker feature: on keeps the broker handler serving `team next` over the
+  // one machine socket, off stops it before any tracker credential is read. It is a feature gate,
+  // not a start authority, so no level says who starts the daemon. Off is explicit and absolute:
+  // it is within an inherited on, and on is never within an inherited off, so a lower level may
+  // switch the feature off but cannot switch it back on. The daemon reader that consumes this
+  // value is owned elsewhere; this entry is only the name, its aliases and the value rule.
+  'daemon.broker': {
+    name: 'daemon.broker',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseOnOff,
+    // 'off' is tighter than 'on': off is within on, on is not within off.
+    isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
   },
   'development-mode': {
     name: 'development-mode',
