@@ -23,7 +23,7 @@ function npmRun(home: string, args: string[], cwd: string) {
 
 test('package.json files allows the shipped entries only', () => {
   const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'));
-  expect(pkg.files).toEqual(['dist', 'examples', 'schema', 'README.md', 'LICENSE']);
+  expect(pkg.files).toEqual(['dist', 'examples', 'schema', 'packages/relay', 'README.md', 'LICENSE']);
 });
 
 test('the packed tarball ships the schema and nothing it should not', () => {
@@ -44,9 +44,19 @@ test('the packed tarball ships the schema and nothing it should not', () => {
     }
 
     // Every packed path under the allowed top-level entries…
-    const allowed = ['dist/', 'examples/', 'schema/', 'package.json', 'README.md', 'LICENSE'];
+    const allowed = ['dist/', 'examples/', 'schema/', 'packages/relay/', 'package.json', 'README.md', 'LICENSE'];
     for (const path of paths) {
       expect(allowed.some((prefix) => path === prefix || path.startsWith(prefix))).toBe(true);
+    }
+    // The bundled relay travels with the CLI, its manifest and both host modules included.
+    for (const shipped of [
+      'packages/relay/package.json',
+      'packages/relay/host/server.js',
+      'packages/relay/host/server.d.ts',
+      'packages/relay/host/queue.js',
+      'packages/relay/host/queue.d.ts',
+    ]) {
+      expect(paths).toContain(shipped);
     }
     // …and the folders that must never ship stay absent.
     for (const forbidden of ['contract/', 'test/', 'scripts/', '.github/', 'docs/', 'src/']) {
