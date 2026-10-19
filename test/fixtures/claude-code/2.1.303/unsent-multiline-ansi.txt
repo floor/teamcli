@@ -1,10 +1,10 @@
 [0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mRead /private/tmp/b2-probe/no-such-drop and do [0m[48;2;55;55;55m    [0m
 [0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mthat.[0m[48;2;55;55;55m                                              [0m
- 
+
   [0m[38;2;153;153;153mThought for [0m[1m[38;2;153;153;153m13s[0m[38;2;153;153;153m, read [0m[1m[38;2;153;153;153m1[0m[38;2;153;153;153m file [0m
 
 [0m[38;2;255;255;255m⏺ [0mdone
- 
+
   The file [0m[38;2;177;185;249m/private/tmp/b2-probe/no-such-drop [0mdoesn't
   exist, so there's nothing for me to read or act
   on. If you meant a different path, let me know
@@ -15,7 +15,7 @@
 [0m[38;2;136;136;136m─────────────────────────────────────────────────────[0m
 ❯ first row
   second row
-  
+
   fourth row
 [0m[38;2;136;136;136m─────────────────────────────────────────────────────[0m
   [0m[38;2;255;193;7m⚠ Transcript saving is off — inherited CLAUDE_CO…[0m
