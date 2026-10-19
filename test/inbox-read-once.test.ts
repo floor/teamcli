@@ -1,34 +1,33 @@
-// The receiver's read-once gate: one message id, one content exposure. A repeat read and a
-// second process both get no body once the first has served it; a rival that arrives while the
-// claim is held is told `busy`; a claim left by a process that died before any receipt is
-// reclaimed and served once; and a claim or receipt that cannot be trusted serves nothing.
+// The receiver's read-once gate: one message id, one content exposure. The signed read receipt is
+// the per-id gate, published exclusively with `link` before any body is returned, so two real
+// processes that race it return exactly one body and the loser is told `already-served`. A repeat
+// read returns no body. An entry at a receipt name that does not verify is uncertainty, not proof
+// unserved: it is preserved and served nothing, never replaced.
 // Bodies are counted, never inferred: every scene asserts whether the body string came back.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync, spawn } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
-  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { admitInboxMessage, admissionFolder, claimPath } from '../src/mcp/inbox-admission.ts';
+import { publishReadReceipt } from '../src/mcp/inbox-admission.ts';
 import { readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { signRecord, signReceiptPayload, verifyReceipt, writeReceipt, type SignedReceipt } from '../src/send/record.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 
 const SESSION = 'acme';
 const LEAD_ID = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e45';
-const OTHER_ID = '5a1c9e93-8b9f-4eb3-8f70-ac6bbd3e4f56';
 const BODY = 'the one body this id may expose';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -117,7 +116,7 @@ function readReceipt(at: Place): SignedReceipt {
   return receipt;
 }
 
-/** A real child process that reads one message, optionally after a barrier file appears. */
+/** A real child process that reads one message after a barrier file appears. */
 function writeReadChild(at: Place): string {
   const script = join(at.base, 'read-child.ts');
   writeFileSync(script, `import { existsSync } from 'node:fs';
@@ -130,15 +129,15 @@ console.log(JSON.stringify(read));
   return script;
 }
 
-/** A real child process that takes the claim and exits without releasing it: the crash shape. */
-function writeClaimChild(at: Place): string {
-  const script = join(at.base, 'claim-child.ts');
-  writeFileSync(script, `import { admitInboxMessage } from ${JSON.stringify(moduleUrl('src/mcp/inbox-admission.ts'))};
-const [dropDir, root, seat, session, id] = process.argv.slice(2);
-const admission = admitInboxMessage({ dropDir, root, seat, session, id, receiptHeld: () => false });
-console.log(JSON.stringify(admission.ok
-  ? { ok: true, reclaimed: admission.reclaimed, pid: process.pid }
-  : admission));
+/** A real child process that races one exclusive receipt publication after a barrier file
+ *  appears. It never checks the name first: both children call the primitive, which is the point. */
+function writePublishChild(at: Place): string {
+  const script = join(at.base, 'publish-child.ts');
+  writeFileSync(script, `import { existsSync } from 'node:fs';
+import { publishReadReceipt } from ${JSON.stringify(moduleUrl('src/mcp/inbox-admission.ts'))};
+const [path, content, barrier] = process.argv.slice(2);
+while (barrier !== '' && !existsSync(barrier)) await new Promise((tick) => setTimeout(tick, 5));
+console.log(JSON.stringify({ result: publishReadReceipt(path, content) }));
 `);
   return script;
 }
@@ -162,36 +161,6 @@ function runInBackground(script: string, args: readonly string[]): Promise<Child
     });
     child.on('close', (code) => resolve({ code, out, err }));
   });
-}
-
-/** A pid that is gone: a child prints its own and exits; the caller waits on the exit before
- *  this returns, so the number names no live process of ours. */
-function deadPid(at: Place): number {
-  const script = join(at.base, 'pid-child.ts');
-  writeFileSync(script, 'console.log(process.pid);\n');
-  const pid = Number(runChild(script, []).trim());
-  expect(Number.isInteger(pid)).toBe(true);
-  let alive = true;
-  try {
-    process.kill(pid, 0);
-  } catch {
-    alive = false;
-  }
-  expect(alive).toBe(false);
-  return pid;
-}
-
-function claimJson(at: Place, overrides: Record<string, unknown> = {}): string {
-  return `${JSON.stringify({
-    v: 1,
-    id: LEAD_ID,
-    root: at.root,
-    session: SESSION,
-    seat: 'lead',
-    pid: deadPid(at),
-    at: '2026-10-20T11:00:00.000Z',
-    ...overrides,
-  }, null, 2)}\n`;
 }
 
 function bodies(results: readonly Record<string, unknown>[]): number {
@@ -241,181 +210,95 @@ describe('the inbox read-once gate', () => {
       expect(bodies(results)).toBe(1);
       const loser = results.find((result) => result.ok === false);
       expect(loser).toBeDefined();
-      expect(loser?.served === 'busy' || loser?.served === 'already-served').toBe(true);
+      expect(loser?.served).toBe('already-served');
       expect(JSON.stringify(loser)).not.toContain(BODY);
-      // The read receipt is the winner's, and no claim is left behind.
+      // The one receipt is the winner's, and neither child's temp is left behind.
       expect(readReceipt(at).payload).toMatchObject({ id: LEAD_ID, to: 'lead', status: 'read' });
-      expect(existsSync(claimPath(at.dropDir, LEAD_ID))).toBe(false);
+      expect(readdirSync(at.dropDir).filter((name) => name.endsWith('.new'))).toEqual([]);
     } finally {
       at.cleanup();
     }
   });
 
-  test('a live holder makes another process busy with no body until the claim is released', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      const held = admitInboxMessage({
-        dropDir: at.dropDir,
-        root: at.root,
-        seat: 'lead',
-        session: SESSION,
-        id: LEAD_ID,
-        receiptHeld: () => false,
-      });
-      expect(held.ok).toBe(true);
-      if (!held.ok) return;
-
-      const child = writeReadChild(at);
-      const busy = JSON.parse(runChild(child, [at.dropDir, at.root, 'lead', SESSION, at.home, LEAD_ID, ''])) as Record<string, unknown>;
-      expect(busy).toMatchObject({ ok: false, served: 'busy' });
-      expect(JSON.stringify(busy)).not.toContain(BODY);
-      expect(existsSync(receiptPath(at.dropDir, LEAD_ID))).toBe(false);
-
-      held.release();
-      const served = JSON.parse(runChild(child, [at.dropDir, at.root, 'lead', SESSION, at.home, LEAD_ID, ''])) as Record<string, unknown>;
-      expect(served).toEqual({ ok: true, body: BODY });
-      expect(existsSync(claimPath(at.dropDir, LEAD_ID))).toBe(false);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('a claim left by a process that died before any receipt is reclaimed and served once', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      const claimer = writeClaimChild(at);
-      const claimed = JSON.parse(runChild(claimer, [at.dropDir, at.root, 'lead', SESSION, LEAD_ID])) as {
-        ok: boolean;
-        pid: number;
-      };
-      expect(claimed.ok).toBe(true);
-      const left = JSON.parse(readFileSync(claimPath(at.dropDir, LEAD_ID), 'utf8')) as { pid: number };
-      expect(left.pid).toBe(claimed.pid);
-      let alive = true;
-      try {
-        process.kill(left.pid, 0);
-      } catch {
-        alive = false;
-      }
-      expect(alive).toBe(false);
-
-      const reader = writeReadChild(at);
-      const served = JSON.parse(runChild(reader, [at.dropDir, at.root, 'lead', SESSION, at.home, LEAD_ID, ''])) as Record<string, unknown>;
-      expect(served).toEqual({ ok: true, body: BODY });
-      expect(existsSync(claimPath(at.dropDir, LEAD_ID))).toBe(false);
-      // The restart reads no second copy.
-      const again = JSON.parse(runChild(reader, [at.dropDir, at.root, 'lead', SESSION, at.home, LEAD_ID, ''])) as Record<string, unknown>;
-      expect(again).toMatchObject({ ok: false, served: 'already-served' });
-      expect(JSON.stringify(again)).not.toContain(BODY);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('a dead claim is never cleared over a durable receipt', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      expect(read(at)).toEqual({ ok: true, body: BODY });
-      const claim = claimJson(at);
-      writeFileSync(claimPath(at.dropDir, LEAD_ID), claim, { mode: 0o600 });
-
-      const got = read(at);
-      expect(got).toMatchObject({ ok: false, served: 'already-served' });
-      expect(JSON.stringify(got)).not.toContain(BODY);
-      // The receipt is proof the content went out; the dead claim is evidence, not a licence
-      // to serve again, so it is left where it is.
-      expect(readFileSync(claimPath(at.dropDir, LEAD_ID), 'utf8')).toBe(claim);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('a claim bound to another inbox serves nothing and is preserved', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      mkdirSync(admissionFolder(at.dropDir), { mode: 0o700 });
-      const foreign = claimJson(at, { seat: 'worker' });
-      writeFileSync(claimPath(at.dropDir, LEAD_ID), foreign, { mode: 0o600 });
-
-      const got = read(at);
-      expect(got.ok).toBe(false);
-      if (!got.ok) {
-        expect(got.reason).toContain('bound to another inbox');
-        expect(got.served).toBeUndefined();
-      }
-      expect(JSON.stringify(got)).not.toContain(BODY);
-      expect(existsSync(receiptPath(at.dropDir, LEAD_ID))).toBe(false);
-      expect(readFileSync(claimPath(at.dropDir, LEAD_ID), 'utf8')).toBe(foreign);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('an unreadable claim, or a link at its name, is refused and preserved', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      mkdirSync(admissionFolder(at.dropDir), { mode: 0o700 });
-      const path = claimPath(at.dropDir, LEAD_ID);
-      const garbage = 'not the claim this gate writes\n';
-      writeFileSync(path, garbage, { mode: 0o600 });
-      const got = read(at);
-      expect(got).toMatchObject({ ok: false });
-      expect(JSON.stringify(got)).not.toContain(BODY);
-      expect(readFileSync(path, 'utf8')).toBe(garbage);
-
-      // A link at the claim's name is never followed, and the message is still not served.
-      const elsewhere = join(at.base, 'elsewhere.claim');
-      writeFileSync(elsewhere, claimJson(at), { mode: 0o600 });
-      unlinkSync(path);
-      symlinkSync(elsewhere, path);
-      const linked = read(at);
-      expect(linked).toMatchObject({ ok: false });
-      expect(JSON.stringify(linked)).not.toContain(BODY);
-      expect(lstatSync(path).isSymbolicLink()).toBe(true);
-      expect(existsSync(receiptPath(at.dropDir, LEAD_ID))).toBe(false);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('an admission folder that is not private serves nothing', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      mkdirSync(admissionFolder(at.dropDir), { mode: 0o755 });
-      chmodSync(admissionFolder(at.dropDir), 0o755);
-      const got = read(at);
-      expect(got.ok).toBe(false);
-      if (!got.ok) expect(got.reason).toContain('not private');
-      expect(JSON.stringify(got)).not.toContain(BODY);
-      expect(existsSync(receiptPath(at.dropDir, LEAD_ID))).toBe(false);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('a corrupt or differently bound receipt does not count as served', () => {
+  test('two real processes publishing the receipt name: exactly one wins and the name is never replaced', async () => {
     const at = place();
     try {
       message(at, 'lead', LEAD_ID, BODY);
       const path = receiptPath(at.dropDir, LEAD_ID);
+      const child = writePublishChild(at);
+      const barrier = join(at.base, 'publish-go');
+      const first = runInBackground(child, [path, 'first writer\n', barrier]);
+      const second = runInBackground(child, [path, 'second writer\n', barrier]);
+      await new Promise((tick) => setTimeout(tick, 100));
+      expect(existsSync(path)).toBe(false);
+      writeFileSync(barrier, 'go\n');
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.code).toBe(0);
+      expect(b.code).toBe(0);
+      const firstResult = JSON.parse(a.out) as { result: string };
+      const secondResult = JSON.parse(b.out) as { result: string };
+      const results = [firstResult.result, secondResult.result];
+      expect(results.filter((result) => result === 'written')).toHaveLength(1);
+      expect(results.filter((result) => result === 'exists')).toHaveLength(1);
+      const winner = firstResult.result === 'written' ? 'first writer\n' : 'second writer\n';
+      expect(readFileSync(path, 'utf8')).toBe(winner);
+      expect(lstatSync(path).isFile()).toBe(true);
+      // Neither writer's temp is left behind: the file that exists is the one that won.
+      expect(readdirSync(at.dropDir).filter((name) => name.endsWith('.new'))).toEqual([]);
+    } finally {
+      at.cleanup();
+    }
+  });
 
-      writeFileSync(path, '{ not a receipt\n', { mode: 0o600 });
+  test('a temp left by a publisher that died before the link blocks nothing', () => {
+    const at = place();
+    try {
+      message(at, 'lead', LEAD_ID, BODY);
+      const path = receiptPath(at.dropDir, LEAD_ID);
+      const leftover = `${path}.999999.deadbeef.new`;
+      writeFileSync(leftover, 'half-written receipt\n', { mode: 0o600 });
+
+      // No shared name was published, so there is nothing to reclaim; the next reader serves the
+      // one body and the leftover is left as debris, not treated as a receipt.
       expect(read(at)).toEqual({ ok: true, body: BODY });
-      expect(readReceipt(at).payload).toMatchObject({ id: LEAD_ID, to: 'lead' });
       expect(read(at)).toMatchObject({ ok: false, served: 'already-served' });
+      expect(readFileSync(leftover, 'utf8')).toBe('half-written receipt\n');
+    } finally {
+      at.cleanup();
+    }
+  });
 
-      // A receipt signed by this key for another seat is not proof this inbox served it.
-      message(at, 'lead', OTHER_ID, BODY);
+  test('an invalid read receipt is uncertainty: no body, no rewrite, preserved', () => {
+    const at = place();
+    try {
+      message(at, 'lead', LEAD_ID, BODY);
+      const path = receiptPath(at.dropDir, LEAD_ID);
+      const garbage = '{ not a receipt\n';
+      writeFileSync(path, garbage, { mode: 0o600 });
+
+      const got = read(at);
+      expect(got.ok).toBe(false);
+      if (!got.ok) {
+        expect(got.reason).toContain('does not verify');
+        expect(got.served).toBeUndefined();
+      }
+      expect(JSON.stringify(got)).not.toContain(BODY);
+      expect(readFileSync(path, 'utf8')).toBe(garbage);
+      expect(existsSync(receiptPath(at.dropDir, LEAD_ID))).toBe(true);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a read receipt signed for another seat is uncertainty: no body, preserved', () => {
+    const at = place();
+    try {
+      message(at, 'lead', LEAD_ID, BODY);
+      const path = receiptPath(at.dropDir, LEAD_ID);
       const foreign = signReceiptPayload({
         kind: 'receipt',
         status: 'read',
-        id: OTHER_ID,
+        id: LEAD_ID,
         to: 'worker',
         root: realpathSync(at.root),
         session: SESSION,
@@ -423,9 +306,36 @@ describe('the inbox read-once gate', () => {
       }, at.home);
       const written = writeReceipt(at.dropDir, foreign, at.home);
       expect(written.ok).toBe(true);
-      const other = readMessage(target(at), OTHER_ID, at.home);
-      expect(other).toEqual({ ok: true, body: BODY });
-      expect(readMessage(target(at), OTHER_ID, at.home)).toMatchObject({ ok: false, served: 'already-served' });
+      const before = readFileSync(path, 'utf8');
+
+      const got = read(at);
+      expect(got.ok).toBe(false);
+      if (!got.ok) {
+        expect(got.reason).toContain('does not verify');
+        expect(got.served).toBeUndefined();
+      }
+      expect(JSON.stringify(got)).not.toContain(BODY);
+      expect(readFileSync(path, 'utf8')).toBe(before);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a link at the receipt name is refused and preserved', () => {
+    const at = place();
+    try {
+      message(at, 'lead', LEAD_ID, BODY);
+      const path = receiptPath(at.dropDir, LEAD_ID);
+      const elsewhere = join(at.base, 'elsewhere.read.json');
+      writeFileSync(elsewhere, 'not reached\n', { mode: 0o600 });
+      symlinkSync(elsewhere, path);
+
+      const got = read(at);
+      expect(got.ok).toBe(false);
+      if (!got.ok) expect(got.served).toBeUndefined();
+      expect(JSON.stringify(got)).not.toContain(BODY);
+      expect(lstatSync(path).isSymbolicLink()).toBe(true);
+      expect(readFileSync(elsewhere, 'utf8')).toBe('not reached\n');
     } finally {
       at.cleanup();
     }

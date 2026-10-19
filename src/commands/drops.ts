@@ -429,9 +429,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       if (got.ok) {
         bodies.push(got.body);
       } else if (got.served !== undefined) {
-        // Another reader already served this message, or is serving it now: there is no body
-        // for this run. It is not a refusal and does not use one of the ten; a busy message
-        // stays waiting for a later turn, an already-served one has left the unread list.
+        // Another reader won the receipt name and served this message: there is no body for this
+        // run. It is not a refusal and does not use one of the ten; the message has left the
+        // unread list.
       } else if (got.superseded === true) {
         // An earlier delivery of the general seat brief: not a body, not a refusal, and it does
         // not use one of the ten this run hands over.
