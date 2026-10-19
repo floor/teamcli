@@ -732,11 +732,14 @@ seats:
     const {
       CODEX_NATIVE_ROUTE,
       CODEX_NATIVE_TIMEOUT_MS,
+      CODEX_PREPROBE_TIMEOUT_MS,
       CODEX_RECEIPT_TIMEOUT_SECONDS,
       codexRelayCapabilities,
       deliverCodexNativeRoute,
+      probeCodexLiveReadiness,
       probeCodexNativeRoute,
       receiptSecondsFor,
+      resolveCodexControlSocketPath,
       resolveCodexEscalationSeconds,
       resolveCodexNativeAttemptTimeoutMs,
     } = await import('../../src/send/push-adapters/codex-relay.ts');
@@ -747,6 +750,7 @@ seats:
     // 1. Capabilities and shared timing constants from src/policy/delivery.ts & src/policy/types.ts
     expect(CODEX_NATIVE_ROUTE).toBe('native');
     expect(CODEX_NATIVE_TIMEOUT_MS).toBe(15_000);
+    expect(CODEX_PREPROBE_TIMEOUT_MS).toBe(400);
     expect(CODEX_RECEIPT_TIMEOUT_SECONDS).toBe(120);
     expect(receiptSecondsFor(15)).toBe(120);
     expect(receiptSecondsFor(15, 10)).toBe(15);
@@ -758,8 +762,9 @@ seats:
       supported: true,
       command: ['codex', 'queue', '--thread', '<agent_session>', '--message', '<pointer>'],
       timeoutMs: 15_000,
-      liveProbe: false,
-      precheck: 'local-policy-and-session-only',
+      preprobeTimeoutMs: 400,
+      precheck: 'local-policy-and-session-plus-optional-thread-read-rpc',
+      liveProbeRpc: 'thread/read',
       ack: false,
       proof: 'queue-accepted-only',
     });
@@ -1118,5 +1123,305 @@ seats:
       receipt: { kind: 'stored', id: SAMPLE_ID },
     });
     expect(readFileSync(join(dropDir, SAMPLE_ID), 'utf8')).toBe(signedRecordText);
+
+    // 8. skipStage caller preparation (routeStartedAt / startedAt) counts toward the whole route deadline:
+    //   - Caller started route preparation at 01:00:00.000Z, spent 2_200ms in ensureDrop/ensureEpisode/policy
+    //     before calling deliverCodexNativeRoute with skipStage: true, and liveProbe took 300ms (total 2_500ms).
+    //     Under the 6_000ms signed budget, liveProbe receives min(400, 3_800) = 400ms and spawn receives 3_500ms.
+    let skipStageStep = 0;
+    const skipStageTimesMs = [
+      Date.parse('2026-10-20T01:00:02.200Z'), // entryMs inside deliverCodexNativeRoute (2_200ms after routeStartedAt)
+      Date.parse('2026-10-20T01:00:02.200Z'), // skipStage copyReceipt timestamp
+      Date.parse('2026-10-20T01:00:02.200Z'), // elapsedBeforeProbeMs check (2_200ms elapsed -> 3_800ms left)
+      Date.parse('2026-10-20T01:00:02.500Z'), // post-liveProbe elapsedMs check (2_500ms elapsed -> 3_500ms left)
+      Date.parse('2026-10-20T01:00:02.900Z'), // post-spawn completion timestamp (2_900ms total)
+    ];
+    let observedLiveProbeBudgetMs = -1;
+    let observedSkipStageSpawnBudgetMs = -1;
+    const skipStageAttempt = await deliverCodexNativeRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy: { dir: dropDir, name: SAMPLE_ID },
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        sender: { seat: 'tester-2', team: 'teamcli' },
+      },
+      {
+        id: SAMPLE_ID,
+        record: signedRecordText,
+        pointer: SAMPLE_POINTER,
+      },
+      {
+        now: () => {
+          const idx = Math.min(skipStageStep, skipStageTimesMs.length - 1);
+          skipStageStep += 1;
+          return new Date(skipStageTimesMs[idx]!);
+        },
+        routeStartedAt: Date.parse('2026-10-20T01:00:00.000Z'),
+        startedAt: Date.parse('2026-10-20T01:00:00.000Z'),
+        skipStage: true,
+        deliveryTimeout: shortenedTimeouts,
+        liveProbe: async (probeReq) => {
+          observedLiveProbeBudgetMs = probeReq.timeoutMs;
+          return {
+            ok: true,
+            thread: {
+              id: probeReq.threadId,
+              status: { type: 'idle' },
+              canAcceptDirectInput: true,
+            },
+          };
+        },
+        spawn: (_bin, _args, opts) => {
+          observedSkipStageSpawnBudgetMs = opts.timeoutMs;
+          return { status: 0, stdout: 'Queued\n', stderr: '' };
+        },
+      },
+    );
+    expect(skipStageAttempt.outcome).toBe('enqueue');
+    expect(observedLiveProbeBudgetMs).toBe(400);
+    expect(observedSkipStageSpawnBudgetMs).toBe(3_500);
+    expect(skipStageAttempt.walkAttempt.ms).toBe(2_900);
+
+    // 9. Bounded <=400ms live readiness probe (probeCodexLiveReadiness + queryCodexAppServerThreadRead)
+    //    over a real Unix-socket WebSocket mock app-server: ready | would-hold | unavailable
+    const { createHash } = await import('node:crypto');
+    const { createServer } = await import('node:net');
+    const sockPath = resolveCodexControlSocketPath(scene.home);
+    expect(sockPath).toBe(join(scene.home, '.codex', 'app-server-control', 'app-server-control.sock'));
+    if (!sockPath) throw new Error('expected default control socket path');
+
+    // 9a. Missing control socket -> unavailable
+    const missingSocketProbe = await probeCodexLiveReadiness({
+      root: scene.root,
+      home: scene.home,
+      session: 'teamcli',
+      seat: 'builder-3',
+      id: SAMPLE_ID,
+      sender: { seat: 'lead', team: 'acme' },
+    });
+    expect(missingSocketProbe).toEqual({
+      status: 'unavailable',
+      reason: 'codex app-server control socket is not listening (ENOENT)',
+    });
+
+    // Start a local mock app-server WebSocket Unix socket (short /tmp path for macOS 104-byte sun_path limit)
+    const testSockPath = join('/tmp', `codex-probe-${String(process.pid)}-${String(Date.now())}.sock`);
+    const testRemote = `unix://${testSockPath}`;
+    let nextThreadMode: 'idle' | 'active-approval' | 'not-loaded' | 'hang' = 'idle';
+    const seenRpcMethods: string[] = [];
+
+    const unmaskClientFrame = (buf: Buffer): { text: string; total: number } | null => {
+      if (buf.length < 6) return null;
+      let offset = 2;
+      let len = buf[1]! & 0x7f;
+      if (len === 126) {
+        if (buf.length < 8) return null;
+        len = buf.readUInt16BE(2);
+        offset = 4;
+      }
+      if (buf.length < offset + 4 + len) return null;
+      const mask = buf.subarray(offset, offset + 4);
+      const payload = Buffer.alloc(len);
+      for (let i = 0; i < len; i += 1) {
+        payload[i] = buf[offset + 4 + i]! ^ mask[i % 4]!;
+      }
+      return { text: payload.toString('utf8'), total: offset + 4 + len };
+    };
+    const sendServerFrame = (c: import('node:net').Socket, obj: unknown) => {
+      const payload = Buffer.from(JSON.stringify(obj), 'utf8');
+      const hdr =
+        payload.length < 126
+          ? Buffer.from([0x81, payload.length])
+          : Buffer.from([0x81, 126, payload.length >> 8, payload.length & 0xff]);
+      c.write(Buffer.concat([hdr, payload]));
+    };
+
+    const server = createServer((conn) => {
+      let upgraded = false;
+      let rem: Buffer = Buffer.alloc(0);
+      conn.on('data', (chunk: Buffer) => {
+        rem = Buffer.concat([rem, chunk]);
+        if (!upgraded) {
+          const endIdx = rem.indexOf('\r\n\r\n');
+          if (endIdx === -1) return;
+          const req = rem.subarray(0, endIdx).toString('utf8');
+          rem = rem.subarray(endIdx + 4);
+          const key = /Sec-WebSocket-Key:\s*(\S+)/i.exec(req)?.[1] ?? '';
+          const accept = createHash('sha1')
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest('base64');
+          conn.write(
+            `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+          );
+          upgraded = true;
+        }
+        while (rem.length > 0) {
+          const frame = unmaskClientFrame(rem);
+          if (!frame) break;
+          rem = rem.subarray(frame.total);
+          const msg = JSON.parse(frame.text) as { id?: string; method: string };
+          seenRpcMethods.push(msg.method);
+          if (msg.method === 'initialize') {
+            sendServerFrame(conn, { id: msg.id, result: { userAgent: 'codex/0.161.0' } });
+          } else if (msg.method === 'thread/read') {
+            if (nextThreadMode === 'hang') {
+              return;
+            }
+            if (nextThreadMode === 'idle') {
+              sendServerFrame(conn, {
+                id: msg.id,
+                result: {
+                  thread: {
+                    id: scene.sessionId,
+                    status: { type: 'idle' },
+                    canAcceptDirectInput: true,
+                  },
+                },
+              });
+            } else if (nextThreadMode === 'active-approval') {
+              sendServerFrame(conn, {
+                id: msg.id,
+                result: {
+                  thread: {
+                    id: scene.sessionId,
+                    status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+                    canAcceptDirectInput: false,
+                  },
+                },
+              });
+            } else if (nextThreadMode === 'not-loaded') {
+              sendServerFrame(conn, {
+                id: msg.id,
+                result: {
+                  thread: {
+                    id: scene.sessionId,
+                    status: { type: 'notLoaded' },
+                    canAcceptDirectInput: null,
+                  },
+                },
+              });
+            }
+          }
+        }
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(testSockPath, resolve));
+    try {
+      // 9b. Live idle thread -> ready
+      nextThreadMode = 'idle';
+      const liveReady = await probeCodexLiveReadiness({
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        id: SAMPLE_ID,
+        sender: { seat: 'lead', team: 'acme' },
+        remote: testRemote,
+      });
+      expect(liveReady.status).toBe('ready');
+      expect(seenRpcMethods).toEqual(['initialize', 'initialized', 'thread/read']);
+
+      // 9c. Live active thread (waitingOnApproval) -> would-hold, and deliverCodexNativeRoute aborts without spawning codex queue
+      nextThreadMode = 'active-approval';
+      const liveWouldHold = await probeCodexLiveReadiness({
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        id: SAMPLE_ID,
+        sender: { seat: 'lead', team: 'acme' },
+        remote: testRemote,
+      });
+      expect(liveWouldHold).toMatchObject({
+        status: 'would-hold',
+        threadId: scene.sessionId,
+        threadStatus: 'active',
+        activeFlags: ['waitingOnApproval'],
+        canAcceptDirectInput: false,
+      });
+
+      const wouldHoldDeliver = await deliverCodexNativeRoute(
+        {
+          route: 'native',
+          runtime: 'codex',
+          copy: { dir: dropDir, name: SAMPLE_ID },
+          root: scene.root,
+          home: scene.home,
+          session: 'teamcli',
+          seat: 'builder-3',
+          sender: { seat: 'tester-2', team: 'teamcli' },
+          remote: testRemote,
+        },
+        {
+          id: SAMPLE_ID,
+          record: signedRecordText,
+          pointer: SAMPLE_POINTER,
+        },
+        {
+          now,
+          deliveryTimeout: shortenedTimeouts,
+          liveRoutesRemain: true,
+          liveProbe: true,
+          spawn: () => {
+            throw new Error('must never spawn codex queue when live thread/read reports would-hold');
+          },
+        },
+      );
+      expect(wouldHoldDeliver.outcome).toBe('unreachable');
+      if (wouldHoldDeliver.outcome !== 'enqueue') {
+        expect(wouldHoldDeliver.wouldHold).toBe(true);
+      }
+      expect(wouldHoldDeliver.walkAttempt).toEqual({
+        route: 'native',
+        outcome: 'unreachable',
+        liveRoutesRemain: true,
+        at: new Date('2026-10-20T01:00:00.000Z'),
+        ms: 0,
+        reason: `codex thread ${scene.sessionId} is active (waitingOnApproval); codex queue would hold the message`,
+        receipt: { kind: 'stored', id: SAMPLE_ID },
+      });
+
+      // 9d. Live notLoaded thread -> unavailable
+      nextThreadMode = 'not-loaded';
+      const liveNotLoaded = await probeCodexLiveReadiness({
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        id: SAMPLE_ID,
+        sender: { seat: 'lead', team: 'acme' },
+        remote: testRemote,
+      });
+      expect(liveNotLoaded).toEqual({
+        status: 'unavailable',
+        reason: `codex thread ${scene.sessionId} is notLoaded on the app-server daemon`,
+      });
+
+      // 9e. Hanging thread/read is bounded by timeoutMs (<= 400ms) -> unavailable + timedOut: true
+      nextThreadMode = 'hang';
+      const liveTimedOut = await probeCodexLiveReadiness({
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        id: SAMPLE_ID,
+        sender: { seat: 'lead', team: 'acme' },
+        remote: testRemote,
+        timeoutMs: 40,
+      });
+      expect(liveTimedOut).toEqual({
+        status: 'unavailable',
+        timedOut: true,
+        reason: 'codex app-server thread/read probe timed out after 40ms',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(testSockPath, { force: true });
+    }
   });
 });
