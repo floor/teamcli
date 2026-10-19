@@ -459,6 +459,10 @@ export type SendDaemonHandle = {
   socketPath: string;
   lockPath: string;
   close(): Promise<void>;
+  /** The per-root send server's one dispatcher: the same function the socket server calls for
+   *  op `send`. Admission, the owner/orchestrator rule, the per-seat queue and the typed
+   *  behavior are unchanged; this exposes the existing closure, it does not translate requests. */
+  deliver(request: DaemonSendRequest): Promise<DaemonSendResponse>;
 };
 
 export type StartSendDaemonResult =
@@ -634,6 +638,10 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     });
   };
 
+  // One dispatcher for this root: the socket server's `send` branch and the returned handle
+  // both call it, so a later machine route reaches exactly the behavior `team send` reaches.
+  const deliver = enqueueSend;
+
   let closed = false;
   let server: Server;
 
@@ -683,7 +691,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         return;
       }
       if (req.op === 'send') {
-        void enqueueSend(req).then((res) => {
+        void deliver(req).then((res) => {
           if (!socket.destroyed) {
             socket.end(`${JSON.stringify(res)}\n`);
           }
@@ -717,6 +725,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       socketPath,
       lockPath,
       close: closeHandle,
+      deliver,
     },
   };
 }
