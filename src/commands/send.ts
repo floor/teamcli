@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { seatOverridesOf, type SeatOverrides } from '../config/apply.ts';
 import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -603,8 +604,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
   // walks; nothing declared leaves mcp-inbox, drop, typed. The words are the receiving team
-  // file's (its own key and the seat's) and the registry project's, read here; a host that hands
-  // in a chain decides instead, which is how a test picks an order without a file to write.
+  // file's (its own key and the seat's) and the registry project's, read here, and the seat's
+  // signed settings say `delivery_order` and `human` in the file's place; a host that hands in a
+  // chain decides instead, which is how a test picks an order without a file to write.
+  const overrides: SeatOverrides = host.delivery ? {} : seatOverridesOf({ home: host.home, root: to.root, seat: to.seat });
   const rawChain = host.delivery ?? deliveryChainOf({
     root: to.root,
     seat: to.seat,
@@ -613,6 +616,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // from its root, and one that cannot be read declares nothing.
     ...(to.cross ? {} : { file: team }),
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+    overrides,
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
@@ -620,7 +624,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // order names is kept out, and each one's human reason is recorded on the history line, so a
   // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
   // back.
-  const human = declared?.human === true;
+  const human = overrides.human ?? (declared?.human === true);
   const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
 
   // One signed record is written into the recipient's folder — the whole body, its thread, the
