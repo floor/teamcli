@@ -500,6 +500,20 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `status.invocation` | `status` | 2 | the invocation can't be read | `team status extra` |
 | `status.not-a-repo` | `status` | 2 | not inside a git repository | `team status` |
 | `status.not-yours` | `status` | 2 | the caller may not read this team | `team status` |
+| `swap.cancelled` | `swap` | 0 | the queued swap was taken out of the queue | `team swap cancel builder-1` |
+| `swap.forced` | `swap` | 0 | the owner forced the queued swap to run at once | `team swap now builder-1` |
+| `swap.listed` | `swap` | 0 | the queue or the entity's rule listing was shown | `team swap` |
+| `swap.queued` | `swap` | 0 | a model swap was queued for the seat's boundary | `team swap queue builder-1` |
+| `swap.caller` | `swap` | 1 | not the owner, the orchestrator or the operator, or not a seat of the team for the view | `team swap queue builder-1` |
+| `swap.detached` | `swap` | 1 | a run with no terminal | `team swap now builder-1` |
+| `swap.io` | `swap` | 1 | the state can't be read or written | `team swap queue builder-1` |
+| `swap.not-queued` | `swap` | 1 | no swap waits for the seat | `team swap cancel builder-1` |
+| `swap.rule` | `swap` | 1 | the entity's model rule can't be read or none is declared | `team swap queue builder-1` |
+| `swap.seat` | `swap` | 1 | no such seat in the team | `team swap queue nobody` |
+| `swap.target` | `swap` | 1 | no seat of the entity the team may copy from runs the requested model, or no recipe is available | `team swap queue builder-1 --to claude-code:nothing` |
+| `swap.unchanged` | `swap` | 1 | the seat already declares a model the rule allows | `team swap queue builder-1` |
+| `swap.file` | `swap` | 2 | the team file or a --file path can't be read | `team swap --rule` |
+| `swap.invocation` | `swap` | 2 | the invocation can't be read | `team swap queue` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |

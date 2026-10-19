@@ -684,6 +684,173 @@ export const HOLD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** One model a swap moves from or to: the file's words at queue time. */
+const SWAP_MODEL_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['cli', 'vendor', 'model', 'version', 'display'],
+  properties: {
+    cli: { type: 'string', minLength: 1 },
+    vendor: { type: 'string', minLength: 1 },
+    model: { type: 'string', minLength: 1 },
+    version: { type: 'string', minLength: 1 },
+    display: { type: 'string', minLength: 1 },
+  },
+};
+
+/** One queued swap: the record the watch carries out at the seat's boundary. */
+const QUEUED_SWAP_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['from', 'to', 'reason', 'queuedAt', 'deadline', 'waitFor'],
+  properties: {
+    from: SWAP_MODEL_SCHEMA_FRAGMENT,
+    to: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['cli', 'vendor', 'model', 'version', 'display', 'launch'],
+      properties: {
+        ...(SWAP_MODEL_SCHEMA_FRAGMENT.properties as Record<string, JsonSchema>),
+        launch: { type: 'string', minLength: 1 },
+        modelFrom: { type: 'string', const: 'launcher' },
+        effort: { type: 'string', minLength: 1 },
+        account: { type: 'string', minLength: 1 },
+      },
+    },
+    reason: { type: 'string', enum: ['model-rule', 'config', 'owner'] },
+    queuedAt: { type: 'string', minLength: 1 },
+    deadline: { type: 'string', minLength: 1 },
+    waitFor: { type: 'string', minLength: 1 },
+    rule: { type: 'string' },
+    forced: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team swap` (`schema/swap.schema.json`). */
+export const SWAP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.swap',
+  fileName: 'swap.schema.json',
+  title: 'team swap --json output',
+  statuses: ['listed', 'rule', 'queued', 'forced', 'cancelled'],
+  required: ['project', 'session'],
+  properties: {
+    entity: { type: ['string', 'null'] },
+    seat: { type: 'string', minLength: 1 },
+    rule: { type: 'string' },
+    entries: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['subject', 'allow', 'labs'],
+        properties: {
+          subject: { type: 'string', minLength: 1 },
+          allow: { type: 'boolean' },
+          labs: { type: 'array', items: { type: 'string', minLength: 1 } },
+        },
+      },
+    },
+    teams: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'name', 'root', 'visibility'],
+        properties: {
+          id: { type: ['string', 'null'] },
+          name: { type: 'string', minLength: 1 },
+          root: { type: 'string', minLength: 1 },
+          visibility: { type: 'string', enum: ['public', 'private'] },
+        },
+      },
+    },
+    breaches: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['team', 'root', 'visibility', 'seat', 'role', 'vendor', 'model', 'proposal', 'reason'],
+        properties: {
+          team: { type: 'string', minLength: 1 },
+          root: { type: 'string', minLength: 1 },
+          visibility: { type: 'string', enum: ['public', 'private'] },
+          seat: { type: 'string', minLength: 1 },
+          role: { type: 'string', minLength: 1 },
+          vendor: { type: 'string', minLength: 1 },
+          model: { type: 'string', minLength: 1 },
+          proposal: {
+            oneOf: [
+              { type: 'null' },
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['donor', 'recipe'],
+                properties: {
+                  donor: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['team', 'root', 'seat'],
+                    properties: {
+                      team: { type: 'string', minLength: 1 },
+                      root: { type: 'string', minLength: 1 },
+                      seat: { type: 'string', minLength: 1 },
+                    },
+                  },
+                  recipe: { type: 'object' },
+                },
+              },
+            ],
+          },
+          reason: { type: ['string', 'null'] },
+        },
+      },
+    },
+    ignored: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['root', 'why'],
+        properties: {
+          root: { type: 'string', minLength: 1 },
+          why: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    swaps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seat', 'swap'],
+        properties: {
+          seat: { type: 'string', minLength: 1 },
+          swap: QUEUED_SWAP_SCHEMA_FRAGMENT,
+        },
+      },
+    },
+    swap: QUEUED_SWAP_SCHEMA_FRAGMENT,
+    donor: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['team', 'root', 'seat'],
+      properties: {
+        team: { type: 'string', minLength: 1 },
+        root: { type: 'string', minLength: 1 },
+        seat: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+});
+
 /** One stop point a pause records: the seat, and what its record and worktree held when the
  *  pause was written. Every field but the seat is absent when the tool held nothing for it. */
 const PAUSE_STOP_SCHEMA_FRAGMENT: JsonSchema = {
@@ -1926,6 +2093,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DELEGATE_OUTPUT_SCHEMA,
   REVOKE_OUTPUT_SCHEMA,
   HOLD_OUTPUT_SCHEMA,
+  SWAP_OUTPUT_SCHEMA,
   PAUSE_OUTPUT_SCHEMA,
   RESUME_OUTPUT_SCHEMA,
   RAISE_OUTPUT_SCHEMA,
