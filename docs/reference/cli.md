@@ -128,7 +128,7 @@ Hidden: no
 
 Usage:
 
-    team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+    team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
 
 ### Who may run it
 
@@ -151,7 +151,7 @@ Hidden: no
 
 Usage:
 
-    team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+    team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
 
 #### Who may run it
 
@@ -165,6 +165,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1834,6 +1835,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--brief` | yes | no | no |
 | `--channel` | yes | no | no |
 | `--client` | yes | no | no |
 | `--confirm` | yes | no | no |

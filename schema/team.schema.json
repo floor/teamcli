@@ -542,6 +542,7 @@
             "uniqueItems": true,
             "items": {
               "enum": [
+                "socket",
                 "native",
                 "mcp-inbox",
                 "typed",
@@ -668,6 +669,7 @@
       "uniqueItems": true,
       "items": {
         "enum": [
+          "socket",
           "native",
           "mcp-inbox",
           "typed",

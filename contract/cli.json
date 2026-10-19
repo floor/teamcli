@@ -252,6 +252,12 @@
             },
             {
               "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--session",
               "repeatable": false,
               "takesValue": true
@@ -268,7 +274,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+            "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
           ],
           "who": {
             "gate": "team-read",
@@ -277,7 +283,7 @@
         }
       ],
       "usage": [
-        "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+        "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
       ],
       "who": {
         "gate": "team-read",
@@ -3145,6 +3151,12 @@
     },
     {
       "flags": [
+        {
+          "hidden": false,
+          "name": "--brief",
+          "repeatable": false,
+          "takesValue": true
+        },
         {
           "hidden": false,
           "name": "--channel",

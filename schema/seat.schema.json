@@ -83,6 +83,7 @@
             "items": {
               "type": "string",
               "enum": [
+                "socket",
                 "native",
                 "mcp-inbox",
                 "typed",
