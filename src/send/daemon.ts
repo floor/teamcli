@@ -3,8 +3,8 @@
 // Owns the per-seat FIFO queue (`MAX_QUEUE_DEPTH = 32`), retries when a seat is mid-turn
 // (`working`) or its per-seat lock (`seat-locks/<session>/<seat>`) is held by `up` or
 // `answer`, checks process identity (`paneHoldsShell` and `seatProcessVerdict`) so a trigger
-// is never typed into a bare shell, checks composer state (`boxHoldsText` and `readScreen`)
-// so a trigger is never typed over an unsent user draft or a dialog screen, writes `0600`
+// is never typed into a bare shell, checks composer state (`readScreen`) so a trigger is never
+// typed over a dialog screen and unsent text is copied and put back by the delivery, writes `0600`
 // drop files under `<storeDir>/drops/<session>/<seat>/<id>`, and appends `0600` JSONL records
 // to `<storeDir>/messages.jsonl`.
 import { randomUUID } from 'node:crypto';
@@ -29,8 +29,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, typeText, type PaneProcesses } from '../herdr.ts';
-import { boxHoldsText } from '../launch/deliver.ts';
+import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
@@ -82,6 +81,9 @@ export const realDaemonHost: DaemonHost = {
     status: (session, pane) => agentStatus(pane, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     paneText: (session, pane) => paneRead(pane, 40, session),
+    // The queue's typed leg is the same delivery `team send` makes: a box holding its owner's
+    // unsent text is cleared with the profile's measured keys and the text pasted back.
+    sendKey: (session, pane, key) => sendKey(pane, key, session),
   },
   now: () => new Date(),
   home: homedir(),
@@ -1020,9 +1022,9 @@ async function executeQueuedSend(
           return recordHeld(`the screen reads ${dialog}; the drop file is at ${dropPath}`);
         }
         const screenKind = readScreen(configured.cli, rawScreen).kind;
-        if (screenKind === 'unsent' && !boxHoldsText(configured.cli, trigger, rawScreen)) {
-          return recordHeld(`the composer already holds unsent text; the drop file is at ${dropPath}`);
-        }
+        // Unsent text does not hold the drop here: the delivery below copies it beside the drop,
+        // clears the box, delivers, and pastes the text back (or holds where this CLI has no
+        // measured way into its box).
         if (status === 'working' || screenKind === 'working') {
           lock.release();
           lock = null;
