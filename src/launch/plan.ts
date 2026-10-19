@@ -618,12 +618,14 @@ export function upPlan(input: UpInput): Step[] {
       });
     }
     // The place's session is the herdr session this launch aims at. A file route binds the
-    // team file's own session instead (`mcp/register.ts`), read in the seat's folder: the
-    // server refuses any other.
+    // team file's own session instead (`mcp/register.ts`), read from the file this run read:
+    // the server refuses any other. A launch-line route names the same file to its server, so
+    // both resolve the team from it rather than from the seat's folder.
     const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
+      ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
     }, seat.sessionName);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.

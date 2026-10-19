@@ -157,6 +157,21 @@ describe('registerInbox', () => {
     }]);
   });
 
+  test('a launch team file with a space in its path reaches the add argv whole', () => {
+    const project = folder();
+    const spaced = join(project, 'a project');
+    mkdirSync(join(spaced, '.agents'), { recursive: true });
+    writeFileSync(join(spaced, '.agents', 'team.yaml'), example);
+    const lobby = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
+    dirs.push(lobby);
+    const teamFile = join(spaced, '.agents', 'team.yaml');
+    const { run, calls } = fakeAdd();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: lobby, file: teamFile, run })).toEqual({ ok: true });
+    expect(calls).toHaveLength(1);
+    // The command is run with an argv array, never a shell: the path is one word.
+    expect(calls[0]!.args.slice(-2)).toEqual(['--file', teamFile]);
+  });
+
   test('a launch file that cannot be read refuses: the server would start with no team', () => {
     const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
     dirs.push(dir);

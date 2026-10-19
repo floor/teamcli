@@ -257,6 +257,23 @@ describe('team mcp serve', () => {
     }
   });
 
+  test('an explicit team file that cannot be read refuses, even where the folder has one', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root);
+      const code = await runMcpServe({ seat: 'lead', session: SESSION, file: join(at.root, 'missing.yaml') }, io, {
+        lines: (async function* () {
+          // no lines
+        })(),
+        write: () => {},
+      }, { home: at.home });
+      expect(code).toBe(2);
+      expect(io.err).toContain('missing.yaml');
+    } finally {
+      at.cleanup();
+    }
+  });
+
   test('an undeclared seat, a wrong session, or no seat at all refuses to start', async () => {
     const at = place();
     try {
