@@ -18,6 +18,8 @@ import { admitSend, senderHeader } from '../src/send/admit.ts';
 import { historyPath } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
+import { installKey } from '../src/store/keys.ts';
 import { updateState } from '../src/state.ts';
 import { gitEnv, recordBody, testIo } from './helpers.ts';
 
@@ -122,6 +124,15 @@ function seatOf(w: World, project: string, session: string, seat: string, role: 
   const made = agent(w.home, { name: seat, role, cli, team: id, seat, session, pane });
   team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role, leads: extra.leads === true, ...(extra.nickname === undefined ? {} : { nickname: extra.nickname }) }]);
   return made;
+}
+
+/** One signed nickname on an agent record, through the store's own plan and write. */
+function signNickname(home: string, agentId: string, nickname: string): void {
+  installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'nickname', value: nickname }] });
+  if (!plan.ok) throw new Error(`the plan was refused: ${plan.why}`);
+  const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T08:00:00.000Z') });
+  if (!written.ok) throw new Error(`the write was refused: ${written.why}`);
 }
 
 // ---- unit: the spec grammar, and what each refusal says -------------------------------------
@@ -265,6 +276,44 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     const bySeat = resolveTarget(w.home, 'builder-1', { cwd: w.root });
     if ('error' in bySeat) throw new Error(`the seat did not resolve: ${bySeat.error}`);
     expect(bySeat.agent.id).toBe(builder.id);
+  });
+
+  test('a signed nickname is the address, and the roster word it replaced names nobody', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'hephaestus' },
+    ]);
+    signNickname(w.home, builder.id, 'wren');
+
+    // The signed word stands where the file's word did: both spellings reach the seat…
+    for (const spec of ['wren@alpha', '@wren']) {
+      const target = resolveTarget(w.home, spec, { cwd: w.root });
+      if ('error' in target) throw new Error(`${spec} did not resolve: ${target.error}`);
+      expect(target.agent.id).toBe(builder.id);
+    }
+    // …and the word the signed record replaced addresses nobody any more.
+    expect(resolveTarget(w.home, '@hephaestus', { cwd: w.root })).toEqual({
+      error: '@hephaestus: no seat carries the nickname "hephaestus"; `team send --list` shows the addresses',
+    });
+  });
+
+  test('a signed nickname equal to another seat\'s name is refused, naming both', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false },
+    ]);
+    signNickname(w.home, lead.id, 'builder-1');
+
+    expect(resolveTarget(w.home, 'builder-1', { cwd: w.root })).toEqual({
+      error: 'builder-1: the spec matches two seats — the seat "builder-1" and the nickname "builder-1" of the seat "lead"; nothing was sent',
+      kind: 'ambiguous',
+    });
   });
 
   test('no role addresses: a spec equal to a seat\'s role names nobody', () => {
@@ -597,6 +646,26 @@ describe('the whole command on a registry-resolved spec', () => {
     if (!admitted.ok) throw new Error(`the owner's send is not admitted: ${admitted.why}`);
     expect(drop.text).toBe(`${senderHeader('owner', admitted.rule)}\n${BODY}`);
     expect(drop.path.startsWith(join(beta.root, '.agents', 'send-drops', 'beta', 'lead'))).toBe(true);
+  });
+
+  test('--list prints the nickname a seat signed, and every row is a spec the resolver takes', async () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'hephaestus' },
+    ]);
+    signNickname(w.home, builder.id, 'wren');
+    const host = sendHost(w, 'alpha', {});
+    const io = testIo(w.root, OWNER);
+
+    const code = await runSend(['--list'], io, host);
+
+    expect(code).toBe(0);
+    // The signed word replaces the file's in the row: the printed address is the one @wren takes.
+    expect(io.out).toContain('@wren');
+    expect(io.out).not.toContain('@hephaestus');
   });
 
   test('a spec the registry refuses types nowhere and leaves no drop behind', async () => {

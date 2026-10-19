@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
-import { seatOverridesOf, type SeatOverrides } from '../config/apply.ts';
+import { seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -1951,17 +1951,22 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   // The reach a send would take, judged from the declared CLI alone: a Claude Code seat carries
   // the cross-session channel, every other CLI the typed trigger. `--list` reads no pane and
   // dials nothing, so it claims no live address; a stopped seat renders `stopped` in its place.
-  const seats: SeatRow[] = loaded.team.seats.map((seat) => ({
-    name: seat.name,
-    // The `@<nickname>` form: every row the listing prints is a spec the resolver takes as it
-    // stands, and a bare nickname would not be one outside the caller's team.
-    nickname: seat.nickname === undefined ? null : `@${seat.nickname}`,
-    cli: seat.cli,
-    role: seat.role,
-    project,
-    reach: seat.cli === 'claude-code' ? 'socket' : 'typed',
-    stopped: seat.stopped === true,
-  }));
+  const seats: SeatRow[] = loaded.team.seats.map((seat) => {
+    // The signed seat setting stands where the file word did, so the row prints the address the
+    // resolver takes: every row the listing prints is a spec the resolver answers.
+    const nickname = seatOverridesOf({ home: host.home, root: loaded.root, seat: seat.name }).nickname ?? seat.nickname;
+    return {
+      name: seat.name,
+      // The `@<nickname>` form: every row the listing prints is a spec the resolver takes as it
+      // stands, and a bare nickname would not be one outside the caller's team.
+      nickname: nickname === undefined ? null : `@${nickname}`,
+      cli: seat.cli,
+      role: seat.role,
+      project,
+      reach: seat.cli === 'claude-code' ? 'socket' : 'typed',
+      stopped: seat.stopped === true,
+    };
+  });
   // The caller's entity reaches past its own file: the machine's team registry holds every other
   // team of the same entity, and each of their seats is addressable as `<seat>@<team>` — the
   // team's own project name is the scope. A registry the home cannot read is reported as the
@@ -2012,9 +2017,17 @@ function crossTeamRows(host: SendHost, teams: Record<string, TeamRecord>, ownId:
     for (const entry of record.roster) {
       const agent = agents.get(entry.agent);
       if (!agent || agent.lifecycle === 'retired') continue;
+      const nickname = seatSettingsOf({
+        home: host.home,
+        root: record.root,
+        agentId: entry.agent,
+        seat: entry.seat,
+        teamId: id,
+        entity: record.entity,
+      }).nickname ?? entry.nickname;
       rows.push({
         name: `${entry.seat}@${record.project}`,
-        nickname: entry.nickname === undefined ? null : `${entry.nickname}@${record.project}`,
+        nickname: nickname === undefined ? null : `${nickname}@${record.project}`,
         cli: agent.cli,
         role: entry.role,
         stopped: agent.lifecycle === 'stopped' || record.lifecycle === 'stopped' || record.lifecycle === 'archived',

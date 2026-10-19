@@ -9,7 +9,8 @@ import { loadTeamFile } from '../file/load.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
-import { findTeam, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeam, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
+import { seatSettingsOf } from '../config/apply.ts';
 
 /** What a spec resolves to: the owning team record, the agent, and the pane to type into. */
 export type Target = { team: TeamRecord; agent: Agent; pane: string };
@@ -131,12 +132,28 @@ function fromId(home: string, id: string, live: LiveRead): Target | ResolveProbl
 
 type NicknameSeat = { team: TeamRecord; seat: string };
 
+/** The nickname a roster line answers to: the seat's signed setting where one is set, the
+ *  roster's projection of the file's word otherwise. A signed word stands in the file's place,
+ *  as it does in the headline a send prints, and the file's old word stops addressing the seat;
+ *  a record that does not verify says nothing, so a broken record never makes an address vanish. */
+function nicknameOfLine(home: string, team: TeamRecord, line: RosterEntry): string | undefined {
+  const signed = seatSettingsOf({
+    home,
+    root: team.root,
+    agentId: line.agent,
+    seat: line.seat,
+    teamId: team.id,
+    entity: team.entity,
+  }).nickname;
+  return signed ?? line.nickname;
+}
+
 /** The roster lines one nickname answers in one team. The file makes a nickname unique in its
  *  team; a registry written elsewhere may hold the collision, and no address in it may pick a
  *  seat by accident. */
-function nicknameSeatsOf(team: TeamRecord, nickname: string): NicknameSeat[] {
+function nicknameSeatsOf(home: string, team: TeamRecord, nickname: string): NicknameSeat[] {
   return team.roster
-    .filter((entry) => entry.nickname === nickname)
+    .filter((entry) => nicknameOfLine(home, team, entry) === nickname)
     .map((entry) => ({ team, seat: entry.seat }));
 }
 
@@ -166,7 +183,7 @@ function fromNickname(
     entity = self?.entity ?? loaded.team.entity ?? null;
   }
   if (self !== null) {
-    const own = nicknameSeatsOf(self, nickname);
+    const own = nicknameSeatsOf(home, self, nickname);
     if (own.length > 1) {
       const named = own.map((one) => `the seat "${one.seat}"`);
       return { error: `${spec}: the nickname "${nickname}" names more than one seat of this team — ${named.join(' and ')}; nothing was sent`, kind: 'ambiguous' };
@@ -183,7 +200,7 @@ function fromNickname(
     self === null
       ? teams
       : teams.filter((team) => team.id !== self.id && entity !== null && team.entity === entity);
-  const found = scope.flatMap((team) => nicknameSeatsOf(team, nickname));
+  const found = scope.flatMap((team) => nicknameSeatsOf(home, team, nickname));
   if (found.length === 0) {
     return { error: `${spec}: no seat carries the nickname "${nickname}"; \`team send --list\` shows the addresses` };
   }
@@ -214,7 +231,7 @@ function lookupInTeam(
   live: LiveRead,
   leadAddress: boolean,
 ): Target | ResolveProblem {
-  const chosen = seatOfTarget(team, spec, target, leadAddress, leadAddress && target === LEAD ? fileLeadOf(home, team) : null);
+  const chosen = seatOfTarget(home, team, spec, target, leadAddress, leadAddress && target === LEAD ? fileLeadOf(home, team) : null);
   if (chosen !== null && 'error' in chosen) return chosen;
   const seat = chosen === null ? target : chosen.seat;
   const wanted =
@@ -264,6 +281,7 @@ function targetOfSeat(
  * accident. `null` leaves the target to the agent-record lookup in `targetOfSeat`.
  */
 function seatOfTarget(
+  home: string,
   team: TeamRecord,
   spec: string,
   target: string,
@@ -285,7 +303,7 @@ function seatOfTarget(
   }
   const seatNames = team.roster.filter((entry) => entry.seat === target).map((entry) => entry.seat);
   const nicknameSeats = team.roster
-    .filter((entry) => entry.nickname === target && entry.seat !== target)
+    .filter((entry) => entry.seat !== target && nicknameOfLine(home, team, entry) === target)
     .map((entry) => entry.seat);
   const answers = [...new Set([...seatNames, ...nicknameSeats])];
   if (answers.length > 1) {

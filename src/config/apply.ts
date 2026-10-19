@@ -21,22 +21,27 @@ export type SeatOverrides = {
 };
 
 /**
- * The at-once settings the signed records hold for one seat, nearest level first. `home` is the
- * registry that holds the records; null reads none of them, as a null home reads the team file
- * alone elsewhere. A seat with no agent record has no signed settings: bootstrap declarations
- * live in the team file and are read by the callers that already read it.
+ * The at-once settings the signed records hold for one seat, nearest level first, when the caller
+ * already knows the agent. `home` is the registry that holds the records. The caller supplies
+ * the team, entity and project whose records the chain reads; a caller that has the roster line
+ * at hand passes them all, so no lookup repeats.
  */
-export function seatOverridesOf(input: { home: string | null; root: string; seat: string }): SeatOverrides {
-  if (input.home === null) return {};
+export function seatSettingsOf(input: {
+  home: string;
+  root: string;
+  agentId: string;
+  seat: string;
+  teamId?: string;
+  entity?: string | null;
+  projectId?: string | null;
+}): SeatOverrides {
   try {
-    const found = agentIdOf(input.home, input.root, input.seat);
-    if (found.agentId === null) return {};
     const chain = resolveConfigChain(readConfigSources({
       home: input.home,
-      entity: found.entity,
-      projectId: found.projectId,
-      teamId: teamIdOf(input.root),
-      agentId: found.agentId,
+      entity: input.entity ?? null,
+      projectId: input.projectId ?? null,
+      teamId: input.teamId ?? teamIdOf(input.root),
+      agentId: input.agentId,
       seatName: input.seat,
     }));
     if (!chain.ok) return {};
@@ -52,6 +57,30 @@ export function seatOverridesOf(input: { home: string | null; root: string; seat
   } catch {
     // An unreadable registry or record declares nothing to a runtime consumer; the read
     // commands and `team check` are where a damaged source is reported.
+    return {};
+  }
+}
+
+/**
+ * The at-once settings the signed records hold for one seat, nearest level first. `home` is the
+ * registry that holds the records; null reads none of them, as a null home reads the team file
+ * alone elsewhere. A seat with no agent record has no signed settings: bootstrap declarations
+ * live in the team file and are read by the callers that already read it.
+ */
+export function seatOverridesOf(input: { home: string | null; root: string; seat: string }): SeatOverrides {
+  if (input.home === null) return {};
+  try {
+    const found = agentIdOf(input.home, input.root, input.seat);
+    if (found.agentId === null) return {};
+    return seatSettingsOf({
+      home: input.home,
+      root: input.root,
+      agentId: found.agentId,
+      seat: input.seat,
+      entity: found.entity,
+      projectId: found.projectId,
+    });
+  } catch {
     return {};
   }
 }
