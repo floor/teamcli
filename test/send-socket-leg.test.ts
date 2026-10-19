@@ -3,11 +3,11 @@
 // declared order is walked as written. No live pane and no real socket: the host's deliver is a
 // fake, and the socket file only has to stand where `socketOf` looks.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { cliHookSettings, cliHookSettingsPath } from '../src/launch/cli-hook.ts';
+import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/launch/cli-hook.ts';
 import { declaredInboundOf } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -286,4 +286,36 @@ test('the merged generated file carries the wrapper word, and the walk dials on 
   expect(parsed.crossSessionInbound).toBe('accept');
   const plain = JSON.parse(cliHookSettings(statePath)) as Record<string, unknown>;
   expect('crossSessionInbound' in plain).toBe(false);
+});
+
+test('the install writes the wrapper word into the same file the launch appends', () => {
+  const wrap = wrapper('accept');
+  const made = world(null, [], { lead: wrap.launch });
+  cleanup = () => {
+    made.cleanup();
+    wrap.cleanup();
+  };
+
+  const landed = installCliHooks(made.dir, 'acme', [
+    { name: 'lead', cli: 'claude-code', launch: wrap.launch },
+  ]);
+
+  expect(landed.lead).toBeDefined();
+  const parsed = JSON.parse(readFileSync(landed.lead ?? '', 'utf8')) as Record<string, unknown>;
+  expect(parsed.hooks).toBeDefined();
+  expect(parsed.crossSessionInbound).toBe('accept');
+});
+
+test('a launch line with its own --settings keeps its word, and a stale generated file is not read', () => {
+  const launch = `claude --settings '{"crossSessionInbound":"hold"}'`;
+  const made = world(null, [], { lead: launch });
+  cleanup = made.cleanup;
+  // A leftover generated file from an earlier install says accept; it is not on this line, so it
+  // is not the session's settings and must not decide the dial.
+  generated(made, JSON.stringify({ crossSessionInbound: 'accept' }));
+
+  const found = declaredInboundOf({ dir: made.dir, root: made.root, session: 'acme', seat: 'lead', launch });
+
+  expect(found.policy).toBe('hold');
+  expect(found.source).toBe(made.root);
 });
