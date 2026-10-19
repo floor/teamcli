@@ -1,7 +1,7 @@
 // The machine socket's framing, as a standalone host: accept one connection, read one
 // newline-terminated JSON line under the daemon's measured frame limit (and an optional
-// caller-set frame-assembly deadline), hand the decoded value to the caller as untrusted input,
-// write the caller's answer once, and end.
+// caller-set frame-assembly deadline), hand the decoded value and its raw line to the caller as
+// untrusted input, write the caller's answer once, and end.
 //
 // It opens no listener until listen() and starts no service. It owns no path: it never unlinks
 // and never chmods `socketPath`, so a stale or unknown socket stays the caller's decision
@@ -114,7 +114,7 @@ export function createHostServer(options) {
       }
       let outcome;
       try {
-        outcome = Promise.resolve(onRequest(input));
+        outcome = Promise.resolve(onRequest(input, line));
       } catch {
         refuse(socket, 'handler-error', answered);
         return;
@@ -132,14 +132,20 @@ export function createHostServer(options) {
   async function listen() {
     if (closed) return { ok: false, reason: 'the host server is closed', code: null };
     const listener = createServer((socket) => serveConnection(socket));
-    const failure = await new Promise((done) => {
-      const onBindError = (error) => done(error);
-      listener.once('error', onBindError);
-      listener.listen(socketPath, () => {
-        listener.off('error', onBindError);
-        done(null);
+    let failure = null;
+    try {
+      failure = await new Promise((done) => {
+        const onBindError = (error) => done(error);
+        listener.once('error', onBindError);
+        listener.listen(socketPath, () => {
+          listener.off('error', onBindError);
+          done(null);
+        });
       });
-    });
+    } catch (error) {
+      // A synchronous bind throw is a bind failure like an emitted one, never a rejected call.
+      failure = error;
+    }
     if (failure !== null) {
       return {
         ok: false,
