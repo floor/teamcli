@@ -804,7 +804,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // its CLI's own screens instead: there is no drop-file trigger to build, and the walk is
     // run in this process (below), not handed to the daemon.
     const compose = profileFor(to.cli)?.compose ?? null;
-    const trigger = readTriggerLine(to.seat, to.session);
+    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project });
     if (trigger === null && compose === null) {
       return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
     }

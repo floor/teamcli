@@ -91,6 +91,18 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
 
+test('the direct typed leg names the signed sender and the team it wrote from', async () => {
+  const made = nativeWorld();
+  cleanup = made.cleanup;
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(pane.typed).toEqual(['From owner@acme: run team drops --read --seat lead --session acme and do that.']);
+});
+
 test('--wait to a claude-code seat walks the typed leg without dialing the socket and waits on the thread', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
