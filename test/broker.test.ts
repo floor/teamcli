@@ -214,17 +214,22 @@ function leaveStaleSocket(at: string = brokerSocket(root)): void {
  *  serialized start must prevent is a second start taking a path this one is still on its way
  *  to; a second start arriving after the file exists reads a live socket and is refused busy
  *  either way.
- *  It prints `ready` with a raw write — out before the hold can block the loop — then one JSON
- *  line with the outcome. A serving child stays alive; anything else runs out of work and
- *  exits on its own. */
-const FIXTURE = `import { lstatSync, readFileSync, writeSync } from 'node:fs';
+ *  It prints `ready` with a raw write — out before the hold can block the loop — then, given a
+ *  go file, parks until it appears before starting: a scene can pay this child's boot (bun +
+ *  imports, seconds under heavy load) before the holder's clock starts and keep only its
+ *  in-process start path inside the holder's fixed window. Entering the hold it says `paused`,
+ *  before the busy-wait, so a scene can anchor its own step on the holder being mid-window.
+ *  Then one JSON line with the outcome. A serving child stays alive; anything else runs out of
+ *  work and exits on its own. */
+const FIXTURE = `import { existsSync, lstatSync, readFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
-const [root, delay, repo] = process.argv.slice(2);
+const [root, delay, repo, go] = process.argv.slice(2);
 const real = net.Server.prototype.listen;
 net.Server.prototype.listen = function (...args) {
+  writeSync(1, 'paused\\n');
   const end = Date.now() + Number(delay);
   while (Date.now() < end) {}
   return real.apply(this, args);
@@ -239,6 +244,7 @@ if (!checked.ok) {
   process.exit(2);
 }
 writeSync(1, 'ready\\n');
+if (go !== undefined) while (!existsSync(go)) await new Promise((tick) => setTimeout(tick, 1));
 const result = await startBroker({
   root,
   team: checked.team,
@@ -382,6 +388,15 @@ function startFixture(delayMs: number): FixtureChild {
   const script = join(base, `start-${delayMs}.mjs`);
   writeFileSync(script, FIXTURE);
   return spawnFixture(script, [root, String(delayMs), join(import.meta.dir, '..')]);
+}
+
+/** The same fixture, booted now and released when `go` appears: its boot (bun + imports) lands
+ *  while the scene is still setting up, so only the in-process start path runs inside a
+ *  holder's fixed window — the fixed cost a loaded machine used to stretch past that window. */
+function startAtGoFixture(delayMs: number, go: string): FixtureChild {
+  const script = join(base, `start-at-go-${delayMs}.mjs`);
+  writeFileSync(script, FIXTURE);
+  return spawnFixture(script, [root, String(delayMs), join(import.meta.dir, '..'), go]);
 }
 
 /** One burst child for a per-round root: it waits for that round's go file. */
@@ -1079,29 +1094,44 @@ describe('the start protocol', () => {
   scene('a start\'s release leaves a lock a second start holds', async () => {
     // The release-identity shape, deterministic: A is a real start held pre-listen by the
     // fixture's listen hold (1500ms). Once A holds the lock, the same-principal removal the
-    // finding's own step uses drops that entry, and B — a real start, held the same way —
-    // creates its own lock in the free name. A's walk then lands and A's release runs while B
+    // finding's own step uses drops that entry, and B — a real start, held the same way, its
+    // hold outlasting A's by the margin the post-release check needs — creates its own lock in
+    // the free name. A's walk then lands and A's release runs while B
     // is alive and still mid-section: the release must unlink only the entry A created, so B's
     // lock survives A's exit — bytes and inode both. A release that unlinks the path
     // unconditionally removes a live replacement's lock; this pin is red until the release is
     // identity-bound. B's own walk, arriving after A bound, answers the pinned bind sentence;
-    // B's release then removes its own lock.
+    // B's release then removes its own lock. The window A holds is the only fixed cost left:
+    // it is load-scaled (nothing bounds A's listen above — it is outside the lock's deadline),
+    // B's boot is paid before the window opens, and the go file releases B only once A is
+    // observed inside its hold — a loaded child's boot used to outlast a flat 1500ms and B then
+    // probed a socket A had already bound, answering busy.
     project();
     record();
     const path = brokerSocket(root);
     const lockPath = `${path}.lock`;
-    const a = startFixture(1500);
+    const holdMs = loadBoundedMs(1_500, 20_000);
+    // B holds past A's release by a margin the test's own poll cannot eat: B's bind follows
+    // A's by only its in-process start path now that its boot is pre-paid, and the check that
+    // B's entry survived A's release lands after outcomeOf(A) wakes — up to a poll late — so
+    // without the margin B could be done and released before that check reads the lock.
+    const bHoldMs = holdMs + loadBoundedMs(1_000, 10_000);
+    const go = join(base, 'go-release');
+    const b = startAtGoFixture(bHoldMs, go);
     try {
-      await readyOf(a);
-      if (a.pid === undefined) throw new Error('the fixture has no pid');
-      // The lock naming A itself, not mere existence: the file exists a beat before its pid
-      // lands, and this pin needs A's section begun — the lock observably A's own.
-      await lockedBy(a);
-      expect(Number(readFileSync(lockPath, 'utf8').trim())).toBe(a.pid);
-      unlinkSync(lockPath);
-      const b = startFixture(1500);
+      await readyOf(b); // B is booted and parked: only its start path runs in A's window
+      const a = startFixture(holdMs);
       try {
-        await readyOf(b);
+        await readyOf(a);
+        if (a.pid === undefined) throw new Error('the fixture has no pid');
+        // The lock naming A itself, not mere existence, and A inside its hold: the file exists
+        // a beat before its pid lands, and this pin needs A's section begun — the lock
+        // observably A's own — before the same-principal removal below.
+        await lockedBy(a);
+        await waitFor(() => a.said.includes('paused'));
+        expect(Number(readFileSync(lockPath, 'utf8').trim())).toBe(a.pid);
+        unlinkSync(lockPath);
+        writeFileSync(go, ''); // B starts into the free name while A is still mid-section
         if (b.pid === undefined) throw new Error('the fixture has no pid');
         await lockedBy(b);
         expect(Number(readFileSync(lockPath, 'utf8').trim())).toBe(b.pid);
@@ -1117,10 +1147,10 @@ describe('the start protocol', () => {
         }
         expect((await outcomeOf(b)).kind).toBe('bind-failed');
       } finally {
-        b.kill();
+        a.kill();
       }
     } finally {
-      a.kill();
+      b.kill();
     }
     expect(existsSync(lockPath)).toBe(false); // B's own release removed its own entry
   });
@@ -1232,18 +1262,27 @@ describe('the start protocol', () => {
     // — an entry is published whole — and at rest no start serves through the other: the
     // second serves, the writer resumes into its own section and answers busy, and no lock, no
     // claim, no private temp is left. The outcome pair is the same on both heads; the empty
-    // sighting is the discriminator.
+    // sighting is the discriminator. The hold is the window, not a wait to scale: the second
+    // is booted before the writer's clock starts and parked on a go file, so only its
+    // in-process start path runs inside the hold — a loaded child's boot used to outlast the
+    // fixed 1500ms and the second then probed a socket the writer had already bound, answering
+    // busy. The hold is not scaled: it is the protocol window under test, and the same fixture
+    // is pinned by the claim scene, where the writer's whole acquire runs against
+    // LOCK_WAIT_MS (2000).
     project();
     record();
     const path = brokerSocket(root);
     const lockPath = `${path}.lock`;
-    const writer = gapFixture(1500);
-    const watcher = watchNoPid(lockPath);
+    const go = join(base, 'go-release');
+    const second = startAtGoFixture(0, go);
     try {
-      await readyOf(writer);
-      await waitFor(() => writer.said.includes('paused')); // the writer is in its create's gap
-      const second = startFixture(0);
+      await readyOf(second); // booted and parked before the writer's clock starts
+      const writer = gapFixture(1500);
+      const watcher = watchNoPid(lockPath);
       try {
+        await readyOf(writer);
+        await waitFor(() => writer.said.includes('paused')); // the writer is in its create's gap
+        writeFileSync(go, ''); // release the second into the live writer's window
         const secondOutcome = await outcomeOf(second, loadBoundedMs(15_000, 60_000));
         const writerOutcome = await outcomeOf(writer, loadBoundedMs(15_000, 60_000));
         await watcher.stop();
@@ -1255,11 +1294,11 @@ describe('the start protocol', () => {
         expect(existsSync(`${lockPath}.takeover`)).toBe(false);
         expect(newResidue()).toEqual([]);
       } finally {
-        second.kill();
+        writer.kill();
+        await watcher.stop();
       }
     } finally {
-      writer.kill();
-      await watcher.stop();
+      second.kill();
     }
   });
 
@@ -1274,7 +1313,12 @@ describe('the start protocol', () => {
     // defect the lock's own gap was. The same watch applies — the claim must never exist
     // without its pid — and the same resting shape: the second serves (nothing to clear; the
     // dead start left no socket), the writer answers busy, and lock, claim and temps all end
-    // absent.
+    // absent. The hold is the window, not a wait to scale: LOCK_WAIT_MS (2000) bounds the
+    // writer's whole acquire, so stretching the hold eats the writer's own margin — a live
+    // rival's lock at resume then answers the deadline's `locked`, not `busy` (measured here
+    // before it was written down: hold 2500, second's listen held 3000, writer answered
+    // locked). The second's boot is paid before the window opens (as in the lock scene), so
+    // only its in-process start path runs inside the hold.
     project();
     record();
     const path = brokerSocket(root);
@@ -1283,13 +1327,16 @@ describe('the start protocol', () => {
     const dead = spawnSync(process.execPath, ['-e', '']);
     if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
     writeFileSync(lockPath, `${dead.pid}\n`); // a dead start's lock: the takeover path at once
-    const writer = gapFixture(1500);
-    const watcher = watchNoPid(claimPath);
+    const go = join(base, 'go-release');
+    const second = startAtGoFixture(0, go);
     try {
-      await readyOf(writer);
-      await waitFor(() => writer.said.includes('paused')); // inside the claim's create
-      const second = startFixture(0);
+      await readyOf(second); // booted and parked before the writer's clock starts
+      const writer = gapFixture(1500);
+      const watcher = watchNoPid(claimPath);
       try {
+        await readyOf(writer);
+        await waitFor(() => writer.said.includes('paused')); // inside the claim's create
+        writeFileSync(go, ''); // release the second into the wait's window
         const secondOutcome = await outcomeOf(second, loadBoundedMs(15_000, 60_000));
         const writerOutcome = await outcomeOf(writer, loadBoundedMs(15_000, 60_000));
         await watcher.stop();
@@ -1301,11 +1348,11 @@ describe('the start protocol', () => {
         expect(existsSync(claimPath)).toBe(false);
         expect(newResidue()).toEqual([]);
       } finally {
-        second.kill();
+        writer.kill();
+        await watcher.stop();
       }
     } finally {
-      writer.kill();
-      await watcher.stop();
+      second.kill();
     }
   });
 
