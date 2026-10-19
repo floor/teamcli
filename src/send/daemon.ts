@@ -43,6 +43,7 @@ import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliv
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
+import { declaredInboundOf, inboundIsLive, inboundSkipReason } from './inbound.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -1171,14 +1172,27 @@ async function executeSocketSend(
   // is one this build does not write, and a caller asking for one anyway — an older CLI — is
   // refused here rather than dialed. Nothing is written, nothing is locked, and no history
   // line is appended: the daemon did not touch the seat.
-  if (!SOCKET_SEND) {
+  // A waited send rides the socket, so it is served only for a receiving Claude session that
+  // itself declares `crossSessionInbound: "accept"`: a frame any other receiver would hold at
+  // its box is never dialed. The sender this caller may be is not the question — the receiver's
+  // own declaration is.
+  const receiver = team.seats.find((seat) => seat.name === seatName);
+  const inbound = declaredInboundOf({
+    dir,
+    root,
+    session: team.session,
+    seat: seatName,
+    ...(receiver?.launch !== undefined ? { launch: receiver.launch } : {}),
+  });
+  if (!SOCKET_SEND || inbound.policy !== 'accept') {
+    const why = SOCKET_SEND ? inboundSkipReason(inbound.policy) : 'this build does not carry it';
     return {
       v: 1,
       ok: false,
       id: msgId,
       seat: seatName,
       outcome: 'refused',
-      detail: `${seatName}: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent`,
+      detail: `${seatName}: --wait needs the native leg (team route + your own SendMessage), and ${why}; nothing was sent`,
     };
   }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
@@ -1241,6 +1255,18 @@ async function executeSocketSend(
       ms: Date.now() - startedAt,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
+  }
+  // A session started before its launcher's declaration was in force would hold the frame; the
+  // socket's age answers whether the setting the file declares is the one the session runs with.
+  if (!inboundIsLive(inbound, socketPath)) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts; nothing was sent`,
+    };
   }
 
   const lock = await acquireSeatLockWithRetry(

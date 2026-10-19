@@ -271,14 +271,17 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
 }
 
 /**
- * The legs a send may walk, in the words the delivery order is written in: `native`, the frame on
- * the receiving seat's cross-session socket; `mcp-inbox`, the seat's own MCP inbox; `typed`, the
- * 0600 drop file and one composer trigger line; `drop`, the same 0600 drop file and no keystroke
- * at all — for a receiver that watches its own drop folder, or a pane that must not be typed into.
+ * The legs a send may walk, in the words the delivery order is written in: `socket`, the frame on
+ * the receiving seat's cross-session socket (a signed copy is written first); `native`, the
+ * sender's own cross-session SendMessage, recorded by the sender with `--confirm`; `mcp-inbox`,
+ * the seat's own MCP inbox; `typed`, the 0600 drop file and one composer trigger line; `drop`, the
+ * same 0600 drop file and no keystroke at all — for a receiver that watches its own drop folder,
+ * or a pane that must not be typed into. `socket` and `native` are distinct legs: the socket leg
+ * is this build's own frame on the receiver's socket, the native leg the sender's own call.
  */
-export type DeliveryLeg = 'native' | 'mcp-inbox' | 'typed' | 'drop';
+export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'typed', 'drop'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop'];
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: mcp-inbox,
@@ -293,8 +296,11 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'ty
  * (`src/send/delivery.ts` leaves it out of that seat's order). The `native` leg is not in the
  * default: a level that names it is the sender choosing the cross-session SendMessage and
  * recording the delivery itself, so `native` is the one leg a declared word may add
- * (`src/policy/types.ts`). The chain is the receiving seat's own — entity, project, team, seat —
- * because the order says how that seat's messages may travel.
+ * (`src/policy/types.ts`). The `socket` leg is not in this fallback either: `team send` walks it
+ * first only when the receiver itself declares `crossSessionInbound: accept` and no level of the
+ * chain names an order — the one implied default that adds it (`src/commands/send.ts`). A
+ * declared word may place `socket` anywhere or leave it out. The chain is the receiving seat's
+ * own — entity, project, team, seat — because the order says how that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',

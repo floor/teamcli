@@ -378,13 +378,14 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
-    // Dropping or reordering channels present in `higher` is within. `native` is the one leg a
-    // word may add: it is never in the default order, and a level that names it is the sender
-    // choosing to deliver through its own SendMessage and record the delivery. Every other leg
-    // absent from `higher` is still an addition, and the whole word is set aside.
+    // Dropping or reordering channels present in `higher` is within. `native` and `socket` are
+    // the legs a word may add: neither is in the fallback order, and a level that names one is
+    // the sender choosing that channel — its own SendMessage, or this build's frame on the
+    // receiver's socket. Every other leg absent from `higher` is still an addition, and the whole
+    // word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
   // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field
   // at a time; `src/policy/thresholds.ts` reads the resolved chain back into the set the bus and

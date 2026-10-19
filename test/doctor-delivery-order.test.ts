@@ -61,7 +61,7 @@ describe('doctor reads the delivery_order legs the file may write', () => {
   test('an unknown leg is refused, naming every leg the file may write', async () => {
     const run = await doctor('delivery_order: [telepathy]\n');
     expect(run.code).toBe(2);
-    expect(run.err).toContain('delivery_order "telepathy" must be one of: native, mcp-inbox, typed, drop');
+    expect(run.err).toContain('delivery_order "telepathy" must be one of: socket, native, mcp-inbox, typed, drop');
   });
 });
 

@@ -26,16 +26,15 @@ export const FRAME_LIMIT = 1_048_576;
 export const SEND_TIMEOUT_MS = 5_000;
 
 /**
- * Whether a `team send` from this CLI process may open another session's cross-session
- * socket. Off: the channel is unattested — the receiving session's `crossSessionInbound`
- * policy holds a frame from a standalone sender as unidentified ("The sender did not
- * attest its permission mode"), and a held frame blocks the seat's box until a person
- * lets it through — so no send path dials while this is false: `team send` (with or
- * without `--wait`) walks the receiving seat's delivery order and waits on the thread,
- * and the daemon and the watch's nudge open no socket either. The socket code stays in
- * the tree, one constant away.
+ * Whether this build may open another session's cross-session socket at all. On: the channel
+ * is carried, and a send dials it only for a receiving Claude session that itself declares
+ * `crossSessionInbound: "accept"` (`src/send/inbound.ts`). Hold, refuse and unset are skipped
+ * before a connection is made, so no frame lands at a box that would hold it. A sender that
+ * cannot use the socket — the receiver is another CLI, or declares nothing — walks the rest of
+ * its order. The socket takes a frame without acknowledging it, so a write is transport, never
+ * a read; only a signed receipt makes a message read.
  */
-export const SOCKET_SEND = false;
+export const SOCKET_SEND: boolean = true;
 
 /**
  * Writes one frame to the socket at `socketPath` and reports whether it was taken.

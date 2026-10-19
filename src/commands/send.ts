@@ -38,6 +38,7 @@ import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS,
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
+import { declaredInboundOf, inboundIsLive, inboundSkipReason, type InboundDeclaration } from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -693,13 +694,32 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     overrides,
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
+  // A receiving Claude session that itself declares `crossSessionInbound: "accept"` takes the
+  // frame first: the socket is the fastest channel and the owner asked for it ahead of the rest
+  // of the order. Every other receiver keeps the order its files declare — hold, refuse and
+  // unset are never dialed, since a held frame would block the seat's box — and another CLI has
+  // no cross-session socket at all.
+  const inbound = declaredInboundOf({
+    dir: to.dir,
+    root: to.root,
+    session: to.session,
+    seat: to.seat,
+    ...(declared?.launch !== undefined ? { launch: declared.launch } : {}),
+  });
+  // The one implied default that names the socket: a receiving Claude session that itself
+  // declares accept, with no level of its chain declaring an order, walks socket first. A word
+  // the chain declares — team, seat, project — is walked as written: it may place `socket`
+  // anywhere or leave it out, and this build never force-prepends it.
+  const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
+  const ordered: readonly DeliveryLeg[] =
+    !declaredOrder && to.cli === 'claude-code' && inbound.policy === 'accept' ? ['socket', ...order] : order;
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
   // order names is kept out, and each one's human reason is recorded on the history line, so a
   // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
   // back.
   const human = overrides.human ?? (declared?.human === true);
-  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
+  const walk: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
 
   // One signed record is written into the recipient's folder — the whole body, its thread, the
   // address it resolved to and the rule that admitted it — and the leg that takes the send
@@ -712,7 +732,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const record = recordOf(msgId, to, body, from, admission, host.now().toISOString());
   const callerRoot = { root, session: team.session };
   if (dry) {
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait)}; nothing was written`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, SOCKET_SEND && inbound.policy === 'accept')}; nothing was written`, report);
   }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
@@ -734,6 +754,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     for (const leg of order) {
       if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
+      else if (leg === 'socket') failures.push("socket: the pane is a human's, and no frame is sent");
       else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
     }
   }
@@ -752,29 +773,27 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
       return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot);
     }
-    if (leg === 'native') {
-      // A seat whose CLI has no cross-session socket has no native leg to walk: the leg is
-      // skipped without a failure, since no send of this seat's could ever leave by it.
-      if (to.cli !== 'claude-code') continue;
-      if (!SOCKET_SEND) {
-        // A sender whose own file declares Claude Code can make the leg itself: the handoff
-        // writes the pending record, prints the exact target and body, and the sender's own
-        // SendMessage carries the message. Any other sender gets the skip, as before. A handoff
-        // that cannot name a live address hands the send to the leg after this one. A `--wait`
-        // run needs the message delivered in this call before it waits on the thread, so it
-        // skips the handoff and continues the walk.
-        if (callerNative && !wait) {
-          const fallback = fallbackAfterNative(walk, at);
-          const off = handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
-          if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
-          if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
-          failures.push(`native: ${off.reason}`);
-          continue;
-        }
-        failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
+    if (leg === 'socket') {
+      // The socket leg dials only a receiving Claude session that itself declares
+      // `crossSessionInbound: "accept"`. Another CLI has no cross-session socket, and a receiver
+      // that declares hold, refuse, or nothing, and a session started before its launcher's
+      // declaration took effect, are skipped before a connection is made: a frame their box
+      // would hold is worse than a slower leg. The signed record is written first, so the
+      // receiver's folder holds the durable copy whatever the frame does; a write on the socket
+      // is transport, never a read.
+      if (to.cli !== 'claude-code') {
+        failures.push(`socket: ${to.cli} sessions have no cross-session socket`);
         continue;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait);
+      if (!SOCKET_SEND) {
+        failures.push('socket: this build does not carry the cross-session socket');
+        continue;
+      }
+      if (inbound.policy !== 'accept') {
+        failures.push(`socket: ${inboundSkipReason(inbound.policy)}`);
+        continue;
+      }
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound);
       if (attempt.kind === 'delivered') {
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'socket', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
@@ -782,12 +801,33 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return delivered(io, to.seat, report, 'socket');
       }
       if (attempt.kind === 'held') return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
-      failures.push(`native: ${attempt.reason}`);
+      failures.push(`socket: ${attempt.reason}`);
       socketNote = `typed, socket ${attempt.reason}`;
       // The fallback's own line, only where the typed leg is still ahead to take the send.
       if (walk.slice(at + 1).includes('typed')) {
         logLine(dir, 'send', who, `${to.seat}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
       }
+      continue;
+    }
+    if (leg === 'native') {
+      // A seat whose CLI has no cross-session socket has no native leg to walk: the leg is
+      // skipped without a failure, since no send of this seat's could ever leave by it.
+      if (to.cli !== 'claude-code') continue;
+      // The native leg is the sender's own call, never this build's frame: a sender whose own
+      // file declares Claude Code makes the handoff — the pending record, the exact target and
+      // body, and the sender's own SendMessage — and the sender records it with `--confirm`. Any
+      // other sender gets the skip. A handoff that cannot name a live address hands the send to
+      // the leg after this one. A `--wait` run needs the message delivered in this call before
+      // it waits on the thread, so it skips the handoff and continues the walk.
+      if (callerNative && !wait) {
+        const fallback = fallbackAfterNative(walk, at);
+        const off = handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
+        if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
+        if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
+        failures.push(`native: ${off.reason}`);
+        continue;
+      }
+      failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
       continue;
     }
     // The drop leg: the same 0600 drop file the typed leg writes, and no keystroke at all — no
@@ -877,18 +917,23 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
  *  phrase is unreachable by the default order of any seat — its legs are mcp-inbox, typed,
  *  drop, and each is either named or passed over for a reason — and only an order that holds
  *  none of them prints it. */
-function walkPhrase(order: readonly DeliveryLeg[], cli: string, callerNative: boolean): string {
-  const nativeWalkable = cli === 'claude-code' && (SOCKET_SEND || callerNative);
+function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible: boolean, socketDialable: boolean): string {
+  // The socket leg is walkable only where this run would dial it: a Claude receiver that itself
+  // declares accept. The native leg is the sender's own handoff, and only a sender whose own
+  // file declares Claude Code makes it.
+  const socketWalkable = SOCKET_SEND && socketDialable;
+  const nativeWalkable = cli === 'claude-code' && handoffEligible;
   const typed = profileFor(cli)?.compose != null
     ? 'a typed brief through its own screens'
     : 'a 0600 drop file and one trigger line';
   const words = (leg: DeliveryLeg): string => {
-    if (leg === 'native') return SOCKET_SEND ? 'its cross-session socket' : 'the native handoff (your own SendMessage, then --confirm)';
+    if (leg === 'socket') return 'its cross-session socket';
+    if (leg === 'native') return 'the native handoff (your own SendMessage, then --confirm)';
     if (leg === 'mcp-inbox') return "the seat's own MCP inbox";
     if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
     return typed;
   };
-  const walkable = order.filter((leg) => leg === 'drop' || leg === 'mcp-inbox' || leg === 'typed' || (leg === 'native' && nativeWalkable));
+  const walkable = order.filter((leg) => leg === 'drop' || leg === 'mcp-inbox' || leg === 'typed' || (leg === 'socket' && socketWalkable) || (leg === 'native' && nativeWalkable));
   const [first] = walkable;
   if (first === undefined) return 'no leg of its delivery order this build can walk';
   // The drop leg is a file and no keystroke: it always takes the send, so nothing stands behind it.
@@ -921,12 +966,16 @@ function stampHandoffNonce(body: string, nonce: string): string {
 }
 
 /** The legs of the recipient's `delivery_order` that stand after `native`: when a handoff is
- *  not confirmed within the 10m window, `team watch` walks these legs in order. */
+ *  not confirmed within the 10m window, `team watch` walks these legs in order. The socket leg is
+ *  not one of them: a frame is written by the send that walks it, and a handoff's pending record
+ *  names only the legs the watcher itself can take. */
 function fallbackAfterNative(
   walk: readonly DeliveryLeg[],
   at: number,
 ): readonly PendingNativeFallbackLeg[] {
-  return walk.slice(at + 1).filter((leg): leg is Exclude<DeliveryLeg, 'native'> => leg !== 'native');
+  return walk
+    .slice(at + 1)
+    .filter((leg): leg is PendingNativeFallbackLeg => leg === 'mcp-inbox' || leg === 'typed' || leg === 'drop');
 }
 
 /** The registry id the sender's record carries, when it has one: the owner is named by `owner`
@@ -2238,6 +2287,7 @@ async function deliverSocketFrame(
   report: Report,
   startedAt: number,
   wait = false,
+  inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -2263,6 +2313,12 @@ async function deliverSocketFrame(
   const first = socketPathFor(host, to, found.pane);
   if (first === null) {
     return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
+  }
+  // A session started before the file that declares `accept` changed was launched without the
+  // setting in force: the frame would be held at its box, so the walk passes this leg over until
+  // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
+  if (!inboundIsLive(inbound, first.path)) {
+    return { kind: 'fallback', reason: 'the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts' };
   }
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.

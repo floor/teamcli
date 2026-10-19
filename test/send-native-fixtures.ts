@@ -24,7 +24,7 @@ export type World = { root: string; dir: string; sockets: string; home: string; 
 /** One more file line, launched as a Claude Code seat: the role word a scene wants to give it. */
 export type ExtraSeat = { name: string; role: string };
 
-function teamFile(root: string, lobby: string, order: readonly string[], extraSeats: readonly ExtraSeat[]): string {
+function teamFile(root: string, lobby: string, order: readonly string[] | null, extraSeats: readonly ExtraSeat[]): string {
   const extra = extraSeats
     .map(
       (seat) => `  - role: ${seat.role}
@@ -72,12 +72,12 @@ seats:
 ${extra}# The team's word is the walk these scenes resolve. The plain-send suites keep the typed trigger:
 # the inbox is tried and skipped for want of a listener, then the line is typed, and the default's
 # drop step stays out. The native suite declares native first, because the handoff is the leg a
-# declared order is what puts in the walk.
-delivery_order: [${order.join(', ')}]
-`;
+# declared order is what puts in the walk. A null order writes no word at all: the scene resolves
+# the build's own default, which is where the socket leg is walked for an accepting receiver.
+${order === null ? '' : `delivery_order: [${order.join(', ')}]\n`}`;
 }
 
-export function world(order: readonly string[] = ['mcp-inbox', 'typed'], extraSeats: readonly ExtraSeat[] = []): World {
+export function world(order: readonly string[] | null = ['mcp-inbox', 'typed'], extraSeats: readonly ExtraSeat[] = []): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-native-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
