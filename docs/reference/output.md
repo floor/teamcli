@@ -160,7 +160,7 @@ The repair names the **first** authority tier that applies:
    - `COMMAND_GATES[command].kind === 'owner-or-leads'` or `'pane-authority'` → `"the team's lead"`
    - `COMMAND_GATES[command].kind === 'capability'` or `GRANT_SCOPES.includes(command)` → `'a grant holder'`
    - `COMMAND_GATES[command].kind === 'seat-record'`, `'owner-or-own-team'`, or `'admission'` → `'any seat'`
-   - A `team <word>` the map does not carry — prose like `team file` ("update the team file's model"), or a session-level `watch` / `worktree` — → `"the team's lead"`, the fallback those words took before the chain rule.
+   - `COMMAND_GATES[command].kind === 'any-caller'`, `'seat-only'`, or `'leads-only'` — the rows 0.5.2 adds for the contract — → `"the team's lead"`, the fallback those words took before the map carried them; and so does a `team <word>` the map does not carry at all, prose like `team file` ("update the team file's model").
 
    The chain runs its legs in order, so the repair's `who` is the actor **every leg admits** — the narrowest of the four. An owner-only leg narrows the chain to `'the owner'`: `team remove <seat> --keep, then team add <seat>` is the owner's, because a lead runs the first leg and is refused at the second, leaving the repair half done. `'a grant holder'` and `"the team's lead"` are not comparable — the same seat need not hold both — so a chain mixing either with anything else is the owner's too. An "or" alternative is another way into the repair, not a leg: it does not narrow the chain. Where a repair has a lead-runnable alternative, print that alternative instead of the narrow chain, so the line names a command the lead can finish.
 

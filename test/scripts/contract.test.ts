@@ -65,31 +65,33 @@ test('the check script exits 0 on this tree', () => {
   expect(result.stdout.trim()).toBe('contract:check: contract/cli.json and docs/reference/cli.md are current');
 });
 
-test('every command carries who may run it, and the map rows are copied as they stand', () => {
+test('every command and subcommand carries who may run it, and the map rows are copied as they stand', () => {
   const contract = JSON.parse(readFileSync(join(root, 'contract/cli.json'), 'utf8')) as {
-    commands: { name: string; who?: { gate: string; why: string } }[];
+    commands: { name: string; who?: { gate: string; why: string }; subcommands: { name: string; who?: { gate: string; why: string } }[] }[];
   };
   const byName = (name: string) => contract.commands.find((command) => command.name === name);
-  // Every word of the CLI, hidden ones and the help words included, states its row: the adapter
-  // that generates access rules reads this field and must never meet a command without one.
-  for (const command of contract.commands) {
-    expect(command.who, `${command.name} has no who row`).toBeDefined();
-    expect(command.who?.gate, `${command.name} names no gate`).not.toBe('');
-    expect(command.who?.why, `${command.name} gives no reason`).not.toBe('');
+  const nodes = contract.commands.flatMap((command) => [
+    { key: command.name, node: command },
+    ...command.subcommands.map((sub) => ({ key: `${command.name}:${sub.name}`, node: sub })),
+  ]);
+  // Every word of the CLI, hidden ones, the help words and every verb included, states its row:
+  // the adapter that generates access rules reads this field and must never meet a word without
+  // one. A word the map does not name is a failure, never a silent "unlisted".
+  for (const { key, node } of nodes) {
+    expect(node.who, `${key} has no who row`).toBeDefined();
+    expect(node.who?.gate, `${key} names no gate`).not.toBe('');
+    expect(node.who?.why, `${key} gives no reason`).not.toBe('');
+    expect(node.who?.gate, `${key} is unlisted: the map must hold a row for every word`).not.toBe('unlisted');
   }
-  // The two sides agree in both directions: a map row the contract lacks hidden as a stale copy,
-  // and a contract row the map dropped would be a rule that no longer exists in the code.
-  for (const command of contract.commands) {
-    const gate = COMMAND_GATES[command.name];
-    if (command.who?.gate === 'unlisted') {
-      expect(gate, `${command.name} is unlisted, but the map now holds a row for it`).toBeUndefined();
-      continue;
-    }
+  // Both sides agree: a dropped map row is caught as a contract row without a rule, and a
+  // reworded map row is caught as a copy that no longer matches the code's own sentence.
+  for (const { key, node } of nodes) {
+    const gate = COMMAND_GATES[key];
     if (gate === undefined) {
-      expect(gate, `${command.name} claims a gate the map does not hold`).toBeDefined();
+      expect(gate, `${key} is in the contract but the map holds no row for it`).toBeDefined();
       continue;
     }
-    expect(command.who, `${command.name} is in the map but the contract does not repeat its row`).toEqual({
+    expect(node.who, `${key} is in the map but the contract does not repeat its row`).toEqual({
       gate: gate.kind,
       why: gate.why,
     });
@@ -99,16 +101,33 @@ test('every command carries who may run it, and the map rows are copied as they 
   expect(byName('status')?.who?.gate).toBe('seat-record');
   expect(byName('send')?.who?.gate).toBe('admission');
   expect(byName('answer')?.who?.gate).toBe('pane-authority');
-  // A word the map does not name is `unlisted`, never open: the map's silence admits no one.
-  expect(byName('broker')?.who?.gate).toBe('unlisted');
-  expect(byName('help')?.who?.gate).toBe('unlisted');
+  // The map now names every word, including those whose modules refuse non-owners outright.
+  expect(byName('broker')?.who?.gate).toBe('owner-only');
+  expect(byName('bus')?.who?.gate).toBe('owner-only');
+  expect(byName('tempo')?.who?.gate).toBe('owner-only');
+  expect(byName('help')?.who?.gate).toBe('any-caller');
+  expect(byName('drops')?.who?.gate).toBe('seat-only');
+  expect(byName('raise')?.who?.gate).toBe('leads-only');
+  // A verb whose gate differs from its command's carries its own row.
+  const sub = (command: string, verb: string) => byName(command)?.subcommands.find((word) => word.name === verb);
+  expect(sub('policy', 'set')?.who?.gate).toBe('owner-only');
+  expect(byName('policy')?.who?.gate).toBe('owner-or-own-team');
+  expect(sub('mcp', 'serve')?.who?.gate).toBe('any-caller');
+  expect(sub('proc', 'list')?.who?.gate).toBe('owner-or-own-team');
+  expect(sub('worktree', 'remove')?.who?.gate).toBe('owner-or-leads');
 });
 
 test('the reference page states the same who row the contract carries', () => {
   const contract = JSON.parse(readFileSync(join(root, 'contract/cli.json'), 'utf8')) as {
-    commands: { name: string; who: { gate: string; why: string } }[];
+    commands: { name: string; who: { gate: string; why: string }; subcommands: { name: string; who: { gate: string; why: string } }[] }[];
   };
   const page = readFileSync(join(root, 'docs/reference/cli.md'), 'utf8');
-  expect(page.split('\n').filter((line) => line === '### Who may run it').length).toBe(contract.commands.length);
-  expect(page).toContain(`\`${contract.commands.find((command) => command.name === 'up')?.who.gate}\` — ${contract.commands.find((command) => command.name === 'up')?.who.why}`);
+  const words = contract.commands.flatMap((command) => [command, ...command.subcommands]);
+  expect(page.split('\n').filter((line) => /^#{3,4} Who may run it$/.test(line)).length).toBe(words.length);
+  const up = contract.commands.find((command) => command.name === 'up');
+  expect(page).toContain(`\`${up?.who.gate}\` — ${up?.who.why}`);
+  // A subcommand states its own row, never the command's standing in for it.
+  const policy = contract.commands.find((command) => command.name === 'policy');
+  const set = policy?.subcommands.find((word) => word.name === 'set');
+  expect(page).toContain(`\`${set?.who.gate}\` — ${set?.who.why}`);
 });
