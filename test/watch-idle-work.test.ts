@@ -8,7 +8,7 @@ import { idleWorkNotes } from '../src/idle_work.ts';
 import type { PauseRecord, SessionState } from '../src/state.ts';
 import { emptySession } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { idleThresholdSeconds, idleWorkReport } from '../src/watch/idle-work.ts';
+import { idleThresholdReading, idleThresholdSeconds, idleWorkReport } from '../src/watch/idle-work.ts';
 
 // The example's team, with the operator named as the lead it is: the workers below are the two
 // deepseek seats and the codex seat.
@@ -77,12 +77,21 @@ function read(team: TeamFile, state: SessionState, scene: Live | null = live(), 
 }
 
 describe('the idle clock', () => {
-  test('the threshold is the idle-threshold policy: 300 seconds by default', () => {
+  test('the threshold is the idle-threshold policy: 300 seconds when nothing declares it', () => {
     expect(idleThresholdSeconds(teamOf(example), root, undefined, new Date(NOW))).toBe(300);
-    // A chain that cannot be read resolves nothing: the reading takes the documented default
-    // rather than throwing or guessing a value, and never writes the expired-policy markers.
+    const report = read(teamOf(example), stateWith(new Date(NOW - 10 * MIN).toISOString()));
+    expect(report.threshold_unknown).toBeUndefined();
+  });
+
+  test('an unreadable signed chain is an unknown threshold, not the default', () => {
+    // A hand-written entry has no signature the chain can verify: the window in force is
+    // unknown, so the reading says so and a dispatcher must not act on the default.
     const broken = teamOf(`${example}\npolicies:\n  idle-threshold: 90s\n`);
-    expect(idleThresholdSeconds(broken, root, undefined, new Date(NOW))).toBe(300);
+    const reading = idleThresholdReading(broken, root, undefined, new Date(NOW));
+    expect(reading.seconds).toBe(300);
+    expect(reading.unknown).toBeDefined();
+    const report = read(broken, stateWith(new Date(NOW - 10 * MIN).toISOString()));
+    expect(report.threshold_unknown).toBeDefined();
   });
 
   test('a worker past the window with work queued is idle with one takeable record', () => {
@@ -148,6 +157,18 @@ describe('the idle clock', () => {
     expect(idleWorkNotes(report)).toEqual([
       'the task source cannot be read, so the idle reading is unknown (.agents/tasks.yaml is missing)',
     ]);
+  });
+
+  test('a declared tracker with no broker snapshot is unknown, not zero work', () => {
+    const team = teamOf(`${example}tasks:
+  source: linear
+  linear:
+    project: 01234567-89ab-cdef-0123-456789abcdef
+    keychainService: team.linear.acme
+`);
+    const report = read(team, stateWith(new Date(NOW - 10 * MIN).toISOString()));
+    expect(report.takeable).toBeNull();
+    expect(report.refused).toBe('the team declares a linear task source and no broker snapshot is available here');
   });
 
   test('a no-live reading never calls a seat idle', () => {
