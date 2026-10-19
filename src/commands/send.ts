@@ -41,6 +41,7 @@ import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/u
 import { declaredInboundOf, inboundIsLive, inboundSkipReason, type InboundDeclaration } from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 
@@ -844,7 +845,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // its CLI's own screens instead: there is no drop-file trigger to build, and the walk is
     // run in this process (below), not handed to the daemon.
     const compose = profileFor(to.cli)?.compose ?? null;
-    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project });
+    // The receiving team's sender-line policy decides the words around the two names; a team
+    // file that did not read leaves the shipped floor format, never an unnamed wake.
+    const wakeFormat = senderLineFormatInForce({
+      home: host.home,
+      root: to.root,
+      team: receiving.ok ? receiving.team : null,
+      now: host.now(),
+    });
+    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project, format: wakeFormat });
     if (trigger === null && compose === null) {
       return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
     }

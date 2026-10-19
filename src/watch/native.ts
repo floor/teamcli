@@ -32,6 +32,7 @@ import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
 import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
 import { wakeSender } from '../send/wake.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import {
   dropTaken,
   listPendingNative,
@@ -319,7 +320,8 @@ async function expireOne(
         // registries. A sender that cannot be pinned is not typed nameless: the record stays on
         // disk and the message waits for the unread report's words.
         const sender = wakeSender(record, home, { root: scene.root, session: record.session, team: scene.team });
-        const line = sender === null ? null : readTriggerLine(record.to, record.session, sender);
+        const format = senderLineFormatInForce({ home, root: scene.root, team: scene.team, now: scene.now });
+        const line = sender === null ? null : readTriggerLine(record.to, record.session, { ...sender, format });
         if (pane !== undefined && line !== null) {
           const status = scene.sources.status(pane, record.session);
           const screen = scene.sources.screen(pane, record.session);

@@ -17,6 +17,7 @@ import {
   SWAP_WAIT_SECONDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
+import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
@@ -92,6 +93,7 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-lead-seconds',
   'liveness-idle-owner-seconds',
   'delivery-order',
+  'sender-line',
   'event-thread-ttl-seconds',
   'event-thread-cap',
   'event-retention-days',
@@ -139,6 +141,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   idle_owner_seconds: 'liveness-idle-owner-seconds',
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
+  sender_line: 'sender-line',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -386,6 +389,21 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
       && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+  },
+  // The line a typed wake opens with: `on` is the shipped `From <seat>@<team>:`,
+  // and a level may set its own one-line format in its place, as long as both names are in it.
+  // A wake always names the sender its signed record carries; a format decides the words around
+  // those two names, never whether they are there. So the floor has no off: `off` is refused by
+  // the parser, and every format is as strict as every other, which lets a lower level choose.
+  'sender-line': {
+    name: 'sender-line',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseSenderLineValue,
+    valueProblem: senderLineValueProblem,
+    isWithin: () => true,
   },
   // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field
   // at a time; `src/policy/thresholds.ts` reads the resolved chain back into the set the bus and

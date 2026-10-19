@@ -51,6 +51,7 @@ import { pendingDropPath } from '../send/pending.ts';
 import { readRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { wakeSender } from '../send/wake.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
@@ -202,6 +203,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   if (options.noNudge === true) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
+  // The receiving team's sender-line format is the same for every seat this pass wakes.
+  const format = senderLineFormatInForce({ home, root: scene.root, team: scene.team, now: scene.now });
   const nowMs = scene.now.getTime();
   for (const seat of scene.team.seats) {
     // A person's drop is read by a person, and nothing is typed into a human's pane.
@@ -239,7 +242,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // stays unread, its reservations are never taken, and the report pass says why.
       const sender = wakeSender(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team });
       if (sender === null) continue;
-      const line = readTriggerLine(seat.name, scene.session, sender);
+      const line = readTriggerLine(seat.name, scene.session, { ...sender, format });
       if (line === null) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an

@@ -35,6 +35,7 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
@@ -980,8 +981,10 @@ async function executeQueuedSend(
   // The wake names the sender from the send's own record: the caller seat the daemon was asked
   // to deliver for, and the team it runs under. Nothing in the body decides the name. The drop is
   // already written, so a wake that cannot carry the name is refused as held with the drop kept
-  // and named, never typed nameless.
-  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project });
+  // and named, never typed nameless. The team's sender-line policy supplies the words around the
+  // two names; one that cannot be read leaves the shipped format, never an unnamed line.
+  const format = senderLineFormatInForce({ home: host.home, root, team, now: host.now() });
+  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project, format });
   if (trigger === null) {
     return recordHeld(`${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was typed`);
   }
