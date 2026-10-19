@@ -256,8 +256,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `mcp.not-set-up` | `mcp` | 1 | no bridge configuration exists in the lobby folder | `team mcp status` |
 | `mcp.invocation` | `mcp` | 2 | the invocation can't be read | `team mcp` |
 | `mcp.serve-refused` | `mcp` | 2 | the inbox server can't start: the invocation, the team placement or its inbox folder can't be read | `team mcp serve` |
+| `messages.client-none` | `messages` | 0 | no client reply is waiting | `team messages --client client-grant.json --key client.key` |
+| `messages.client-shown` | `messages` | 0 | a client reading completed, and an acknowledged reply's receipt was written when it was asked for | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
+| `messages.client-key` | `messages` | 1 | the client key is missing or unreadable, or the ack receipt could not be signed with it | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `messages.client-refused` | `messages` | 1 | the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify | `team messages --client client-grant.json --key client.key` |
 | `messages.file` | `messages` | 1 | the team file can't be read | `team messages` |
 | `messages.id` | `messages` | 1 | the filename is not the record's id | `team messages` |
 | `messages.key` | `messages` | 1 | the message key is missing or unreadable | `team messages` |
@@ -266,6 +270,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.session` | `messages` | 1 | the record is bound to another session | `team messages` |
 | `messages.shape` | `messages` | 1 | the record is not a message | `team messages` |
 | `messages.signature` | `messages` | 1 | the signature is not the message key's | `team messages` |
+| `messages.client-usage` | `messages` | 2 | the client invocation can't be read | `team messages --client client-grant.json` |
 | `messages.invocation` | `messages` | 2 | the invocation can't be read | `team messages extra` |
 | `messages.not-a-repo` | `messages` | 2 | not inside a git repository | `team messages` |
 | `next.none` | `next` | 0 | nothing to take or to release | `team next` |
@@ -436,6 +441,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `rename.invalid` | `rename` | 2 | the team file or new seat name is invalid | `team rename worker Bad_Name` |
 | `rename.invocation` | `rename` | 2 | the invocation can't be read | `team rename` |
 | `reply.replied` | `reply` | 0 | the reply record was written on its thread, or its thread was closed | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.client-refused` | `reply` | 1 | a client thread can't be answered: its origin grant, its placement, its recipient or the writer's own seat does not bind it, or the reply can't be written | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.refused` | `reply` | 1 | the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.configuration` | `reply` | 2 | the team file can't be read | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.usage` | `reply` | 2 | the invocation can't be read | `team reply` |

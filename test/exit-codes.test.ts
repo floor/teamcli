@@ -32,7 +32,9 @@ import { runInit } from '../src/commands/init.ts';
 import { runRoute } from '../src/commands/route.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { pendingPath } from '../src/send/pending.ts';
-import { plantMessage, plantRecord, runMessages, type MessagePayload } from '../src/commands/messages.ts';
+import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
+import { clientInboxFolder } from '../src/client/inbox.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
@@ -3836,7 +3838,14 @@ async function sent(place: Place, argv: string[], caller: Caller, host: SendHost
  * `place.root`, one app key and one owner-signed grant. The key folder lives outside the OS temp
  * directory, because the placement rules refuse a client key under tmpdir. The scene removes it.
  */
-function clientWorld(place: Place): { base: string; home: string; grantPath: string; keyPath: string } {
+function clientWorld(place: Place, options: { inbox?: boolean } = {}): {
+  base: string;
+  home: string;
+  grantPath: string;
+  keyPath: string;
+  grantId: string;
+  recipientId: string;
+} {
   const base = realpathSync(mkdtempSync(join(process.cwd(), '.team-exit-client-')));
   const home = join(base, 'home');
   mkdirSync(home, { recursive: true });
@@ -3870,11 +3879,70 @@ function clientWorld(place: Place): { base: string; home: string; grantPath: str
   if (!written.ok) throw new Error(written.why);
   const grant = writeClientGrant(
     home,
-    { clientId: 'grok-bot', entity: 'floor', publicKey: pair.publicKey, keyId: pair.keyId, keyDir },
+    { clientId: 'grok-bot', entity: 'floor', publicKey: pair.publicKey, keyId: pair.keyId, keyDir, ...(options.inbox === true ? { inbox: true } : {}) },
     { now: NOW, key: ownerKey },
   );
   if (!grant.ok) throw new Error(grant.why);
-  return { base, home, grantPath: grant.path, keyPath: join(keyDir, 'client.key') };
+  return {
+    base,
+    home,
+    grantPath: grant.path,
+    keyPath: join(keyDir, 'client.key'),
+    grantId: grant.grant.grantId,
+    recipientId: agent.id,
+  };
+}
+
+/** The client's opening record: a signed client send, waiting in the grant recipient's folder. */
+function plantClientRoot(place: Place, world: ReturnType<typeof clientWorld>, id: string): void {
+  const session = 'acme';
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: 'orchestrator',
+    to_id: world.recipientId,
+    root: place.root,
+    session,
+    at: NOW.toISOString(),
+    body: 'from the client — admitted by: a signed client request\n\nhello',
+    from: 'client:grok-bot',
+    from_id: null,
+    rule: 'a signed client request',
+    thread: id,
+    from_client: { client_id: 'grok-bot', grant_id: world.grantId },
+  };
+  const dir = recordDir(place.root, session, 'orchestrator');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, world.home), null, 2)}\n`, { mode: 0o600 });
+}
+
+/** The seat's reply onto that record: a signed client-thread reply in the client's own inbox. */
+function plantClientReply(place: Place, world: ReturnType<typeof clientWorld>, rootId: string, id: string): void {
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: 'client:grok-bot',
+    to_id: null,
+    root: place.root,
+    session: 'acme',
+    at: new Date(NOW.getTime() + 1000).toISOString(),
+    body: 'from the seat orchestrator — admitted by: a reply on a client thread, to the client that opened it\n\nthe answer',
+    from: 'orchestrator',
+    from_id: world.recipientId,
+    rule: 'a reply on a client thread, to the client that opened it',
+    thread: rootId,
+    in_reply_to: rootId,
+    to_client: { client_id: 'grok-bot', grant_id: world.grantId },
+  };
+  const dir = clientInboxFolder(place.root, 'acme', 'grok-bot');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, world.home), null, 2)}\n`, { mode: 0o600 });
+}
+
+async function readClient(place: Place, home: string, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root);
+  const code = await runMessages(argv, io, { home, now: () => NOW });
+  return { code, out: io.out, err: io.err };
 }
 
 async function sentClient(place: Place, home: string, argv: string[]): Promise<Ran> {
@@ -3915,6 +3983,95 @@ scene('send.client-usage', async (place) => {
       await sentClient(place, world.home, ['--client', world.grantPath, 'orchestrator@floor', 'hello']),
       '--client needs --key',
     );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+const CLIENT_ROOT = '88888888-8888-4888-8888-888888888888';
+const CLIENT_REPLY = '77777777-7777-4777-8777-777777777777';
+
+scene('messages.client-shown', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    plantClientRoot(place, world, CLIENT_ROOT);
+    plantClientReply(place, world, CLIENT_ROOT, CLIENT_REPLY);
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      'shown',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-none', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    messageKeyOf(world.home);
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      'nothing is waiting',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-key', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
+      'team messages:',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-refused', async (place) => {
+  return show(
+    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')]),
+    'team messages: refused:',
+  );
+});
+
+scene('messages.client-usage', async (place) => {
+  return show(
+    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0']),
+    '--limit is a page bound',
+  );
+});
+
+scene('reply.client-refused', async (place) => {
+  const ORCH_TEAM = `format: 1
+project: acme
+coordinator: orchestrator
+operator: orchestrator
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: orchestrator
+    label: orchestrator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+  write(place, ORCH_TEAM);
+  const world = clientWorld(place);
+  try {
+    plantClientRoot(place, world, CLIENT_ROOT);
+    updateState(join(place.root, '.agents'), (state) => {
+      state.sessions.acme = { seats: { orchestrator: { stage: 'ready' as const, pane: 'w1:p1' } } } as never;
+    });
+    const io = testIo(place.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
+    const code = await runReply([CLIENT_ROOT, 'the answer'], io, { home: world.home, now: () => NOW });
+    return show({ code, out: io.out, err: io.err }, 'send-only');
   } finally {
     rmSync(world.base, { recursive: true, force: true });
   }

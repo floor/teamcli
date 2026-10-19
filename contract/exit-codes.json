@@ -1754,6 +1754,20 @@
     {
       "code": 0,
       "command": "messages",
+      "id": "messages.client-none",
+      "meaning": "no client reply is waiting",
+      "trigger": "team messages --client client-grant.json --key client.key"
+    },
+    {
+      "code": 0,
+      "command": "messages",
+      "id": "messages.client-shown",
+      "meaning": "a client reading completed, and an acknowledged reply's receipt was written when it was asked for",
+      "trigger": "team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 0,
+      "command": "messages",
       "id": "messages.none",
       "meaning": "nothing is waiting",
       "trigger": "team messages"
@@ -1764,6 +1778,20 @@
       "id": "messages.shown",
       "meaning": "a waiting message was shown and its receipt was written",
       "trigger": "team messages"
+    },
+    {
+      "code": 1,
+      "command": "messages",
+      "id": "messages.client-key",
+      "meaning": "the client key is missing or unreadable, or the ack receipt could not be signed with it",
+      "trigger": "team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "messages",
+      "id": "messages.client-refused",
+      "meaning": "the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify",
+      "trigger": "team messages --client client-grant.json --key client.key"
     },
     {
       "code": 1,
@@ -1820,6 +1848,13 @@
       "id": "messages.signature",
       "meaning": "the signature is not the message key's",
       "trigger": "team messages"
+    },
+    {
+      "code": 2,
+      "command": "messages",
+      "id": "messages.client-usage",
+      "meaning": "the client invocation can't be read",
+      "trigger": "team messages --client client-grant.json"
     },
     {
       "code": 2,
@@ -3009,6 +3044,13 @@
       "command": "reply",
       "id": "reply.replied",
       "meaning": "the reply record was written on its thread, or its thread was closed",
+      "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
+    },
+    {
+      "code": 1,
+      "command": "reply",
+      "id": "reply.client-refused",
+      "meaning": "a client thread can't be answered: its origin grant, its placement, its recipient or the writer's own seat does not bind it, or the reply can't be written",
       "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
     },
     {

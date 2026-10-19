@@ -10,7 +10,7 @@ identity, an agent id for a seat or a team id for `@team`.
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> [--inbox] [--expires <ISO>] [--json]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
 `--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,
@@ -40,7 +40,10 @@ and destination of the local bot relay: `--client grok-bot`, `--entity floor`, a
 the grant expires seven days after it is written, and a grant never carries an unlimited or a past
 expiry. `--dry-run`, `--scope`, `--capabilities`, `--name` and positional arguments belong to the
 other forms and are refused here. The grant admits only the signed client request form, with no
-owner, seat or terminal authority.
+owner, seat or terminal authority. `--inbox` widens the vocabulary to `send` and `messages`: the
+same grant then admits the client's own read of its replies (`team messages --client`, see
+[`team messages`](messages.md)) as well as its sends. Without `--inbox` the grant is exactly the
+send-only grant earlier builds wrote, byte for byte, and a read presented under it is refused.
 
 ## Who may run it
 

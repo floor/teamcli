@@ -17,6 +17,25 @@ last, so a reply between two seats no other rule pairs is admitted while the thr
 rule reads the thread, not the invitation: it admits a reply on any open thread, and a thread is
 open until it is closed or the clock or the cap ends it.
 
+A record a client wrote is answered on the client's own thread. A record carrying `from_client` is
+the client's opening record, and only that record is answered: the reply's `to` is
+`client:<client id>`, its `to_id` is null, and its `to_client` names the client and the grant that
+opened the thread. The record is written into the client's inbox,
+`<root>/.agents/send-drops/<session>/.clients/<client id>/`, and a signed `replied` receipt goes
+beside the opening record in the answering seat's folder. The thread's age and cap count the
+verified replies in that inbox too.
+
+The pair is admitted by the thread's originating grant, read from the canonical grants folder by
+the id the opening record carries — never by scanning for another grant, and never by a later
+grant. The grant must be active when the reply is written, must carry the `--inbox` vocabulary
+(`send` and `messages`), and must still bind the recipient the opening record names: the
+registry's coordinator team, seat and agent id, the same checkout and the same session. A changed
+binding, a revoked or expired grant, a send-only grant, the owner, or any other seat is refused,
+and nothing is written. A thread opened under a send-only grant is not reauthorized by a new one:
+the client starts a new thread under a `--inbox` grant. The reply runs under the grant lock and
+then the seat lock, in that order, so a revocation that wins the grant lock is seen before the
+record is written. A client reply writes no project message-history line.
+
 A thread ends in three ways. `team reply <id> --close` writes a signed close sidecar beside the
 record it answers, `<id>.closed.json` — a thread's close is the addressee's own act, and it
 writes no message. A thread whose newest record is `thread-ttl` old (72 hours) is closed by the
@@ -57,7 +76,9 @@ Reads the team file, the caller's placement, the message key, and the record the
 the records and close sidecars of its thread. Writes one signed record,
 `.agents/send-drops/<session>/<seat>/<id>` (mode 0600), into the answered sender's folder, and a
 signed `replied` receipt beside the answered record (`<id>.replied.json`); a `--close` writes the
-signed close sidecar `<id>.closed.json` beside it instead. The seat's folder and the reply's
+signed close sidecar `<id>.closed.json` beside it instead. A reply on a client thread is the one
+exception to the destination: its record goes into the client's own inbox folder, and no history
+line is appended. The seat's folder and the reply's
 record are each written under the seat's lock (`<state dir>/seat-locks/<session>/<seat>`), so two
 commands never write into one folder at once. It writes one line to `.agents/team.log`, and
 appends the reply to the project's message history ([team feed](feed.md)); when the reply record
@@ -72,7 +93,9 @@ terminal is refused. The caller must be the record's addressee — the record's 
 the record sits in its own folder — and the reply reaches the seat the record's `from` names: a
 sender the team file no longer declares is not reached by a reply. The owner answers a seat's
 record through this same path; a record the owner sent has no seat to answer in this build, and a
-reply to it is refused before anything is written.
+reply to it is refused before anything is written. A client thread is answered by its recipient
+seat alone, on its own pane and session, and only while the registry still names that seat and
+agent for the grant's team; the owner and every other seat are refused.
 
 ## Output and exit codes
 
@@ -82,8 +105,10 @@ then the outcome line. A refused run prints its line on stderr and has none.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | replied | `<seat>: replied` on stdout — the seat the reply went to | 0 |
+| replied to a client | `client:<client id>: replied` on stdout | 0 |
 | closed | `<thread>: closed` on stdout | 0 |
 | refused | `team reply: <reason>` on stderr | 1 |
+| a client thread refused | `team reply: <reason>` on stderr — the thread's grant, placement or binding does not admit the reply | 1 |
 | configuration | `team reply: <team-file problem>` on stderr | 2 |
 | usage | `team reply: <problem>` and the usage on stderr | 2 |
 
@@ -91,7 +116,7 @@ Under `--json` a written run prints one `team.reply` document — `{format, stat
 project, session, record, thread, in_reply_to, to, rule, reply, at}` — where `status` is `replied`
 or `closed`, `record` is the reply's own id (`null` for a close), and `rule` is the admitting
 rule; a refused run prints the structured error document instead (`error.id` is `reply.refused`,
-`reply.configuration` or `reply.usage`) and stderr stays empty.
+`reply.client-refused`, `reply.configuration` or `reply.usage`) and stderr stays empty.
 
 Refusals name what stopped them, and nothing is written:
 

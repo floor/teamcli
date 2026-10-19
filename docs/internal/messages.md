@@ -109,6 +109,75 @@ An empty mailbox is not a refusal:
 
     note: nothing is waiting
 
+## The client inbox
+
+The read side of a client grant is a second reader with its own folder, its own admission and its
+own receipt. It never reads a seat's mailbox, and a seat never reads it.
+
+The folder is `<root>/.agents/send-drops/<session>/.clients/<client id>/`. The leading dot is what
+keeps it out of every seat reader: `team messages`, `team reply`, `team drops`, the watch and the
+bus reconciliation all filter the session folder's first segment with a name pattern a leading dot
+cannot match. A reply on a client thread lands there, written by the seat the thread's grant names;
+the client's read is the only reader.
+
+The folder is created mode 0700 and never `chmod`'ed. A folder found with any group or other bit, a
+symbolic link, another user's folder, or a non-directory is refused with the repair named, rather
+than repaired in place. Records and receipts are written whole at mode 0600 through a temporary
+file linked onto the final name: publication never replaces an existing name, and no `chmod` call
+runs on the inbox or its files.
+
+### Admission
+
+A read is a signed request, and the command verifies it before it scans anything:
+
+1. the grant file is read and its signature and shape verify;
+2. the grant's client id and entity must be the one principal and entity this build admits —
+   `grok-bot` and `floor` — and its recipient must resolve to `orchestrator@floor`;
+3. the signed v2 request is verified against the grant's public key: the domain, the operation
+   `messages`, the grant id, client id, key id, entity, `since`, `ack`, `limit`, `request id` and
+   `issued_at` are all inside the signature, and the grant must be canonical, unexpired and
+   unrevoked;
+4. the grant is checked active again, and the registry binding is resolved a second time: the
+   coordinator's team, seat and agent id, the checkout and the session must still be the ones the
+   grant signs;
+5. the request id is claimed under the grant lock before any row is scanned: a replay of an
+   already-claimed request is refused with nothing read and nothing written;
+6. the inbox folder is checked as above, and the message key is read;
+7. only then is the folder scanned.
+
+Every failure before step 7 leaves no row scanned and no receipt written.
+
+### What is shown
+
+A file in the inbox is shown only when its signature verifies and it names this client and its own
+thread: `to` is `client:<client id>`, `to_id` is null, `to_client` names the same client and the
+grant that opened the thread, `thread` and `in_reply_to` are the opening record's id, the record's
+root and session are this checkout's, the writer is the seat and agent id the grant signs, and the
+opening record itself verifies with `from_client` and no `to_client`. A file that fails any of
+these is a `refused` row with its difference and prints no body.
+
+The thread's originating grant must be in the canonical grants folder; it need not still be
+active. A revoked or expired grant leaves the history readable, and a later grant never
+reauthorizes a thread. A file named `<id>.read.json` is the read receipt, a sibling the scan skips.
+
+### The ack
+
+`--ack <id>` acknowledges one reply independently of the page: the id is validated against every
+verified reply in the inbox, so a reply outside `--since`/`--limit` can be acknowledged without
+its body being printed. The acknowledgement is written as a signed `<id>.read.json` receipt at
+0600, once: a second acknowledgement prints `ack: <id> already acknowledged` and writes nothing.
+An existing receipt that does not verify is not replaced — the ack is refused, the run exits 1,
+and the reason names the file for the owner to remove. A reply whose body is outside the page is
+never printed.
+
+### Known limits
+
+The key is still a file on disk: `key isolation: not enforced (pane guard pending)` is printed on
+stderr on every client invocation, usage refusals included, and carried in the JSON as
+`key_isolation`. The read protects the inbox from other principals by grant and signature, not the
+key from same-user processes. The request replay claim is per checkout and client; it does not
+expire on its own. The page bound is 20 by default and 100 at most.
+
 ## Examples, moved here whole
 
 The examples below are the page's own, moved here whole. The console, and the file fence

@@ -11,21 +11,43 @@ writes a signed record there for each event it delivers to the owner (see [the e
 bus](../internal/events.md)), its `FROM` is `runtime`, and the run shows it and writes its receipt
 like any other waiting record.
 
+A second form reads a client's own replies. `team messages --client <grant-file> --key <key-file>`
+presents the owner's client grant and the client's private key; the command builds and verifies a
+signed request, admits it against the grant, and reads only that client's inbox,
+`<root>/.agents/send-drops/<session>/.clients/<client id>/`. A seat's mailbox is never read on
+this path, and a client grant opens no seat's mailbox. A reply is shown only when its signature
+verifies, it names this client and its thread, and the seat and agent that wrote it are the ones
+the thread's originating grant signed. The grant that opened the thread must still be in the
+canonical grants folder; it need not still be active, so a client keeps its history across a
+revocation and a reissue. The grant must be a `--inbox` grant: one written without it carries
+the send-only vocabulary, and the read is refused with the owner's repair named.
+
 ## Synopsis
 
     team messages [--json]
+    team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--json` | — | the same reading as one document, format 1, registered as `schema/messages.schema.json`: the context, the message rows, the notes, the differences with their repairs, and the counts |
+| `--client` | `<file>` | read this client's replies from the grant file the owner wrote for it |
+| `--key` | `<file>` | the client's private key, `client.key`; required with `--client` |
+| `--since` | `<id>` | show only replies ordered after that reply; the id must be a verified reply in this inbox |
+| `--ack` | `<id>` | write the read receipt beside that reply; the id is validated on its own, whether or not the page shows it |
+| `--limit` | `<n>` | the page bound, from 1 to 100; without it, 20 |
+| `--request-id` | `<id>` | the signed request's own id; generated when absent, and claimed once per checkout |
+| `--json` | — | the same reading as one document, format 1, registered as `schema/messages.schema.json`: the context, the message rows, the notes, the differences with their repairs, and the counts; the client form is the `team.messages.client` v1 document in `schema/messages-client.schema.json` |
 
 ## Who may run it
 
 Anyone in the checkout. The watch asks the recipient's pane to run it. The command shows every
 waiting message in the checkout, not only the caller's: a seat runs as the owner-user, and the
 mailbox is not a wall between seats.
+
+The client form has no caller placement and reads no seat: the client id in the verified request
+decides which inbox is read, and the owner's grant and the client's own key are the whole
+authority.
 
 ## Output and exit codes
 
@@ -45,6 +67,25 @@ and the signed record keeps the sender's registry id apart from it.
 | the invocation can't be read, or this folder is neither a checkout nor a team root | `team messages: <problem>`, with the usage for the invocation | 2 |
 
 A record that does not verify prints no body and writes no receipt.
+
+The client reading has the same shape: the context line, the table, one heading and body under
+each verified reply, the notes and differences, the `ack:` line when `--ack` was given, and the
+closing `<n> message` or `<n> messages`. A refused record is a `refused` row with its difference
+and never a body. `--since` narrows the page to replies ordered after the named reply by time,
+then by id; `--limit` cuts that page. `--ack` is independent of the page: its reply is validated
+against the whole verified inbox, so a reply outside the page can be acknowledged without its
+body being printed. A receipt is written once and never replaced: a second acknowledgement of the
+same reply prints `ack: <id> already acknowledged` and writes nothing. Every client invocation,
+a usage refusal included, writes `key isolation: not enforced (pane guard pending)` to stderr
+first; under `--json` the same line also rides in the document as `key_isolation`.
+
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| the client reading completed, with or without shown replies | the reading above; an `ack:` line follows an `--ack` | 0 |
+| nothing was waiting | the reading with no rows and the note `nothing is waiting` | 0 |
+| a record or the ack does not verify, or the request, grant, placement or inbox can't be read | the refused rows with their differences, or `team messages: refused: <why>` | 1 |
+| the client key is missing or unreadable, or the ack receipt cannot be signed | `team messages: <why>` | 1 |
+| the client invocation can't be read | `team messages: <why>` and the usage | 2 |
 
 ## Example
 

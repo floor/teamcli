@@ -17,6 +17,13 @@ expiring in at most seven days; the owner withdraws it by grant id with
 [`team revoke`](revoke.md). The client then sends with `team send --client`, signing each request
 with `client.key`. `team client` itself never signs a grant, a request or a drop.
 
+A grant that carries `--inbox` also admits the read side: the client runs
+`team messages --client <grant-file> --key <key-file>` to see the replies a seat wrote on the
+threads it opened, and `--ack <id>` to write the read receipt. The read is a signed request too,
+and it is refused for a grant without `--inbox`; the owner issues a new grant to widen the
+vocabulary, since a grant is never rewritten. See [`team messages`](messages.md) for the flags,
+the reading and the exit codes.
+
 ## Synopsis
 
     team client keygen --out <dir> [--json]
