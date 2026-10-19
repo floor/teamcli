@@ -269,7 +269,14 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     return 'cancelled';
   }
 
-  // `queue` and `now`: the wait in force, the rule, and the recipe.
+  // An existing request already carries its recipe and wait. The owner can force it even
+  // when the entity has since removed its rule, or the request came from configuration.
+  if (sub === 'now') {
+    const held = queuedSwap(readState(dir), seat.name);
+    if (held) return forceExisting(rawIo, io, json, dir, seat, walked, now, held, base, null);
+  }
+
+  // A new `queue` or `now` request needs the wait in force, the rule, and the recipe.
   const wait = waitSecondsOf(home, root, team, seat, now);
   if ('why' in wait) {
     refuse(rawIo, io, json, 'swap.rule', plainText(wait.why), null, notice, null);
@@ -291,11 +298,6 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     const where = listing.entity === null ? 'this team declares no entity' : `the entity ${listing.entity} declares no model rule`;
     refuse(rawIo, io, json, 'swap.rule', `${where}, so there is nothing to swap to`, null, notice, null);
     return 'rule';
-  }
-
-  if (sub === 'now') {
-    const held = queuedSwap(readState(dir), seat.name);
-    if (held) return forceExisting(rawIo, io, json, dir, seat, walked, now, held, base, null);
   }
 
   const choice = choose(sub, listing, root, seat, args.values.to);
