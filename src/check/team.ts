@@ -28,7 +28,6 @@ import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
-import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import {
@@ -67,7 +66,7 @@ import { recordHolds } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
-import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
+import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
@@ -839,23 +838,13 @@ function attentionDifferences(
     if (pane === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === read.name);
     if (!agent || agent.pane !== pane) continue;
-    // The pane is the seat only while the process team launched is still in it, read as
-    // `compare()` reads it: a pane back at its shell, or one running a process the record does
-    // not name (with no stored session showing continuity), keeps the process row, and its
-    // scrollback is not read for a prompt — a dialog the CLI drew before it exited is not a seat
-    // held at one.
-    const processes = live.processes?.[pane] ?? null;
-    const verdict = seatProcessVerdict(read.recorded?.launched, processes);
-    const continuity = replacedSeat(verdict, {
-      asked: true,
-      namedOnPane: read.recorded?.pane === pane,
-      recordedSession: read.recorded?.agent_session,
-      liveSession: agent.session,
-    });
-    if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) continue;
-    // A record with no identity whose pane holds a bare shell reads no prompt either: there is
-    // no CLI in it to be held (`compare()` prints the shell's own row).
-    if (read.recorded !== undefined && !read.recorded.launched && paneHoldsShell(processes)) continue;
+    // The pane is the seat only while the process team launched is still in it, the same gate
+    // `compare()` applies (`paneShowsSeat`): a pane back at its shell, or one running a process
+    // the record does not name with no stored session showing continuity, keeps the process row,
+    // and its scrollback is not read for a prompt — a dialog the CLI drew before it exited is not
+    // a seat held at one. A record with no identity whose pane holds a bare shell reads no prompt
+    // either.
+    if (!paneShowsSeat(read.recorded, agent, live)) continue;
     const text = live.screens[pane];
     const screen = readScreen(read.cli, text);
     // A launch's own waiting record already names the seat and the dialog it stopped at, with

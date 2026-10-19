@@ -241,6 +241,29 @@ test('a record with no identity whose pane holds a shell reads no prompt either'
   expect(code).toBe(1);
 });
 
+test('a temporary seat whose pane holds a shell keeps no prompt row from its scrollback', () => {
+  live = {
+    ...built(),
+    agents: [...built().agents, agent('claude-acme-tmp-1', 'w6')],
+    screens: { 'w6:p1': PERMISSION },
+    processes: { 'w6:p1': { shell: 10, foreground: [10] } },
+  };
+  updateState(join(dir, '.agents'), (state) => {
+    const session = (state.sessions['acme-web'] ??= emptySession());
+    session.seats['claude-acme-tmp-1'] = {
+      stage: 'ready',
+      pane: 'w6:p1',
+      workspace: 'w6',
+      last_active: AT,
+      temporary: { like: 'deepseek-acme', until: 'merged:fix/select-width' },
+    };
+  });
+  const { out } = check();
+  // Neither the check's line nor `compare()`'s plain temporary row: the pane is a shell.
+  expect(out).not.toContain('stuck at a permission prompt');
+  expect(out).not.toContain('waits at a permission prompt');
+});
+
 test('a replaced pane whose stored session is the live one is still read for its prompt', () => {
   live = {
     ...built(),
