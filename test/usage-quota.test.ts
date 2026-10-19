@@ -634,7 +634,7 @@ seats:
       account,
       run: 'acme-web',
       windows: [],
-      cost: { amount: null, currency: 'USD', mark: 'unknown', why: "no money cost was read from this seat's screen this run" },
+      cost: { amount: null, currency: 'USD', source: 'unknown', why: "no money cost was read from this seat's screen this run" },
       ...extra,
     });
     expect(doc.teams[0]?.seats).toEqual([

@@ -557,7 +557,7 @@ describe('team usage', () => {
               readAt: '2026-10-04T08:58:00.000Z', age: '2m', stale: false,
             },
           ],
-          cost: { amount: null, currency: 'USD', mark: 'unknown', why: "no money cost was read from this seat's screen this run" },
+          cost: { amount: null, currency: 'USD', source: 'unknown', why: "no money cost was read from this seat's screen this run" },
         }],
       }],
     });
@@ -2321,8 +2321,10 @@ describe('team usage', () => {
     expect(doc.teams[0]?.seats[0]?.cost).toEqual({
       amount: 5.8,
       currency: 'USD',
-      mark: 'measured',
-      source: 'status line',
+      // The session registry's own word carries the mark (`SessionRecord['cost']['source']`),
+      // and the surface the figure was read from is `readFrom`, so the two commands agree.
+      source: 'measured',
+      readFrom: 'status line',
       readAt: new Date(NOW.getTime()).toISOString(),
       age: '0m',
     });
@@ -2330,11 +2332,11 @@ describe('team usage', () => {
     // this run reads unknown rather than borrowing it.
     const stray = testIo(root, SEAT);
     expect(await runUsage(['--json'], stray, { home, now: () => NOW, observe: () => ({ observations: [], costs: [cost('other-web')], notes: [] }) })).toBe(0);
-    const other = JSON.parse(stray.out) as { teams: { seats: { cost: { amount: number | null; currency: string; mark: string; why?: string } }[] }[] };
+    const other = JSON.parse(stray.out) as { teams: { seats: { cost: { amount: number | null; currency: string; source: string; why?: string } }[] }[] };
     expect(other.teams[0]?.seats[0]?.cost).toEqual({
       amount: null,
       currency: 'USD',
-      mark: 'unknown',
+      source: 'unknown',
       why: "no money cost was read from this seat's screen this run",
     });
   });
