@@ -31,6 +31,7 @@ import {
   parseUsageOutput,
   realQuotaObservations,
   setUsageExec,
+  statusCost,
   statusQuota,
 } from '../src/information/quota-observe.ts';
 import type { MachineUsage, TeamEntry } from '../src/information/usage.ts';
@@ -274,6 +275,28 @@ describe('the live sources', () => {
     expect(labeledFigures(null, target, NOW)).toEqual([]);
   });
 
+  test('the spend the real row prints is read as a measured figure, and a row printing none is no figure', () => {
+    // The real capture's `S: $5.8`: the amount belongs to the pane that printed it, and it is
+    // read only from the row the profile's status patterns recognize.
+    const target = { seat: 'lead', account: 'anthropic', cli: 'claude-code' };
+    expect(statusCost('claude-code', REAL_SCREEN, target, NOW)).toEqual({
+      seat: 'lead',
+      account: 'anthropic',
+      amount: 5.8,
+      currency: 'USD',
+      observedAt: NOW,
+      source: 'status line',
+    });
+    // The figure is the row's own: a different print reads as that print, not a rounded float.
+    expect(statusCost('claude-code', REAL_SCREEN.replace('$5.8', '$12.25'), target, NOW)?.amount).toBe(12.25);
+    // A recognized row that prints no `S:` amount is no observation — never a zero.
+    const noAmount = REAL_SCREEN.replace('S: $5.8 ⣿⣄⣀⣀⣀ 24% · ', '');
+    expect(statusCost('claude-code', noAmount, target, NOW)).toBeNull();
+    // A CLI whose row no capture showed printing money gives none, and an unread pane gives none.
+    expect(statusCost('grok', 'working\n\nQuota reached for this account. It resets at 3pm\n', { ...target, cli: 'grok' }, NOW)).toBeNull();
+    expect(statusCost('claude-code', null, target, NOW)).toBeNull();
+  });
+
   test('a screen gives the status row once per window, not once per grammar that matches it', () => {
     const target = { seat: 'lead', account: 'anthropic', cli: 'claude-code' };
     const found = statusQuota('claude-code', REAL_SCREEN, target, NOW, quotaWith('claude-code', []));
@@ -378,6 +401,18 @@ describe('the live sources', () => {
     // The full view reads every team's pane, the caller's own included, once each.
     expect(reads).toEqual(['p1', 'p2', 'p3']);
     expect(full.observations).toHaveLength(2);
+    // The one pane that answered also printed its seat's spend; the observer stamps it with the
+    // session it read the pane in, exactly as the quota figures are stamped.
+    expect(full.costs).toEqual([{
+      seat: 'lead',
+      account: 'anthropic',
+      session: 'mine-web',
+      amount: 5.8,
+      currency: 'USD',
+      observedAt: NOW,
+      source: 'status line',
+    }]);
+    expect(restricted.costs).toEqual([]);
     expect(full.notes).toEqual([{ why: 'a seat pane could not be read', count: 2 }]);
   });
 
@@ -474,6 +509,7 @@ seats:
           observations: [
             observed({ account: 'anthropic', window: 'weekly', used: 12, left: 88, resetsAt: NOW + 125 * HOUR + 26 * 60_000, seat: 'lead', margin: 13.3 }),
           ],
+          costs: [],
           notes: [{ why: 'a seat pane could not be read', count: 1 }],
         };
       },
@@ -493,7 +529,7 @@ seats:
     expect(io.out).toContain('note: 1 seat pane could not be read\n');
 
     const json = testIo(root, SEAT);
-    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe: () => ({ observations: [], notes: [] }) })).toBe(0);
+    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe: () => ({ observations: [], costs: [], notes: [] }) })).toBe(0);
     const doc = JSON.parse(json.out) as { quota: Record<string, unknown> };
     expect(Object.keys(doc.quota)).toEqual(['format', 'accountsFile', 'labs', 'advice']);
     expect(doc.quota).toMatchObject({
@@ -589,12 +625,24 @@ seats:
     const json = testIo(root, runningSeat);
     expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), running: () => models })).toBe(0);
     const doc = JSON.parse(json.out) as { teams: { seats: { seat: string; cli: string; account: string; pool?: string }[] }[] };
+    // Each seat carries its run and its figures: no live read and no per-seat record here, so
+    // every window list is empty (the tree prints `unknown`) and the spend is unknown with its
+    // reason — never a zero.
+    const row = (seat: string, cli: string, account: string, extra: Record<string, unknown> = {}) => ({
+      seat,
+      cli,
+      account,
+      run: 'acme-web',
+      windows: [],
+      cost: { amount: null, currency: 'USD', mark: 'unknown', why: "no money cost was read from this seat's screen this run" },
+      ...extra,
+    });
     expect(doc.teams[0]?.seats).toEqual([
-      { seat: 'lead', cli: 'claude-code', account: 'anthropic' },
-      { seat: 'builder-a', cli: 'claude-code', account: 'deepseek' },
-      { seat: 'builder-b', cli: 'claude-code', account: 'deepseek' },
-      { seat: 'operator-a', cli: 'antigravity', account: 'google-antigravity', pool: 'gemini' },
-      { seat: 'pinned', cli: 'claude-code', account: 'openai' },
+      row('lead', 'claude-code', 'anthropic'),
+      row('builder-a', 'claude-code', 'deepseek'),
+      row('builder-b', 'claude-code', 'deepseek'),
+      row('operator-a', 'antigravity', 'google-antigravity', { pool: 'gemini' }),
+      row('pinned', 'claude-code', 'openai'),
     ]);
 
     // No running source at all (a test's own run, or herdr unreachable): the file decides, and
@@ -672,7 +720,7 @@ seats:
     // and the closing counts grow by the lab and the account it made.
     const read = observed({ account: 'zai', window: 'weekly', used: 12, left: 88, resetsAt: NOW + 125 * HOUR + 26 * 60_000, seat: 'lead' });
     const seat = testIo(root, SEAT);
-    expect(await runUsage(['--tree'], seat, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], notes: [] }) })).toBe(0);
+    expect(await runUsage(['--tree'], seat, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], costs: [], notes: [] }) })).toBe(0);
     expect(seat.out).toMatch(/^zai\s+weekly\s+88%\s+12%\s+in 125h26m/m);
     // The account is the figure's own, but the seat stands under what PAYS for it: this seat's
     // file and launcher name Anthropic, and its screen's account names only the subscription
@@ -685,7 +733,7 @@ seats:
     expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, margin +13.3%)\n');
     expect(seat.out).toContain('usage on this machine, 1 team, 3 labs, 3 accounts\n');
     const json = testIo(root, SEAT);
-    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], notes: [] }) })).toBe(0);
+    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], costs: [], notes: [] }) })).toBe(0);
     const doc = JSON.parse(json.out) as { counts: Record<string, number>; labs: { lab: string; accounts: unknown[] }[] };
     expect(doc.counts).toEqual({ teams: 1, labs: 3, accounts: 3 });
     expect(doc.labs.map((one) => one.lab)).toEqual(['anthropic', 'openai', 'zai']);
@@ -698,11 +746,11 @@ seats:
     // reading of theirs and names nothing — the full view, whose own read it is, reads it.
     const wide = { ...read, seat: null };
     const hidden = testIo(root, SEAT);
-    expect(await runUsage([], hidden, { home, now: () => new Date(NOW), observe: () => ({ observations: [wide], notes: [] }) })).toBe(0);
+    expect(await runUsage([], hidden, { home, now: () => new Date(NOW), observe: () => ({ observations: [wide], costs: [], notes: [] }) })).toBe(0);
     expect(hidden.out).not.toContain('zai');
     expect(hidden.out).toContain('usage on this machine, 1 team, 2 labs, 2 accounts\n');
     const owner = testIo(root, { kind: 'owner' });
-    expect(await runUsage([], owner, { home, now: () => new Date(NOW), observe: () => ({ observations: [wide], notes: [] }) })).toBe(0);
+    expect(await runUsage([], owner, { home, now: () => new Date(NOW), observe: () => ({ observations: [wide], costs: [], notes: [] }) })).toBe(0);
     expect(owner.out).toMatch(/^zai\s+weekly\s+88%/m);
     expect(owner.out).toContain('usage on this machine, 1 team, 3 labs, 3 accounts\n');
   });

@@ -22,7 +22,7 @@ import { readMachineReadings, type MachineReading } from './machine-readings.ts'
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota } from './quota.ts';
+import { marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -1000,10 +1000,62 @@ export type ReportLab = {
 export type ReportWhy = { scope: string; account: string; why: string };
 export type ReportNote = { scope: string; why: string; count?: number };
 
-/** One seat of a breakdown block: the seat's name, its CLI, and the account that pays for it.
- *  Copied field by field in `reportSeatsOf`: the internal row also carries the lab's vendor and
- *  the pane, and neither is another reader's business. */
-export type ReportSeatRow = { seat: string; cli: string; account: string; pool?: 'gemini' | 'claude-gpt' };
+/** One quota figure a seat's own screen (or the watch's record of it) gave: the window, its two
+ *  percentages, the reset and margin the report already reads, and whether this run measured the
+ *  figure or read an earlier record. A seat's screen may name a different account from the one
+ *  that pays for it (a DeepSeek seat on the Claude Code CLI prints Anthropic's own bar), so the
+ *  row carries the account the figure belongs to. */
+export type ReportSeatWindow = {
+  window: WindowName;
+  /** The account the figure measures — not always the account that pays for the seat. */
+  account: string;
+  left: number | null;
+  used: number | null;
+  resetsAt: string | null;
+  resetsIn: string | null;
+  /** Expected minus used, one decimal, when the window's clock allows one. */
+  margin: number | null;
+  /** `measured` when this run read the seat's own screen; `estimated` when the figure is read
+   *  from an older record (the watch's per-seat reading in the project state). */
+  mark: 'measured' | 'estimated';
+  source: string;
+  readAt: string | null;
+  age: string;
+  stale: boolean;
+};
+
+/** A seat's spend in money, per run. `measured` when this run read the amount off the seat's own
+ *  screen — the claude-family status row's `S: $5.8` (test/usage-quota.test.ts:47) is the one
+ *  grammar a capture showed printing money; `unknown` with its reason when no screen printed an
+ *  amount, never an estimated zero that would read as a spend. The figure is per seat and per
+ *  run: the pane's own session, stamped with the herdr session it was read in. */
+export type ReportSeatCost = {
+  amount: number | null;
+  currency: 'USD';
+  mark: 'measured' | 'estimated' | 'unknown';
+  /** Where a measured amount was read. */
+  source?: string;
+  /** ISO, when this run read the figure. */
+  readAt?: string;
+  age?: string;
+  /** Why no amount is known, in the tool's own words. */
+  why?: string;
+};
+
+/** One seat of a breakdown block: the seat's name, its CLI, the account that pays for it, the
+ *  run (herdr session) it belongs to, its quota figures with their marks, and its spend. Copied
+ *  field by field: the internal row also carries the lab's vendor and the pane, and neither is
+ *  another reader's business. */
+export type ReportSeatRow = {
+  seat: string;
+  cli: string;
+  account: string;
+  pool?: 'gemini' | 'claude-gpt';
+  /** The team file's herdr session: the run the seat and its readings belong to. */
+  run?: string;
+  windows: ReportSeatWindow[];
+  cost: ReportSeatCost;
+};
 
 /** One team's breakdown block: its seats and the account each draws on. The default report
  *  carries the caller's own team; `--all` under the full view carries every team's. */
@@ -1014,6 +1066,8 @@ export type ReportTeamBlock = { team: string; root?: string; seats: ReportSeatRo
  *  already collapsed to one entry per distinct why with its count. */
 export type QuotaFacts = {
   observations: QuotaObservation[];
+  /** The money figures the same live read produced; absent from a caller with no cost source. */
+  costs?: readonly CostObservation[];
   notes: Array<{ why: string; count: number }>;
 };
 
@@ -1560,14 +1614,19 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // The breakdown blocks: the caller's own team first, then — only under `--all` and only in the
   // full view, where another team's name is already allowed — every other team by name. A caller
   // the view does not widen reads one note instead, never a name the view holds back.
+  // The breakdowns carry each seat's own figures: read live this run where the seat's pane
+  // answered (measured), from the project state's per-seat record otherwise (estimated), and no
+  // row where neither exists — a seat with no figure reads `unknown` in the tree, never a zero.
+  // Only a block this view prints is asked for its state, so the restricted view reads no other
+  // team's store.
   const breakdowns: ReportTeamBlock[] = [];
   if (mineEntry !== null && mineName !== null) {
-    breakdowns.push({ team: mineName ?? 'mine', seats: reportSeatsOf(mineEntry.usage.seatAccounts) });
+    breakdowns.push({ team: mineName ?? 'mine', seats: seatRowsOf(mineEntry, live, now) });
   }
   if (allTeams && view.full) {
     for (const team of teamOrder) {
       if (team === mineEntry) continue;
-      breakdowns.push({ team: nameOf(team), root: team.root, seats: reportSeatsOf(team.usage.seatAccounts) });
+      breakdowns.push({ team: nameOf(team), root: team.root, seats: seatRowsOf(team, live, now) });
     }
   }
   if (allTeams && !view.full) {
@@ -1596,8 +1655,123 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   };
 }
 
-function reportSeatsOf(seats: readonly SeatAccountRow[]): ReportSeatRow[] {
-  return seats.map(({ seat, cli, account, pool }) => ({ seat, cli, account, ...(pool ? { pool } : {}) }));
+/** The tool's words for a seat whose screen printed no amount this run: the report shows the
+ *  spend unknown with this reason, never a zero that would read as a measured spend. */
+const SEAT_COST_UNREAD = 'no money cost was read from this seat\'s screen this run';
+
+/**
+ * One team's seats, each with its own figures. The state is read once per block for the watch's
+ * per-seat record; a state that cannot be read leaves every seat `estimated`-less rather than
+ * failing the report, which is what every other read of a broken store already does. A figure
+ * this run measured wins over an older record of the same account and window; the record fills
+ * the windows the live read did not answer, marked `estimated`. A seat with neither carries no
+ * window at all — the tree prints `unknown`, never a zero.
+ */
+function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number): ReportSeatRow[] {
+  const run = entry.usage.session;
+  let stored: Seen[] = [];
+  try {
+    stored = recall(readState(join(entry.root, '.agents')).budgets);
+  } catch {
+    stored = [];
+  }
+  // The same binding the report's rows use (`boundReadings`): a reading names an account the
+  // file in force declares (or the machine holds) and a seat the file names. A stored reading
+  // for anything else is not the seat's figure and never becomes one here.
+  const boundAccounts = new Set(entry.usage.accounts.map((one) => one.account));
+  const observations = live?.observations ?? [];
+  const costs = live?.costs ?? [];
+  // A stamp the observer made keeps two teams' same-named seats apart; a reading made before the
+  // stamp existed (a test's own) still belongs to the row that names its seat.
+  const mine = (one: { session?: string | null }): boolean => one.session === undefined || one.session === null || run === null || one.session === run;
+  return entry.usage.seatAccounts.map((row) => {
+    const bound = stored.filter((one) => boundAccounts.has(one.account));
+    const measured = observations.filter((one) => one.seat === row.seat && !one.wall && one.window !== null && mine(one));
+    const paid = costs
+      .filter((one) => one.seat === row.seat && mine(one))
+      .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null;
+    return {
+      seat: row.seat,
+      cli: row.cli,
+      account: row.account,
+      ...(row.pool ? { pool: row.pool } : {}),
+      ...(run === null ? {} : { run }),
+      windows: seatWindowsOf(row.seat, measured, bound, now),
+      cost: costOf(paid, now),
+    };
+  });
+}
+
+/** One seat's spend as this run read it: the newest observation of its own screen, marked
+ *  measured, or unknown with one reason. A screen that printed no amount is never a zero. */
+function costOf(paid: CostObservation | null, now: number): ReportSeatCost {
+  if (paid === null) return { amount: null, currency: 'USD', mark: 'unknown', why: SEAT_COST_UNREAD };
+  return {
+    amount: paid.amount,
+    currency: paid.currency,
+    mark: 'measured',
+    source: paid.source,
+    readAt: new Date(paid.observedAt).toISOString(),
+    age: span(now - paid.observedAt),
+  };
+}
+
+/** One seat's windows: the newest live figure per account and window, then the state's record
+ *  for every account and window the live read left open. `measured` is this run's own read of
+ *  the seat's screen; `estimated` is the watch's earlier record. The state is the project's own,
+ *  so its readings need no session stamp: within one project a seat name is one seat. */
+function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stored: readonly Seen[], now: number): ReportSeatWindow[] {
+  const windows = new Map<string, ReportSeatWindow>();
+  for (const one of measured) {
+    if (one.window === null) continue;
+    const window = one.window;
+    const stale = now - one.observedAt > QUOTA_STALE_MS || (one.resetsAt !== null && one.resetsAt <= now);
+    const key = `${one.account}\0${window}`;
+    const candidate: ReportSeatWindow = {
+      window,
+      account: one.account,
+      left: one.left,
+      used: one.used,
+      resetsAt: one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
+      resetsIn: one.resetsAt === null ? one.resetText : span(one.resetsAt - now),
+      margin: stale ? null : marginOf(one, now),
+      mark: 'measured',
+      source: one.source,
+      readAt: new Date(one.observedAt).toISOString(),
+      age: span(now - one.observedAt),
+      stale,
+    };
+    const known = windows.get(key);
+    if (known === undefined || (known.readAt ?? '') < (candidate.readAt ?? '')) windows.set(key, candidate);
+  }
+  for (const one of stored) {
+    if (one.seat !== seat) continue;
+    const key = `${one.account}\0${one.window}`;
+    // A figure this run measured is newer by construction; the record only fills the gaps.
+    if (windows.has(key)) continue;
+    const resetsAt = one.resetsAt;
+    const stale = now - one.changedAt > QUOTA_STALE_MS || (resetsAt !== null && resetsAt <= now);
+    windows.set(key, {
+      window: one.window,
+      account: one.account,
+      left: one.left,
+      used: one.used,
+      resetsAt: resetsAt === null ? null : new Date(resetsAt).toISOString(),
+      resetsIn: resetsAt === null ? null : span(resetsAt - now),
+      margin: stale || (one.window !== 'session' && one.window !== 'weekly') ? null : marginOf({ used: one.used, window: one.window, resetsAt, margin: null }, now),
+      mark: 'estimated',
+      // Not the word `watch`: the watch clause is the machine line's own, and a seat figure
+      // read from the project state must not read as one.
+      source: 'state record',
+      readAt: new Date(one.changedAt).toISOString(),
+      age: span(now - one.changedAt),
+      stale,
+    });
+  }
+  // The account first, the table's window order inside it: the same order the machine lines
+  // print, so a seat's figures read in the order its team's accounts do.
+  const rank = (one: ReportSeatWindow) => `${one.account}\0${String(WINDOWS.indexOf(one.window)).padStart(2, '0')}`;
+  return [...windows.values()].sort((a, b) => (rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0));
 }
 
 /** The entity a team's account is borrowed from, or undefined: the fact rides the team's own rows
@@ -1806,12 +1980,44 @@ export function reportText(report: UsageReport, tree = false): string {
       headers: ['SEAT', 'CLI', 'ACCOUNT'],
       rows: block.seats.map((seat) => [seat.seat, seat.cli, `${seat.account}${seat.pool ? ` (${seat.pool})` : ''}`]),
     }));
+    // The seat figures are the tree's detail: the default table stays the table it was, and
+    // `--tree` adds each seat's own windows, their marks and the one spend line under it.
+    if (tree) lines.push(...seatFiguresText(block));
   }
   // A reason repeated is one note with its count (§ 2.2), never the same line twice.
   for (const note of collapseNotes(report.notes.map(noteText))) lines.push(`note: ${note}`);
   lines.push('');
   lines.push(`usage on this machine, ${count(report.counts.teams, 'team')}, ${count(report.counts.labs, 'lab')}, ${count(report.counts.accounts, 'account')}`);
   return `${lines.join('\n')}\n`;
+}
+
+/** One team's per-seat figures, under its seat table in the tree: the run the seats belong to,
+ *  one line per figure with its window, reset, margin and mark, one spend line per seat, and
+ *  `unknown  no reading for this seat` where neither this run nor the watch's record has a
+ *  figure. A quota figure a screen printed is `measured`; one read from the watch's per-seat
+ *  record is `estimated`; a spend a screen printed is `measured`, and one no screen printed is
+ *  `unknown` with its reason — never `0`. */
+function seatFiguresText(block: ReportTeamBlock): string[] {
+  // The run rides the rows (`run`, `--json`), not a line of its own: the block's header is the
+  // team the caller already read, and a session name here would be one more line to keep true.
+  const lines: string[] = [];
+  for (const seat of block.seats) {
+    if (seat.windows.length === 0) lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  unknown  no reading for this seat`);
+    for (const one of seat.windows) {
+      const left = one.left === null ? 'left unknown' : `left ${one.left}%`;
+      const used = one.used === null ? 'used unknown' : `used ${one.used}%`;
+      const reset = one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`;
+      const stale = one.stale ? '  stale' : '';
+      lines.push(`  ${seat.seat}  ${seat.cli}  ${one.account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${one.mark}  ${one.source}  read ${one.age} ago${stale}`);
+    }
+    // The spend line belongs to its seat: the amount is the pane's own session, so two seats on
+    // one account print their own figures, and one no screen answered for prints `unknown`.
+    const cost = seat.cost.mark === 'unknown' || seat.cost.amount === null
+      ? `unknown  ${seat.cost.why ?? SEAT_COST_UNREAD}`
+      : `$${seat.cost.amount}  ${seat.cost.mark}  ${seat.cost.source ?? 'status line'}${seat.cost.age === undefined ? '' : `  read ${seat.cost.age} ago`}`;
+    lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  cost  ${cost}`);
+  }
+  return lines;
 }
 
 /** The pace word a line carries (§ 3-S3): one decimal always, in used points per hour — never a
