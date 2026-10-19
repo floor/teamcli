@@ -22,6 +22,13 @@ import { readScreen } from './screen.ts';
  * already-typed nudge are not this threshold and play no part here.
  */
 export function idleThresholdSeconds(team: TeamFile, root: string, home: string | undefined, now: Date): number {
+  return idleThresholdReading(team, root, home, now).seconds;
+}
+
+/** The threshold with its provenance: a chain that cannot be read is not a chain that declared
+ *  nothing, so it carries `unknown` and the snapshot says the window in force is unknown rather
+ *  than acting on the documented default. */
+export function idleThresholdReading(team: TeamFile, root: string, home: string | undefined, now: Date): { seconds: number; unknown?: string } {
   try {
     const resolved = loadAndResolvePolicyChain(
       {
@@ -33,11 +40,14 @@ export function idleThresholdSeconds(team: TeamFile, root: string, home: string 
       },
       { now, upToLevel: 'team' },
     );
-    if (!resolved.ok) return 300;
+    if (!resolved.ok) {
+      const why = resolved.refusals.map((refusal) => refusal.message).join('; ');
+      return { seconds: 300, unknown: why === '' ? 'the policy chain could not be read' : why };
+    }
     const value = resolved.policies['idle-threshold']?.value;
-    return typeof value === 'number' ? value : 300;
-  } catch {
-    return 300;
+    return typeof value === 'number' ? { seconds: value } : { seconds: 300, unknown: 'idle-threshold did not resolve to a number' };
+  } catch (error) {
+    return { seconds: 300, unknown: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -49,20 +59,22 @@ export function idleThresholdSeconds(team: TeamFile, root: string, home: string 
  * stamp has no provable clock and is not counted. `takeable` is the records at
  * least one of those seats could claim under the picker's own rules (`takeable`), minus ids a
  * live lease in this clone already holds. A paused team claims nothing. A team whose file names
- * a tracker has no local queue to count here; the tracker is never read over the network.
+ * a tracker has an unknown count here — no broker snapshot is read and the tracker is never read
+ * over the network — and the reading says unknown rather than zero.
  */
 export function idleWorkReport(input: IdleWorkInput): IdleWorkReport {
   const now = input.now.getTime();
-  const threshold_seconds = idleThresholdSeconds(input.team, input.root, input.home, input.now);
-  const seats = idleSeatsOf(input, threshold_seconds, now);
+  const threshold = idleThresholdReading(input.team, input.root, input.home, input.now);
+  const seats = idleSeatsOf(input, threshold.seconds, now);
   const counted = takeableNow(input, seats, now);
   const report: IdleWorkReport = {
     format: 1,
     at: input.now.toISOString(),
-    threshold_seconds,
+    threshold_seconds: threshold.seconds,
     takeable: counted.takeable,
     idle: seats.map(({ name, since }) => ({ seat: name, since })),
   };
+  if (threshold.unknown !== undefined) report.threshold_unknown = threshold.unknown;
   if (counted.refused !== undefined) report.refused = counted.refused;
   return report;
 }
@@ -108,7 +120,11 @@ function sinceOf(stamp: string | undefined): string | null {
 function takeableNow(input: IdleWorkInput, seats: readonly IdleWorker[], now: number): { takeable: number | null; refused?: string } {
   if (input.pause != null) return { takeable: 0 };
   const source = fileSourceOf(input.team);
-  if (source === null) return { takeable: 0 };
+  // A declared tracker is the team's source, and this reading has no broker snapshot behind it:
+  // the count is unknown, never zero, so no dispatcher reads it as "no work".
+  if (source === null) {
+    return { takeable: null, refused: 'the team declares a linear task source and no broker snapshot is available here' };
+  }
   const read = readFileSource(input.root, source);
   if (read.kind === 'missing') return { takeable: null, refused: `${source.path} is missing` };
   if (read.kind === 'outside') return { takeable: null, refused: `${source.path} is outside the team root` };

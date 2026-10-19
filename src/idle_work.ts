@@ -26,6 +26,9 @@ export type IdleWorkReport = {
   at: string;
   /** Seconds an idle seat must have been quiet before the reading counts it. */
   threshold_seconds: number;
+  /** Present when the signed policy chain could not be read: the threshold in force is unknown,
+   *  `threshold_seconds` is only the documented default, and no dispatch may act on this reading. */
+  threshold_unknown?: string;
   /** Records the picker would offer right now; 0 when the queue is empty, null when unreadable. */
   takeable: number | null;
   /** Present with `takeable: null`: why the source could not be read. */
