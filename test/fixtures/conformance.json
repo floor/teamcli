@@ -1980,6 +1980,13 @@
       "classify": "working",
       "composer": "unknown",
       "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.303/unsent-multiline-ansi.txt",
+      "cli": "claude-code",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
     }
   ],
   "yaml": [
