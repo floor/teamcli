@@ -681,7 +681,7 @@ describe('team up', () => {
       `+ herdr --session acme-web workspace create --cwd ${root} --label 'claude-coordinator-acme · project coordinator' --no-focus\n`,
     );
     expect(run.out).toContain(
-      "+ herdr --session acme-web pane run <pane of claude-coordinator-acme> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt '\\''Rules for this session, from the team file:",
+      "+ herdr --session acme-web pane run <pane of claude-coordinator-acme> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --name claude-coordinator-acme --append-system-prompt '\\''Rules for this session, from the team file:",
     );
     expect(run.out).toContain(
       '- Your signature in a commit message, as a trailer, in a last paragraph of its own that holds trailers only: Agent: Claude Opus 5.5 · project coordinator\n',
@@ -690,7 +690,7 @@ describe('team up', () => {
       '- Your signature in a pull request body, as its last line: **Agent:** DeepSeek V4.1 Flash · implementer\n',
     );
     expect(run.out).toContain('- Run a script with its interpreter; never chmod, chown, sudo or recursive rm.\n');
-    expect(run.out).toContain('AGENT_UNATTENDED=1 team-deepseek --dangerously-skip-permissions --append-system-prompt');
+    expect(run.out).toContain('AGENT_UNATTENDED=1 team-deepseek --dangerously-skip-permissions --name deepseek-acme --append-system-prompt');
     expect(run.out).toContain('+ herdr --session acme-web agent rename <pane of deepseek-acme-2> deepseek-acme-2\n');
     expect(run.out).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -c model_reasoning_effort=high -a never -s danger-full-access');
     expect(run.out).toContain('pane send-text <pane of codex-acme>');
