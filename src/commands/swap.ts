@@ -349,30 +349,9 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     return 'cancelled';
   }
 
-  // `queue` and `now`: the wait in force, the rule, and the recipe.
-  const wait = waitSecondsFor(home, root, team, seat, now);
-  if ('why' in wait) {
-    refuse(rawIo, io, json, 'swap.rule', plainText(wait.why), null, notice, null);
-    return 'rule';
-  }
-  let listing: RuleListing;
-  try {
-    const lookup = listModelRuleBreaches({ home, team, root, teamId: teamIdOf(root) });
-    if (!lookup.ok) {
-      refuse(rawIo, io, json, 'swap.rule', plainText(lookup.why), null, notice, null);
-      return 'rule';
-    }
-    listing = lookup.listing;
-  } catch (error) {
-    refuse(rawIo, io, json, 'swap.rule', `the model rule cannot be read: ${(error as Error).message}`, null, notice, null);
-    return 'rule';
-  }
-  if (listing.rule === '') {
-    const where = listing.entity === null ? 'this team declares no entity' : `the entity ${listing.entity} declares no model rule`;
-    refuse(rawIo, io, json, 'swap.rule', `${where}, so there is nothing to swap to`, null, notice, null);
-    return 'rule';
-  }
-
+  // The plan a forced `now` runs from. It is built before the rule is resolved, because an
+  // existing request already carries its recipe and wait: the owner can force it even when the
+  // entity has since removed its rule, or the request came from configuration.
   const plan = {
     plan: true as const,
     dir,
@@ -395,6 +374,30 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   if (sub === 'now') {
     const held = queuedSwap(readState(dir), seat.name);
     if (held) return forcedPlan(plan, seat, held, null);
+  }
+
+  // A new `queue` or `now` request needs the wait in force, the rule, and the recipe.
+  const wait = waitSecondsFor(home, root, team, seat, now);
+  if ('why' in wait) {
+    refuse(rawIo, io, json, 'swap.rule', plainText(wait.why), null, notice, null);
+    return 'rule';
+  }
+  let listing: RuleListing;
+  try {
+    const lookup = listModelRuleBreaches({ home, team, root, teamId: teamIdOf(root) });
+    if (!lookup.ok) {
+      refuse(rawIo, io, json, 'swap.rule', plainText(lookup.why), null, notice, null);
+      return 'rule';
+    }
+    listing = lookup.listing;
+  } catch (error) {
+    refuse(rawIo, io, json, 'swap.rule', `the model rule cannot be read: ${(error as Error).message}`, null, notice, null);
+    return 'rule';
+  }
+  if (listing.rule === '') {
+    const where = listing.entity === null ? 'this team declares no entity' : `the entity ${listing.entity} declares no model rule`;
+    refuse(rawIo, io, json, 'swap.rule', `${where}, so there is nothing to swap to`, null, notice, null);
+    return 'rule';
   }
 
   const choice = choose(sub, listing, root, seat, args.values.to);

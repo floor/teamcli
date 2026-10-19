@@ -197,6 +197,7 @@ export function findRecipe(
   const candidates: Candidate[] = [];
   const self = listing.teams[0];
   for (const team of listing.teams) {
+    if (self && team.visibility !== self.visibility) continue;
     for (const seat of team.file.seats) {
       if (team.root === self?.root && seat.name === target.name) continue;
       if (seat.cli.toLowerCase() !== cli || seat.model.trim().toLowerCase() !== model) continue;
@@ -234,7 +235,7 @@ function propose(
     for (const seat of team.file.seats) {
       if (team.root === targetTeam.root && seat.name === target.name) continue;
       if (!modelRuleAllows(entries, { name: target.name, role: target.role, vendor: seat.vendor })) continue;
-      const rank = (team.name === targetTeam.name ? 0 : 2) + (seat.cli === target.cli ? 0 : 1);
+      const rank = (team.root === targetTeam.root ? 0 : 2) + (seat.cli === target.cli ? 0 : 1);
       candidates.push({ donor: { team: team.name, root: team.root, seat: seat.name }, seat, rank });
     }
   }
