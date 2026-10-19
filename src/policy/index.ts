@@ -26,12 +26,15 @@ export {
   EVENT_ROUTING_SETTING,
   EVENT_THRESHOLDS,
   EVENT_THRESHOLDS_SETTING,
+  EVENT_THRESHOLD_POLICIES,
   PRIVILEGED_KINDS,
   PRIVILEGED_KINDS_SETTING,
   growPrivilegedKinds,
   isPrivilegedKind,
   type EventRouting,
   type EventThreshold,
+  type EventThresholdField,
+  type EventThresholdPolicyName,
   type RoutingChange,
   type RoutingPosition,
   type RoutingRecipient,
@@ -49,6 +52,14 @@ export {
   type ResolvePolicyOptions,
   type SinglePolicyResult,
 } from './resolve.ts';
+
+export {
+  eventThresholdsInForce,
+  eventThresholdsOf,
+  type EventThresholds,
+  type EventThresholdsContext,
+  type EventThresholdsInForce,
+} from './thresholds.ts';
 
 export {
   loadAndResolvePolicyChain,

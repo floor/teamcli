@@ -16,6 +16,7 @@ import {
   STATE_THRESHOLDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
+import { EVENT_THRESHOLDS } from './events.ts';
 
 /** The four inheritance levels of Kernel amendment 02 §2.2, outermost first. */
 export type PolicyLevel = 'entity' | 'project' | 'team' | 'seat';
@@ -89,6 +90,13 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-lead-seconds',
   'liveness-idle-owner-seconds',
   'delivery-order',
+  'event-thread-ttl-seconds',
+  'event-thread-cap',
+  'event-retention-days',
+  'event-held-threshold-seconds',
+  'event-unreachable-threshold-seconds',
+  'event-idle-threshold-seconds',
+  'event-reconcile-interval-seconds',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -132,6 +140,28 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   seat_numbering: 'seat-numbering',
   pane_conduct: 'pane-conduct',
   review_terms: 'review-terms',
+  event_thread_ttl_seconds: 'event-thread-ttl-seconds',
+  thread_ttl_seconds: 'event-thread-ttl-seconds',
+  'thread-ttl': 'event-thread-ttl-seconds',
+  thread_ttl: 'event-thread-ttl-seconds',
+  event_thread_cap: 'event-thread-cap',
+  thread_cap: 'event-thread-cap',
+  'thread-cap': 'event-thread-cap',
+  event_retention_days: 'event-retention-days',
+  retention_days: 'event-retention-days',
+  retention: 'event-retention-days',
+  event_held_threshold_seconds: 'event-held-threshold-seconds',
+  held_threshold_seconds: 'event-held-threshold-seconds',
+  held: 'event-held-threshold-seconds',
+  event_unreachable_threshold_seconds: 'event-unreachable-threshold-seconds',
+  unreachable_threshold_seconds: 'event-unreachable-threshold-seconds',
+  unreachable: 'event-unreachable-threshold-seconds',
+  event_idle_threshold_seconds: 'event-idle-threshold-seconds',
+  idle_threshold_seconds: 'event-idle-threshold-seconds',
+  idle: 'event-idle-threshold-seconds',
+  event_reconcile_interval_seconds: 'event-reconcile-interval-seconds',
+  reconcile_interval_seconds: 'event-reconcile-interval-seconds',
+  reconcile: 'event-reconcile-interval-seconds',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -184,6 +214,33 @@ function parsePositiveSeconds(raw: unknown): number | null {
   if (typeof raw === 'string' && /^[1-9][0-9]*s?$/.test(raw.trim())) {
     const n = Number.parseInt(raw.trim().replace(/s$/, ''), 10);
     return Number.isInteger(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
+/** A positive whole count (a record cap, a number of days), without the seconds suffix. */
+function parsePositiveCount(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim())) {
+    return Number.parseInt(raw.trim(), 10);
+  }
+  return null;
+}
+
+/**
+ * A delay threshold: a positive whole number of seconds, never above its release default. The
+ * ceiling is part of the spec's range, so every path that parses a word — `team policy set`
+ * before writing, and the resolver at load — refuses a longer one; the message says why.
+ */
+function parseShortenableSeconds(raw: unknown, ceiling: number): number | null {
+  const n = parsePositiveSeconds(raw);
+  return n !== null && n <= ceiling ? n : null;
+}
+
+function shortenOnlyProblem(name: string, raw: unknown, ceiling: number): string | null {
+  const n = parsePositiveSeconds(raw);
+  if (n !== null && n > ceiling) {
+    return `policy "${name}" may only be shortened: ${String(n)}s exceeds the release default ${String(ceiling)}s`;
   }
   return null;
 }
@@ -322,6 +379,85 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
       && lower.every((leg, idx) => (leg === 'native' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+  },
+  // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field
+  // at a time; `src/policy/thresholds.ts` reads the resolved chain back into the set the bus and
+  // the reply command consume. A shorter value is the tighter one on every field — a shorter
+  // thread life, a smaller cap, less retention, a more frequent reconcile pass, a shorter delay.
+  // The three delay thresholds may only be shortened, never lengthened past the release default:
+  // the ceiling is in their parse range, so a longer word is refused before it is signed.
+  'event-thread-ttl-seconds': {
+    name: 'event-thread-ttl-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_THRESHOLDS.thread_ttl_seconds,
+    gateLifting: false,
+    parseValue: parsePositiveSeconds,
+    // Shorter or equal life is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'event-thread-cap': {
+    name: 'event-thread-cap',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_THRESHOLDS.thread_cap,
+    gateLifting: false,
+    parseValue: parsePositiveCount,
+    // A smaller or equal cap is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'event-retention-days': {
+    name: 'event-retention-days',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_THRESHOLDS.retention_days,
+    gateLifting: false,
+    parseValue: parsePositiveCount,
+    // Fewer or equal days kept is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'event-held-threshold-seconds': {
+    name: 'event-held-threshold-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_THRESHOLDS.held_threshold_seconds,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseShortenableSeconds(raw, EVENT_THRESHOLDS.held_threshold_seconds),
+    valueProblem: (raw: unknown) => shortenOnlyProblem('event-held-threshold-seconds', raw, EVENT_THRESHOLDS.held_threshold_seconds),
+    // Shorter or equal delay is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'event-unreachable-threshold-seconds': {
+    name: 'event-unreachable-threshold-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_THRESHOLDS.unreachable_threshold_seconds,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseShortenableSeconds(raw, EVENT_THRESHOLDS.unreachable_threshold_seconds),
+    valueProblem: (raw: unknown) => shortenOnlyProblem('event-unreachable-threshold-seconds', raw, EVENT_THRESHOLDS.unreachable_threshold_seconds),
+    // Shorter or equal delay is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'event-idle-threshold-seconds': {
+    name: 'event-idle-threshold-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_THRESHOLDS.idle_threshold_seconds,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseShortenableSeconds(raw, EVENT_THRESHOLDS.idle_threshold_seconds),
+    valueProblem: (raw: unknown) => shortenOnlyProblem('event-idle-threshold-seconds', raw, EVENT_THRESHOLDS.idle_threshold_seconds),
+    // Shorter or equal delay is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  'event-reconcile-interval-seconds': {
+    name: 'event-reconcile-interval-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_THRESHOLDS.reconcile_interval_seconds,
+    gateLifting: false,
+    parseValue: parsePositiveSeconds,
+    // A shorter or equal interval is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
   },
   'development-mode': {
     name: 'development-mode',

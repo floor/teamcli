@@ -3,11 +3,14 @@
 // (RFC 002 Amendment 01 §4.1–§4.4). Only the owner runs it, from a terminal outside herdr, one
 // per clone — shaped after `team broker`. No supervisor starts it in 0.5.1; when no bus is
 // running, `team watch` and `team send` fall back cleanly to their record-polling and direct paths.
+import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { startBus } from '../bus/server.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { projectIdOfTeam } from '../dev_mode.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
+import { eventThresholdsInForce } from '../policy/index.ts';
 import { stopped } from './broker.ts';
 
 export const USAGE = `Usage: team bus
@@ -62,11 +65,29 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
     return badConfig(io, problem?.message ?? "the team file can't be read");
   }
 
+  // The owner's event thresholds, resolved once for this bus: a chain that will not load is the
+  // configuration refusal (`bus.configuration`), never a silent run on the release defaults.
+  const thresholds = eventThresholdsInForce({
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    entity: loaded.team.entity,
+    projectId: projectIdOfTeam(sources.home ?? homedir(), loaded.team, loaded.root),
+    root: loaded.root,
+    team: loaded.team,
+    upToLevel: 'team',
+  });
+  if (!thresholds.ok) {
+    return badConfig(io, thresholds.refusals.map((refusal) => refusal.message).join('; '));
+  }
+
   const started = await startBus({
     root: loaded.root,
     team: loaded.team,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
-    ...(sources.reconcileIntervalMs !== undefined ? { reconcileIntervalMs: sources.reconcileIntervalMs } : {}),
+    ...(sources.reconcileIntervalMs !== undefined
+      ? { reconcileIntervalMs: sources.reconcileIntervalMs }
+      : { reconcileIntervalMs: thresholds.thresholds.reconcile_interval_seconds * 1000 }),
+    retentionSeconds: thresholds.thresholds.retention_days * 86_400,
+    heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
     stderr: (text) => io.stderr(text),
   });
 
