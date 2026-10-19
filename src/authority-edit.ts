@@ -2,6 +2,7 @@ import { lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describeCaller, isOwner, walkCaller } from './caller.ts';
+import { devModeOwnerLiftAtCwd } from './dev_mode.ts';
 import { findRoot, loadTeamFile, withoutFileOffer } from './file/load.ts';
 import type { TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
@@ -40,12 +41,18 @@ export async function runAuthorityEdit(
   const caller = walkCaller(io);
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (json) {
-      writeJsonError(rawIo, `${command}.refused`, plainText(msg), `the owner runs \`team ${command}\` from a terminal outside herdr`, 1, 'owner-only');
-    } else {
-      io.stderr(`team ${command}: ${msg}\n`);
+    // The owner's dev-mode admission for exactly this gate (OD-20261019-49): a placed lead or
+    // orchestrator continues with the warning; the owner's own path above is untouched.
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: msg, ...(options.home !== undefined ? { home: options.home } : {}) });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(rawIo, `${command}.refused`, plainText(msg), `the owner runs \`team ${command}\` from a terminal outside herdr`, 1, 'owner-only');
+      } else {
+        io.stderr(`team ${command}: ${msg}\n`);
+      }
+      return 'refused';
     }
-    return 'refused';
+    io.stderr(`${lift.warning}\n`);
   }
 
   const home = options.home ?? homedir();

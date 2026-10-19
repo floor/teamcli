@@ -20,6 +20,7 @@
 import { homedir } from 'node:os';
 import type { AuthorityEditOptions, AuthorityEditResult } from '../authority-edit.ts';
 import { describeCaller, isOwner, walkCaller } from '../caller.ts';
+import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { grantsDir } from '../grant.ts';
 import { cleanedIo, type Io } from '../io.ts';
@@ -69,12 +70,17 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
   const caller = walkCaller(io);
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (json) {
-      writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant` from a terminal outside herdr', 1, 'owner-only');
-    } else {
-      io.stderr(`team grant: ${msg}\n`);
+    // The owner's dev-mode admission for exactly this gate (OD-20261019-49).
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, ...(options.home !== undefined ? { home: options.home } : {}) });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        io.stderr(`team grant: ${msg}\n`);
+      }
+      return 'refused';
     }
-    return 'refused';
+    io.stderr(`${lift.warning}\n`);
   }
 
   const home = options.home ?? homedir();
@@ -173,12 +179,17 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
   const caller = walkCaller(io);
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (json) {
-      writeJsonError(rawIo, 'revoke.refused', plainText(msg), 'the owner runs `team revoke` from a terminal outside herdr', 1, 'owner-only');
-    } else {
-      io.stderr(`team revoke: ${msg}\n`);
+    // The owner's dev-mode admission for exactly this gate (OD-20261019-49).
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'revoke', refusal: msg, ...(options.home !== undefined ? { home: options.home } : {}) });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(rawIo, 'revoke.refused', plainText(msg), 'the owner runs `team revoke` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        io.stderr(`team revoke: ${msg}\n`);
+      }
+      return 'refused';
     }
-    return 'refused';
+    io.stderr(`${lift.warning}\n`);
   }
 
   const home = options.home ?? homedir();

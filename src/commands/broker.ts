@@ -12,6 +12,7 @@
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import type { Command, Io } from '../io.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
 import { keychainReader, realSecurityRun, type KeyReader } from '../release/keychain.ts';
@@ -59,9 +60,9 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   // The start is the owner's, and this gate comes before every other prerequisite: a call placed
   // as a seat, in a pane, under herdr, or with no terminal is refused here, before the credential
   // is read and before the socket is bound. A run with no terminal gets the one sentence; the
-  // Keychain is not asked. Dev mode does not reach this gate: serving is never a dev-mode command
-  // (`dev_mode.ts`), so the orchestrator's and the operator's seats are refused as every other
-  // caller is.
+  // Keychain is not asked. The owner's dev-mode admission (OD-20261019-49) is the one other way:
+  // a placed orchestrator or lead continues with the warning below; every other caller is
+  // refused as before.
   const caller = callerOf(io);
   const detached = detachedRefusal(caller);
   if (detached !== undefined) {
@@ -72,9 +73,19 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   const placement = `only the owner runs \`broker\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
   const owner = isOwner(caller);
   if (!owner) {
-    io.stderr(`team broker: ${placement}\n`);
-    // exit: broker.not-owner
-    return 1;
+    // The owner's dev-mode admission for exactly this gate (OD-20261019-49): a placed lead or
+    // orchestrator continues with the warning; every other caller keeps the refusal.
+    const lift = devModeOwnerLiftAtCwd(io, {
+      command: 'broker',
+      refusal: placement,
+      ...(sources.home !== undefined ? { home: sources.home } : {}),
+    });
+    if (lift === null || !lift.lifted) {
+      io.stderr(`team broker: ${placement}\n`);
+      // exit: broker.not-owner
+      return 1;
+    }
+    io.stderr(`${lift.warning}\n`);
   }
   // The folder is resolved the way every command resolves it: the checkout git names, or, in a
   // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`

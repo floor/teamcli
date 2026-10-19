@@ -3,7 +3,7 @@ import { notInForce } from '../approve/approval.ts';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeLevelNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeLevelNote, devModeOwnerLiftAtCwd, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
@@ -813,11 +813,25 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // seat, orchestrator and operator included, exactly as the owner's own `down` does. A gate that
   // has answered is the run's only refusal: today's abandon line stays out of the way of its own.
   const abandon = args.flags.has('abandon') && granted === undefined;
+  let abandonLifted = false;
   if (abandon && !callerOwns(caller) && verdict === undefined) {
-    refusals.push({
-      id: 'down.abandon',
-      message: 'only the owner abandons a team, from a terminal outside herdr',
+    // The owner's dev-mode admission for exactly this gate (OD-20261019-49): a placed lead or
+    // orchestrator continues with the warning; every other caller keeps the refusal.
+    const lift = devModeOwnerLiftAtCwd(io, {
+      command: 'down',
+      refusal: 'only the owner abandons a team, from a terminal outside herdr',
+      ...(sources.home !== undefined ? { home: sources.home } : {}),
+      now: sources.now(),
     });
+    if (lift === null || !lift.lifted) {
+      refusals.push({
+        id: 'down.abandon',
+        message: 'only the owner abandons a team, from a terminal outside herdr',
+      });
+    } else {
+      abandonLifted = true;
+      io.stderr(`${lift.warning}\n`);
+    }
   }
   const branchRun = branching();
 
@@ -1019,10 +1033,10 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
-    abandon: abandon && callerOwns(caller),
+    abandon: abandon && (callerOwns(caller) || abandonLifted),
     // A free seat is still asked. When that ask cannot be typed or confirmed, the owner's
     // `--abandon` closes it in this same run; every other run names that close and leaves it.
-    closeUnasked: abandon && callerOwns(caller),
+    closeUnasked: abandon && (callerOwns(caller) || abandonLifted),
     unasked: 'team down --abandon closes it',
   });
 
