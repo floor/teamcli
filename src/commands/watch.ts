@@ -632,12 +632,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             const liveScreen = live.screens[agent.pane];
             const rawScreen = readScreenNow
               ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (sources.screen(agent.pane, session) ?? liveScreen))
-              : liveScreen;
+              : undefined;
             if (rawScreen !== undefined && rawScreen !== '') {
               live.screens[agent.pane] = rawScreen;
             }
             if (herdrUnreliable(seat.cli)) {
-              await statusEngine.pollUnreliableSeat(seat.name, rawScreen, now, agent.pane);
+              await statusEngine.pollUnreliableSeat(seat.name, rawScreen ?? liveScreen, now, agent.pane);
             } else if (
               agent.status === 'idle'
               || agent.status === 'working'
@@ -645,7 +645,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               || agent.status === 'done'
               || agent.status === 'unknown'
             ) {
-              await statusEngine.observe(seat.name, agent.status, now, agent.pane, rawScreen);
+              const verifyScreen = isScreenVerifiedStatusCli(seat.cli) || agent.status === 'blocked'
+                ? rawScreen
+                : undefined;
+              await statusEngine.observe(seat.name, agent.status, now, agent.pane, verifyScreen);
             }
           }
           await statusEngine.tick(now);
@@ -659,7 +662,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             statusWaitersKey = nextPanesKey;
             statusWaiters = nextPanesKey === ''
               ? undefined
-              : statusEngine.startWaiters(panesBySeat, { timeoutMs: inForce.interval * 1000 });
+              : statusEngine.startWaiters(panesBySeat, { timeoutMs: Math.min(9_000, inForce.interval * 1000) });
           }
         }
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the

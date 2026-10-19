@@ -162,34 +162,38 @@ describe('herdr wait agent-status CLI integration and output parser', () => {
     expect(invalidPane.outcome).toBe('error');
   });
 
-  test('waitAgentStatus passes session, pane, status, and timeout to herdr and herdrStatusSource races { not } targets', async () => {
+  test('waitAgentStatus passes session, pane, status, and timeout to herdr and herdrStatusSource cycles one client at a time', async () => {
     const seenArgs: string[][] = [];
-    setHerdrWaitExec(async (args, signal) => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    setHerdrWaitExec(async (args) => {
       seenArgs.push(args);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
       const statusIdx = args.indexOf('--status');
       const requested = statusIdx >= 0 ? args[statusIdx + 1] : '';
-      if (requested === 'blocked') {
-        return {
-          code: 0,
-          stdout: JSON.stringify({
-            event: 'pane.agent_status_changed',
-            data: { pane_id: 'w1:p1', workspace_id: 'w1', agent_status: 'blocked', agent: 'claude' },
-          }),
-          stderr: '',
-        };
-      }
-      // Other candidates wait until aborted by the race winner.
-      return await new Promise((resolve) => {
-        if (signal?.aborted) {
-          resolve({ code: null, stdout: '', stderr: 'timed out waiting for agent status change' });
-          return;
+      try {
+        if (seenArgs.length === 1 || requested === 'done') {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              event: 'pane.agent_status_changed',
+              data: {
+                pane_id: 'w1:p1',
+                workspace_id: 'w1',
+                agent_status: requested,
+                agent: 'claude',
+              },
+            }),
+            stderr: '',
+          };
         }
-        signal?.addEventListener(
-          'abort',
-          () => resolve({ code: null, stdout: '', stderr: 'timed out waiting for agent status change' }),
-          { once: true },
-        );
-      });
+        return { code: 1, stdout: '', stderr: 'timed out waiting for agent status change' };
+      } finally {
+        inFlight -= 1;
+      }
     });
 
     const direct = await waitAgentStatus('w1:p1', 'blocked', 5000, 'acme-dev');
@@ -213,16 +217,23 @@ describe('herdr wait agent-status CLI integration and output parser', () => {
     ]);
 
     const source = herdrStatusSource({ session: 'acme-dev', now: () => 1_700_000_000_000 });
-    const raced = await source.waitStatus(
+    const cycled = await source.waitStatus(
       { name: 'worker-1', pane: 'w1:p1', cli: 'claude-code' },
       { not: 'working' },
-      5000,
+      9000,
     );
-    expect(raced).toEqual({
+    expect(cycled).toEqual({
       outcome: 'changed',
-      status: 'blocked',
+      status: 'done',
       at: 1_700_000_000_000,
     });
+    // Strictly ONE herdr client process is active at any point in time (never 4 parallel clients).
+    expect(maxInFlight).toBe(1);
+    // Candidate 1 (`blocked`, 3000ms) timed out, then Candidate 2 (`done`, 3000ms) matched and stopped the cycle.
+    expect(seenArgs.slice(1).map((a) => [a[a.indexOf('--status') + 1], a[a.indexOf('--timeout') + 1]])).toEqual([
+      ['blocked', '3000'],
+      ['done', '3000'],
+    ]);
   });
 });
 
@@ -774,8 +785,8 @@ describe('flicker grace, waiter timeout, unreliable herdr (jules), human seats, 
   });
 });
 
-describe('production watch wiring, assigned-work gate, and screen verification (F1–F6)', () => {
-  test('F1: realWatchSources wires statusSource and runWatch starts/stops status waiters', async () => {
+describe('production watch wiring, assigned-work gate, and screen verification', () => {
+  test('realWatchSources wires statusSource and runWatch starts/stops status waiters', async () => {
     expect(realWatchSources.statusSource).toBeDefined();
     expect(typeof realWatchSources.statusSource?.waitStatus).toBe('function');
     expect(typeof realWatchSources.statusSource?.promptKind).toBe('function');
@@ -853,7 +864,7 @@ describe('production watch wiring, assigned-work gate, and screen verification (
     expect(abortedSeats.sort()).toEqual(['crew-lead', 'worker-1']);
   });
 
-  test('F2 & F5: seat.idle requires assigned work, is worker-only (not leads), routes to lead, and drains one nudge work drop', async () => {
+  test('seat.idle requires assigned work, is worker-only (not leads), routes to lead, and drains one nudge work drop', async () => {
     const { root, home } = makeScratch();
     execSync('git init -q -b main', { cwd: root, stdio: 'ignore' });
     const file = join(root, '.agents', 'team.yaml');
@@ -877,19 +888,19 @@ describe('production watch wiring, assigned-work gate, and screen verification (
     expect(engine.tickSync(clock)).toEqual([]);
     expect(engine.drainNudges()).toEqual([]);
 
-    // 2. Assign work to worker-1 via a live lease in `.agents/leases/workspace-status.json`.
+    // 2. Assign work to worker-1 via a live lease in `.agents/leases/TASK-1.json`.
     const leasesDir = join(root, '.agents', 'leases');
     mkdirSync(leasesDir, { recursive: true });
     writeFileSync(
-      join(leasesDir, 'workspace-status.json'),
-      JSON.stringify({ id: 'workspace-status', seat: 'worker-1', until: new Date(clock + 3_600_000).toISOString() }),
+      join(leasesDir, 'TASK-1.json'),
+      JSON.stringify({ id: 'TASK-1', seat: 'worker-1', until: new Date(clock + 3_600_000).toISOString() }),
     );
     expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-1', clock)).toBe(true);
 
     // Also assign work to crew-lead to prove leads NEVER emit `seat.idle` even with assigned work.
     writeFileSync(
-      join(leasesDir, 'FLO-LEAD.json'),
-      JSON.stringify({ id: 'FLO-LEAD', seat: 'crew-lead', until: new Date(clock + 3_600_000).toISOString() }),
+      join(leasesDir, 'TASK-LEAD.json'),
+      JSON.stringify({ id: 'TASK-LEAD', seat: 'crew-lead', until: new Date(clock + 3_600_000).toISOString() }),
     );
 
     const due = engine.tickSync(clock);
@@ -932,7 +943,7 @@ describe('production watch wiring, assigned-work gate, and screen verification (
     expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'jules-1', clock + 1_000, { project: 'acme', home })).toBe(false);
   });
 
-  test('F2: runWatch drains statusEngine nudges and writes a work drop when a worker seat with assigned work is idle past threshold', async () => {
+  test('runWatch drains statusEngine nudges and writes a work drop when a worker seat with assigned work is idle past threshold', async () => {
     const { root, home } = makeScratch();
     execSync('git init -q -b main', { cwd: root, stdio: 'ignore' });
     const file = join(root, '.agents', 'team.yaml');
@@ -944,8 +955,8 @@ describe('production watch wiring, assigned-work gate, and screen verification (
     mkdirSync(leasesDir, { recursive: true });
     let clock = Date.parse('2026-10-19T06:00:00Z');
     writeFileSync(
-      join(leasesDir, 'workspace-status.json'),
-      JSON.stringify({ id: 'workspace-status', seat: 'worker-1', until: new Date(clock + 7_200_000).toISOString() }),
+      join(leasesDir, 'TASK-1.json'),
+      JSON.stringify({ id: 'TASK-1', seat: 'worker-1', until: new Date(clock + 7_200_000).toISOString() }),
     );
 
     const statusSource: StatusSource = {
@@ -1012,7 +1023,7 @@ describe('production watch wiring, assigned-work gate, and screen verification (
     expect(drops).toHaveLength(1);
   });
 
-  test('F3, F4, F6: shouldReadScreenForStatus and reconcileStatusWithScreen handle Antigravity/Gemini idle-while-working and Cursor done-while-running, and OWNER_PROMPT_KINDS has no hyphenated rate-limit', async () => {
+  test('shouldReadScreenForStatus and reconcileStatusWithScreen verify Antigravity/Gemini/Cursor/Jules without overriding reliable CLIs, and OWNER_PROMPT_KINDS has no hyphenated rate-limit', async () => {
     expect(OWNER_PROMPT_KINDS).toContain('rate limit');
     expect(OWNER_PROMPT_KINDS as readonly string[]).not.toContain('rate-limit');
 
@@ -1021,6 +1032,8 @@ describe('production watch wiring, assigned-work gate, and screen verification (
     expect(isScreenVerifiedStatusCli('gemini')).toBe(true);
     expect(isScreenVerifiedStatusCli('cursor')).toBe(true);
     expect(isScreenVerifiedStatusCli('claude-code')).toBe(false);
+    expect(isScreenVerifiedStatusCli('codex')).toBe(false);
+    expect(isScreenVerifiedStatusCli('grok')).toBe(false);
 
     expect(shouldReadScreenForStatus({ cli: 'antigravity' }, 'idle', true)).toBe(true);
     expect(shouldReadScreenForStatus({ cli: 'gemini' }, 'idle', true)).toBe(true);
@@ -1047,7 +1060,16 @@ describe('production watch wiring, assigned-work gate, and screen verification (
     ].join('\n');
     expect(reconcileStatusWithScreen('cursor', 'done', cursorWorkingScreen)).toBe('working');
 
-    // Verify engine does not emit false `seat.done` for Cursor when screen is working, nor false `seat.idle` for Antigravity when screen is working.
+    // Reliable CLI (`claude-code`) with a stale working frame on screen must NOT have `done` or `idle` suppressed.
+    const claudeWorkingScreen = readFileSync(
+      join(import.meta.dir, 'fixtures', 'claude-code', '2.1.302', 'working.txt'),
+      'utf8',
+    );
+    expect(reconcileStatusWithScreen('claude-code', 'done', claudeWorkingScreen)).toBe('done');
+    expect(reconcileStatusWithScreen('claude-code', 'idle', claudeWorkingScreen)).toBe('idle');
+
+    // Verify engine does not emit false `seat.done` for Cursor when screen is working, nor false `seat.idle` for Antigravity when screen is working,
+    // while `claude-code` emits `seat.done` even when a stale working frame is passed to `observeSync`.
     const multiCliTeam = validateTeamFile(`format: 1
 entity: floor
 project: acme
@@ -1059,6 +1081,13 @@ workspace:
 seats:
   - name: crew-lead
     role: coordinator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - name: worker-1
+    role: builder
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
@@ -1086,7 +1115,7 @@ seats:
       team: multiCliTeam.team,
       now: () => clock,
       idleThresholdSeconds: 60,
-      assignedSeats: ['ag-1', 'cur-1'],
+      assignedSeats: ['worker-1', 'ag-1', 'cur-1'],
     });
 
     const agStep1 = await engine.observe('ag-1', 'idle', clock, 'w2:p1', agWorkingScreen);
@@ -1099,5 +1128,9 @@ seats:
     const curStep = await engine.observe('cur-1', 'done', clock, 'w3:p1', cursorWorkingScreen);
     expect(curStep.status).toBe('working');
     expect(curStep.events).toHaveLength(0);
+
+    const claudeDoneStep = engine.observeSync('worker-1', 'done', clock, 'w4:p1', claudeWorkingScreen);
+    expect(claudeDoneStep.status).toBe('done');
+    expect(claudeDoneStep.events.map((ev) => ev.input.kind)).toEqual(['seat.done']);
   });
 });
