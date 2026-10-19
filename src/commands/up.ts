@@ -1501,15 +1501,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
     cliHooks = installed;
     const plan = buildPlan();
-    // The general seat brief goes first: one signed drop in every declared seat's folder, human
-    // seats included, before the plan types a rules line into any pane. A delivery that cannot be
-    // written is said and logged, and the launch goes on; `team check` names the seat with no
-    // record. A seat that already holds this text's record is left as it is.
+    // The general seat brief goes first: one signed drop in the folder of every seat this plan
+    // launches or relaunches, and of every declared seat the session records no launch of. A seat
+    // the state records as already launched, which this run leaves as it is, is left exactly so:
+    // no drop and no state entry. A delivery that cannot be written is said and logged, and the
+    // launch goes on; `team check` names the seat with no record.
+    const launchedSeats = plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    const briefSeats = team.seats
+      .filter((seat) => launchedSeats.includes(seat.name) || recorded?.seats[seat.name] === undefined)
+      .map((seat) => seat.name);
     const briefs = deliverGeneralBrief({
       dir,
       root,
       session,
-      seats: team.seats.map((seat) => seat.name),
+      seats: briefSeats,
       home: sources.home,
       at: (sources.now?.() ?? new Date()).toISOString(),
     });
@@ -1526,7 +1531,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
-    resetCliHookState(dir, session, plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : [])));
+    resetCliHookState(dir, session, launchedSeats);
 
     // Every launch uses the limits declared in the live file, with or without a stored approval.
     const ceilings = ceilingsOf(team);

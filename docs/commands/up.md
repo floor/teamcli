@@ -10,12 +10,14 @@ is a human's own pane: the plan skips it — nothing is launched into it or type
 it is — and it does not count as short of ready.
 
 Before the plan types anything, the run delivers the general seat brief: TeamCLI's built-in
-default, the first text every seat gets, written into each declared seat's drop folder as a signed
-message record — human seats included — and recorded in the session's state. It travels the drop
-leg and is never typed; a seat that already holds this brief's verified record is left as it is,
-a file planted at the brief's id is replaced by the signed record, and a link, a folder or a FIFO
-there is refused, never followed. [`team check`](check.md) names a seat the session launched
-without a verified delivery record.
+default, the first text every seat gets, written as a signed message record into the drop folder
+of every seat the plan launches or relaunches, and of every declared seat the session records no
+launch of — a human seat, which is never launched, among them — and recorded in the session's
+state. A seat the state records as already launched, and that the run leaves as it is, is left
+exactly so: no drop and no state entry. It travels the drop leg and is never typed; a seat that
+already holds this brief's verified record is left as it is, a file planted at the brief's id is
+replaced by the signed record, and a link, a folder or a FIFO there is refused, never followed.
+[`team check`](check.md) names a seat the session launched without a verified delivery record.
 
 ## Synopsis
 

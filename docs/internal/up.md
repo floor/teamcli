@@ -239,8 +239,9 @@ launch model check) keeps today's behaviour: nothing checks its pane.
 
 When the idle screen names no model this version can read, `up` writes `<seat>: its screen doesn't show a model this version knows; not checked` to stderr, after the seat's record, and continues. It is detail, not a record: the log keeps the seat's one line, the record `ready`. Nothing is assumed about which model is running.
 
-Before the plan lands anything, every declared seat — a human's pane included — receives the
-general seat brief: TeamCLI's built-in default, embedded in the package (`src/launch/general-brief-text.ts`,
+Before the plan lands anything, the seats whose launch this run owns — the seats it launches or
+relaunches, and every declared seat the session records no launch of, a human's pane among them —
+receive the general seat brief: TeamCLI's built-in default, embedded in the package (`src/launch/general-brief-text.ts`,
 generated from the accepted source by `scripts/brief.ts --write`; `brief:check` pins its bytes, and
 compares it with the source when one is given) so the package never reads a documentation checkout.
 `deliverGeneralBrief` (`src/launch/general-brief.ts`) signs one message record per seat and writes
@@ -251,7 +252,9 @@ by this checkout's message key — planted, foreign, unsigned, another body — 
 a folder or a FIFO there is refused and never followed or replaced. Only a record read back and
 verified (`recordHolds`, `src/send/record.ts`) is recorded as delivered. The session's `briefs` map
 records each delivery — the record's id and its own `at` — in one locked state write, which is what
-[`team check`](check.md) verifies to name a seat the session launched without one. A drop that
+[`team check`](check.md) verifies to name a seat the session launched without one. A seat the
+state records as already launched, and that this run leaves as it is, gets neither a drop nor a
+state entry. A drop that
 cannot be written is a line on stderr and in the log for that seat alone, and the launch carries
 on: the record on disk is the message, and the check names the seat. Nothing is typed for the
 brief, and `add`, `restart` and `reload` deliver through the same function, for the one seat each
