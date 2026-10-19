@@ -14,6 +14,7 @@ import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
+import { idleWorkReport } from '../watch/idle-work.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -94,6 +95,9 @@ export function standingSource(home: string): StatusSources['standing'] {
 }
 
 export const realSources: StatusSources = {
+  // The watch's own read-only snapshot, the same function its dispatcher uses, so who is idle and
+  // what is takeable cannot differ between the two readers.
+  idleWork: idleWorkReport,
   // The green journal's own pending reader, the same function the watch uses: a corrupt journal
   // throws, and the presentation names that read as refused rather than as no ready slice.
   pendingGreen: pendingGreenSlices,
@@ -411,6 +415,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     live,
     now,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
+    // The project's records, not one session's: a paused team claims nothing and a seat holding
+    // a queued swap is not an idle worker.
+    pause: whole.pause ?? null,
+    swaps: Object.keys(whole.swaps ?? {}),
   });
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);

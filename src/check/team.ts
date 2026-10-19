@@ -163,7 +163,8 @@ export const realCheckSources: CheckSources = {
   standing: realSources.standing,
   now: realSources.now,
   home: realSources.home,
-  // The same pending reader `status` uses, wired once: both commands read the one journal.
+  // The same snapshot and pending reader `status` uses, wired once: the commands cannot disagree.
+  idleWork: realSources.idleWork,
   pendingGreen: realSources.pendingGreen,
 };
 
@@ -400,6 +401,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     live,
     now: sources.now(),
     ...(sources.home !== undefined ? { home: sources.home } : {}),
+    pause: whole.pause ?? null,
+    swaps: Object.keys(whole.swaps ?? {}),
   });
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
   const idleNotes = [

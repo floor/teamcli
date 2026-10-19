@@ -76,12 +76,19 @@ export function readPendingGreen(source: PendingGreenSource, dir: string): Pendi
  * The lines `status` and `check` print. Nothing is said unless there is something to act on: the
  * idle line appears only when seats are idle past the threshold and the queue holds takeable work.
  * A named source that cannot be read is always said, because silence there would read as no work.
+ * An unreadable signed chain is said first: the window in force is unknown, so the default number
+ * the report carries must never be printed as if it were the window, and no dispatch acts on it.
  */
 export function idleWorkNotes(report: IdleWorkReport): string[] {
+  const unknown: string[] = [];
+  if (report.threshold_unknown !== undefined) {
+    unknown.push(`the idle threshold cannot be read, so the idle reading is unknown (${report.threshold_unknown}); no dispatch acts on it`);
+  }
   if (report.takeable === null) {
     const why = report.refused === undefined ? '' : ` (${report.refused})`;
-    return [`the task source cannot be read, so the idle reading is unknown${why}`];
+    unknown.push(`the task source cannot be read, so the idle reading is unknown${why}`);
   }
+  if (unknown.length > 0) return unknown;
   if (report.idle.length === 0 || report.takeable === 0) return [];
   const seats = report.idle.map((seat) =>
     seat.since === null ? `${seat.seat} idle since the watch started` : `${seat.seat} idle since ${seat.since}`);
@@ -105,6 +112,10 @@ export function greenNotes(read: PendingGreenRead | null): string[] {
 
 function duration(seconds: number): string {
   const whole = Math.max(0, Math.round(seconds));
+  if (whole > 0 && whole % 3600 === 0) {
+    const hours = whole / 3600;
+    return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  }
   if (whole > 0 && whole % 60 === 0) {
     const minutes = whole / 60;
     return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
