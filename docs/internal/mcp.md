@@ -27,7 +27,9 @@ notices a message when its client calls `inbox_check`; nothing in this process w
 
 The seat, the session and the project root are fixed at launch. `--seat` must name a seat the team
 file declares, `--session` (when given) must be the team's own session, and the folder served is
-`<root>/.agents/send-drops/<session>/<seat>` for that team. No tool argument can name another
+`<root>/.agents/send-drops/<session>/<seat>` for that team. `--file` names the team file the
+launch read; with no `--file` the server reads the team file of the folder it starts in, which a
+seat launched into a lobby does not have. No tool argument can name another
 seat's folder or a path: a message id must be a lowercase UUID, and a string that is anything else
 never reaches the filesystem.
 
@@ -307,7 +309,7 @@ team mcp: a subcommand is required: status, doctor or serve
 
 Usage: team mcp status [--json]
        team mcp doctor [--json]
-       team mcp serve --seat <seat> [--session <session>]
+       team mcp serve --seat <seat> [--session <session>] [--file <path>]
 Read-only: reports the MCP bridge's state and diagnoses what is missing.
 `status` prints one table per leg and the state they add up to; `doctor`
 turns the same surface into findings, each missing one with a one-line fix.
@@ -321,8 +323,11 @@ for doctor. A run that exits 2 writes the structured error document instead
 `serve` is the seat's inbox, for the CLI that started it: a stdio MCP
 server with `inbox_check` and `inbox_read` over one seat's drop folder.
 Its stdout carries JSON-RPC lines only. --seat is required; --session
-defaults to the team's session and must match it. It exits 0 when stdin
-closes and 2 when the invocation or the team placement can't be read.
+defaults to the team's session and must match it. --file is the team file
+the seat's launch read: a seat that starts in a lobby has none in its
+folder, so its registration names the launch's file and the server reads
+that. It exits 0 when stdin closes and 2 when the invocation or the team
+placement can't be read.
 
 Exits 0 when every observed leg is up (status) or nothing is missing (doctor),
 1 when a leg is down, the bridge is not set up, or doctor finds something

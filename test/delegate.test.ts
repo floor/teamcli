@@ -446,7 +446,9 @@ describe('commands and flags', () => {
     expect(refused({ command: 'up', flags: ['file', 'session'] }).text).toBe(`--session is the owner's; the approved delegate cannot use it`);
     expect(refused({ command: 'down', flags: ['abandon'] }).id).toBe('down.delegate-flag');
     expect(refused({ command: 'add', flags: ['temporary'] }).id).toBe('add.delegate-flag');
-    expect(refused({ command: 'add', flags: ['like'] }).text).toContain('--like');
+    // `--like` is not the owner's alone: a declared copy is how a delegate adds a seat, and the
+    // command admits it only when the source is the record's own (`add.delegate-edit`).
+    expect(gate({ command: 'add', flags: ['like'] })).toEqual({ kind: 'passed', pane: 'other/w1:p1' });
     expect(refused({ command: 'add', flags: ['until'] }).text).toContain('--until');
     expect(refused({ command: 'add', flags: ['worktree'] }).text).toContain('--worktree');
     expect(refused({ command: 'remove', flags: ['keep'] }).id).toBe('remove.delegate-flag');

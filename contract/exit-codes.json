@@ -165,6 +165,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.like-exists",
+      "meaning": "the new seat's name is already declared",
+      "trigger": "team add worker --like lead"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.lobby",
       "meaning": "the lobby could not be created for the launch",
       "trigger": "team add worker"
@@ -404,8 +411,8 @@
       "code": 2,
       "command": "add",
       "id": "add.temporary-flags",
-      "meaning": "--like, --until and --worktree need --temporary",
-      "trigger": "team add worker --like lead"
+      "meaning": "--until and --worktree need --temporary",
+      "trigger": "team add worker --until result:out.md"
     },
     {
       "code": 2,
@@ -1761,6 +1768,13 @@
     {
       "code": 1,
       "command": "next",
+      "id": "next.paused",
+      "meaning": "the team is paused, so nothing was claimed",
+      "trigger": "team next"
+    },
+    {
+      "code": 1,
+      "command": "next",
       "id": "next.policy",
       "meaning": "a task policy the validator refuses",
       "trigger": "team next"
@@ -1792,6 +1806,62 @@
       "id": "next.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team next"
+    },
+    {
+      "code": 0,
+      "command": "pause",
+      "id": "pause.placed",
+      "meaning": "the team was paused",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.caller",
+      "meaning": "not the owner or the orchestrator",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.io",
+      "meaning": "the state or the registry can't be read or written",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.paused",
+      "meaning": "the team is already paused",
+      "trigger": "team pause"
+    },
+    {
+      "code": 2,
+      "command": "pause",
+      "id": "pause.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team pause"
+    },
+    {
+      "code": 2,
+      "command": "pause",
+      "id": "pause.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team pause --all --json"
+    },
+    {
+      "code": 2,
+      "command": "pause",
+      "id": "pause.team",
+      "meaning": "the team name is not registered or names more than one",
+      "trigger": "team pause other"
     },
     {
       "code": 0,
@@ -2957,6 +3027,62 @@
     },
     {
       "code": 0,
+      "command": "resume",
+      "id": "resume.resumed",
+      "meaning": "the team resumed",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.caller",
+      "meaning": "not the owner or the orchestrator",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.io",
+      "meaning": "the state or the registry can't be read or written",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.not-paused",
+      "meaning": "no pause stands",
+      "trigger": "team resume"
+    },
+    {
+      "code": 2,
+      "command": "resume",
+      "id": "resume.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team resume"
+    },
+    {
+      "code": 2,
+      "command": "resume",
+      "id": "resume.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team resume --all --json"
+    },
+    {
+      "code": 2,
+      "command": "resume",
+      "id": "resume.team",
+      "meaning": "the team name is not registered or names more than one",
+      "trigger": "team resume other"
+    },
+    {
+      "code": 0,
       "command": "revoke",
       "id": "revoke.done",
       "meaning": "the authority was removed or matched, the standing grant's revocation was appended or already named, or a write-free preview passed",
@@ -3220,6 +3346,34 @@
       "id": "send.usage",
       "meaning": "the invocation can't be read",
       "trigger": "team send"
+    },
+    {
+      "code": 0,
+      "command": "sessions",
+      "id": "sessions.none",
+      "meaning": "no session record matched",
+      "trigger": "team sessions"
+    },
+    {
+      "code": 0,
+      "command": "sessions",
+      "id": "sessions.shown",
+      "meaning": "the session records were listed",
+      "trigger": "team sessions"
+    },
+    {
+      "code": 1,
+      "command": "sessions",
+      "id": "sessions.read",
+      "meaning": "a session registry can't be read",
+      "trigger": "team sessions"
+    },
+    {
+      "code": 2,
+      "command": "sessions",
+      "id": "sessions.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team sessions --by nothing"
     },
     {
       "code": 0,

@@ -112,6 +112,7 @@ describe('checkLogin with fake command results', () => {
       exitKeys: [],
       exitClear: null,
       exitConfirm: null,
+      input: null,
       compose: null,
       lobbyFiles: [],
       startupReads: [],

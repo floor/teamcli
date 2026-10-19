@@ -66,6 +66,7 @@ export const EVENT_KINDS = [
   'seat.blocked',
   'seat.at-prompt',
   'seat.prompt-escalated',
+  'seat.unblocked',
   'seat.unreachable',
   'seat.done',
   // Work & tasks

@@ -27,7 +27,11 @@ export type Screen =
                                      // back: a transient error, never typed into
   | { kind: 'rate limit'; reset: string | null } // a usage limit, with the reset time the
                                      // screen names, or null when it names none
-  | { kind: 'unknown' };
+  | { kind: 'unknown'; matched?: string } // no shape this CLI's profile reads. `matched` is the
+                                     // safety floor's own line when one is on the screen — the
+                                     // one piece of an unrecognised prompt a reader may quote
+                                     // back (the floor's footer or its numbered choice), never a
+                                     // guess at what the dialog says
 
 /** What a screen says a seat is doing, in the state words the readers use: an idle table or a
  *  composer holding text is `idle` (the two the CLI takes a line at), a running turn is

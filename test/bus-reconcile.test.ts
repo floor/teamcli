@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readEvents, type EventPayload } from '../src/bus/log.ts';
+import { appendEvent, readEvents, type EventPayload } from '../src/bus/log.ts';
 import { OWNER_MAILBOX, OwnerDelivery } from '../src/bus/owner.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
@@ -136,6 +136,89 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(log.ok).toBe(true);
     if (!log.ok) return;
     expect(log.events.length).toBe(first.raised.length + third.raised.length);
+  });
+
+  test('a pass verifies the whole log once, then only the events appended since its last read', () => {
+    const { root, home } = makeScratch();
+    for (const id of ['seed-1', 'seed-2', 'seed-3']) {
+      const appended = appendEvent('acme', root, home, {
+        ts: '2026-10-18T12:00:00.000Z',
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: id,
+        to: 'worker-1',
+      });
+      expect(appended.ok).toBe(true);
+    }
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropMessage(seatDir, 'drop-1', "from the file's seat clerk — admitted by: lead\n\nhello");
+
+    const first = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.full).toBe(true);
+    expect(first.checked).toBe(3);
+    expect(first.raised.map((record) => record.payload.record_id)).toEqual(['drop-1']);
+
+    // The second pass checks only the record the first pass appended.
+    const second = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:11:00.000Z'),
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.full).toBe(false);
+    expect(second.checked).toBe(1);
+    expect(second.raised).toHaveLength(0);
+
+    // With nothing appended, a pass checks no signature at all.
+    const quiet = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:12:00.000Z'),
+    });
+    expect(quiet.ok).toBe(true);
+    if (!quiet.ok) return;
+    expect(quiet.full).toBe(false);
+    expect(quiet.checked).toBe(0);
+    expect(quiet.raised).toHaveLength(0);
+
+    // A new durable record is raised, and the pass that follows it is the one that checks it.
+    dropMessage(seatDir, 'drop-2', "from the file's seat clerk — admitted by: lead\n\nhello again");
+    const raised = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:13:00.000Z'),
+    });
+    expect(raised.ok).toBe(true);
+    if (!raised.ok) return;
+    expect(raised.checked).toBe(0);
+    expect(raised.raised.map((record) => record.payload.record_id)).toEqual(['drop-2']);
+    const after = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:14:00.000Z'),
+    });
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.checked).toBe(1);
+    expect(after.raised).toHaveLength(0);
   });
 
   test('reconciles signed .agents/messages/<seat> records, .read.json receipts, messages.jsonl history, and seat states', () => {

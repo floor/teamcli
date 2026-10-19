@@ -1,4 +1,5 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
@@ -8,6 +9,25 @@ import { shippedEfforts } from './efforts.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
 import { trustAnswers, type TrustRecord } from './trust-answer.ts';
+
+/** How a CLI's input box is emptied and restored, as the one run that measured it saw.
+ *  Declared only on the profiles a run covered; a CLI without this block has its unsent text
+ *  left alone by every delivery and by a restart. */
+export type InputBlock = {
+  /** The keys that empty the box on an idle screen, sent in order and repeated until the box
+   *  reads empty. */
+  clear: readonly string[];
+  /** The keys that empty the box during a running turn, measured on a CLI that takes text there.
+   *  Null when the CLI's keys were measured only on an idle screen. */
+  clearWorking: readonly string[] | null;
+  /** How text is put back into the box. */
+  paste: 'bracketed';
+  /** Whether this CLI takes text into its box while a turn runs. True means `clearWorking` is
+   *  the sequence a delivery uses on a working screen; false means a draft found there is left
+   *  in place and held, because clearing it was never measured and the idle keys could stop the
+   *  turn. */
+  midTurn: boolean;
+};
 
 /**
  * A launch profile: what `team` knows about one CLI, so a seat can't start
@@ -60,6 +80,9 @@ export interface Profile {
    *  key is established for this CLI: a seat that asks the question is one that could not be
    *  stopped by asking. */
   exitConfirm: string | null;
+  /** The measured way into this CLI's box — its clear keys and paste surface. Null when no run
+   *  measured them: a delivery that finds unsent text there holds, and a restart refuses. */
+  input: InputBlock | null;
   /** The exact relative paths of regular files this CLI may leave in its working folder.
    *  Empty when no capture has established a path for this CLI. */
   lobbyFiles: readonly string[];
@@ -124,7 +147,10 @@ export function shellQuote(word: string): string {
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
   /** Launch-line arguments, appended when a seat launches. `{seat}`, `{session}`, `{command}`
-   *  and `{entry}` are filled from the launch. Empty when the CLI takes none. */
+   *  and `{entry}` are filled from the launch; `{command_json}`, `{entry_json}` and
+   *  `{seat_json}` are the same values escaped for a double-quoted string inside a structured
+   *  word; `{file_args}` is the team file's `--file` pair as array elements inside such a
+   *  word, and nothing when the launch read no file. Empty when the CLI takes none. */
   launchArgs: readonly string[];
   /** The CLI's own project-scope `mcp add` subcommand arguments, run in the seat's folder at
    *  launch. Null when the CLI has no measured add command. */
@@ -138,16 +164,33 @@ export type InboxBlock = {
 
 /** What a launch fills into the profile's `mcp_inbox` words. `command` and `entry` are this
  *  install's runner — the executable and its entry script — which reach the inbox server
- *  whether or not `team` is on the PATH. */
-export type InboxPlace = { seat: string; session: string; command: string; entry: string };
+ *  whether or not `team` is on the PATH. `file` is the team file the launch read, when it read
+ *  one: the server resolves the team from it, whatever folder it starts in. */
+export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string };
 
-/** A profile word with the launch's own values filled in. */
+/** A profile word with the launch's own values filled in.
+ *
+ *  `{file_args}` is for a launch-line route whose word holds the server's arguments inside a
+ *  structured string (codex's `mcp_servers.team_inbox.args=[...]`): it is the `--file` pair as
+ *  array elements, the path escaped as a JSON string (which is also a TOML basic string), and
+ *  nothing at all when the launch named no team file. A whole `{file}` word is for a command's
+ *  own argv (`mcp add`), where the pair is two words and the shell never sees them.
+ *
+ *  `{command_json}`, `{entry_json}` and `{seat_json}` are the same values escaped for a
+ *  double-quoted string inside such a structured word, for the profile that supplies the
+ *  quotes: a quote or a backslash in a path stays part of the value. The plain forms stay raw
+ *  for argv words (`mcp add`), where no escaping belongs. */
 export function fillInboxPlace(text: string, place: InboxPlace): string {
+  const inside = (value: string): string => JSON.stringify(value).slice(1, -1);
   return text
     .replaceAll('{seat}', place.seat)
     .replaceAll('{session}', place.session)
     .replaceAll('{command}', place.command)
-    .replaceAll('{entry}', place.entry);
+    .replaceAll('{entry}', place.entry)
+    .replaceAll('{command_json}', inside(place.command))
+    .replaceAll('{entry_json}', inside(place.entry))
+    .replaceAll('{seat_json}', inside(place.seat))
+    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`);
 }
 
 /**
@@ -200,6 +243,48 @@ export function supportsCliHook(cli: string): boolean {
  */
 export function supportsSessionName(cli: string): boolean {
   return cli === 'claude-code';
+}
+
+/** True when the CLI takes the session id on its launch line, so TeamCLI sets it rather than
+ *  reading the CLI's own session files afterwards. Measured from `claude --help` on 2.1.303:
+ *
+ *      --session-id <uuid>                   Use a specific session ID for the conversation
+ *                                            (must be a valid UUID)
+ */
+export function supportsSessionId(cli: string): boolean {
+  return cli === 'claude-code';
+}
+
+/** True when the CLI keeps its sessions to resume by id, which is what makes a session's id
+ *  worth recording. Measured from `claude --help` on 2.1.303:
+ *
+ *      -r, --resume [value]                  Resume a conversation - provide a session ID
+ *                                            or interactively select a conversation
+ */
+export function supportsSessionResume(cli: string): boolean {
+  return cli === 'claude-code';
+}
+
+/** The session id a launch line already names with `--session-id`, if it names one. */
+export function launchSessionId(command: string): string | undefined {
+  const match = /(?:^|\s)--session-id(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$)/.exec(command);
+  return match?.[1];
+}
+
+/**
+ * The command a pane runs, with the session id TeamCLI sets where the CLI takes one. The id is
+ * appended after every other argument, so the plan (`team up --dry-run`, `team add`) keeps the
+ * deterministic line it had and each launch gets its own id. A line that already names a session
+ * id, resumes one (`--resume`/`-r`) or continues one (`--continue`/`-c`) is left as it is: the
+ * id it names is the one recorded, and a resumed conversation is not a new session.
+ */
+export function withLaunchSession(cli: string, command: string): { command: string; sessionId?: string } {
+  if (!supportsSessionId(cli)) return { command };
+  const named = launchSessionId(command);
+  if (named !== undefined) return { command, sessionId: named };
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return { command };
+  const sessionId = randomUUID();
+  return { command: `${command} --session-id ${sessionId}`, sessionId };
 }
 
 /** True when the CLI accepts an effort override flag on its launch line. */
@@ -387,7 +472,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -403,6 +488,18 @@ const CONFIRM_KEYS = ['enter'] as const;
 // takes no exit text. Closed like the sets above, and only a key a run established is in it:
 // `ctrl+c` quits the Jules TUI from its session table (0.1.42; the footer draws `ctrl+c: quit`).
 const EXIT_KEYS = ['ctrl+c'] as const;
+
+// The keys a profile may name as `input.clear` and `input.clear_working`: the exit-clearing set
+// with `ctrl+k` added, because a measured clear pair is greater than one key (codex empties one
+// line per [ctrl+u, ctrl+k] pass at idle). Closed like the sets above: a key no run established
+// is refused as the profile loads.
+const INPUT_KEYS = ['ctrl+c', 'ctrl+u', 'ctrl+k', 'escape', 'backspace'] as const;
+
+// The paste surfaces a profile may name as `input.paste`. Bracketed paste is the one measured:
+// claude 2.1.303, codex 0.161.0 and cursor-agent 2026.10.16 each drew a pasted draft back as its
+// own rows. What a delivery pastes is one row: a box drawn over more than one row cannot be told
+// from a soft wrap, so it is held (see captureBox in send/deliver.ts).
+const PASTE_SURFACES = ['bracketed'] as const;
 
 /** The value of `exit_keys`: a non-empty list of the keys above, spelled as herdr spells them. */
 function exitKeysOf(entry: YamlEntry): readonly string[] {
@@ -426,6 +523,42 @@ function clearKeyOf(entry: YamlEntry): string {
     fail(entry.line, `"exit_clear" must be one of: ${CLEAR_KEYS.join(', ')}`);
   }
   return value;
+}
+
+/** One key list of the `input` block: a non-empty list of the keys above, spelled as herdr
+ *  spells them. */
+function inputKeysOf(entry: YamlEntry, key: string): readonly string[] {
+  if (entry.value.kind !== 'seq' || entry.value.items.length === 0) {
+    fail(entry.line, `"${key}" must be a non-empty list of keys`);
+  }
+  return entry.value.items.map((item) => {
+    const value = stringOf(item);
+    if (value === null) fail(item.line, `"${key}" entries must be strings`);
+    if (!(INPUT_KEYS as readonly string[]).includes(value)) {
+      fail(item.line, `"${key}" must hold keys among: ${INPUT_KEYS.join(', ')}`);
+    }
+    return value;
+  });
+}
+
+/** The value of `input`: the measured clear keys and paste surface for this CLI's box. */
+function inputOf(entry: YamlEntry): InputBlock {
+  const entries = mapping(entry.value, '"input"');
+  only(entries, ['clear', 'clear_working', 'paste', 'mid_turn']);
+  const clear = inputKeysOf(required(entries, 'clear', entry.line), 'input.clear');
+  const workingEntry = optional(entries, 'clear_working');
+  const clearWorking = workingEntry ? inputKeysOf(workingEntry, 'input.clear_working') : null;
+  const pasteEntry = required(entries, 'paste', entry.line);
+  const paste = text(pasteEntry, 'input.paste');
+  if (!(PASTE_SURFACES as readonly string[]).includes(paste)) {
+    fail(pasteEntry.line, `"input.paste" must be one of: ${PASTE_SURFACES.join(', ')}`);
+  }
+  const midTurnEntry = optional(entries, 'mid_turn');
+  const midTurn = midTurnEntry ? boolOf(midTurnEntry.value, 'input.mid_turn') : false;
+  if (midTurn && clearWorking === null) {
+    fail(workingEntry?.line ?? entry.line, '"input.clear_working" is required when "input.mid_turn" is true');
+  }
+  return { clear, clearWorking, paste: paste as InputBlock['paste'], midTurn };
 }
 
 /** The value of `exit_confirm`: one of the keys above, spelled as herdr spells it. */
@@ -666,6 +799,14 @@ export function exitClearKey(text: string): string | null {
   return entry === undefined ? null : clearKeyOf(entry);
 }
 
+/** The `input` block a profile snippet names, by the loader's own rule: for tests. A key outside
+ *  the closed sets, or a `mid_turn` with no `clear_working`, throws; an absent block reads as
+ *  null, as an absent optional key does. */
+export function inputBlockOf(text: string): InputBlock | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'input');
+  return entry === undefined ? null : inputOf(entry);
+}
+
 /** The `exit_confirm` a profile snippet names, by the loader's own rule: for tests. A key outside
  *  the closed set throws; an absent key reads as null, as an absent optional key does. */
 export function exitConfirmKey(text: string): string | null {
@@ -723,6 +864,7 @@ function launchOf(root: YamlNode): Shipped {
   const unreadModelEntry = optional(entries, 'unread_model');
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
+  const inputEntry = optional(entries, 'input');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
@@ -761,6 +903,7 @@ function launchOf(root: YamlNode): Shipped {
       compose: composeEntry ? composeOf(composeEntry) : null,
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
+      input: inputEntry ? inputOf(inputEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,

@@ -29,7 +29,7 @@ import { DEFAULT_STATE_THRESHOLDS, type StateThresholds } from '../settings/inhe
 import { stateThresholds } from '../settings/resolve.ts';
 import { machineLiveness, watchWords } from '../settings/declared.ts';
 import { entityLiveness } from '../entities.ts';
-import { emptySession, isSeatId, liveHold, readState, type SessionState } from '../state.ts';
+import { emptySession, isSeatId, liveHold, pauseText, readState, type PauseRecord, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Difference, type Live } from '../status/compare.ts';
 import { waitOrStop } from '../wait.ts';
 import { realSources as realStatusSources, type StatusSources } from './status.ts';
@@ -128,6 +128,8 @@ export interface SeatsJson {
   project: string;
   session: string;
   notice?: string | null;
+  /** Present while the team is paused (`team pause`), with its stop points. */
+  pause?: PauseRecord;
   seats: Array<{
     name: string;
     /** The seat's human name from the file, or null when it writes none. */
@@ -492,16 +494,20 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
           ...(row.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
         })),
+        ...(whole.pause !== undefined ? { pause: whole.pause } : {}),
       });
       break;
     }
 
     const rendered = renderSeatsTable(rows, '', style);
+    // The team's pause reads above the table, one line in the shape `status` prints it: a reader
+    // seeing every seat idle is told why none of them is taking work.
+    const pauseLine = whole.pause !== undefined ? `${pauseText(whole.pause)}\n` : '';
     if (watching && io.stdoutIsTTY) {
       io.stdout(`\x1b[2J\x1b[H`);
-      io.stdout(`Every 2s: team seats${all ? ' --all' : ''} (${plainLine(session)})  ${now.toISOString()}\n\n${rendered}`);
+      io.stdout(`Every 2s: team seats${all ? ' --all' : ''} (${plainLine(session)})  ${now.toISOString()}\n\n${pauseLine}${rendered}`);
     } else {
-      io.stdout(`${contextLine(team.project, session)}\n${rendered}${pluralCount(rows.length, 'seat')}\n`);
+      io.stdout(`${contextLine(team.project, session)}\n${pauseLine}${rendered}${pluralCount(rows.length, 'seat')}\n`);
     }
     if (!watching) break;
     if (!(await wait(2))) break;
