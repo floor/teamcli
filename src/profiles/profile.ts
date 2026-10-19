@@ -209,9 +209,15 @@ export function launchCommand(
   cliHook?: string | null,
   place?: InboxPlace,
   displayName?: string,
+  runtimePolicies?: { codexDaemon?: 'on' | 'off' },
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = profile.unattended.filter((option) => !words.has(option));
+  if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !words.has('--no-daemon')) {
+    const altIdx = options.indexOf('--no-alt-screen');
+    if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
+    else options.push('--no-daemon');
+  }
   // The session's own display name, where the CLI takes one and the line names none: a person
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
   // readable name rather than an anonymous session.

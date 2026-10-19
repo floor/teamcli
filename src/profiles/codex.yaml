@@ -13,7 +13,6 @@ unattended:
   - never
   - -s
   - danger-full-access
-  - --no-daemon
   - --no-alt-screen
 rules: first-message
 login:

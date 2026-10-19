@@ -1318,6 +1318,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     teamFile: loaded.path,
     cliHooks,
     briefEpochs: currentBriefEpochs(dir, session),
+    home: sources.home,
   });
 
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
