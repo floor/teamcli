@@ -156,9 +156,10 @@ export async function runDueSwaps(input: SwapRunOptions): Promise<SwapRunResult[
   return results;
 }
 
-/** One queued swap, carried out if it is due. The queue record is removed only once the new
- *  pane is ready — or read-back shows the wrong model — and only if it is still the record this
- *  run read. */
+/** One queued swap, carried out if it is due. The queue record is removed only once the new pane
+ *  is ready, the file declares the recipe and the read-back agrees (or cannot read the screen);
+ *  a file write that failed or a read-back mismatch leaves the record standing. Only the record
+ *  this run read is removed. */
 export async function runOneSwap(input: SwapRunOptions, name: string, swap: QueuedSwap): Promise<SwapRunResult> {
   const { dir, root, home, team, session, sources, now } = input;
   const declared = team.seats.find((candidate) => candidate.name === name);
@@ -253,17 +254,26 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
 
   switch (performed.kind) {
     case 'ready': {
-      // The seat is on the new declaration: the request is done, whatever the screen says next.
-      finishSwap(dir, name, swap.queuedAt);
       const from = `${swap.from.vendor} ${swap.from.model} ${swap.from.version}`;
       const to = `${swap.to.vendor} ${swap.to.model} ${swap.to.version}`;
       const how = resume !== undefined ? `resumed session ${resume}` : handover !== undefined ? `handover passed from ${handover.path}` : 'fresh conversation';
-      logLine(dir, 'swap', input.by, `${name}: swapped ${from} -> ${to} (${how})`, now());
+      // The file's write failed: the new pane runs, but the team file still declares the old
+      // model. The request is not done, and no line says it swapped.
+      if (performed.declareFailure !== undefined) {
+        const said = `the team file was not rewritten (${performed.declareFailure}); the swap failed`;
+        logLine(dir, 'swap', input.by, `${name}: ${said}`, now());
+        return { kind: 'failed', seat: name, why: said };
+      }
+      // The screen shows another model: the swap failed, the queue record stands, and nothing
+      // says it swapped. A completion here would hide a seat running the wrong model.
       if (performed.readBack.kind === 'mismatch') {
         const said = `read-back: mismatch — the file declares ${performed.readBack.expected}, the screen shows ${performed.readBack.shown}`;
         logLine(dir, 'swap', input.by, `${name}: ${said}; the swap failed`, now());
         return { kind: 'mismatch', seat: name, oldPane: performed.oldPane, pane: performed.pane, readBack: performed.readBack };
       }
+      // The seat is on the new declaration and the screen agrees: the request is done.
+      finishSwap(dir, name, swap.queuedAt);
+      logLine(dir, 'swap', input.by, `${name}: swapped ${from} -> ${to} (${how})`, now());
       logLine(
         dir,
         'swap',

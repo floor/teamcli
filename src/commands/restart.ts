@@ -434,7 +434,15 @@ export type PerformResult =
   | { kind: 'not-ready'; message: string }
   | { kind: 'herdr' }
   | { kind: 'run-lock'; held: number }
-  | { kind: 'ready'; oldPane: string; pane: string; readBack: ReadBack };
+  | {
+      kind: 'ready';
+      oldPane: string;
+      pane: string;
+      readBack: ReadBack;
+      /** The team-file declaration's write failed: the pane runs, but the file still names the
+       *  old model. A caller must not call the request done on this. */
+      declareFailure?: string;
+    };
 
 export async function performRestart(input: PerformInput): Promise<PerformResult> {
   const {
@@ -664,10 +672,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
     // The team file's new declaration lands after the old pane is closed and before the hooks
     // and the launch, which reads the file's own words. A write that fails is said and logged,
-    // and the launch goes on: the seat is already down.
+    // and the launch goes on: the seat is already down. The failure is carried on the ready
+    // result so the caller does not mark the request done on a file that still names the old
+    // model.
+    let declareFailure: string | undefined;
     if (input.declare) {
       const wrote = input.declare();
       if (!wrote.ok) {
+        declareFailure = wrote.why;
         const said = `the team file was not rewritten (${wrote.why}); the launch uses the queued recipe`;
         if (json) notes.push(said);
         else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
@@ -789,6 +801,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       oldPane,
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
+      ...(declareFailure === undefined ? {} : { declareFailure }),
     };
   } finally {
     runLock.release();
