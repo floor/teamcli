@@ -32,6 +32,7 @@ import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
+import { listUnread } from '../mcp/inbox.ts';
 import {
   collapseNotes,
   contextLine,
@@ -64,7 +65,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
-import { recordHolds, receiptFile, receiptHolds } from '../send/record.ts';
+import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
@@ -299,7 +300,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
   // at all: the setting is one record, never a file key and never a stale approval.
-  const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team), undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
+  const inForce = watchInForceOf(standing, team);
+  const comparison = compare(team, session, state, live, sources.now(), inForce, undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
   // than named seat by seat — `team seats` keeps the mark, and `team status --all --json` keeps
@@ -326,6 +328,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...comparison.differences.filter((difference) => difference.promptSeat === undefined || !attention.named.has(difference.promptSeat)),
     ...signingDifferences(team, state, live, root, sources.home),
     ...briefs.differences,
+    ...unreadDifferences(team, state, root, sources.home, session, inForce.unreadAfter, sources.now()),
     ...provenance.differences,
     ...attention.differences,
     ...labelDifferences(team, state, live),
@@ -825,6 +828,64 @@ function generalBriefDifferences(
     out.push({ what: `${seat.name}: the general seat brief has been delivered and not read`, repair: readerRepair });
   }
   return { differences: out, stale };
+}
+
+/**
+ * Every seat with work still unread past `watch.unread_after`. The reading is the watch's own —
+ * `listUnread`, with the same receipt, superseded and claim rules — so the check and the unread
+ * wake agree on what unread means. One difference per seat names the oldest message and counts
+ * the rest. The general seat brief has its own read difference and is not counted twice; a
+ * person's drop is read by a person and is never asked for a receipt, and without a message key
+ * no receipt can be judged, so neither is named here.
+ */
+function unreadDifferences(
+  team: TeamFile,
+  state: SessionState,
+  root: string,
+  home: string | undefined,
+  session: string,
+  windowSeconds: number,
+  now: Date,
+): Difference[] {
+  if (home === undefined) return [];
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return [];
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const brief = state.briefs?.[seat.name];
+    const briefIds = new Set<string>([
+      ...(brief === undefined ? [] : [brief.id]),
+      ...(brief?.superseded ?? []),
+    ]);
+    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const context = { to: seat.name, root, session };
+    const unread = listUnread(dropDir, context, home).filter((message) => {
+      if (briefIds.has(message.id)) return false;
+      return now.getTime() - Date.parse(message.ts) >= windowSeconds * 1000;
+    });
+    const oldest = unread[0];
+    if (oldest === undefined) continue;
+    const minutes = Math.max(1, Math.round((now.getTime() - Date.parse(oldest.ts)) / 60_000));
+    // The sender is the record's own word when the record verifies; the marker's unsigned hint
+    // is what `team drops` prints beside it, and is used only when the record cannot be opened.
+    let sender = oldest.from;
+    const looked = readRecord(join(dropDir, oldest.id), oldest.id);
+    if (looked.ok && looked.record !== null && verifyRecord(looked.record, key.key)) {
+      sender = looked.record.payload.from;
+    }
+    const who = sender === undefined ? 'a message' : `a message from ${sender}`;
+    const more = unread.length > 1 ? `; ${String(unread.length - 1)} more unread` : '';
+    const watcher = state.seats[seat.name]?.watcher;
+    const repair = watcher === undefined || watcher === 'none'
+      ? `team drops --read --seat ${seat.name} reads it; no turn-start reader is installed, so team reload ${seat.name} installs the launch's hooks`
+      : `the seat's next turn reads it (team drops --read --seat ${seat.name})`;
+    out.push({
+      what: `${seat.name}: ${who} has been unread for ${String(minutes)} min${more} (id ${oldest.id})`,
+      repair,
+    });
+  }
+  return out;
 }
 
 /** Whether this seat's folder holds a signed read receipt for another message: the read an

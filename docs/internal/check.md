@@ -131,6 +131,19 @@ launch's hooks. Every repair is a reload, an up, a read or the rollout's own rec
 `--repair`: the difference is advice, and the delivery is the launch's own act. The check writes
 none of it and has no writer mode and no `--rollout` of its own.
 
+Unread work is named on the same pass (`unreadDifferences`, `src/check/team.ts`): every non-human
+seat's drop folder is read through `listUnread` (`src/mcp/inbox.ts`), the watch's own reading of
+what waits — a UUID-named regular file with no verified read receipt beside it, the general seat
+brief's current and superseded ids aside. A message older than `watch.unread_after` — the value in
+force, 600 s when the file omits it — is one difference for the seat,
+`<seat>: a message from <from> has been unread for <n> min (id <id>)`, with `; <m> more unread`
+when others are due and the oldest named. The repair is the seat's next turn, or
+`team drops --read --seat <seat>` when the seat's record says no turn-start reader is installed.
+The sender is the verified record's `from`; a record that does not verify falls back to the
+marker's own unsigned word, as `team drops` prints it. A person's drop is read by a person and is
+never asked for a receipt, and with no message key no receipt can be judged: neither is named.
+The line is advice like the rest, and the watch's unread wake is the path that types the read.
+
 ## Seats held at a prompt
 
 The same pass names a seat held at a prompt it can read (`attentionDifferences`,

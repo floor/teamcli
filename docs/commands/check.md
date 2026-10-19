@@ -74,6 +74,16 @@ ready`, and a read that arrived before readiness is
 delivery-only and is never asked to read. `team check` writes none of this: it has no writer mode
 and no `--rollout`, and the only act it names is the seat's own read or a delivering command's.
 
+Unread work is named on the same pass. Each seat's drop folder is read the way the watch's
+unread wake reads it: a message with no signed read receipt past `watch.unread_after` — ten
+minutes when the file omits it — is one difference for the seat,
+`<seat>: a message from <from> has been unread for <n> min (id <id>)`, with
+`; <m> more unread` when other messages are due and the oldest named. The repair is the seat's
+next turn, or `team drops --read --seat <seat>` when the seat's record says no turn-start reader
+is installed; the watch's unread wake types that same read into an idle seat. The general seat
+brief keeps its own read difference and is not counted twice. A person's drop is read by a
+person and is never asked for a receipt. The check writes nothing here either.
+
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
 process team launched — back at its shell, or replaced by one the state's stored session does not
