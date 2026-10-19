@@ -246,9 +246,13 @@ The watch types fixed lines and never a report.
   spent. At twice the window a message still unread is reported once to its sender and to the
   team's lead as a signed Runtime mailbox record — never by typing into a pane — after a
   `<id>.reported` reservation of its own; the record is published write-once, so a mailbox
-  already holding it keeps those bytes. The report's words say whether a wake line was sent, was
-  reserved with an unconfirmed outcome, or was never typed, and `--no-nudge` skips the wake but
-  still writes the report.
+  already holding it keeps those bytes. The sender's mailbox is resolved from the signed
+  `from_id` through this home's registries, never from the `from` name: one agent record naming
+  that seat, and for another team its team record listing that agent at that seat and recording
+  the session the record is bound to. A sender those records cannot pin to one team, seat and
+  session is reported to the lead only, and the missing metadata is named in the record and the
+  line. The report's words say whether a wake line was sent, was reserved with an unconfirmed
+  outcome, or was never typed, and `--no-nudge` skips the wake but still writes the report.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
 orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that

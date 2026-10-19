@@ -7,7 +7,10 @@
 // receipt N after it landed gets one wake — the seat's own drop read typed into its pane — and a
 // message still unread at twice that window is reported to its sender and to the team's lead.
 // The report is a mailbox record (`team messages` reads it), never a keystroke into another
-// seat's pane.
+// seat's pane. The sender's own mailbox is the one its signed agent id resolves to through this
+// home's agent and team registries — a teammate in another checkout is written in that team's
+// root and session — and a sender those registries cannot pin to one team, seat and session is
+// reported to the lead alone, with the missing metadata said.
 //
 // The wake is the typed leg's own delivery, with the rules that leg already has: a human seat's
 // pane is never typed into, a dialog or a box holding unsent text is not typed blind, the seat
@@ -38,6 +41,8 @@ import { dirname, join } from 'node:path';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
+import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
@@ -323,26 +328,98 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   }
 }
 
-/** The mailboxes one report goes to: the sender's own when this team holds that seat (or the
- *  owner's own), and the team's lead. A sender outside this team has no mailbox here — the lead
- *  is still told, and the line names the sender. The same seat is never written twice. */
-function reportTargets(scene: RetryScene, from: string): string[] {
-  const targets: string[] = [];
-  if (from === OWNER_MAILBOX) targets.push(OWNER_MAILBOX);
-  else if (scene.team.seats.some((seat) => seat.name === from)) targets.push(from);
+/** One mailbox a report goes to: the checkout and session whose `team messages` reads it, and the
+ *  seat name its folder holds. A foreign sender's mailbox lives in its own team's root and
+ *  session; both teams on this home share the message key the record is signed with. */
+type ReportTarget = { root: string; session: string; to: string; label: string };
+
+type ReportResolution = {
+  targets: ReportTarget[];
+  /** Why the sender's own mailbox could not be named; null when it was. The lead is still
+   *  written, and this reason is said in the record and in the report line — never guessed
+   *  around, and never replaced by a same-named local seat. */
+  unresolved: string | null;
+};
+
+/**
+ * The mailboxes one report goes to: the sender's own when the signed record's `from_id` resolves
+ * through this home's registries to exactly one seat of one known team, and the team's lead. A
+ * sender is never routed by name: the signed `from` alone could name a same-named seat here or in
+ * another team, so a record without an agent id, or whose agent record, team record or roster
+ * entry does not pin the same team, seat and session, is reported to the lead only, with the
+ * missing metadata in the words.
+ */
+function reportTargets(scene: RetryScene, payload: RecordPayload, home: string): ReportResolution {
+  const targets: ReportTarget[] = [];
+  const seen = new Set<string>();
+  const add = (target: ReportTarget): void => {
+    const key = `${target.root}\u0000${target.to}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    targets.push(target);
+  };
+  const own = (to: string): ReportTarget => ({ root: scene.root, session: scene.session, to, label: to });
+  let unresolved: string | null = null;
+
+  if (payload.from === OWNER_MAILBOX && payload.from_id === null) {
+    add(own(OWNER_MAILBOX));
+  } else if (payload.from_id === null) {
+    unresolved = `the signed record names no agent id for ${JSON.stringify(payload.from)}`;
+  } else if (!AGENT_ID_PATTERN.test(payload.from_id)) {
+    unresolved = `the signed record's from_id ${JSON.stringify(payload.from_id)} is not an agent id`;
+  } else {
+    const agent = getAgent(home, payload.from_id);
+    if (agent === null || agent.lifecycle === 'retired') {
+      unresolved = `agent ${payload.from_id} is not a live record in this home's registry`;
+    } else if (agent.reach.seat !== payload.from) {
+      unresolved = `agent ${payload.from_id} names seat ${JSON.stringify(agent.reach.seat)}, not ${JSON.stringify(payload.from)}`;
+    } else if (agent.reach.team === teamIdOf(scene.root)) {
+      // The sender is a seat of this very checkout: the record must name this session, and the
+      // team file in force must declare the seat.
+      if (agent.reach.session !== scene.session) {
+        unresolved = `agent ${payload.from_id} is registered in session ${JSON.stringify(agent.reach.session)}, not ${JSON.stringify(scene.session)}`;
+      } else if (!scene.team.seats.some((seat) => seat.name === payload.from)) {
+        unresolved = `agent ${payload.from_id} is not a seat of this checkout's team`;
+      } else {
+        add(own(payload.from));
+      }
+    } else {
+      try {
+        const team = getTeam(home, agent.reach.team);
+        const roster = team?.roster.find((entry) => entry.agent === payload.from_id && entry.seat === payload.from);
+        if (team === null) {
+          unresolved = `agent ${payload.from_id} names team ${JSON.stringify(agent.reach.team)}, which this home's registry does not hold`;
+        } else if (team.root === '') {
+          unresolved = `team ${JSON.stringify(agent.reach.team)} has no canonical root in this home's registry`;
+        } else if (!Object.hasOwn(team.lobbies, agent.reach.session)) {
+          unresolved = `agent ${payload.from_id} names session ${JSON.stringify(agent.reach.session)}, which team ${JSON.stringify(agent.reach.team)} does not record`;
+        } else if (roster === undefined) {
+          unresolved = `team ${JSON.stringify(agent.reach.team)} does not list agent ${payload.from_id} at seat ${JSON.stringify(payload.from)}`;
+        } else {
+          add({ root: team.root, session: agent.reach.session, to: payload.from, label: `${payload.from} of ${team.project}` });
+        }
+      } catch (error) {
+        // An unreadable registry is not a route: the lead is told, with the reason.
+        unresolved = `the team registry could not be read: ${String(error)}`;
+      }
+    }
+  }
+
   const lead = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
-  if (lead !== '' && !targets.includes(lead)) targets.push(lead);
-  return targets;
+  if (lead !== '') add(own(lead));
+  return { targets, unresolved };
 }
 
 /**
  * Reports every message still unread at twice the window to its sender and the team's lead, once.
  * The record is the Runtime's own (`from: runtime`, the writer owner delivery already uses), so
  * it reaches the mailbox `team messages` reads and the seat's watch rings it — no pane is
- * touched, which is why a watch without nudges runs this too. The words keep the three states
- * apart: a message with a wake marker says its wake line was sent; one without says none was
- * typed. A write that fails leaves the message without `<id>.reported`, and a later pass writes
- * the same record name again rather than a second one.
+ * touched, which is why a watch without nudges runs this too. The sender's mailbox is the one its
+ * signed `from_id` resolves to through this home's registries; a sender they cannot pin is
+ * reported to the lead only, and the reason is said there and in the line. The words keep the
+ * three wake states apart: a message with a wake marker says its wake line was sent; one without
+ * says none was typed. A write that fails leaves the message without `<id>.reported`, and a later
+ * pass writes the same record name again rather than a second one.
  */
 export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void {
   const home = scene.home;
@@ -363,7 +440,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       if (existsSync(reportedPath(dropDir, message.id))) continue;
       const payload = payloadOf(dropDir, message.id, home);
       if (payload === null) continue;
-      const targets = reportTargets(scene, payload.from);
+      const { targets, unresolved } = reportTargets(scene, payload, home);
       if (targets.length === 0) continue;
       const at = scene.now.toISOString();
       // The reservation is linked before the first mailbox write: one pass publishes, and one
@@ -378,23 +455,26 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
         : woke.state === 'reserved'
           ? `a wake was reserved at ${woke.at} and its outcome is unconfirmed`
           : `its wake line was sent at ${woke.at}`;
-      const text = `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; the drop is at ${join(dropDir, message.id)}`;
+      const where = `the drop is at ${join(dropDir, message.id)}`;
+      const text = unresolved === null
+        ? `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}`
+        : `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}; the sender's own mailbox could not be resolved (${unresolved}), so this report goes to the team's lead only`;
       let published = 0;
       let existed = 0;
       let failure: string | null = null;
       for (const target of targets) {
         const outcome = writeRuntimeMailboxRecord({
-          root: scene.root,
+          root: target.root,
           home,
-          to: target,
+          to: target.to,
           id: `unread-${message.id}`,
           text,
-          session: scene.session,
+          session: target.session,
           at,
           once: true,
         });
         if (!outcome.ok) {
-          failure = `${target}: ${outcome.error}`;
+          failure = `${target.label}: ${outcome.error}`;
           continue;
         }
         if (outcome.existing === true) existed += 1;
@@ -409,19 +489,22 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       if (failure !== null) {
         // Part of it landed. The reservation stays spent — a repeat could duplicate the part
         // that did — and the line says what did not land.
-        mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'partial', to: targets });
+        mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'partial', to: targets.map((target) => target.label) });
         scene.say(
           `${seat.name}: the unread report for ${message.id} reached ${String(published + existed)} of ${String(targets.length)} mailboxes (${failure})`,
           true,
         );
         continue;
       }
-      mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'reported', to: targets });
+      mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'reported', to: targets.map((target) => target.label) });
       // A record already at a mailbox is the first publication still standing; only a pass that
       // wrote something new says the line again.
       if (published > 0) {
+        const reached = targets.map((target) => target.label).join(' and ');
         scene.say(
-          `${seat.name}: a message from ${payload.from} was still unread after ${minutes} min; reported to ${targets.join(' and ')}`,
+          unresolved === null
+            ? `${seat.name}: a message from ${payload.from} was still unread after ${minutes} min; reported to ${reached}`
+            : `${seat.name}: a message from ${payload.from} was still unread after ${minutes} min; reported to ${reached} only: the sender's own mailbox could not be resolved (${unresolved})`,
           true,
         );
       }

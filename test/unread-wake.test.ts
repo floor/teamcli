@@ -12,10 +12,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { listUnacked } from '../src/commands/messages.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readMessage, receiptPath } from '../src/mcp/inbox.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
 import { dropMessage, readTriggerLine } from '../src/send/native.ts';
@@ -145,6 +148,7 @@ function seedMessage(
   body: string,
   ts: Date,
   from = 'owner',
+  fromId: string | null = null,
 ): string {
   const dropDir = join(at.dir, 'send-drops', session, seat);
   const record = signRecord({
@@ -157,7 +161,7 @@ function seedMessage(
     at: ts.toISOString(),
     body,
     from,
-    from_id: null,
+    from_id: fromId,
     rule: 'the owner',
     thread: id,
   }, at.home);
@@ -171,6 +175,23 @@ function readInbox(at: { root: string; dir: string; home: string }, id: string, 
   const dropDir = join(at.dir, 'send-drops', session, seat);
   const read = readMessage({ dropDir, root: realpathSync(at.root), seat, session }, id, at.home);
   if (!read.ok) throw new Error(read.reason);
+}
+
+/** One agent record in this home: the identity a signed `from_id` is resolved through. */
+function registerSeat(home: string, team: string, seat: string, session: string): string {
+  return registerAgent(home, {
+    name: seat,
+    signing: { model: 'Test', version: '1', role: 'builder' },
+    lab: 'test',
+    cli: 'claude',
+    launcher: null,
+    launch: 'claude',
+    reach: { team, seat, session, pane: null, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'test',
+  }).id;
 }
 
 type Scene = Parameters<typeof wakeUnreadDrops>[0];
@@ -406,7 +427,8 @@ describe('reportUnreadDrops', () => {
   test('a woken message says its wake line was sent, and a seat sender is told in its own mailbox', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from helper\n\nstill here', new Date(NOW.getTime() - 21 * MIN), 'helper');
+    const helper = registerSeat(made.home, teamIdOf(made.root), 'helper', 'acme');
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from helper\n\nstill here', new Date(NOW.getTime() - 21 * MIN), 'helper', helper);
     const one = pane(claudeBox(''));
     const said: string[] = [];
     // The wake happened a pass earlier; this pass is the report at twice the window.
@@ -419,6 +441,74 @@ describe('reportUnreadDrops', () => {
     const toHelper = mailboxBody(made.root, 'helper', `unread-${UNREAD_A}`);
     expect(toHelper.body).toContain('its wake line was sent at 2026-10-17T03:50:00.000Z');
     expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toBe(toHelper.body);
+  });
+
+  test("a foreign sender's own team is told in its own root and session", () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const beta = join(made.root, '..', 'beta');
+    mkdirSync(join(beta, '.agents'), { recursive: true });
+    const betaRoot = realpathSync(beta);
+    const betaId = teamIdOf(betaRoot);
+    const scout = registerSeat(made.home, betaId, 'scout', 'beta');
+    upsertTeam(made.home, betaId, {
+      project: 'beta',
+      session: 'beta',
+      root: betaRoot,
+      lobby: 'beta-lobby',
+      roster: [{ agent: scout, seat: 'scout', role: 'builder' }],
+    });
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from scout\n\nforeign', new Date(NOW.getTime() - 21 * MIN), 'scout', scout);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    // The record is one the foreign team's own `team messages` reads: its root and session.
+    const record = JSON.parse(
+      readFileSync(join(betaRoot, '.agents', 'messages', 'scout', `unread-${UNREAD_A}.json`), 'utf8'),
+    ) as { payload: { root: string; session: string; to: string } };
+    expect(record.payload.to).toBe('scout');
+    expect(record.payload.session).toBe('beta');
+    expect(realpathSync(record.payload.root)).toBe(betaRoot);
+    expect(listUnacked(betaRoot, 'beta', made.home).map((one) => one.id)).toContain(`unread-${UNREAD_A}`);
+    // Nothing was written under our own root for that name.
+    expect(existsSync(join(made.root, '.agents', 'messages', 'scout'))).toBe(false);
+    expect(said).toEqual([`lead: a message from scout was still unread after 21 min; reported to scout of beta and lead`]);
+  });
+
+  test('an unresolved sender is reported to the lead only, never to a same-named local seat', () => {
+    const made = world();
+    // The team file declares a local `helper`: the name alone must never route the report to it.
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from helper\n\nunproven', new Date(NOW.getTime() - 21 * MIN), 'helper');
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    expect(existsSync(join(made.root, '.agents', 'messages', 'helper'))).toBe(false);
+    const toLead = mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`);
+    expect(toLead.body).toContain('the sender\'s own mailbox could not be resolved (the signed record names no agent id for "helper")');
+    expect(toLead.body).toContain('this report goes to the team\'s lead only');
+    expect(said).toEqual([
+      'lead: a message from helper was still unread after 21 min; reported to lead only: the sender\'s own mailbox could not be resolved (the signed record names no agent id for "helper")',
+    ]);
+  });
+
+  test('an agent whose team the registry does not hold is reported to the lead only', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const ghost = registerSeat(made.home, 'ffffffffffff', 'scout', 'beta');
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from scout\n\norphan', new Date(NOW.getTime() - 21 * MIN), 'scout', ghost);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    expect(existsSync(join(made.root, '.agents', 'messages', 'scout'))).toBe(false);
+    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(
+      `agent ${ghost} names team "ffffffffffff", which this home's registry does not hold`,
+    );
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('reported to lead only');
   });
 
   test('a message inside twice the window is not reported yet', () => {

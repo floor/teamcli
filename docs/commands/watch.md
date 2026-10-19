@@ -291,7 +291,7 @@ been unread for `watch.unread_after` (ten minutes by default). The lines around 
 | `<seat>: a held send from <from> was sent on retry (trigger taken, no read receipt yet)` / `<seat>: an inbox send from <from> was sent on retry (trigger taken, no read receipt yet)` | this pass typed the drop's trigger line and sent it: a held send once the box was free, or an inbox message still unread past its ten-minute fallback window; the history records `sent (unconfirmed)`, never a read; when the retry moved an unsent draft, its receipt follows on the same line (`; the unsent text was pasted back`, or `; the unsent text could not be put back; its copy is at <path>`) and in the history note |
 | `<seat>: a held send from <from> was read on retry (receipt)` / `<seat>: an inbox send from <from> was read on retry (receipt)` | the retry's line is the seat's own `team drops --read`, and its signed receipt landed inside the retry's window: the history records `delivered (read)`, the marker is cleared, and nothing is ever typed again |
 | `<seat>: a message from <from> was unread and one wake line was sent (trigger taken, no read receipt yet)` / `<seat>: a message from <from> was unread and was read on the wake (receipt)` | a message still without a signed receipt `watch.unread_after` after it landed (ten minutes by default): the pass typed the seat's own drop read — the same `Run team drops --read --seat <seat> --session <session> and do that.` a retry types — into a free box; the history records `sent (unconfirmed)` with `trigger taken, no read receipt yet`, or `delivered (read)` when the signed receipt verifies; a draft the wake moved is pasted back, as a retry's is |
-| `<seat>: a message from <from> was still unread after <n> min; reported to <sender> and <lead>` | the message is still unread at twice `watch.unread_after`: one signed Runtime mailbox record per target — its sender's own when this team holds that seat (the owner's own for the owner's messages) and the team's lead — is written under `.agents/messages/`, and `team messages` lists it; nothing is typed, so `--no-nudge` writes it too |
+| `<seat>: a message from <from> was still unread after <n> min; reported to <sender> and <lead>` / `<seat>: a message from <from> was still unread after <n> min; reported to <lead> only: the sender's own mailbox could not be resolved (<why>)` | the message is still unread at twice `watch.unread_after`: one signed Runtime mailbox record per target — its sender's own, resolved through the signed record's agent id and this home's agent and team registries (the owner's own for the owner's messages), and the team's lead — is written under `.agents/messages/`, and `team messages` lists it; nothing is typed, so `--no-nudge` writes it too. A sender the registries cannot pin to one team, seat and session is never routed by name: the record goes to the lead alone, and the line and the record carry the reason |
 | `<seat>: a held send from <from> was not delivered (<why>); the drop file is at <path>; send it again` (the word is `an inbox send` for the fallback) | the retry's bound ended — three typed tries, thirty minutes, a trigger that would not fit in a pane, or a drop file moved away — and the message waits where the line names it |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
@@ -319,6 +319,15 @@ holding the record is left byte for byte. The words keep the states apart: a wak
 says when its line was sent, one whose attempt was interrupted says it was reserved at that
 instant and its outcome is unconfirmed, and one never attempted says no wake line was typed.
 `--no-nudge` skips the wake but still writes the report.
+
+The report's sender mailbox is resolved through the signed record's agent id and the agent and
+team registries this home holds, never through the `from` name: one agent record naming the same
+seat, and for a teammate in another checkout its team record listing that agent at that seat and
+recording the session the record is bound to, so the record lands in that team's own root and
+session and its own `team messages` reads it. A sender without an agent id, or whose agent,
+team or roster entry does not pin the same team, seat and session, is reported to the team's
+lead only — a same-named seat here is not that sender — and both the record and the line name
+the metadata that was missing. Everything else about the report is unchanged.
 
 ## Budgets
 
