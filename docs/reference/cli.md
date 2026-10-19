@@ -522,7 +522,7 @@ Usage:
 
     team mcp status [--json]
     team mcp doctor [--json]
-    team mcp serve --seat <seat> [--session <session>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>]
 
 ### Flags
 
@@ -561,12 +561,13 @@ Hidden: no
 
 Usage:
 
-    team mcp serve --seat <seat> [--session <session>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |

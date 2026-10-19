@@ -995,6 +995,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
@@ -1023,7 +1029,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team mcp serve --seat <seat> [--session <session>]"
+            "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
           ]
         },
         {
@@ -1059,7 +1065,7 @@
       "usage": [
         "team mcp status [--json]",
         "team mcp doctor [--json]",
-        "team mcp serve --seat <seat> [--session <session>]"
+        "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
       ]
     },
     {

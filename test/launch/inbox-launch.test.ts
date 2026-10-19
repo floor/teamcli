@@ -3,7 +3,7 @@ import { executePlan, type Host } from '../../src/launch/execute.ts';
 import type { Step } from '../../src/launch/plan.ts';
 
 function inboxHost(input: {
-  registerInbox?: (cli: string, seat: string, cwd: string) => { ok: true } | { ok: false; reason: string } | null;
+  registerInbox?: (cli: string, seat: string, cwd: string, teamFile?: string) => { ok: true } | { ok: false; reason: string } | null;
   calls: string[];
   said: string[];
   logged: { who: string; what: string }[];
@@ -32,25 +32,37 @@ function inboxHost(input: {
   };
 }
 
-function steps(): Step[] {
+function steps(teamFile?: string): Step[] {
   return [
-    { kind: 'run', argv: [], do: { do: 'launch', seat: 'coder', label: 'coder', command: 'cursor-agent', pane: 'p1', cli: 'cursor', cwd: '/seat/folder' } },
+    { kind: 'run', argv: [], do: { do: 'launch', seat: 'coder', label: 'coder', command: 'cursor-agent', pane: 'p1', cli: 'cursor', cwd: '/seat/folder', ...(teamFile === undefined ? {} : { teamFile }) } },
     { kind: 'skip', text: 'ready', do: { do: 'record', seat: 'coder', record: { kind: 'ready' } } },
   ];
 }
 
 describe('the team inbox at launch', () => {
-  test('it is registered in the seat folder, before the launch command runs', async () => {
+  test('it is registered in the seat folder, with the team file the run read, before the launch command runs', async () => {
     const calls: string[] = [];
     const said: string[] = [];
     const logged: { who: string; what: string }[] = [];
     const host = inboxHost({
       calls, said, logged,
-      registerInbox: (cli, seat, cwd) => { calls.push(`register:${cli}:${seat}:${cwd}`); return { ok: true }; },
+      registerInbox: (cli, seat, cwd, teamFile) => { calls.push(`register:${cli}:${seat}:${cwd}:${teamFile ?? ''}`); return { ok: true }; },
+    });
+    await executePlan(steps('/project/.agents/team.yaml'), 'acme', host);
+    expect(calls).toEqual(['register:cursor:coder:/seat/folder:/project/.agents/team.yaml', 'paneRun']);
+    expect(said.join('')).not.toContain('team inbox');
+  });
+
+  test('a launch with no team file passes none: the registration reads the seat folder', async () => {
+    const calls: string[] = [];
+    const said: string[] = [];
+    const logged: { who: string; what: string }[] = [];
+    const host = inboxHost({
+      calls, said, logged,
+      registerInbox: (cli, seat, cwd, teamFile) => { calls.push(`register:${cli}:${seat}:${cwd}:${teamFile ?? 'none'}`); return { ok: true }; },
     });
     await executePlan(steps(), 'acme', host);
-    expect(calls).toEqual(['register:cursor:coder:/seat/folder', 'paneRun']);
-    expect(said.join('')).not.toContain('team inbox');
+    expect(calls).toEqual(['register:cursor:coder:/seat/folder:none', 'paneRun']);
   });
 
   test('a refusal is detail under the seat record, and the seat still launches', async () => {
