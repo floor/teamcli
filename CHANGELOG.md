@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A send the pair admits is written, delivered and logged like any other: its header names the
   rule and its history line lands in the receiving team's store. `team send --list` shows both
   seats with their role, and a refusal for an unknown name lists them among the file's seats.
+- **`team usage` reports each seat's spend.** Under each team's seat table, `--tree` now prints
+  the seats' own figures: one line per window — left, used, resets, margin — and one spend line
+  per seat. A figure is `measured` when the run read the seat's own screen, `estimated` from the
+  watch's per-seat record when the live read did not answer, and a seat with neither prints
+  `unknown` with its reason. The spend line is the seat's own money figure, read from the amount
+  a Claude Code status row prints in its `S:` field; any other CLI, an unread pane or a row
+  without the field prints `cost unknown` with one sentence, never `0`. Figures belong to the
+  seat and the run (herdr session) their pane was read in, so two teams' same-named seats never
+  borrow each other's numbers. `--json` carries the same facts under `teams[].seats`, with the
+  session registry's own `measured` / `estimated` / `unknown` word, so every surface prints the
+  same mark for the same figure.
 
 ## [0.5.1] - 2026-10-19
 
