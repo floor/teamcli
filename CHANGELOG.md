@@ -26,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller before any state is written. The caller is the owner at a terminal outside herdr, or the
   team's own orchestrator on the pane the state records for it. `--json` emits `team.pause` /
   `team.resume` and is refused with `--all`.
+- **Operators of one team may message each other.** Two seats of the same team whose file lines
+  both write `role: operator` may send to each other; the pair rule admits that direction alone,
+  and it is the one decision a role's own word makes. It reads the word the live file writes
+  today — a seat the file no longer declares falls back to the role it was registered under —
+  and it is not the team's operator place, which already reaches every seat of its team. The word
+  grants no other reach: it makes no lead and no assistant, and the pair never crosses teams, so
+  another team's operator is reached through that team's orchestrator or an owner-signed grant.
+  A send the pair admits is written, delivered and logged like any other: its header names the
+  rule and its history line lands in the receiving team's store. `team send --list` shows both
+  seats with their role, and a refusal for an unknown name lists them among the file's seats.
 
 ## [0.5.1] - 2026-10-19
 
