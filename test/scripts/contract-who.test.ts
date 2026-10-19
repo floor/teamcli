@@ -30,6 +30,11 @@ const GATE_WORDS = [
   'capability',
   'admission',
   'pane-authority',
+  // The three kinds the map grew in 0.5.2 (`map.ts:27-44`): a word that asks for no record, a
+  // seat of the team on its recorded pane, and a seat the file marks `leads`.
+  'any-caller',
+  'seat-only',
+  'leads-only',
   'unlisted',
 ] as const;
 
@@ -71,7 +76,7 @@ test('the row the contract carries is the map row as it stands, and silence read
   }
   // The four kinds the 0.5.0 table gives commands, and the two whose gate lives elsewhere,
   // each name at least one command: a kind no command uses is a kind the page need not carry.
-  for (const name of ['owner-only', 'owner-or-leads', 'owner-or-own-team', 'seat-record', 'admission', 'pane-authority']) {
+  for (const name of ['owner-only', 'owner-or-leads', 'owner-or-own-team', 'seat-record', 'admission', 'pane-authority', 'any-caller', 'seat-only', 'leads-only']) {
     expect(contract.commands.some((command) => command.who?.gate === name), `no command reads ${name}`).toBe(true);
   }
 });
