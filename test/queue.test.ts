@@ -15,11 +15,18 @@ import { approvalOf } from '../src/approve/approval.ts';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
 import { runQueue, USAGE } from '../src/commands/queue.ts';
 import { loadTeamFile, NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
+import type { TeamFile } from '../src/file/types.ts';
 import { GREEN_SLICE_OUTPUT_SCHEMA, QUEUE_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { pendingGreenSlices, type GreenSliceEvent } from '../src/tasks/green-slices.ts';
 import { fileSourceOf, readFileSource } from '../src/tasks/queue.ts';
+import {
+  installSlice,
+  readySlice,
+  readSliceWords,
+  type SliceInput,
+} from '../src/tasks/slice-handler.ts';
 import { version } from '../src/version.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -675,5 +682,160 @@ describe('the file source helper', () => {
     project(TEAM);
     expect(readFileSource(root, { path: '.agents/queue.yaml', local: true })).toEqual({ kind: 'records', records: [], refusals: [] });
     expect(readFileSource(root, { path: '.agents/tasks.yaml', local: false })).toEqual({ kind: 'missing' });
+  });
+});
+
+describe('the daemon-facing slice boundary', () => {
+  const LINEAR_REFUSAL =
+    'the team file declares a linear task source; there is no local queue, and the tracker is never written';
+
+  function teamOf(): TeamFile {
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    return loaded.team;
+  }
+
+  /** The queue, a live lease of `q1` for the lead, and the panes the state records. */
+  function prepared(text = TEAM): void {
+    ready(text);
+    writeQueue('- id: "q1"\n  title: "a leased task"\n');
+    lease('q1');
+  }
+
+  /** A request as a host parses it from JSON: untyped, so it may carry more than the boundary
+   *  reads, and the boundary must read only the three words. */
+  function payload(fields: Record<string, unknown>): Parameters<typeof readSliceWords>[0] {
+    return fields as Parameters<typeof readSliceWords>[0];
+  }
+
+  test('readSliceWords keeps only the three words, and defaults the version', () => {
+    const read = readSliceWords(
+      payload({
+        task: 'q1',
+        commit: 'abcdef1',
+        defaultVersion: version(),
+        caller: { kind: 'owner' },
+        installedBy: 'owner',
+        seat: 'lead',
+      }),
+    );
+    expect(read).toEqual({ ok: true, words: { task: 'q1', commit: 'abcdef1', version: version() } });
+    if (read.ok) expect(Object.keys(read.words).sort()).toEqual(['commit', 'task', 'version']);
+  });
+
+  test('readSliceWords refuses a malformed word with the sentence the CLI prints', () => {
+    const base = { task: 'q1', commit: 'abcdef1', defaultVersion: '0.5.0' };
+    expect(readSliceWords(payload({ task: 'q1', defaultVersion: '0.5.0' }))).toEqual({
+      ok: false,
+      message: '--commit is required',
+      usage: true,
+    });
+    expect(readSliceWords(payload({ commit: 'abcdef1', defaultVersion: '0.5.0' }))).toEqual({
+      ok: false,
+      message: 'a task is required',
+      usage: true,
+    });
+    expect(readSliceWords(payload({ ...base, task: 'bad id' }))).toEqual({
+      ok: false,
+      message: '"bad id" is not a task id: use letters, digits, dot, dash or underscore, starting with a letter or digit',
+      usage: false,
+    });
+    expect(readSliceWords(payload({ ...base, commit: 'ABCDEF1' }))).toEqual({
+      ok: false,
+      message: '"ABCDEF1" is not a commit: use 7 to 40 lowercase hex digits',
+      usage: false,
+    });
+    expect(readSliceWords(payload({ ...base, version: 'has space' }))).toEqual({
+      ok: false,
+      message: '"has space" is not a version: use letters, digits, dot, dash, plus or underscore',
+      usage: false,
+    });
+  });
+
+  test('the payload caller is not identity: the placement the host passes records', () => {
+    prepared();
+    // The extra fields are what an untrusted request could claim; the boundary reads none.
+    const input = {
+      task: 'q1',
+      commit: 'abcdef1',
+      version: version(),
+      caller: lead,
+      described: 'lead',
+      now: NOW,
+      seat: 'worker',
+      installedBy: 'owner',
+      kind: 'owner',
+    } as unknown as SliceInput;
+    const result = readySlice(teamOf(), root, input);
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'recorded',
+      event: { kind: 'ready', task: 'q1', seat: 'lead', commit: 'abcdef1', version: version() },
+    });
+    expect(journal()?.events).toHaveLength(1);
+    expect(journal()?.events[0]).toMatchObject({ kind: 'ready', seat: 'lead' });
+  });
+
+  test('a seat with no session cannot be placed, and admits nothing', () => {
+    prepared();
+    const placed = { kind: 'seat', name: 'lead', pane: 'w1:p1' } as const;
+    const result = readySlice(teamOf(), root, {
+      task: 'q1',
+      commit: 'abcdef1',
+      version: version(),
+      caller: placed,
+      described: 'lead',
+      now: NOW,
+    });
+    expect(result).toEqual({
+      ok: false,
+      refusal: { id: 'queue.caller', message: 'only a seat of this team records a green slice ready; this call is lead' },
+    });
+    expect(journal()).toBeNull();
+  });
+
+  test('an approved designated seat installs, and installedBy is the host caller', () => {
+    prepared(`${TEAM}installer: worker\n`);
+    approve();
+    const input = {
+      task: 'q1',
+      commit: 'abcdef1',
+      version: version(),
+      caller: worker,
+      described: 'worker',
+      now: NOW,
+      // A payload cannot name the installer.
+      installedBy: 'owner',
+      seat: 'lead',
+    } as unknown as SliceInput;
+    const result = installSlice(teamOf(), root, home, input);
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'recorded',
+      event: { kind: 'install', task: 'q1', commit: 'abcdef1', installedBy: 'worker' },
+    });
+    expect(journal()?.events.at(-1)).toMatchObject({ kind: 'install', installedBy: 'worker' });
+  });
+
+  test('a linear source is refused before any caller is judged', () => {
+    project(LINEAR);
+    const result = readySlice(teamOf(), root, {
+      task: 'q1',
+      commit: 'abcdef1',
+      version: version(),
+      caller: { kind: 'unplaced', reason: 'no terminal' },
+      described: 'unplaced (no terminal)',
+      now: NOW,
+    });
+    expect(result).toEqual({ ok: false, refusal: { id: 'queue.source', message: LINEAR_REFUSAL } });
+    const installed = installSlice(teamOf(), root, home, {
+      task: 'q1',
+      commit: 'abcdef1',
+      version: version(),
+      caller: { kind: 'unplaced', reason: 'no terminal' },
+      described: 'unplaced (no terminal)',
+      now: NOW,
+    });
+    expect(installed).toEqual({ ok: false, refusal: { id: 'queue.source', message: LINEAR_REFUSAL } });
   });
 });
