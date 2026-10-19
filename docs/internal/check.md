@@ -214,6 +214,18 @@ and open nothing: the target is the file the caller's own place finds.
   all but one of them`. A sibling the registries cannot answer for — no record, no readable file,
   or one naming another project — is not counted, and a team that declares no lead reads no
   sibling at all. A check with no home reads no registry;
+- the entity policy source (`~/.config/team/entities.yaml`), for the entity's model rule
+  (Policies rule 10): every seat of this team whose declared vendor the rule refuses is one
+  difference, `<seat>: declares vendor <vendor>, which the entity model rule <rule> refuses; a
+  swap to <cli> <model> <version> from <team>/<donor> is proposed` — or, where no recipe is
+  available, the reason in place of the proposal — repaired with `team swap queue <seat>`. It is
+  the breach list [`team swap`](../commands/swap.md) `--rule` prints for the entity, narrowed to
+  the team this check runs in: another team's breaching seat is not this team's difference. The
+  repair's actor is the team's lead, set on the difference itself. A rule that cannot be read is a
+  note — `the entity model rule cannot be read, so no breach is judged: <why>` — never an empty
+  rule, which would read every seat as in rule; a check with no home reads no rule. The wait
+  `team swap` applies is not read here: the difference is the breach, and the queue command reads
+  the wait when a swap is queued;
 - the seat's own reading, the pair [`team seats`](../commands/seats.md) prints as STATE and SOURCE
   (`src/labels/state.ts`): the word and where it came from, best source first — a screen waiting on
   someone (a dialog, a question, an error, a composer holding unsent text), the CLI's own state hook

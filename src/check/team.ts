@@ -12,7 +12,7 @@
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
 import { homedir } from 'node:os';
-import { join, isAbsolute, relative } from 'node:path';
+import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { blindDifferences } from '../commands/seats.ts';
@@ -71,6 +71,7 @@ import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
+import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
@@ -291,6 +292,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   }
   const state = whole.sessions[session] ?? emptySession();
   const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
+  const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
   // at all: the setting is one record, never a file key and never a stale approval.
   const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team), undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
@@ -326,6 +328,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...registryDifferences(team, root, sources.home),
     ...deliveryOrderDifferences(team, root, sources.home),
     ...policyChecked.differences,
+    ...modelRule.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same rows `status` prints: a legacy record or one the verification refused still says
     // what it is; a machine that never approved the file is the ordinary file now, and nothing to
@@ -363,6 +366,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...leadRoleNotes(team),
     ...lobbyNotes(team, root, sources.home, session),
     ...policyChecked.notes,
+    ...modelRule.notes,
     ...unknownStatusNotes(team, state, live),
     ...record.notes,
     ...provenance.notes,
@@ -1433,5 +1437,49 @@ function policyCheck(
   }
 
   return { differences, notes };
+}
+
+/**
+ * The entity's model rule over this team's file (Policies rule 10). Every breaching seat of the
+ * team this check runs in is one difference, repaired with `team swap queue <seat>`: the same
+ * breach list `team swap --rule` prints, narrowed to this team. The line names the rule, the
+ * seat's vendor and the swap proposed — or why none is. A rule that cannot be read is a note and
+ * never an empty rule: an unreadable rule must not read every seat as in rule.
+ *
+ * The repair is the lead's: `team swap queue` is queued by the orchestrator's or the operator's
+ * seat, and the command is a grant scope in the permission map, so the difference carries its
+ * actor rather than letting `whoOfDifference` read the repair as a grant holder's.
+ */
+function modelRuleCheck(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+): { differences: Difference[]; notes: string[] } {
+  if (home === undefined || team.entity === null) return { differences: [], notes: [] };
+  let found: RuleLookup;
+  try {
+    found = listModelRuleBreaches({ home, team, root, teamId: teamIdOf(root) });
+  } catch (error) {
+    found = { ok: false, why: `the model rule cannot be read: ${(error as Error).message}` };
+  }
+  if (!found.ok) {
+    return { differences: [], notes: [`the entity model rule cannot be read, so no breach is judged: ${found.why}`] };
+  }
+  const listing = found.listing;
+  if (listing.rule === '') return { differences: [], notes: [] };
+  const here = resolve(root);
+  const differences: Difference[] = [];
+  for (const breach of listing.breaches) {
+    if (resolve(breach.root) !== here) continue;
+    const action = breach.proposal
+      ? `a swap to ${breach.proposal.recipe.cli} ${breach.proposal.recipe.model} ${breach.proposal.recipe.version} from ${breach.proposal.donor.team}/${breach.proposal.donor.seat} is proposed`
+      : (breach.reason ?? 'no recipe is available');
+    differences.push({
+      what: `${breach.seat.name}: declares vendor ${breach.seat.vendor}, which the entity model rule ${listing.rule} refuses; ${action}`,
+      repair: `team swap queue ${breach.seat.name}`,
+      who: "the team's lead",
+    });
+  }
+  return { differences, notes: [] };
 }
 
