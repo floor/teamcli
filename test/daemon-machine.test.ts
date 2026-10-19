@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
@@ -55,6 +55,16 @@ function scratch(): { base: string; root: string; home: string } {
 afterEach(() => {
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
 });
+
+/** The heartbeat runs on its own; poll the state record until it reflects the change. */
+async function waitFor(check: () => Promise<boolean> | boolean, ms = 3000): Promise<void> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (await check()) return;
+    if (Date.now() > deadline) throw new Error('timed out waiting for the daemon state');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 async function request(socketPath: string, line: string): Promise<Record<string, unknown>> {
   const { connect } = await import('node:net');
@@ -165,6 +175,69 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       expect(mode(daemonStatePath(home))).toBe(0o600);
       expect(mode(daemonLockPath(home))).toBe(0o600);
       expect(mode(daemonLogPath(home))).toBe(0o600);
+    } finally {
+      await started.daemon.close();
+    }
+  });
+
+  test('the heartbeat marks a hosted send endpoint that stopped answering', async () => {
+    const { root, home } = scratch();
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
+      unlinkSync(sendSocketPath('acme', root, home));
+      await waitFor(async () => (await daemonHealth(home)).roots[0]?.send === 'failed');
+
+      const health = await daemonHealth(home);
+      expect(health.roots[0]).toMatchObject({
+        send: 'failed',
+        bus: 'serving',
+        why: 'the hosted send endpoint stopped answering',
+      });
+
+      const status = testIo(home, owner);
+      expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
+      expect(status.out).toContain('roots 1 (send 0, bus 1)');
+      expect(status.out).toContain('1 endpoint not hosted here');
+    } finally {
+      await started.daemon.close();
+    }
+  });
+
+  test('the heartbeat marks a hosted bus endpoint that stopped answering', async () => {
+    const { root, home } = scratch();
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      await waitFor(async () => (await daemonHealth(home)).roots[0]?.bus === 'failed');
+
+      const health = await daemonHealth(home);
+      expect(health.roots[0]).toMatchObject({
+        send: 'serving',
+        bus: 'failed',
+        why: 'the hosted bus endpoint stopped answering',
+      });
+
+      const status = testIo(home, owner);
+      expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
+      expect(status.out).toContain('roots 1 (send 1, bus 0)');
+      expect(status.out).toContain('1 endpoint not hosted here');
     } finally {
       await started.daemon.close();
     }
