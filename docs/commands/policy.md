@@ -16,7 +16,8 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `liveness-idle-lead-seconds`, `liveness-idle-owner-seconds`, `delivery-order`,
 `event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
-`event-idle-threshold-seconds`, `event-reconcile-interval-seconds`).
+`event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
+`swap-wait-seconds`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -33,6 +34,16 @@ a value above the release default is refused, and so is a level's word that leng
 above it. The shorter field spellings (`held_threshold_seconds`, `thread-ttl`, …) are accepted
 and written back under the canonical name. `team bus` reads the held, retention and reconcile
 numbers when it starts, and `team reply` reads the thread life and cap from the caller's chain.
+
+`model-rule` is the entity's rule for which models may run on which seats, held as one line of
+`;`-separated entries, `<seat|role|*>=<lab>+<lab>`. A seat name beats a role word, a role beats
+`*`, and a seat no entry names may run any model; labs are vendor words as a seat writes
+`vendor:`, and an entry whose words are all `!lab` refuses those labs instead of allowing them.
+Only the entity may set it — `orchestrator=anthropic; architect=anthropic; *=!anthropic` is one
+rule — and the watch and `team check` carry it out in every team of the entity.
+`swap-wait-seconds` is how long a queued model swap may wait for its boundary: 1800 seconds
+(30 minutes) when nothing declares it, a shorter word being the tighter one, and a broken seat
+swaps at once.
 
 ## Who may run it
 

@@ -22,8 +22,9 @@ The value is one or more entries separated by `;`:
     orchestrator=anthropic; architect=anthropic; *=!anthropic
 
 - An entry is `<subject>=<labs>`. The subject is a seat name, a role word (the file's
-  `role:`), or `*`. A seat name wins over a role, and a role wins over `*`; the first entry
-  whose subject matches is the one that decides. A seat no entry matches is allowed.
+  `role:`), or `*`. A seat name wins over a role, and a role wins over `*`; a subject named
+  twice is refused, so the entry for the most specific subject is the one that decides. A
+  seat no entry names is allowed.
 - The labs are `+`-joined vendor words exactly as a seat writes `vendor:` (`anthropic`,
   `openai`, `google`, `deepseek`, `moonshot`, `zhipu`, `meta`, `xai`, …). A plain list means
   the seat must run one of those labs; a single `!lab` (or a list of `!lab`s) means it must

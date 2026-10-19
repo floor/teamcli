@@ -179,6 +179,19 @@ export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec
   },
 };
 
+/**
+ * How long a queued model swap may wait for its boundary before it runs at the next pause between
+ * two turns (Policies rule 11, OD-20261019-03). It ships at 30 minutes; a shorter wait moves the
+ * seat sooner, so the tighter side is 'lower'. The project may open it, as it may open the state
+ * windows, and every level inside may close it again.
+ */
+export const SWAP_WAIT_SECONDS: NumberSettingSpec = {
+  name: 'swap_wait_seconds',
+  policy: 'swap-wait-seconds',
+  fallback: 1800,
+  looseningLevels: ['project'],
+};
+
 /** The three liveness defaults, in the order a report names them: the idle-to-lead, idle-to-owner
  *  and blind windows. They ship at 5 minutes, 15 minutes and 5 minutes. */
 export type LivenessThresholds = Pick<StateThresholds, 'idle_lead_seconds' | 'idle_owner_seconds' | 'blind_after_seconds'>;

@@ -54,6 +54,16 @@ export {
 } from './resolve.ts';
 
 export {
+  formatModelRule,
+  modelRuleAllows,
+  modelRuleEntryFor,
+  modelRuleProblem,
+  parseModelRule,
+  parseModelRuleValue,
+  type ModelRuleEntry,
+} from './model-rule.ts';
+
+export {
   eventThresholdsInForce,
   eventThresholdsOf,
   type EventThresholds,
