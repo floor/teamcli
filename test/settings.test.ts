@@ -360,7 +360,7 @@ describe('the write verbs', () => {
     expect(set.err).toContain('seat "lead": the nickname "Hera" is also on seat "worker"');
   });
 
-  test('a record that does not verify signs no word, so it blocks no write the file admits', async () => {
+  test('a record that does not verify refuses the write instead of standing for the declaration', async () => {
     registerLead();
     const worker = registerAgent(home, {
       ...agentInit(),
@@ -371,15 +371,17 @@ describe('the write verbs', () => {
     if (!plan.ok) throw new Error(plan.why);
     const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T10:00:00Z') });
     if (!written.ok) throw new Error(written.why);
-    // The damaged record declares nothing to a runtime consumer, as it reads nowhere else: the
-    // collision it held is gone with its signature, and the write the file's own rules admit runs.
     const path = join(agentsDir(home), `${worker}.yaml`);
     writeFileSync(path, readFileSync(path, 'utf8').replace('value: "Hera"', 'value: "Crow"'));
 
     const set = await run(['set', 'lead', 'nickname=Hera']);
 
-    expect(set.code).toBe(0);
-    expect(set.out).toBe('settings: set nickname=Hera at seat (lead)\n');
+    // The effective word the damaged record held is unknown; checking the new word against the
+    // declaration alone could hand two seats one address, so the write is refused and names the
+    // record it could not verify.
+    expect(set.code).toBe(2);
+    expect(set.err).toContain(path);
+    expect(set.err).toContain('signature verification failed');
   });
 
   test('a model word is recorded as the launch id it names', async () => {

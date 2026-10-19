@@ -46,7 +46,7 @@ export function checkSeatSetting(
   key: ConfigKey,
   value: ConfigValue,
   seat: Seat,
-  seats: readonly Seat[],
+  seats: ReadonlyArray<{ name: string; nickname?: string; line: number }>,
   chain: PolicyChainResult,
 ): SeatSettingCheck {
   switch (key) {

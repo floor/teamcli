@@ -446,11 +446,14 @@ export function nicknameProblem(
   }
   for (const other of seats) {
     if (other.name === own) continue;
+    // A roster seat the file no longer declares carries no line: its word still addresses it,
+    // and the refusal says where the seat is rather than printing a line no file holds.
+    const where = other.line > 0 ? `(line ${other.line})` : '(no longer declared in the team file)';
     if (other.nickname === nickname) {
-      return { line: other.line, message: `the nickname "${nickname}" is also on seat "${other.name}" (line ${other.line})` };
+      return { line: other.line, message: `the nickname "${nickname}" is also on seat "${other.name}" ${where}` };
     }
     if (other.name === nickname) {
-      return { line: other.line, message: `the nickname "${nickname}" is the name of another seat (line ${other.line})` };
+      return { line: other.line, message: `the nickname "${nickname}" is the name of another seat ${where}` };
     }
   }
   return null;
