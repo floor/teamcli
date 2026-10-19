@@ -11,10 +11,11 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Caller, SeatStanding } from '../../src/caller.ts';
+import { detachedRefusal, mayChangeTeamVerdict, type Caller, type SeatStanding } from '../../src/caller.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { writeGrant } from '../../src/permissions/grants.ts';
-import { callerRecordOf, resolveCaller, rosterOf, type BridgeTeam } from '../../src/permissions/who.ts';
+import { COMMAND_GATES } from '../../src/permissions/map.ts';
+import { callerRecordOf, gateVerdict, resolveCaller, rosterOf, type BridgeTeam } from '../../src/permissions/who.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 
 const AGENT = 'agt_0123456789ab';
@@ -58,6 +59,7 @@ function fileTeam(id: string): BridgeTeam {
   return {
     id,
     orchestrator: 'lead',
+    operator: 'operator',
     seats: [
       { name: 'lead', role: 'coordinator' },
       { name: 'worker', role: 'implementer' },
@@ -148,7 +150,7 @@ describe('a seat, where the registry holds no record of the team', () => {
     if (!validated.ok) return;
     expect(validated.team.orchestrator).toBe('lead');
     const { root, home, id } = world();
-    const team: BridgeTeam = { id, orchestrator: validated.team.orchestrator, seats: validated.team.seats };
+    const team: BridgeTeam = { id, orchestrator: validated.team.orchestrator, operator: validated.team.operator, seats: validated.team.seats };
     expect(callerRecordOf(seatCaller('lead'), team, null)).toMatchObject({ kind: 'seat', leads: true });
     for (const command of ['up', 'down', 'restart', 'remove']) {
       expect(resolveCaller(seatCaller('lead'), team, root, home, command, placement(), NOW)).toMatchObject({ effect: 'allow', rule: 'leads' });
@@ -224,3 +226,85 @@ describe('a seat, where the registry holds the team', () => {
     expect(decision.why).toContain('the registry cannot be read');
   });
 });
+
+describe('each mapped row pins the module function its kind names', () => {
+  /** The callers the verdict functions tell apart: the owner, the orchestrator's seat, the
+   *  operator's seat, a plain seat, a seat on another pane, a pane with no agent, and the two
+   *  placements a terminal requirement refuses or lets through. */
+  function callers(): Caller[] {
+    return [
+      { kind: 'owner' },
+      { kind: 'owner-no-tty' },
+      { kind: 'seat', name: 'lead', pane: 'w0:p1', session: 'acme' },
+      { kind: 'seat', name: 'operator', pane: 'w0:p1', session: 'acme' },
+      { kind: 'seat', name: 'worker', pane: 'w0:p1', session: 'acme' },
+      { kind: 'seat', name: 'worker', pane: 'w9:p9', session: 'acme' },
+      { kind: 'pane', pane: 'w0:p1', session: 'acme' },
+      { kind: 'unplaced', reason: 'it is run by an agent outside herdr' },
+    ];
+  }
+
+  test('every `team-change` row is `mayChangeTeamVerdict`, for every placement', () => {
+    const { root, home, id } = world();
+    const team = fileTeam(id);
+    const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.kind === 'team-change');
+    expect(rows.map(([command]) => command).sort()).toEqual([
+      'hold',
+      'worktree',
+      'worktree:list',
+      'worktree:new',
+      'worktree:remove',
+    ]);
+    for (const [command] of rows) {
+      for (const caller of callers()) {
+        const verdict = mayChangeTeamVerdict(caller, team, placement());
+        expect(gateVerdict(caller, team, root, home, command, placement(), () => NOW), `${command} / ${callerWords(caller)}`).toEqual(verdict);
+        const decision = resolveCaller(caller, team, root, home, command, placement(), NOW);
+        if (verdict.kind === 'ok') expect(decision, `${command} / ${callerWords(caller)}`).toMatchObject({ effect: 'allow', rule: 'team-change' });
+        else if (verdict.kind === 'refused') expect(decision, `${command} / ${callerWords(caller)}`).toMatchObject({ effect: 'deny', rule: 'team-change' });
+        else expect(decision, `${command} / ${callerWords(caller)}`).toMatchObject({ effect: 'deny', rule: 'unplaced' });
+      }
+    }
+  });
+
+  test('the operator\'s seat is admitted and a `leads` seat that is neither lead nor operator is refused', () => {
+    const { root, home, id } = world();
+    const team = fileTeam(id);
+    // `hold` and every `worktree` verb: the operator's seat stands where the state records it.
+    for (const command of ['hold', 'worktree:new']) {
+      expect(gateVerdict({ kind: 'seat', name: 'operator', pane: 'w0:p1', session: 'acme' }, team, root, home, command, placement(), () => NOW)).toEqual({ kind: 'ok' });
+      expect(resolveCaller({ kind: 'seat', name: 'operator', pane: 'w0:p1', session: 'acme' }, team, root, home, command, placement(), NOW)).toMatchObject({
+        effect: 'allow',
+        rule: 'team-change',
+      });
+      // A seat marked `leads` in the file is not one of the three callers the function admits.
+      const refused = resolveCaller(seatCaller('worker'), team, root, home, command, placement(), NOW);
+      expect(refused).toMatchObject({ effect: 'deny', rule: 'team-change' });
+      expect(refused.why).toContain('neither the owner, the orchestrator\'s seat nor the operator\'s seat');
+    }
+  });
+
+  test('every row carrying a terminal requirement refuses exactly what `detachedRefusal` refuses', () => {
+    const { root, home, id } = world();
+    const team = fileTeam(id);
+    const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.terminal !== undefined);
+    expect(rows.map(([command]) => command).sort()).toEqual(['proc', 'proc:add', 'proc:done', 'watch']);
+    const noTty: Caller = { kind: 'owner-no-tty' };
+    for (const [command, gate] of rows) {
+      const sentence = detachedRefusal(noTty, gate.terminal);
+      expect(sentence).toBeString();
+      expect(gateVerdict(noTty, team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'refused' });
+      const decision = resolveCaller(noTty, team, root, home, command, placement(), NOW);
+      expect(decision, command).toMatchObject({ effect: 'deny', rule: 'terminal' });
+      expect(decision.why, command).toBe(sentence as string);
+      // A caller with a terminal, and a seat on its recorded pane, are judged by the row itself.
+      expect(gateVerdict({ kind: 'owner' }, team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'ok' });
+      expect(gateVerdict(seatCaller('worker'), team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'ok' });
+    }
+  });
+});
+
+/** A caller's own words, for a scene's failure message. */
+function callerWords(caller: Caller): string {
+  return caller.kind === 'seat' ? `${caller.name}@${caller.pane}` : caller.kind;
+}

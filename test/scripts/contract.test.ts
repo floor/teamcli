@@ -67,7 +67,11 @@ test('the check script exits 0 on this tree', () => {
 
 test('every command and subcommand carries who may run it, and the map rows are copied as they stand', () => {
   const contract = JSON.parse(readFileSync(join(root, 'contract/cli.json'), 'utf8')) as {
-    commands: { name: string; who?: { gate: string; why: string }; subcommands: { name: string; who?: { gate: string; why: string } }[] }[];
+    commands: {
+      name: string;
+      who?: { gate: string; why: string; terminal?: { who: string; where: string } };
+      subcommands: { name: string; who?: { gate: string; why: string; terminal?: { who: string; where: string } } }[];
+    }[];
   };
   const byName = (name: string) => contract.commands.find((command) => command.name === name);
   const nodes = contract.commands.flatMap((command) => [
@@ -94,6 +98,7 @@ test('every command and subcommand carries who may run it, and the map rows are 
     expect(node.who, `${key} is in the map but the contract does not repeat its row`).toEqual({
       gate: gate.kind,
       why: gate.why,
+      ...(gate.terminal !== undefined ? { terminal: gate.terminal } : {}),
     });
   }
   expect(byName('up')?.who?.gate).toBe('owner-or-leads');
@@ -111,15 +116,32 @@ test('every command and subcommand carries who may run it, and the map rows are 
   // A verb whose gate differs from its command's carries its own row.
   const sub = (command: string, verb: string) => byName(command)?.subcommands.find((word) => word.name === verb);
   expect(sub('policy', 'set')?.who?.gate).toBe('owner-only');
-  expect(byName('policy')?.who?.gate).toBe('owner-or-own-team');
+  expect(byName('policy')?.who?.gate).toBe('team-read');
   expect(sub('mcp', 'serve')?.who?.gate).toBe('any-caller');
-  expect(sub('proc', 'list')?.who?.gate).toBe('owner-or-own-team');
-  expect(sub('worktree', 'remove')?.who?.gate).toBe('owner-or-leads');
+  expect(sub('proc', 'list')?.who?.gate).toBe('team-read');
+  expect(sub('worktree', 'remove')?.who?.gate).toBe('team-change');
+  // A row whose module refuses a run with no terminal carries the route that refusal prints,
+  // beside a kind that reads wider: `watch` is any caller, and only a caller with a terminal or
+  // its own pane starts it.
+  expect(byName('watch')?.who?.gate).toBe('any-caller');
+  expect(byName('watch')?.who?.terminal).toEqual({
+    who: 'the owner or a placed seat',
+    where: 'a terminal outside herdr or its own pane',
+  });
+  expect(sub('proc', 'list')?.who?.terminal).toBeUndefined();
+  expect(byName('proc')?.who?.terminal).toEqual({
+    who: 'the owner or a seat of this team',
+    where: 'a terminal outside herdr or its own pane',
+  });
 });
 
 test('the reference page states the same who row the contract carries', () => {
   const contract = JSON.parse(readFileSync(join(root, 'contract/cli.json'), 'utf8')) as {
-    commands: { name: string; who: { gate: string; why: string }; subcommands: { name: string; who: { gate: string; why: string } }[] }[];
+    commands: {
+      name: string;
+      who: { gate: string; why: string; terminal?: { who: string; where: string } };
+      subcommands: { name: string; who: { gate: string; why: string; terminal?: { who: string; where: string } } }[];
+    }[];
   };
   const page = readFileSync(join(root, 'docs/reference/cli.md'), 'utf8');
   const words = contract.commands.flatMap((command) => [command, ...command.subcommands]);
@@ -130,4 +152,10 @@ test('the reference page states the same who row the contract carries', () => {
   const policy = contract.commands.find((command) => command.name === 'policy');
   const set = policy?.subcommands.find((word) => word.name === 'set');
   expect(page).toContain(`\`${set?.who.gate}\` — ${set?.who.why}`);
+  // A terminal requirement is stated beside the kind, in the sentence `detachedRefusal` prints.
+  const watch = contract.commands.find((command) => command.name === 'watch');
+  expect(watch?.who.terminal).toBeDefined();
+  expect(page).toContain(
+    `A run with no terminal is refused: only ${watch?.who.terminal?.who} runs this, from ${watch?.who.terminal?.where}`,
+  );
 });

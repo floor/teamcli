@@ -51,6 +51,7 @@ function fileTeam(id: string): BridgeTeam {
   return {
     id,
     orchestrator: 'lead',
+    operator: 'operator',
     seats: [
       { name: 'lead', role: 'coordinator' },
       { name: 'worker', role: 'implementer' },
