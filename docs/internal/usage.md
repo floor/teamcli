@@ -176,11 +176,45 @@ read`, `a CLI usage command did not answer`) however many seats hit it. The rest
 only the caller's own team's panes; the full view reads every team's. The machine reading cache is
 machine-wide, as the report's own machine lines already are.
 
+## Per-seat figures and spend
+
+With `--tree`, each team's seat table is followed by the seats' own figures, built by `reportOf`
+into `teams[].seats` (`information/usage.ts`): one line per window per seat, and one spend line
+per seat. A window this run read from the seat's own pane is `measured`, with the status row's
+source; a window only the watch's per-seat record answers is `estimated`, source `state record`,
+with its age and staleness. The record fills only the windows the live read did not answer, and
+stored readings pass the same bound-account filter the report's rows use, so a reading for an
+account this team's file does not bind never becomes a seat figure. A seat with no figure in
+either source prints `unknown  no reading for this seat`; no percentage is invented.
+
+The spend is read from the seat's own status row, never from a credential or a usage API: the
+claude-family row a real 2.1.299 screen drew carries `S: $5.8` beside its bar (`status.test.ts`,
+`usage-quota.test.ts`), and `statusCost` reads that dollar figure only from the row the profile's
+status patterns recognize, and only for the CLI whose row a capture showed printing money. The
+amount is marked `measured` with the surface it was read from and its reading age; a seat whose
+screen printed no amount — another CLI, an unread pane, or a recognized row without the field —
+reads `unknown` with one sentence, never `0`. Nothing is stored: the spend is a report figure,
+read again each run.
+
+The report's cost `source` is the session registry's own word for how an amount was obtained
+(`measured` or `estimated` on a recorded session's `cost`; the registry omits a cost it did not
+measure and prints that as `unknown`, never zero). A figure both commands carry therefore prints
+the same mark in `team sessions` and `team usage`; the report keeps the surface it read in
+`readFrom` (`status line`), beside `readAt` and `age`. The registry does not write this figure
+yet — the spend is read from the screen, not from a record — so the two agree on the vocabulary,
+not on storage.
+
+Every live quota observation and spend is stamped with the herdr session its pane was read in.
+`reportOf` attributes a figure to a seat only when the stamps agree (or one side has none), so two
+teams' same-named seats never borrow each other's figures; the project's own state record needs no
+stamp, because within one project a seat name is one seat.
+
 ## Output and privacy
 
 Text and JSON use the same report. `--json` has format 1, a read timestamp, view, caller project,
 counts, account rows grouped by lab, the `quota` block, unknown reasons, notes, and `teams` with
-seat mappings. A lab no screen reads and no reading reached also carries its seat count (`seats`),
+each seat's run, its windows (mark, source, reading time, age and staleness) and its cost (the
+registry's `source` word, `readFrom`, reading time and age; `why` when unknown). A lab no screen reads and no reading reached also carries its seat count (`seats`),
 which the text face prints as one line in place of its rows. Subscription rows carry the window,
 left/used percentages, reset countdown and reading age; Antigravity pool rows add `pool`. A
 machine account counts once even with multiple windows or pools. The `quota` block carries
