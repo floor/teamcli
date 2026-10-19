@@ -19,15 +19,15 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createServer, type Server, type Socket } from 'node:net';
+import { connect, createServer, type Server, type Socket } from 'node:net';
 import { homedir } from 'node:os';
-import { startBus, type BusHandle } from '../bus/server.ts';
+import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine } from '../launch/plain.ts';
 import { pidAlive } from '../state.ts';
-import { startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
+import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
@@ -35,16 +35,12 @@ import {
   ensureMachineDir,
   writeDaemonState,
   type DaemonFeatures,
+  type DaemonRootState,
   type DaemonStuckRequest,
 } from './state.ts';
 
-export type MachineRootStatus = {
-  root: string;
-  team: string | null;
-  send: 'serving' | 'already-running' | 'failed';
-  bus: 'serving' | 'failed';
-  why: string | null;
-};
+/** One checkout as hosted by this process; the state record keeps the same shape. */
+export type MachineRootStatus = DaemonRootState;
 
 export type MachineDaemon = {
   socketPath: string;
@@ -150,6 +146,32 @@ function snapshotOf(fields: {
   };
 }
 
+/** One hosted endpoint pair and the status record its liveness is written into. */
+type EndpointWatch = {
+  status: MachineRootStatus;
+  sendSocket: string | null;
+  busSocket: string | null;
+};
+
+/** A bus socket has no ping op, so one successful connect is the whole liveness answer. */
+function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = connect({ path: socketPath });
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.on('error', () => finish(false));
+    socket.on('connect', () => finish(true));
+    socket.on('close', () => finish(false));
+  });
+}
+
 /**
  * Starts the one machine daemon. It binds the machine socket first, then hosts send and bus for
  * every root it was given. A root that cannot be read or hosted is named in the returned status
@@ -210,6 +232,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const inFlight = new Map<string, InFlight>();
   const connections = new Set<Socket>();
+  const roots: MachineRootStatus[] = [];
   let heartbeatAt = since;
   let closed = false;
 
@@ -250,6 +273,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         socket: socketPath,
         features,
         stuck: stuckNow(),
+        roots: [...roots],
       });
     } catch {
       // The next heartbeat tries again; an unwritable record is reported as unknown, never healthy.
@@ -319,9 +343,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   chmodSync(socketPath, 0o600);
   writeState();
 
-  const roots: MachineRootStatus[] = [];
   const sendHandles: SendDaemonHandle[] = [];
   const busHandles: BusHandle[] = [];
+  const watched: EndpointWatch[] = [];
 
   // Staged limitation, and the exact block the extraction replaces: the machine protocol
   // socket is the daemon's own endpoint, but send and bus still have no machine route, so this
@@ -330,6 +354,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // delivery and a shared per-seat queue behind the relay package boundary.
   for (const rootArg of input.roots) {
     const status: MachineRootStatus = { root: rootArg, team: null, send: 'failed', bus: 'failed', why: null };
+    // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
+    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null };
+    watched.push(watch);
     const loaded = loadTeamFile(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
@@ -351,8 +378,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (send.kind === 'serving') {
       sendHandles.push(send.handle);
       status.send = 'serving';
+      watch.sendSocket = send.handle.socketPath;
     } else if (send.kind === 'already-running') {
       status.send = 'already-running';
+      watch.sendSocket = send.socketPath;
     } else {
       status.send = 'failed';
       status.why = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
@@ -394,6 +423,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (bus.kind === 'serving') {
       busHandles.push(bus.handle);
       status.bus = 'serving';
+      watch.busSocket = busSocket(loaded.root);
     } else {
       status.bus = 'failed';
       if (status.why === null) {
@@ -409,9 +439,51 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     appendDaemonLog(home, `root ${rootArg}: send ${status.send}, bus ${status.bus}`, now());
   }
 
+  // A socket file that stays behind after a crash, or a listener that stops answering, is not a
+  // hosted endpoint. The heartbeat asks each hosted socket; an endpoint that stopped answering is
+  // marked failed with its reason and logged once, and a later heartbeat never resurrects it.
+  let refreshing = false;
+  const refreshHostedEndpoints = async (): Promise<void> => {
+    if (closed || refreshing) return;
+    refreshing = true;
+    try {
+      await Promise.all(
+        watched.map(async (watch) => {
+          const { status } = watch;
+          if ((status.send === 'serving' || status.send === 'already-running') && watch.sendSocket !== null) {
+            if (!(await probeDaemonSocket(watch.sendSocket))) {
+              status.why ??=
+                status.send === 'serving'
+                  ? 'the hosted send endpoint stopped answering'
+                  : 'the send server that was already running stopped answering';
+              status.send = 'failed';
+              appendDaemonLog(home, `root ${status.root}: send endpoint stopped answering`, now());
+            }
+          }
+          if (status.bus === 'serving' && watch.busSocket !== null) {
+            if (!(await probeBusSocket(watch.busSocket))) {
+              status.why ??= 'the hosted bus endpoint stopped answering';
+              status.bus = 'failed';
+              appendDaemonLog(home, `root ${status.root}: bus endpoint stopped answering`, now());
+            }
+          }
+        }),
+      );
+    } finally {
+      refreshing = false;
+      writeState();
+    }
+  };
+
+  // The first state write happened before hosting so a reader never finds a bound socket with no
+  // record; this one records what each checkout actually got, failures and reasons included, and
+  // every heartbeat refreshes it after asking the hosted sockets whether they still answer.
+  writeState();
+
   const timer = setInterval(() => {
     heartbeatAt = now().toISOString();
     writeState();
+    void refreshHostedEndpoints();
   }, heartbeatMs);
   timer.unref();
 

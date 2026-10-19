@@ -14,7 +14,7 @@ import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { daemonHealth } from '../daemon/health.ts';
-import { appendDaemonLog, startMachineDaemon, type StartMachineDaemonResult } from '../daemon/host.ts';
+import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { systemServiceManager, type ServiceManager, type ServiceProgram } from '../daemon/service.ts';
 import type { DaemonHost } from '../send/daemon.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -210,6 +210,22 @@ function processStop(end: () => void): () => void {
   };
 }
 
+/** The hosted-endpoint summary the run line and status both print, so a daemon that is running
+ *  while a checkout's endpoint did not start here never reads as full health. */
+function rootsSummary(roots: MachineRootStatus[]): string[] {
+  const sendServing = roots.filter((root) => root.send === 'serving').length;
+  const busServing = roots.filter((root) => root.bus === 'serving').length;
+  const notHosted = roots.reduce(
+    (count, root) => count + (root.send === 'serving' ? 0 : 1) + (root.bus === 'serving' ? 0 : 1),
+    0,
+  );
+  const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
+  if (notHosted > 0) {
+    parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
+  }
+  return parts;
+}
+
 function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
   if (health.state === 'running') {
     const parts = [
@@ -218,6 +234,9 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
       `since ${health.since ?? 'unknown'}`,
       `heartbeat ${health.heartbeatAt ?? 'unknown'}`,
     ];
+    // A daemon can be running while a checkout's send or bus endpoint did not start here; the
+    // one line says so instead of reporting plain health, and the detail is in --json and log.
+    parts.push(...rootsSummary(health.roots));
     if (health.probe.state === 'unanswered') {
       parts.push(`probe unanswered (${health.probe.reason})`);
     } else if (health.probe.state === 'refused') {
@@ -296,10 +315,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       return 1;
     }
     const machine = started.daemon;
-    const sendCount = machine.roots.filter((root) => root.send === 'serving').length;
-    const busCount = machine.roots.filter((root) => root.bus === 'serving').length;
     io.stdout(
-      `team daemon: running (pid ${String(process.pid)}); socket ${machine.socketPath}; roots ${String(machine.roots.length)} (send ${String(sendCount)}, bus ${String(busCount)}); broker not hosted\n`,
+      `team daemon: running (pid ${String(process.pid)}); socket ${machine.socketPath}; ${rootsSummary(machine.roots).join('; ')}; broker not hosted\n`,
     );
     let disarm = (): void => {};
     await new Promise<void>((settle) => {

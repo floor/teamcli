@@ -12,6 +12,16 @@ export type DaemonFeatures = { broker: 'on' | 'off' | 'absent' };
 /** A request the daemon has been working on longer than its stuck threshold. */
 export type DaemonStuckRequest = { id: string; op: string; since: string; ageMs: number };
 
+/** One checkout this process hosts, recorded so a later `team daemon status` can tell a running
+ *  daemon from a running daemon that silently hosts nothing for a checkout. */
+export type DaemonRootState = {
+  root: string;
+  team: string | null;
+  send: 'serving' | 'already-running' | 'failed';
+  bus: 'serving' | 'failed';
+  why: string | null;
+};
+
 export type DaemonState = {
   format: 1;
   pid: number;
@@ -25,6 +35,7 @@ export type DaemonState = {
   socket: string;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
+  roots: DaemonRootState[];
 };
 
 export type DaemonStateRead =
@@ -78,6 +89,8 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     if (typeof entry.since !== 'string' || typeof entry.ageMs !== 'number') return null;
     requests.push({ id: entry.id, op: entry.op, since: entry.since, ageMs: entry.ageMs });
   }
+  const roots = rootsOf(record.roots);
+  if (roots === null) return null;
   return {
     format: 1,
     pid: record.pid as number,
@@ -89,7 +102,34 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     socket: record.socket as string,
     features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
     stuck: requests,
+    roots,
   };
+}
+
+/** `roots` was added after the first state records were written: a record without it reads as
+ *  "no checkout recorded", while a malformed one makes the whole record unreadable rather than
+ *  inventing hosting facts. */
+function rootsOf(raw: unknown): DaemonRootState[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return null;
+  const roots: DaemonRootState[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.root !== 'string' || entry.root === '') return null;
+    if (!(entry.team === null || typeof entry.team === 'string')) return null;
+    if (!['serving', 'already-running', 'failed'].includes(entry.send as string)) return null;
+    if (!['serving', 'failed'].includes(entry.bus as string)) return null;
+    if (!(entry.why === null || typeof entry.why === 'string')) return null;
+    roots.push({
+      root: entry.root,
+      team: entry.team as string | null,
+      send: entry.send as DaemonRootState['send'],
+      bus: entry.bus as DaemonRootState['bus'],
+      why: entry.why as string | null,
+    });
+  }
+  return roots;
 }
 
 function positiveInt(value: unknown): boolean {
