@@ -59,9 +59,10 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   'message.replied': ['sender'],
   // The lead's copy is raised only after `held-threshold`; the sender's word is immediate.
   'message.held': ['sender', 'lead'],
-  // Working and idle are read by the bus and the watch; a lead that wants them adds itself.
+  // Working is read by the bus and the watch; a lead that wants it adds itself.
+  // A worker seat idle past its window with assigned work reaches its lead once per idle stretch.
   'seat.working': [],
-  'seat.idle': [],
+  'seat.idle': ['lead'],
   'seat.idle-timeout': ['lead'],
   'seat.blocked': ['lead', 'operator'],
   'seat.at-prompt': ['lead', 'operator'],
@@ -69,6 +70,9 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   // the event reaches the entity's own lead and the owner at once. The owner stands even when
   // the registry names no entity lead, so a climb is never silent.
   'seat.prompt-escalated': ['entity', 'owner'],
+  // A seat that was blocked at a prompt and is now working again: closes the open at-prompt
+  // notice for the lead and operator.
+  'seat.unblocked': ['lead', 'operator'],
   'seat.unreachable': ['lead', 'operator'],
   'seat.done': ['lead', 'operator'],
   'work.claimed': ['lead'],

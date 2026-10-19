@@ -96,8 +96,11 @@ export const realSources: StatusSources = {
     // Every agent's pane, not only one whose name is a seat: a stray in a seat's workspace has a
     // screen too. A null screen is left out, and that pane is then unread.
     for (const agent of agents) {
-      const screen = paneRead(agent.pane, PANE_WINDOW, session);
-      if (screen !== null) screens[agent.pane] = screen;
+      const declared = team.seats.find((s) => s.name === agent.name);
+      if (declared?.human !== true) {
+        const screen = paneRead(agent.pane, PANE_WINDOW, session);
+        if (screen !== null) screens[agent.pane] = screen;
+      }
       // The pane's process identity, for the comparison with the one the state recorded: a pane
       // that no longer holds what team launched is not the seat. Null when herdr can't tell.
       processes[agent.pane] = paneProcesses(agent.pane, session);
@@ -108,6 +111,7 @@ export const realSources: StatusSources = {
     // The screen is the same read: a pane with no agent still has visible text, and a null leaves
     // the restored row with no note.
     for (const seat of team.seats) {
+      if (seat.human === true) continue;
       const held = state.seats[seat.name];
       if (!held?.launched || !held.pane || held.pane in processes) continue;
       processes[held.pane] = paneProcesses(held.pane, session);
