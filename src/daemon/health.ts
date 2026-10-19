@@ -103,7 +103,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       why: null,
     };
   }
-  const answer = await requestHealth(socket, options.timeoutMs ?? 500, options.id ?? randomUUID());
+  const answer = await probeDaemonHealth(socket, { timeoutMs: options.timeoutMs ?? 500, id: options.id ?? randomUUID() });
   if (answer.kind === 'answered') {
     const health = answer.health;
     return {
@@ -180,6 +180,15 @@ type HealthAnswer =
   | { kind: 'answered'; health: DaemonHealthSnapshot }
   | { kind: 'refused'; error: { code: string; message: string } }
   | { kind: 'unanswered'; reason: 'timeout' | 'closed' };
+
+/** One health probe against a live socket. Exported so a starting daemon can tell a live
+ *  predecessor (already running) from a stale socket before it binds. Never throws. */
+export function probeDaemonHealth(
+  socketPath: string,
+  options: { timeoutMs?: number; id?: string } = {},
+): Promise<HealthAnswer> {
+  return requestHealth(socketPath, options.timeoutMs ?? 500, options.id ?? randomUUID());
+}
 
 function requestHealth(socketPath: string, timeoutMs: number, id: string): Promise<HealthAnswer> {
   return new Promise((resolve) => {

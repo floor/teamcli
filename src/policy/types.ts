@@ -529,7 +529,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     name: 'daemon.broker',
     kind: 'enforced',
     levels: ['entity', 'project', 'team'],
-    defaultValue: 'on',
+    // The broker reads the owner's credential store, so absence is off: no team gets broker
+    // access because it failed to say anything. Turning it on is an explicit owner declaration.
+    defaultValue: 'off',
     gateLifting: false,
     parseValue: parseOnOff,
     // 'off' is tighter than 'on': off is within on, on is not within off.

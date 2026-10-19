@@ -17,7 +17,8 @@ export type DaemonState = {
   pid: number;
   uid: number;
   since: string;
-  /** `launchd`, `manual` or `team-up`, from the process that started it. */
+  /** `service-manager`, `manual` or `team-up`: the kind of thing that started it, never the
+   *  platform's own name for its service manager. */
   startedBy: string;
   version: string;
   heartbeatAt: string;

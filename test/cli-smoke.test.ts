@@ -49,6 +49,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   answer: 'types an answer into a live herdr pane dialog',
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
   bus: 'starts a long-running local event bus server on .agents/bus.sock',
+  daemon: 'starts the one machine daemon, and installs or removes its user service unit through the system service manager',
   hold: 'mutates .agents/state.json to place or clear a team hold',
   pause: 'writes pause state for one or more teams',
   resume: 'clears pause state for one or more teams',

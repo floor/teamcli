@@ -20,6 +20,9 @@ import { runApprove, type ApproveSources, type Waiting } from '../src/approve/co
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
+import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
+import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
+import type { ServiceManager } from '../src/daemon/service.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
 import { commits } from '../src/commands/commits.ts';
@@ -3678,6 +3681,157 @@ scene('bus.stopped', async (place) => {
   expect(existsSync(join(place.root, '.agents', 'bus.sock'))).toBe(false);
   return show(ran, 'team bus: stopped');
 });
+
+type FakeDaemonService = ServiceManager & { calls: string[] };
+
+function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonService {
+  const calls: string[] = [];
+  const unit = (home: string): string => join(home, 'unit.plist');
+  return {
+    kind: 'system-service-manager',
+    unitPath: unit,
+    plan: (home, program) => ({ unitPath: unit(home), program: [program.execPath, program.entry, 'daemon', 'run'] }),
+    install: (home) => {
+      calls.push('install');
+      return { ok: true, unitPath: unit(home) };
+    },
+    uninstall: (home) => {
+      calls.push('uninstall');
+      return { ok: true, unitPath: unit(home), removed: true };
+    },
+    ...overrides,
+    calls,
+  };
+}
+
+const daemonSnapshot: DaemonHealthSnapshot = {
+  pid: 42,
+  uid: 501,
+  since: '2026-10-20T10:00:00.000Z',
+  startedBy: 'service-manager',
+  version: 'test',
+  heartbeatAt: '2026-10-20T10:00:05.000Z',
+  stuck: [],
+  features: { broker: 'absent' },
+};
+
+function daemonSources(place: Place, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
+  return {
+    home: place.home,
+    program: { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js' },
+    version: 'test',
+    ...overrides,
+  };
+}
+
+async function daemonRan(
+  place: Place,
+  argv: string[],
+  caller: Caller = owner,
+  overrides: Partial<DaemonCommandSources> = {},
+): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runDaemon(argv, io, daemonSources(place, overrides)), out: io.out, err: io.err };
+}
+
+scene('daemon.entry-missing', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, { service: fakeDaemonService(), program: null }),
+    'the CLI entry cannot be found',
+  );
+});
+scene('daemon.already-running', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async () => ({ kind: 'already-running', pid: 42 }),
+    }),
+    'team daemon: already running (pid 42)',
+  ));
+scene('daemon.dry-run', async (place) => {
+  write(place, TEAM);
+  const service = fakeDaemonService();
+  const ran = await daemonRan(place, ['install', '--dry-run'], owner, { service });
+  expect(service.calls).toEqual([]);
+  return show(ran, 'team daemon: would install');
+});
+scene('daemon.installed', async (place) => {
+  write(place, TEAM);
+  const service = fakeDaemonService();
+  const ran = await daemonRan(place, ['install'], owner, { service });
+  expect(service.calls).toEqual(['install']);
+  return show(ran, 'team daemon: installed');
+});
+scene('daemon.not-owner', async (place) =>
+  show(
+    await daemonRan(place, ['install'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
+    'only the owner installs or removes the machine daemon',
+  ));
+scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
+scene('daemon.run-failed', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async () => ({ kind: 'locked', pid: 43 }),
+    }),
+    'another start holds the machine lock (pid 43)',
+  ));
+scene('daemon.install-failed', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null }),
+      }),
+    }),
+    'the system service manager refused to start the daemon',
+  );
+});
+scene('daemon.run-not-owner', async (place) =>
+  show(
+    await daemonRan(place, ['run'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
+    'only the owner or the system service manager runs the machine daemon',
+  ));
+scene('daemon.service-unavailable', async (place) =>
+  show(
+    await daemonRan(place, ['install'], owner, { service: null }),
+    'no system service manager adapter is available on this platform yet',
+  ));
+scene('daemon.uninstall-failed', async (place) =>
+  show(
+    await daemonRan(place, ['uninstall'], owner, {
+      service: fakeDaemonService({
+        uninstall: () => ({ ok: false, why: 'the system service manager refused to stop the daemon', detail: null }),
+      }),
+    }),
+    'the system service manager refused to stop the daemon',
+  ));
+scene('daemon.status', async (place) => show(await daemonRan(place, ['status']), 'team daemon: not running'));
+scene('daemon.stopped', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async () => ({
+        kind: 'serving',
+        daemon: {
+          socketPath: join(place.home, 'daemon.sock'),
+          roots: [],
+          health: () => daemonSnapshot,
+          close: async () => {},
+        },
+      }),
+      stop: (end) => {
+        setTimeout(end, 0);
+        return () => {};
+      },
+    }),
+    'team daemon: stopped',
+  ));
+scene('daemon.uninstalled', async (place) => {
+  const service = fakeDaemonService();
+  const ran = await daemonRan(place, ['uninstall'], owner, { service });
+  expect(service.calls).toEqual(['uninstall']);
+  return show(ran, 'team daemon: uninstalled');
+});
+scene('daemon.usage', async (place) => show(await daemonRan(place, ['watch']), 'unknown subcommand'));
 scene('next.broker', async (place) => {
   write(place, LINEAR);
   recordLead(place);

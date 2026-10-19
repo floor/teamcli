@@ -183,11 +183,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(POLICY_CATALOGUE['dev-mode'].gateLifting).toBe(true);
   });
 
-  test('daemon.broker is a feature gate above the seat, on by default and switchable only off', () => {
+  test('daemon.broker is a feature gate above the seat, off by default and switchable only on by an explicit declaration', () => {
     const spec = POLICY_CATALOGUE['daemon.broker'];
     expect(spec.kind).toBe('enforced');
     expect(spec.levels).toEqual(['entity', 'project', 'team']);
-    expect(spec.defaultValue).toBe('on');
+    expect(spec.defaultValue).toBe('off');
     expect(spec.gateLifting).toBe(false);
     expect(normalizePolicyName('daemon_broker')).toBe('daemon.broker');
     expect(normalizePolicyName('daemon-broker')).toBe('daemon.broker');
@@ -197,7 +197,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
 
     const absent = resolvePolicy('daemon.broker', []);
     expect(absent.ok).toBe(true);
-    if (absent.ok) expect(absent.effective.value).toBe('on');
+    if (absent.ok) expect(absent.effective.value).toBe('off');
 
     const off = resolvePolicy('daemon.broker', [
       { name: 'daemon.broker', value: 'on', level: 'entity', setter: 'owner', date: '2026-10-20T10:00:00Z', kind: 'enforced' },

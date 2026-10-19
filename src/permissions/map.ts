@@ -160,6 +160,26 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'the bus reconciles the project\'s event log, and the owner runs it, one per clone, from a terminal outside herdr',
     },
+    daemon: {
+      kind: 'owner-only',
+      why: 'the one machine daemon is the owner\'s: install, uninstall and run are owner-only, and the system service manager\'s no-terminal start is the owner\'s own login session',
+    },
+    'daemon:status': {
+      kind: 'any-caller',
+      why: 'the status reading is one health probe over the machine socket and reads no team file and no secret',
+    },
+    'daemon:run': {
+      kind: 'owner-only',
+      why: 'starting the one machine daemon is the owner\'s, or the system service manager starting it in the owner\'s login session; a seat or a pane never starts it',
+    },
+    'daemon:install': {
+      kind: 'owner-only',
+      why: 'registering the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+    },
+    'daemon:uninstall': {
+      kind: 'owner-only',
+      why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+    },
     client: {
       kind: 'any-caller',
       why: 'its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',

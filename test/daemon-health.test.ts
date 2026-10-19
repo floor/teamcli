@@ -20,7 +20,7 @@ const snapshot: DaemonHealthSnapshot = {
   pid: process.pid,
   uid: typeof process.getuid === 'function' ? process.getuid() : -1,
   since: '2026-10-20T10:00:00.000Z',
-  startedBy: 'launchd',
+  startedBy: 'service-manager',
   version: '0.5.3-daemon-test',
   heartbeatAt: '2026-10-20T11:59:30.000Z',
   stuck: [{ id: 'req-7', op: 'send', since: '2026-10-20T11:58:00.000Z', ageMs: 90_000 }],
@@ -128,7 +128,7 @@ describe('one machine daemon: health reading', () => {
     expect(health.state).toBe('running');
     expect(health.running).toBe(true);
     expect(health.pid).toBe(process.pid);
-    expect(health.startedBy).toBe('launchd');
+    expect(health.startedBy).toBe('service-manager');
     expect(health.heartbeatAt).toBe(snapshot.heartbeatAt);
     expect(health.features).toEqual({ broker: 'absent' });
     expect(health.stuck).toEqual(snapshot.stuck);
