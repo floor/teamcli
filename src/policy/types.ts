@@ -14,9 +14,11 @@ import {
   SEAT_NUMBERING_DEFAULT_VALUE,
   SEATS_CROSS_TEAMS,
   STATE_THRESHOLDS,
+  SWAP_WAIT_SECONDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
+import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
 /** The four inheritance levels of Kernel amendment 02 §2.2, outermost first. */
 export type PolicyLevel = 'entity' | 'project' | 'team' | 'seat';
@@ -97,6 +99,8 @@ export const ENFORCED_POLICY_NAMES = [
   'event-unreachable-threshold-seconds',
   'event-idle-threshold-seconds',
   'event-reconcile-interval-seconds',
+  'model-rule',
+  'swap-wait-seconds',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -162,6 +166,8 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   event_reconcile_interval_seconds: 'event-reconcile-interval-seconds',
   reconcile_interval_seconds: 'event-reconcile-interval-seconds',
   reconcile: 'event-reconcile-interval-seconds',
+  model_rule: 'model-rule',
+  swap_wait_seconds: 'swap-wait-seconds',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -457,6 +463,35 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parsePositiveSeconds,
     // A shorter or equal interval is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The entity's rule for which models may run on which seats (Policies rule 10, OD-20261019-01):
+  // one line of `<seat|role|*>=<lab>` entries, carried out in every team of the entity. Only the
+  // entity sets it, so no lower level is ever judged against it; the empty default is no rule.
+  'model-rule': {
+    name: 'model-rule',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: (raw: unknown) => {
+      const entries = parseModelRule(raw);
+      return entries === null ? null : formatModelRule(entries);
+    },
+    valueProblem: modelRuleProblem,
+    isWithin: () => true,
+  },
+  // How long a queued swap may wait for its boundary before it runs at the next pause between two
+  // turns (Policies rule 11), 30 minutes when nothing declares it. A shorter wait moves the seat
+  // sooner, so the shorter value is the tighter one.
+  'swap-wait-seconds': {
+    name: 'swap-wait-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    looseningLevels: SWAP_WAIT_SECONDS.looseningLevels as readonly PolicyLevel[],
+    defaultValue: SWAP_WAIT_SECONDS.fallback,
+    gateLifting: false,
+    parseValue: parsePositiveSeconds,
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   'development-mode': {

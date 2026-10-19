@@ -10,7 +10,7 @@ import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
-import { pluralCount } from '../output/text.ts';
+import { pluralCount, type DifferenceWho } from '../output/text.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
@@ -67,6 +67,11 @@ export type Difference = {
    *  a held seat is named once. `status` prints the row as it stands, and nothing serializes the
    *  mark. */
   promptSeat?: string;
+  /** Who runs the repair, where the repair's command alone would read it wrongly: `team swap
+   *  queue` is in the grant scopes (`GRANT_SCOPES`), so `whoFromCommand` would call it a grant
+   *  holder's, and the command admits the team's lead. Set where the difference is created and
+   *  never re-derived from the wording. */
+  who?: DifferenceWho;
 };
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };

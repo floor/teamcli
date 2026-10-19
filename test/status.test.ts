@@ -15,6 +15,7 @@ import { overridesPath } from '../src/profiles/overrides.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
+import { enqueueSwap } from '../src/swap/queue.ts';
 import type { Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
 import { watchLabel } from '../src/watch/pane.ts';
@@ -152,6 +153,35 @@ describe('team status', () => {
     expect(lapsed.out).toBe(clean.out);
     const lapsedDoc = JSON.parse((await status('--json')).out) as { hold?: unknown };
     expect(lapsedDoc.hold).toBeUndefined();
+  });
+
+  test('a queued swap is one note, in the reading and in the document, and no exit moves', async () => {
+    const clean = await status();
+    const queuedAt = new Date('2026-10-03T14:00:00.000Z');
+    enqueueSwap(join(dir, '.agents'), {
+      seat: 'claude-coordinator-acme',
+      from: { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' },
+      to: { cli: 'claude-code', vendor: 'deepseek', model: 'DeepSeek Flash', version: '4.1', display: 'DeepSeek Flash 4.1', launch: 'claude --model deepseek-flash' },
+      reason: 'model-rule',
+      rule: '*=!anthropic',
+      waitSeconds: 1800,
+      waitFor: "the seat's boundary (quiet, no turn, no dialog, no lease, no work drop)",
+      now: queuedAt,
+    });
+    const line = 'swap claude-coordinator-acme: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.1 (the entity model rule), '
+      + `queued ${queuedAt.toISOString()}, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), `
+      + `runs by ${new Date(queuedAt.getTime() + 1800 * 1000).toISOString()}`;
+    const { code, out } = await status();
+    expect(code).toBe(clean.code);
+    // The note lands after the reading's other notes and before the summary line, where the
+    // reading says what the team waits on.
+    expect(out).toBe(clean.out.replace('no differences\n', `note: ${line}\nno differences\n`));
+    const doc = JSON.parse((await status('--json')).out) as {
+      notes: string[];
+      swaps?: Array<{ seat: string; swap: { reason: string; rule: string } }>;
+    };
+    expect(doc.notes).toContain(line);
+    expect(doc.swaps).toEqual([{ seat: 'claude-coordinator-acme', swap: expect.objectContaining({ reason: 'model-rule', rule: '*=!anthropic' }) }]);
   });
 
   test('a missing seat, with its repair', async () => {

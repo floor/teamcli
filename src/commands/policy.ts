@@ -167,7 +167,7 @@ function orderedEffectivePolicies(policies: Record<string, EffectivePolicy>): Ef
   return out;
 }
 
-function resolveProjectIdForTeam(home: string, root: string, team: TeamFile): string | null {
+export function resolveProjectIdForTeam(home: string, root: string, team: TeamFile): string | null {
   try {
     const fromRegistry = projectOfTeam(home, teamIdOf(root));
     if (fromRegistry?.id) return fromRegistry.id;

@@ -36,6 +36,13 @@ reads
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.
 
+The entity's model rule ([team swap](swap.md)) is read on the same pass: every seat of the team
+this check runs in whose declared vendor the rule forbids is one difference, naming the rule, the
+seat's vendor and the swap proposed — or why none is — and repaired with `team swap queue <seat>`,
+which the team's lead runs. Breaches in the entity's other teams are not this team's differences:
+the check answers for the team it runs in. A rule that cannot be read is a note, never an empty
+rule that would read every seat as in rule.
+
 The general seat brief every launch delivers first is checked on the same pass. A delivery is a
 claim and a drop: the claim in the state names the delivery's incarnation, runtime epoch, the
 brief's sha256 and the id the record must have. A seat the session launched — a human's pane too,
@@ -160,13 +167,14 @@ briefs: delivered-and-read
 ```yaml file=.agents/team.yaml
 format: 1
 project: beacon
+entity: lab
 operator: claude-keeper
 
 identity:
   humans: [jane@acme.example]
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobbies/lab
   - ~/Code/beacon
 
 workspace:
@@ -191,6 +199,15 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+
+  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude --model deepseek-flash
 ```
 
 The team runs as the file and the state say, so there is nothing to act on (the note is the
@@ -202,6 +219,26 @@ team beacon, session "beacon"
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0
+```
+
+The entity's rule refuses this lab, and the check names each seat of the team it runs in with the
+swap the queue would take — the same breach list `team swap --rule` prints for the entity:
+
+```console
+$ team policy set entity model-rule '*=!anthropic' ; echo "exit $?"
+policy: set model-rule=*=!anthropic at entity (lab)
+exit 0
+$ team check ; echo "exit $?"
+team beacon, session "beacon"
+note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
+difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
+  repair: team swap queue claude-keeper
+  who: the team's lead
+difference: claude-beacon: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
+  repair: team swap queue claude-beacon
+  who: the team's lead
+2 differences
+exit 1
 ```
 
 Rationale, behaviour, refusals and known limits: [docs/internal/check.md](../internal/check.md).

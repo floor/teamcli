@@ -1933,6 +1933,104 @@ Usage:
 
 None.
 
+## `swap`
+
+Hidden: no
+
+Usage:
+
+    team swap [--file <path>] [--json]
+    team swap --rule [--file <path>] [--json]
+    team swap queue <seat> [--to <target>] [--file <path>] [--json]
+    team swap now <seat> [--file <path>] [--json]
+    team swap cancel <seat> [--file <path>] [--json]
+    team swap --run [--file <path>] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--rule` | no | no | no |
+| `--run` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `cancel`
+
+Hidden: no
+
+Usage:
+
+    team swap cancel <seat> [--file <path>] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `now`
+
+Hidden: no
+
+Usage:
+
+    team swap now <seat> [--file <path>] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `queue`
+
+Hidden: no
+
+Usage:
+
+    team swap queue <seat> [--to <target>] [--file <path>] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--to` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `tempo`
 
 Hidden: no

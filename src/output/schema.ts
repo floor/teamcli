@@ -279,6 +279,13 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           type: 'array',
           items: { type: 'object' },
         },
+        // A loose item here, like `hold`, `pause` and `procs`: the queued-swap fragments are
+        // declared below this document, and a reference to them from here is a use before
+        // initialization at module load.
+        swaps: {
+          type: 'array',
+          items: { type: 'object' },
+        },
       },
     },
     {
@@ -693,6 +700,192 @@ export const HOLD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
         by: { type: 'string', minLength: 1 },
         at: { type: 'string', minLength: 1 },
         until: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+});
+
+/** One model a swap moves from or to: the file's words at queue time. */
+const SWAP_MODEL_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['cli', 'vendor', 'model', 'version', 'display'],
+  properties: {
+    cli: { type: 'string', minLength: 1 },
+    vendor: { type: 'string', minLength: 1 },
+    model: { type: 'string', minLength: 1 },
+    version: { type: 'string', minLength: 1 },
+    display: { type: 'string', minLength: 1 },
+  },
+};
+
+/** One queued swap: the record the watch carries out at the seat's boundary. */
+const QUEUED_SWAP_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['from', 'to', 'reason', 'queuedAt', 'deadline', 'waitFor'],
+  properties: {
+    from: SWAP_MODEL_SCHEMA_FRAGMENT,
+    to: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['cli', 'vendor', 'model', 'version', 'display', 'launch'],
+      properties: {
+        ...(SWAP_MODEL_SCHEMA_FRAGMENT.properties as Record<string, JsonSchema>),
+        launch: { type: 'string', minLength: 1 },
+        modelFrom: { type: 'string', const: 'launcher' },
+        effort: { type: 'string', minLength: 1 },
+        account: { type: 'string', minLength: 1 },
+      },
+    },
+    reason: { type: 'string', enum: ['model-rule', 'config', 'owner'] },
+    queuedAt: { type: 'string', minLength: 1 },
+    deadline: { type: 'string', minLength: 1 },
+    waitFor: { type: 'string', minLength: 1 },
+    rule: { type: 'string' },
+    handover: { type: 'string', minLength: 1 },
+    forced: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team swap` (`schema/swap.schema.json`). */
+export const SWAP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.swap',
+  fileName: 'swap.schema.json',
+  title: 'team swap --json output',
+  statuses: ['listed', 'rule', 'queued', 'forced', 'ran', 'run-failed', 'cancelled'],
+  required: ['project', 'session'],
+  properties: {
+    entity: { type: ['string', 'null'] },
+    seat: { type: 'string', minLength: 1 },
+    rule: { type: 'string' },
+    entries: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['subject', 'allow', 'labs'],
+        properties: {
+          subject: { type: 'string', minLength: 1 },
+          allow: { type: 'boolean' },
+          labs: { type: 'array', items: { type: 'string', minLength: 1 } },
+        },
+      },
+    },
+    teams: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'name', 'root', 'visibility'],
+        properties: {
+          id: { type: ['string', 'null'] },
+          name: { type: 'string', minLength: 1 },
+          root: { type: 'string', minLength: 1 },
+          visibility: { type: 'string', enum: ['public', 'private'] },
+        },
+      },
+    },
+    breaches: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['team', 'root', 'visibility', 'seat', 'role', 'vendor', 'model', 'proposal', 'reason'],
+        properties: {
+          team: { type: 'string', minLength: 1 },
+          root: { type: 'string', minLength: 1 },
+          visibility: { type: 'string', enum: ['public', 'private'] },
+          seat: { type: 'string', minLength: 1 },
+          role: { type: 'string', minLength: 1 },
+          vendor: { type: 'string', minLength: 1 },
+          model: { type: 'string', minLength: 1 },
+          proposal: {
+            oneOf: [
+              { type: 'null' },
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['donor', 'recipe'],
+                properties: {
+                  donor: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['team', 'root', 'seat'],
+                    properties: {
+                      team: { type: 'string', minLength: 1 },
+                      root: { type: 'string', minLength: 1 },
+                      seat: { type: 'string', minLength: 1 },
+                    },
+                  },
+                  recipe: { type: 'object' },
+                },
+              },
+            ],
+          },
+          reason: { type: ['string', 'null'] },
+        },
+      },
+    },
+    ignored: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['root', 'why'],
+        properties: {
+          root: { type: 'string', minLength: 1 },
+          why: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    swaps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seat', 'swap'],
+        properties: {
+          seat: { type: 'string', minLength: 1 },
+          swap: QUEUED_SWAP_SCHEMA_FRAGMENT,
+        },
+      },
+    },
+    swap: QUEUED_SWAP_SCHEMA_FRAGMENT,
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seat', 'result'],
+        properties: {
+          seat: { type: 'string', minLength: 1 },
+          result: { type: 'string', enum: ['swapped', 'mismatch', 'failed', 'stays'] },
+          old_pane: { type: 'string', minLength: 1 },
+          pane: { type: 'string', minLength: 1 },
+          read_back: { type: ['string', 'null'] },
+          why: { type: 'string', minLength: 1 },
+          resumed: { type: 'string', minLength: 1 },
+          handover: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    donor: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['team', 'root', 'seat'],
+      properties: {
+        team: { type: 'string', minLength: 1 },
+        root: { type: 'string', minLength: 1 },
+        seat: { type: 'string', minLength: 1 },
       },
     },
   },
@@ -2188,6 +2381,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DELEGATE_OUTPUT_SCHEMA,
   REVOKE_OUTPUT_SCHEMA,
   HOLD_OUTPUT_SCHEMA,
+  SWAP_OUTPUT_SCHEMA,
   PAUSE_OUTPUT_SCHEMA,
   RESUME_OUTPUT_SCHEMA,
   RAISE_OUTPUT_SCHEMA,

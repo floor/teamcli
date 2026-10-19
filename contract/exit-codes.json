@@ -1878,6 +1878,13 @@
       "trigger": "team next"
     },
     {
+      "code": 1,
+      "command": "next",
+      "id": "next.swap",
+      "meaning": "the seat waits on a queued model swap, so nothing was claimed",
+      "trigger": "team next"
+    },
+    {
       "code": 2,
       "command": "next",
       "id": "next.invocation",
@@ -3759,6 +3766,125 @@
       "id": "status.not-yours",
       "meaning": "the caller may not read this team",
       "trigger": "team status"
+    },
+    {
+      "code": 0,
+      "command": "swap",
+      "id": "swap.cancelled",
+      "meaning": "the queued swap was taken out of the queue",
+      "trigger": "team swap cancel builder-1"
+    },
+    {
+      "code": 0,
+      "command": "swap",
+      "id": "swap.forced",
+      "meaning": "the owner forced the queued swap to run at once",
+      "trigger": "team swap now builder-1"
+    },
+    {
+      "code": 0,
+      "command": "swap",
+      "id": "swap.listed",
+      "meaning": "the queue or the entity's rule listing was shown",
+      "trigger": "team swap"
+    },
+    {
+      "code": 0,
+      "command": "swap",
+      "id": "swap.queued",
+      "meaning": "a model swap was queued for the seat's boundary",
+      "trigger": "team swap queue builder-1"
+    },
+    {
+      "code": 0,
+      "command": "swap",
+      "id": "swap.ran",
+      "meaning": "the queued swaps due now were carried out, or none was due",
+      "trigger": "team swap --run"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.caller",
+      "meaning": "not the owner, the orchestrator or the operator, or not a seat of the team for the view",
+      "trigger": "team swap queue builder-1"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team swap now builder-1"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.herdr",
+      "meaning": "herdr cannot be read, so no swap can be run",
+      "trigger": "team swap --run"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.io",
+      "meaning": "the state can't be read or written",
+      "trigger": "team swap queue builder-1"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.not-queued",
+      "meaning": "no swap waits for the seat",
+      "trigger": "team swap cancel builder-1"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.rule",
+      "meaning": "the entity's model rule can't be read or none is declared",
+      "trigger": "team swap queue builder-1"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.run-failed",
+      "meaning": "a due swap did not run: a preflight refusal, a read-back mismatch, or the seat is signed off or no longer declared",
+      "trigger": "team swap --run"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.seat",
+      "meaning": "no such seat in the team",
+      "trigger": "team swap queue nobody"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.target",
+      "meaning": "no seat of the entity the team may copy from runs the requested model, or no recipe is available",
+      "trigger": "team swap queue builder-1 --to claude-code:nothing"
+    },
+    {
+      "code": 1,
+      "command": "swap",
+      "id": "swap.unchanged",
+      "meaning": "the seat already declares a model the rule allows",
+      "trigger": "team swap queue builder-1"
+    },
+    {
+      "code": 2,
+      "command": "swap",
+      "id": "swap.file",
+      "meaning": "the team file or a --file path can't be read",
+      "trigger": "team swap --rule"
+    },
+    {
+      "code": 2,
+      "command": "swap",
+      "id": "swap.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team swap queue"
     },
     {
       "code": 0,

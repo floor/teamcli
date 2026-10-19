@@ -72,6 +72,22 @@ export function releaseLocal(root: string, seat: string, pane: string, now: numb
   });
 }
 
+/** The live lease `seat` holds in this clone, or null. The swap boundary is a seat holding none:
+ *  a lease is work in its hands (Policies rule 11). A directory that cannot be read holds none. */
+export function liveLeaseOf(root: string, seat: string, now: number): Lease | null {
+  let files: string[];
+  try {
+    files = leaseFiles(leasesDir(root));
+  } catch {
+    return null;
+  }
+  for (const path of files) {
+    const lease = readLease(path);
+    if (lease && lease.seat === seat && isLive(lease, now)) return lease;
+  }
+  return null;
+}
+
 /** Re-keys any lease held by `fromSeat` to `toSeat` so a renamed seat can still renew and release it. */
 export function renameSeatLeases(root: string, fromSeat: string, toSeat: string): string[] {
   const dir = leasesDir(root);

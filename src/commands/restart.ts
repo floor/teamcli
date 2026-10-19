@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { stripSgr } from '../ansi.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
@@ -20,7 +21,7 @@ import {
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode, type DevModeRun } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
@@ -52,7 +53,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
+import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -67,12 +68,13 @@ import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
-import { shellQuote } from '../profiles/profile.ts';
+import { shellQuote, withResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -176,9 +178,6 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // Collapsed notes: what plain output writes to stdout while it works (the pre-close readings,
   // the stop's own lines) ride on the document instead.
   const notes: string[] = [];
-  const noteIo: Io = json
-    ? { ...out, stdout: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
-    : out;
 
   const walked = walkCaller(io);
   const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
@@ -297,56 +296,243 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     return notReadyRefused(out, json, `${name} is a human's pane: nothing is typed into it or launched over it; left as it is`);
   }
 
+  const performed = await performRestart({
+    out,
+    json,
+    notes,
+    dir,
+    root,
+    home,
+    path,
+    team,
+    session,
+    name,
+    declared,
+    recorded: recordedSeat,
+    agents,
+    abandon,
+    owner: caller.kind === 'owner',
+    callerText: describeCaller(caller),
+    standing,
+    ceilings,
+    dev,
+    devFolded,
+    command: 'restart',
+    endReason: 'restart',
+    dry,
+    now: sources.now,
+    sources,
+  });
+  switch (performed.kind) {
+    case 'dry':
+      return dryRunExit(out, json, performed.text, {
+        project: team.project,
+        session,
+        seat: name,
+        plan: performed.plan,
+        notes,
+      });
+    case 'replaced':
+      return replacedRefused(out, json, name);
+    case 'abandon-working':
+      return abandonWorkingRefused(out, json, name);
+    case 'busy':
+      return busyRefused(out, json, performed.message);
+    case 'not-ready':
+      return notReadyRefused(out, json, performed.message);
+    case 'herdr':
+      return herdrRefused(out, json);
+    case 'run-lock':
+      return runLockRefused(out, json, performed.held, session, dir);
+    case 'ready':
+      return readyExit(
+        out,
+        json,
+        dir,
+        describeCaller(caller),
+        name,
+        performed.oldPane,
+        performed.pane,
+        sources.now(),
+        team.project,
+        session,
+        notes,
+      );
+    default: {
+      // Every result the launch sequence returns is handled above. This arm is the contract the
+      // exit gate reads: a run that ends in a shape this version does not know can only be a bug.
+      const unknown: never = performed;
+      throw new Error(`restart: unhandled result ${JSON.stringify(unknown)}`);
+    }
+  }
+}
+
+/** Which command runs the shared launch sequence: the word its log lines carry, and the reason
+ *  the old session's record ends with. */
+export type PerformCommand = 'restart' | 'swap';
+
+/** What the shared launch sequence is handed: the seat as the file now declares it, the world it
+ *  was inspected in, and the caller's own words. `restart` and the swap's run both call it, so
+ *  there is one stop-and-launch sequence in the tool. */
+export type PerformInput = {
+  out: Io;
+  json: boolean;
+  /** The plain output's working lines, collapsed onto the document under `--json`. */
+  notes: string[];
+  dir: string;
+  root: string;
+  home: string;
+  path: string;
+  team: TeamFile;
+  session: string;
+  name: string;
+  declared: Seat;
+  /** The seat as the file will declare it once the stop is done: a swap's recipe. Absent, the
+   *  declaration is `declared` and the run is a restart. The inspection reads `declared` (the
+   *  pane still runs the old CLI); the preflight and the launch read this one. */
+  next?: Seat;
+  recorded: SeatState | undefined;
+  agents: readonly HerdrAgent[];
+  abandon: boolean;
+  /** The swap observed the screen at the CLI's rate limit or provider error: that pane cannot
+   *  finish its task and cannot answer, so it is closed without typing. Every other blocked
+   *  screen — permission, trust, question, exit question, vendor notice — keeps its refusal. */
+  broken?: boolean;
+  owner: boolean;
+  callerText: string;
+  standing: Standing;
+  ceilings: Ceilings;
+  dev: DevModeRun;
+  devFolded: boolean;
+  command: PerformCommand;
+  endReason: 'restart' | 'swap';
+  /** The dry run: preflight, then the plan, and nothing stopped or launched. */
+  dry: boolean;
+  /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
+   *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
+  resume?: string;
+  /** The handover the new conversation reads first: the seat is asked to write this path before
+   *  the stop, and the wait is bounded. */
+  handover?: { path: string; waitMs: number };
+  /** Writes the team file's new declaration, after the old pane is closed and before the hooks
+   *  and the launch — the launch reads the file's own words. A failure is a truthful abort: the
+   *  sequence ends before the hooks, the brief and the launch, and the caller reports it as a
+   *  refusal. A swap keeping its queue record on that abort is the caller's rule (the ruling of
+   *  2026-10-19). */
+  declare?: () => { ok: true } | { ok: false; why: string };
+  now(): Date;
+  sources: RestartSources;
+};
+
+/** What the launch's own screen says the new conversation is, read back after ready. */
+export type ReadBack =
+  | { kind: 'match'; model: string }
+  | { kind: 'mismatch'; expected: string; shown: string }
+  | { kind: 'unread' };
+
+export type PerformResult =
+  | { kind: 'dry'; text: string; plan: PlanStep[] }
+  | { kind: 'replaced' }
+  | { kind: 'abandon-working' }
+  | { kind: 'busy'; message: string }
+  | { kind: 'not-ready'; message: string }
+  | { kind: 'herdr' }
+  | { kind: 'run-lock'; held: number }
+  | {
+      kind: 'ready';
+      oldPane: string;
+      pane: string;
+      readBack: ReadBack;
+      /** The handover file the launch was actually given. Absent when the bounded wait ended
+       *  without one, so a caller never reports a handover that was only asked for. */
+      handover?: string;
+    };
+
+export async function performRestart(input: PerformInput): Promise<PerformResult> {
+  const {
+    out,
+    json,
+    notes,
+    dir,
+    root,
+    home,
+    path,
+    team,
+    session,
+    name,
+    declared,
+    agents,
+    abandon,
+    owner,
+    callerText,
+    standing,
+    ceilings,
+    dev,
+    devFolded,
+    dry,
+    now,
+    sources,
+  } = input;
+  const recordedSeat = input.recorded;
+  const recordedSession = readState(dir).sessions[session] ?? emptySession();
+  // The declaration the launch reads: a swap's recipe, when one is handed in; a restart's own
+  // file entry otherwise. The inspection above it reads the old declaration — the pane still
+  // runs the old CLI.
+  const next = input.next ?? declared;
+  const noteIo: Io = json
+    ? { ...out, stdout: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
+    : out;
+
   // Inspect the target seat's current pane before any preflight or stop.
-  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, caller.kind === 'owner', sources);
-  if (inspected.kind === 'replaced') return replacedRefused(out, json, name);
-  if (inspected.kind === 'abandon-working') return abandonWorkingRefused(out, json, name);
-  if (inspected.kind === 'busy') return busyRefused(out, json, inspected.message);
+  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart');
+  if (inspected.kind === 'replaced') return { kind: 'replaced' };
+  if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
+  if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
 
   // Preflight the relaunch before stopping the seat so a preflight refusal leaves the seat running.
-  const profile = profileFor(declared.cli);
+  const profile = profileFor(next.cli);
   if (!profile) {
-    return notReadyRefused(out, json, `no launch profile for \`${plainLine(declared.cli)}\` in this version`);
+    return { kind: 'not-ready', message: `no launch profile for \`${plainLine(next.cli)}\` in this version` };
   }
-  for (const problem of placedProblems(team, root, sources.home, undefined, session)) {
-    return notReadyRefused(out, json, problem.message);
+  for (const problem of placedProblems(team, root, home, undefined, session)) {
+    return { kind: 'not-ready', message: problem.message };
   }
-  const start = seatStart({ ...team, session }, declared, root, sources.home);
+  const start = seatStart({ ...team, session }, next, root, home);
   if ('problem' in start) {
-    return notReadyRefused(out, json, start.problem);
+    return { kind: 'not-ready', message: start.problem };
   }
-  const doctorTeam = { ...team, seats: [declared] };
+  const doctorTeam = { ...team, seats: [next] };
   for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team)) {
     if (blocksLaunch(finding)) {
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       if (finding.text.includes(' is read at start by ')) continue;
-      return notReadyRefused(out, json, finding.text);
+      return { kind: 'not-ready', message: finding.text };
     }
   }
   const samples: SwapSample[] = [];
   const machineNow = sources.machine?.(root);
   const machineProblem = machineNow ? launchLimit(machineNow, team.machine, samples, sources.now().getTime()) : null;
-  if (machineProblem) return notReadyRefused(out, json, machineProblem);
+  if (machineProblem) return { kind: 'not-ready', message: machineProblem };
 
   const remainingAgents = agents.filter((agent) => agent.name !== name);
   const runningSeats = runningOf(remainingAgents, team, recordedSession);
-  const room = ceilingProblem(ceilings, runningSeats, declared);
-  if (room) return notReadyRefused(out, json, room);
+  const room = ceilingProblem(ceilings, runningSeats, next);
+  if (room) return { kind: 'not-ready', message: room };
 
   const budgets = budgetsInForceOf(standing, team);
   const budgetDecision = (sources.seatBudget ?? seatBudget)(
     budgets,
     loadReadings(dir),
-    declared,
+    next,
     sources.now().getTime(),
     loadSpendReadings(dir),
   );
   if (budgetDecision.kind === 'refuse') {
-    return notReadyRefused(out, json, budgetDecision.why);
+    return { kind: 'not-ready', message: budgetDecision.why };
   }
 
-  const liveRules = standing.kind !== 'verified' || caller.kind === 'owner';
-  const planSeat = buildUpSeat(standing, team, declared, start, root, sources.home, liveRules);
+  const liveRules = standing.kind !== 'verified' || owner;
+  const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules);
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -376,49 +562,49 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const stopPlan: PlanStep[] = inspected.agent
       ? [{ step: 'stop', seat: name, detail: `stop ${name} in ${inspected.agent.pane} (${inspected.where})`, prefix: '+' }]
       : [{ step: 'stop', seat: name, detail: 'not currently running', prefix: 'skip' }];
-    return dryRunExit(out, json, `${stopStep}${draftStep}${advice}${plainText(formatPlan(preview))}`, {
-      project: team.project,
-      session,
-      seat: name,
+    return {
+      kind: 'dry',
+      text: `${stopStep}${draftStep}${advice}${plainText(formatPlan(preview))}`,
       plan: [...stopPlan, ...planStepsOf(preview)],
-      notes,
-    });
+    };
   }
 
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    return runLockRefused(out, json, runLock.held, session, dir);
+    return { kind: 'run-lock', held: runLock.held };
   }
   try {
     const freshAgents = sources.agents(session);
-    if (freshAgents === null) return herdrRefused(out, json);
+    if (freshAgents === null) return { kind: 'herdr' };
     const freshSession = readState(dir).sessions[session] ?? emptySession();
     const freshRecorded = freshSession.seats[name];
-    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, caller.kind === 'owner', sources);
-    if (rechecked.kind === 'replaced') return replacedRefused(out, json, name);
-    if (rechecked.kind === 'abandon-working') return abandonWorkingRefused(out, json, name);
-    if (rechecked.kind === 'busy') return busyRefused(out, json, rechecked.message);
+    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart');
+    if (rechecked.kind === 'replaced') return { kind: 'replaced' };
+    if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
+    if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
 
     // The unsent text, copied under the run lock before the pane is closed, so neither a failed
     // launch nor this process ending loses it. The copy stays until the text is read back in
     // the new box; where that fails, its path is named in what the run prints.
     let draftText: string | undefined;
     let draftCopy: string | undefined;
-    if (rechecked.draftScreen !== undefined && rechecked.agent) {
+    if (input.command === 'restart' && rechecked.draftScreen !== undefined && rechecked.agent) {
       const capture = captureDraft(declared.cli, rechecked.draftScreen);
       if (!('text' in capture)) {
-        return busyRefused(out, json, `${name} holds unsent text in its input box ${capture.why}; left as it is`);
+        return { kind: 'busy', message: `${name} holds unsent text in its input box ${capture.why}; left as it is` };
       }
       const kept = keepRestartDraft(dir, session, name, capture.text);
       if ('why' in kept) {
-        return busyRefused(out, json, `${name} holds unsent text and ${kept.why}; left as it is`);
+        return { kind: 'busy', message: `${name} holds unsent text and ${kept.why}; left as it is` };
       }
       draftText = capture.text;
       draftCopy = kept.path;
     }
 
-    const who = describeCaller(caller);
+    const who = callerText;
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
+    let handoverPath: string | undefined;
+    let stopObs: Extract<InspectedSeat, { kind: 'ok' }> = rechecked;
 
     if (rechecked.agent) {
       // Print the three pre-close facts before stopping or closing the seat's workspace. Under
@@ -431,41 +617,68 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
           : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
       noteIo.stdout(`${plainLine(name)}: input box: ${box}\n`);
       noteIo.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
-      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(declared.launch)}" in a new workspace without passing the old transcript\n`);
+      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(next.launch)}" in a new workspace without passing the old transcript\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
 
-      const stopped = await stopRunning({
-        io: noteIo,
-        dir,
-        session,
-        sources,
-        logCommand: 'restart',
-        caller: who,
-        seat: {
+      // The handover is asked at the boundary, as the last step of the old conversation's task,
+      // and before the stop. The request starts a turn; the pane is read again before the stop,
+      // so what the stop acts on is the screen after that turn, never the one it was asked at.
+      if (input.handover !== undefined) {
+        handoverPath = await askForHandover({
+          session,
           name,
-          cli: declared.cli,
           pane: rechecked.agent.pane,
-          workspace: rechecked.agent.workspace,
-          state: rechecked.where === 'free' ? 'free' : rechecked.where,
-          ...(rechecked.exitInBox ? { exitInBox: true } : {}),
-          ...(rechecked.atExitQuestion ? { atExitQuestion: true } : {}),
-        },
-        keep: false,
-        // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
-        // says "close without typing" here, and the owner's own `--abandon` stays what it was.
-        // A box whose text was copied is closed the same way: the close would otherwise type
-        // the exit into the text, and the copied text is what waits for the new pane.
-        abandon: (abandon || rechecked.unrecognised !== undefined || draftCopy !== undefined) && rechecked.where !== 'free',
-        closeUnasked: abandon,
-        unasked: `team restart ${name} --abandon closes it`,
-      });
-      if (!stopped) {
-        return busyRefused(out, json, `${name} could not be stopped; left as it is${keptAt(draftCopy)}`);
+          path: input.handover.path,
+          waitMs: input.handover.waitMs,
+          sources,
+          log: (said) => logLine(dir, input.command, who, said, sources.now()),
+        });
+        const fresh = sources.agents(session);
+        if (fresh === null) return { kind: 'herdr' };
+        const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart');
+        if (seen.kind === 'replaced') return { kind: 'replaced' };
+        if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
+        if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
+        stopObs = seen;
       }
-      if (sources.upLaunch.agentPanes(session)?.includes(rechecked.agent.pane)) {
-        return busyRefused(out, json, `${name} did not close its old pane; left as it is${keptAt(draftCopy)}`);
+
+      // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
+      // old record is cleared below either way.
+      let stopped = true;
+      if (stopObs.agent) {
+        stopped = await stopRunning({
+          io: noteIo,
+          dir,
+          session,
+          sources,
+          logCommand: input.command,
+          caller: who,
+          seat: {
+            name,
+            cli: declared.cli,
+            pane: stopObs.agent.pane,
+            workspace: stopObs.agent.workspace,
+            state: stopObs.where === 'free' ? 'free' : stopObs.where,
+            ...(stopObs.exitInBox ? { exitInBox: true } : {}),
+            ...(stopObs.atExitQuestion ? { atExitQuestion: true } : {}),
+          },
+          keep: false,
+          // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
+          // says "close without typing" here, and the owner's own `--abandon` stays what it was.
+          // A broken screen (rate limit or provider error) gets the same close: nothing is typed
+          // into a pane whose conversation cannot answer.
+          abandon: (abandon || stopObs.unrecognised !== undefined || stopObs.brokenScreen || draftCopy !== undefined) && stopObs.where !== 'free',
+          closeUnasked: abandon,
+          unasked: `team ${input.command} ${name} --abandon closes it`,
+        });
+      }
+      if (!stopped) {
+        return { kind: 'busy', message: `${name} could not be stopped; left as it is${keptAt(draftCopy)}` };
+      }
+      if (stopObs.agent && sources.upLaunch.agentPanes(session)?.includes(stopObs.agent.pane)) {
+        return { kind: 'busy', message: `${name} did not close its old pane; left as it is${keptAt(draftCopy)}` };
       }
       let priorPane = freshRecorded?.pane;
       updateState(dir, (file) => {
@@ -483,14 +696,58 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
       // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
-      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, name, 'stopped', 'restart');
-      if (ended) logLine(dir, 'restart', who, ended.note, sources.now());
+      const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason);
+      if (ended) logLine(dir, input.command, who, ended.note, sources.now());
     }
+
+    // The team file's new declaration lands after the old pane is closed and before the hooks
+    // and the launch, which reads the file's own words. A write that fails is a truthful abort:
+    // the run ends non-zero and launches nothing — a swap's queue record stands and the failure
+    // is reported (the ruling of 2026-10-19). The seat is already down either way, so the next
+    // `team up` starts it from the file the run actually holds.
+    if (input.declare) {
+      const wrote = input.declare();
+      if (!wrote.ok) {
+        const said = `the team file was not rewritten (${wrote.why}); nothing was launched`;
+        if (json) notes.push(said);
+        else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
+        logLine(dir, input.command, who, said, sources.now());
+        return { kind: 'not-ready', message: said };
+      }
+    }
+
+    // A handover the old conversation wrote is passed to the new one through the brief and the
+    // rules line it already reads first, whichever way this CLI carries its rules. One sentence,
+    // built once: the brief appends its words verbatim and the rules line carries the same.
+    const handoverSentence = handoverPath === undefined
+      ? undefined
+      : `Your predecessor wrote a handover for you at ${handoverPath}; read it before anything else.`;
+    if (handoverSentence !== undefined) {
+      planSeat.rules = `${planSeat.rules}\n\n${handoverSentence}`;
+      if (planSeat.rulesFile) planSeat.rulesFile.line = `${planSeat.rulesFile.line} ${handoverSentence}`;
+    }
+
+    // The recorded conversation, resumed on the new declaration. The profile decides whether the
+    // CLI can carry the id at all; the attempt is the log's fact, never a claim that it resumed
+    // losslessly.
+    let resumed: string | undefined;
+    if (input.resume !== undefined) {
+      const line = withResume(next.cli, planSeat.launch, input.resume);
+      if (line !== null) {
+        planSeat.launch = line;
+        resumed = input.resume;
+        logLine(dir, input.command, who, `${name}: resuming session ${input.resume} on the new declaration`, sources.now());
+      }
+    }
+
+    // What the launch declares: the recipe, with the resume line the plan carries where one was
+    // applied. The record and the registry read this seat, never the old declaration.
+    const launching: Seat = resumed === undefined ? next : { ...next, launch: planSeat.launch };
 
     const records = progressWriter(
       json
         ? { stdout: () => {}, stderr: (text) => { notes.push(...text.split('\n').filter((line) => line !== '')); }, isTTY: false }
-        : { stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false },
+        : { stdout: out.stdout, stderr: out.stderr, isTTY: out.stdoutIsTTY ?? false },
     );
     // The general seat brief goes first, before the state hook and the plan's rules line: the
     // claim is written before the hook that resolves it and the signed drop before the launch. A
@@ -506,22 +763,37 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       state: readState(dir).sessions[session] ?? emptySession(),
       attributed: [planSeat.name],
       broadcast: true,
+      ...(handoverSentence === undefined ? {} : { handover: handoverSentence }),
     });
     const briefLine = (said: string): void => {
       if (json) notes.push(said);
-      else out.stderr(`team restart: ${plainText(said)}\n`);
-      logLine(dir, 'restart', who, said, sources.now());
+      else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
+      logLine(dir, input.command, who, said, sources.now());
     };
     for (const delivery of briefs.deliveries) {
       if (!delivery.ok) briefLine(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
     }
     if (briefs.recording !== undefined) briefLine(`the general seat brief was written and not recorded (${briefs.recording})`);
+    // The claim this seat's launch was delivered at. The launch's own record writes the pane
+    // diagnostics onto it, and only while the state still holds exactly this claim: a recovery or
+    // a replacement delivery that landed in between is the claim that stands, and this run must
+    // not overwrite it. The identity is compared whole — id alone is no claim.
+    const delivered = briefs.deliveries.find((delivery) => delivery.seat === planSeat.name && delivery.ok === true);
+    const expectedBrief = delivered === undefined || !delivered.ok
+      ? undefined
+      : {
+          id: delivered.id,
+          incarnation: delivered.incarnation,
+          epoch: delivered.epoch,
+          sha256: GENERAL_BRIEF_SHA256,
+          stage: 'ready' as const,
+        };
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat], { project: team.project, root, home: sources.home });
+    const installed = installCliHooks(dir, session, [planSeat], { project: team.project, root, home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
-      logLine(dir, 'restart', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+      logLine(dir, input.command, who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
     const plan = upPlan({
       root,
@@ -542,12 +814,16 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       session,
       team: team,
       root,
-      home: sources.home,
+      home,
+      command: input.command,
+      endReason: input.endReason,
+      ...(resumed === undefined ? {} : { resume: resumed }),
+      ...(handoverPath === undefined ? {} : { handover: handoverPath }),
       ceilings,
       running: runningSeats,
-      seat: declared,
+      seat: launching,
       caller: who,
-      owner: caller.kind === 'owner',
+      owner,
       devMode: devModeMark(dev, devFolded),
       now: sources.now,
       launch: sources.upLaunch,
@@ -563,34 +839,171 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       inLobby: planSeat.lobby === true,
       records,
       doctor: sources.doctor,
+      ...(expectedBrief === undefined ? {} : { brief: expectedBrief }),
     });
     const report = await executePlan(plan, session, host);
     const afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
     if (!launchedOk || !afterwards?.pane) {
-      logLine(dir, 'restart', who, `${name}: launch did not reach ready${draftCopy === undefined ? '' : `; its unsent text is copied at ${draftCopy}`}`, sources.now());
-      return notReadyRefused(out, json, `${name} did not reach a ready prompt${keptAt(draftCopy)}`);
+      logLine(dir, input.command, who, `${name}: launch did not reach ready${draftCopy === undefined ? '' : `; its unsent text is copied at ${draftCopy}`}`, sources.now());
+      return { kind: 'not-ready', message: `${name} did not reach a ready prompt${keptAt(draftCopy)}` };
     }
     // The unsent text goes back into the new pane's own box, its rows verified. On success the
     // copy is removed; where the paste did not read back, the copy stays and this run names it.
     if (draftText !== undefined && draftCopy !== undefined) {
-      const restored = await restoreRestartDraft(sources.upLaunch, session, afterwards.pane, declared.cli, draftText);
+      const restored = await restoreRestartDraft(sources.upLaunch, session, afterwards.pane, next.cli, draftText);
       if (restored.ok) {
         removeRestartDraft(draftCopy);
         const said = `${name}: unsent text pasted back${restored.note === undefined ? '' : ` (${restored.note})`}`;
         noteIo.stdout(`${plainLine(said)}\n`);
-        logLine(dir, 'restart', who, said, sources.now());
+        logLine(dir, input.command, who, said, sources.now());
       } else {
         const why = restored.note ?? 'the paste did not read back as its rows';
         const said = `${name}: the unsent text could not be pasted back (${why}); its copy is at ${draftCopy}`;
         noteIo.stdout(`${plainLine(said)}\n`);
-        logLine(dir, 'restart', who, said, sources.now());
+        logLine(dir, input.command, who, said, sources.now());
       }
     }
-    return readyExit(out, json, dir, who, name, oldPane, afterwards.pane, sources.now(), team.project, session, notes);
+    return {
+      kind: 'ready',
+      oldPane,
+      pane: afterwards.pane,
+      readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
+      ...(handoverPath === undefined ? {} : { handover: handoverPath }),
+    };
   } finally {
     runLock.release();
   }
+}
+
+/** How often the handover wait looks for the file. The wait is bounded by the caller; this is
+ *  the poll inside it. */
+const HANDOVER_POLL_MS = 2_000;
+
+/** The line typed into the old conversation to ask for its handover. One line: it is typed into
+ *  an empty input box and sent with Enter. */
+export function handoverRequest(path: string): string {
+  return `Before this conversation ends, write a handover for your successor to ${path}: what you were doing, what is done, what is left, and anything the next conversation must not redo. Write the file as the last thing you do.`;
+}
+
+function fileHasText(path: string): boolean {
+  try {
+    return statSync(path).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Asks the old conversation for its handover and waits, bounded, for the file. A file a previous
+ * attempt already wrote is used without asking again. A request that cannot be typed is said and
+ * the launch goes on; one that is chosen but not answered before the wait is the caller's to log.
+ */
+async function askForHandover(input: {
+  session: string;
+  name: string;
+  pane: string;
+  path: string;
+  waitMs: number;
+  sources: RestartSources;
+  log(said: string): void;
+}): Promise<string | undefined> {
+  if (fileHasText(input.path)) {
+    input.log(`${input.name}: using the handover already at ${input.path}`);
+    return input.path;
+  }
+  try {
+    mkdirSync(dirname(input.path), { recursive: true });
+  } catch {
+    input.log(`${input.name}: the handover folder could not be made; the launch goes on`);
+    return undefined;
+  }
+  const typed = input.sources.upLaunch.typeText?.(input.session, input.pane, handoverRequest(input.path)) ?? false;
+  const entered = typed && (input.sources.upLaunch.pressEnter?.(input.session, input.pane) ?? false);
+  if (!entered) {
+    input.log(`${input.name}: the handover request was not typed; the launch goes on`);
+    return undefined;
+  }
+  const started = input.sources.now().getTime();
+  // The file landing is not the end of the turn: the conversation may still be finishing its
+  // final response, and the stop's recheck would refuse the seat as mid-turn. The wait is the
+  // bound: it goes on until the seat is no longer working. A file written by a turn that ran
+  // past the wait is still used — the launch reads it, and the recheck decides the stop.
+  for (;;) {
+    if (fileHasText(input.path)) {
+      if (!workingNow(input.sources, input.session, input.pane)) {
+        input.log(`${input.name}: the old conversation wrote the handover at ${input.path}`);
+        return input.path;
+      }
+    }
+    if (input.sources.now().getTime() - started >= input.waitMs) {
+      if (fileHasText(input.path)) {
+        input.log(
+          `${input.name}: the old conversation wrote the handover at ${input.path} and its turn is still running; the launch goes on`,
+        );
+        return input.path;
+      }
+      input.log(`${input.name}: no handover was written before the wait ended; the launch goes on`);
+      return undefined;
+    }
+    await input.sources.upLaunch.sleep(HANDOVER_POLL_MS);
+  }
+}
+
+/** Whether herdr still reports the pane mid-turn. An unreadable herdr is not called working: the
+ *  stop's own recheck reads the same source and decides. */
+function workingNow(sources: RestartSources, session: string, pane: string): boolean {
+  const agents = sources.agents(session);
+  const agent = agents?.find((candidate) => candidate.pane === pane);
+  return agent?.status === 'working';
+}
+
+/** The words a model id is compared by: lowercased, split where a CLI or a file may spell the
+ *  same id with a hyphen, a dot or a space. */
+function modelIdWords(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== '');
+}
+
+/** The model id a launch line names with `--model`, where it names one. */
+function launchModelId(launch: string): string | null {
+  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(launch);
+  return match?.[1] ?? null;
+}
+
+/** The id on the launch wrapper's banner line, `<id> · API Usage Billing`, where the pane shows
+ *  one. This is the reading for a CLI the profile cannot show a model for. */
+export function bannerModel(screen: string | undefined): string | null {
+  if (screen === undefined) return null;
+  for (const line of stripSgr(screen).split('\n')) {
+    const match = /([A-Za-z0-9][A-Za-z0-9._-]*)\s*·\s*API Usage Billing/.exec(line);
+    if (match) return match[1] ?? null;
+  }
+  return null;
+}
+
+/**
+ * What the new pane says the conversation is, compared with the declaration it was launched
+ * from. The profile's own model reading comes first (`modelDiffers`); a model it cannot show is
+ * read off the wrapper's banner instead, compared by normalized words with the id the recipe's
+ * launch line carries — the id a donor seat running the same line shows. Neither reading is
+ * `unread`, and `unread` never claims a match.
+ */
+export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
+  const shown = seatModel(seat, screen);
+  if (shown !== null) {
+    const want = `${seat.model} ${seat.version}`;
+    const got = `${shown.model} ${shown.version}`;
+    return modelDiffers(shown, seat) ? { kind: 'mismatch', expected: want, shown: got } : { kind: 'match', model: got };
+  }
+  const banner = bannerModel(screen);
+  if (banner !== null) {
+    const expected = launchModelId(seat.launch) ?? seat.model;
+    const wanted = modelIdWords(expected);
+    const got = modelIdWords(banner);
+    const same = wanted.length === got.length && wanted.every((word) => got.includes(word));
+    return same ? { kind: 'match', model: banner } : { kind: 'mismatch', expected, shown: banner };
+  }
+  return { kind: 'unread' };
 }
 
 type InspectedSeat =
@@ -608,6 +1021,9 @@ type InspectedSeat =
       draftScreen?: string;
       /** herdr's own status, when the screen is not recognised but herdr says idle or done. */
       unrecognised?: string;
+      /** The screen reads as the CLI's rate limit or provider error and the caller observed it:
+       *  the pane cannot answer, so it is closed without typing and never refused as busy. */
+      brokenScreen: boolean;
     };
 
 function inspectSeat(
@@ -619,6 +1035,10 @@ function inspectSeat(
   abandon: boolean,
   owner: boolean,
   sources: RestartSources,
+  broken = false,
+  /** Whether an unsent box may be copied and pasted back. A restart does; a swap leaves the
+   *  box to the seat's own work — the queue stands and the swap waits, never typing over it. */
+  draftCapture = true,
 ): InspectedSeat {
   const proc = recorded?.launched && recorded.pane && sources.upLaunch.processInfo
     ? sources.upLaunch.processInfo(session, recorded.pane)
@@ -643,7 +1063,7 @@ function inspectSeat(
   }
   const agent = matched[0];
   if (!agent) {
-    return { kind: 'ok', agent: undefined, where: 'free', exitInBox: false, atExitQuestion: false };
+    return { kind: 'ok', agent: undefined, where: 'free', exitInBox: false, atExitQuestion: false, brokenScreen: false };
   }
 
   const liveCwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
@@ -663,6 +1083,11 @@ function inspectSeat(
       home: sources.home,
     });
   const clearable = holdsExit && profile?.exitClear !== null;
+  // A broken seat is closed without typing: the screen is at the CLI's rate limit or provider
+  // error and the caller observed it (`broken`), so the pane cannot run a turn and cannot answer
+  // an exit. The screen is read again here, so a seat that recovered between the observation and
+  // this inspection is no longer treated as broken. The other blocked screens keep their refusal.
+  const brokenScreen = broken && (screen.kind === 'provider error' || screen.kind === 'rate limit');
 
   if (abandon && !owner && where === 'working') {
     return { kind: 'abandon-working' };
@@ -678,6 +1103,7 @@ function inspectSeat(
       exitInBox: false,
       atExitQuestion: false,
       unrecognised: agent.status,
+      brokenScreen: false,
     };
   }
   // Unsent text is not a block: the box is read now, the text is copied under the run lock
@@ -685,7 +1111,7 @@ function inspectSeat(
   // refusal is a text no measured surface can copy faithfully, and a seat herdr reports
   // mid-turn — its turn is not this command's to end. The CLI's own exit text in the box is
   // never pasted into the new pane; it stays the clearable case above.
-  if (where === 'unsent' && !abandon && !clearable && !holdsExit) {
+  if (draftCapture && where === 'unsent' && !abandon && !clearable && !holdsExit) {
     if (profile !== null && profile.input !== null && (agent.status === 'idle' || agent.status === 'done')) {
       const raw = sources.screenText(session, agent.pane, declared.cli);
       const capture = raw === undefined ? { why: 'but its screen could not be read' } : captureDraft(declared.cli, raw);
@@ -697,6 +1123,7 @@ function inspectSeat(
           exitInBox: false,
           atExitQuestion: false,
           draftScreen: raw ?? '',
+          brokenScreen,
         };
       }
       return {
@@ -708,7 +1135,7 @@ function inspectSeat(
     // old word stands below.
   }
 
-  if (where !== 'free' && where !== 'exited' && !abandon && !clearable) {
+  if (where !== 'free' && where !== 'exited' && !abandon && !clearable && !brokenScreen) {
     const way = where !== 'unknown'
       ? ''
       : owner
@@ -728,6 +1155,7 @@ function inspectSeat(
     where,
     exitInBox: clearable,
     atExitQuestion: screen.kind === 'exit question',
+    brokenScreen,
   };
 }
 
@@ -804,6 +1232,14 @@ function hostOf(input: {
   team: TeamFile;
   root: string;
   home: string;
+  /** The command whose relaunch this host serves: its log lines carry the word, and a session
+   *  it closes on the way ends with its reason. */
+  command: PerformCommand;
+  endReason: 'restart' | 'swap';
+  /** The recorded conversation the launch resumed, when it did. */
+  resume?: string;
+  /** The handover file the new conversation was told to read first. */
+  handover?: string;
   ceilings: Ceilings;
   running: Running[];
   seat: Seat;
@@ -822,6 +1258,11 @@ function hostOf(input: {
   inLobby: boolean;
   records: Progress;
   doctor: DoctorSources;
+  /** The claim this launch's general seat brief was delivered at, with the digest and the stage
+   *  the delivery finalized it to. `record` writes the pane diagnostics onto the state's claim
+   *  only while every field still matches: a claim a recovery or a replacement delivery wrote in
+   *  between is left exactly as it is. */
+  brief?: { id: string; incarnation: string; epoch: string; sha256: string; stage: 'claimed' | 'ready' };
 }): Host {
   const { dir, session, launch, seat, records } = input;
   const running = [...input.running];
@@ -900,7 +1341,7 @@ function hostOf(input: {
         const machine = input.readMachine(input.root);
         const problem = launchLimit(machine, input.limits, input.samples, input.now().getTime());
         if (problem) {
-          logLine(dir, 'restart', input.caller, `refused: ${problem} — readings: ${readingsText(machine)}`, input.now());
+          logLine(dir, input.command, input.caller, `refused: ${problem} — readings: ${readingsText(machine)}`, input.now());
           return problem;
         }
       }
@@ -943,6 +1384,28 @@ function hostOf(input: {
         if (patchedEffort === null) delete seatState.effort;
         else if (patchedEffort !== undefined) seatState.effort = patchedEffort;
         current.seats[name] = seatState;
+        // The brief's pane diagnostics, written under this same state lock and only while the
+        // state still holds the claim this launch was delivered at: id, incarnation, epoch,
+        // digest and stage, compared whole. A claim a recovery or a replacement delivery wrote
+        // in between is the claim that stands, and nothing here overwrites it.
+        const expected = input.brief;
+        if (isTarget && patch.pane !== undefined && expected !== undefined) {
+          const claim = current.briefs?.[name];
+          if (
+            claim !== undefined
+            && claim.id === expected.id
+            && claim.incarnation === expected.incarnation
+            && claim.epoch === expected.epoch
+            && claim.sha256 === expected.sha256
+            && claim.stage === expected.stage
+          ) {
+            const identity = launchedIdentity(launch.processInfo?.(session, patch.pane) ?? null);
+            const diagnosed = { ...claim, seat_handle: id, pane: patch.pane };
+            if (identity === null) delete diagnosed.pane_root_pid;
+            else diagnosed.pane_root_pid = identity.shell;
+            current.briefs![name] = diagnosed;
+          }
+        }
         if (patch.pane) {
           replaced = prior.pane !== patch.pane ? prior.pane : undefined;
           current.launched_file = input.teamFile;
@@ -959,11 +1422,11 @@ function hostOf(input: {
             patch.pane,
             readState(dir).sessions[session]?.seats[name]?.id,
           );
-          if ('note' in made) logLine(dir, 'restart', input.caller, made.note, input.now());
+          if ('note' in made) logLine(dir, input.command, input.caller, made.note, input.now());
           else {
             // The address: the live session socket this relaunch answers at, recorded on the agent.
             const refreshed = refreshAgentAddress(input.home, made.id, patch.pane, session);
-            if (refreshed.note) logLine(dir, 'restart', input.caller, refreshed.note, input.now());
+            if (refreshed.note) logLine(dir, input.command, input.caller, refreshed.note, input.now());
           }
         }
       }
@@ -972,6 +1435,9 @@ function hostOf(input: {
     // ended as `restart` before the close; this one names it `previous`.
     sessionStarted(name, started) {
       if (name !== seat.name) return;
+      // A resumed launch names no `--session-id` of its own: the id it carries is the recorded
+      // conversation's, and the start record is that conversation's session.
+      const sessionId = started.cli_session ?? input.resume;
       const began = beginSession({
         home: input.home,
         root: input.root,
@@ -980,10 +1446,11 @@ function hostOf(input: {
         seat,
         pane: started.pane,
         ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
-        ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+        ...(sessionId === undefined ? {} : { cli_session: sessionId }),
+        ...(input.handover === undefined ? {} : { handover: input.handover }),
         now: input.now(),
       });
-      if ('note' in began) logLine(dir, 'restart', input.caller, began.note, input.now());
+      if ('note' in began) logLine(dir, input.command, input.caller, began.note, input.now());
     },
     running(name) {
       if (!running.some((item) => item.name === name)) {
@@ -1007,8 +1474,8 @@ function hostOf(input: {
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
       if (name === seat.name) {
-        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped', 'restart');
-        if (ended) logLine(dir, 'restart', input.caller, ended.note, input.now());
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped', input.endReason);
+        if (ended) logLine(dir, input.command, input.caller, ended.note, input.now());
       }
     },
     say: (line) => input.io.stderr(plainText(line)),
@@ -1019,7 +1486,7 @@ function hostOf(input: {
       const prof = profileFor(cli);
       return prof ? input.doctor.version(prof.binary) : null;
     },
-    log: (who, what) => logLine(dir, 'restart', input.caller, `${who}: ${what}`, input.now()),
+    log: (who, what) => logLine(dir, input.command, input.caller, `${who}: ${what}`, input.now()),
   };
 }
 

@@ -218,6 +218,12 @@
           "items": {
             "type": "object"
           }
+        },
+        "swaps": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       }
     },

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
-import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, startupReadsList } from '../src/profiles/profile.ts';
+import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, startupReadsList, withResume } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
@@ -408,5 +408,17 @@ input:
     - ctrl+c
   paste: bracketed
   mid_turn: true`)).toThrow('"input.clear_working" is required when "input.mid_turn" is true');
+  });
+});
+
+describe('the resume line a swap appends', () => {
+  test('a launch line that already names a session is left as it is', () => {
+    for (const line of ['claude --resume abc', 'claude -r abc', 'claude --continue', 'claude -c', 'claude --session-id abc']) {
+      expect(withResume('claude-code', line, 'ses_1')).toBeNull();
+    }
+  });
+
+  test('a plain launch line takes the recorded id', () => {
+    expect(withResume('claude-code', 'claude --model deepseek-flash', 'ses_1')).toBe('claude --model deepseek-flash --resume ses_1');
   });
 });

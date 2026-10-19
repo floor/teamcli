@@ -6,6 +6,11 @@ pull until `team up` has recorded its pane; the owner is refused, and so is a na
 seat. The source is a file the owner committed, or a tracker the owner's broker reads — with no
 broker running, `next` refuses and claims nothing.
 
+A seat that waits on a queued model swap ([team swap](swap.md)) claims nothing either: the swap
+runs at the seat's own boundary, so the seat takes no new task while it waits. The refusal is one
+line naming the queued swap and the way out, and `--release` still runs — letting go of the lease
+a seat holds is how a waiting seat stands down.
+
 ## Synopsis
 
     team next [--mine | --release] [--wait] [--json]
@@ -15,7 +20,7 @@ broker running, `next` refuses and claims nothing.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--mine` | — | a new take keeps only records whose `assignee` is the caller's seat name; a renewal is not filtered |
-| `--release` | — | unlink the caller's lease and print `team next: released <id>`; records no progress |
+| `--release` | — | unlink the caller's lease and print `team next: released <id>`; records no progress, and a queued swap does not stop it |
 | `--wait` | — | re-reads the source every `tasks.cadence` while a pass finds nothing takeable, until a record is taken, the wait is stopped, or a read breaks; without `tasks.cadence` it refuses; off unless set |
 | `--json` | — | one `team.next` document on stdout instead of the context line and block; off unless set |
 | `--help`, `-h` | — | the usage, and exit 0 |
@@ -39,6 +44,7 @@ recorded one.
 | a record was claimed, or the caller's live lease was renewed | the context line, the record's block (the `team issues` block, one record), and `team next: claimed <id>` | 0 |
 | a lease was released, or there was nothing to take or to release | the context line and `team next: released <id>`, or `team next: nothing is takeable` / `team next: nothing is assigned to you` / `team next: nothing is held` | 0 |
 | the wait ended on a stop signal, or a clock that did not advance | `team next: stopped waiting` | 0 |
+| the seat waits on a queued swap | `team next: <seat> waits on a swap: <the queue's line>; nothing new is claimed until it runs or \`team swap cancel <seat>\`` | 1 |
 | refused: not a seat on its recorded pane, the team file can't be read or its policy is refused, the task file is missing or not a list, nothing was taken and a record is not a task, or the broker path refused | `team next: <reason>`; under `--json`, a `team.error` document on stdout with `id` the contract row and `repair` the way out | 1 |
 | the invocation can't be read, or this folder is neither a checkout nor a team root | `team next: <problem>`, with the usage for the invocation; under `--json`, a `team.error` document | 2 |
 
@@ -49,11 +55,12 @@ Under `--json` the command prints one `team.next` document: its `schema` tag fir
 ```yaml file=.agents/team.yaml
 format: 1
 project: beacon
+entity: lab
 coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobbies/lab
   - ~/Code/beacon
 
 workspace:
@@ -72,6 +79,13 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude --model deepseek-flash
 ```
 
 ```yaml file=.agents/tasks.yaml
@@ -85,6 +99,24 @@ team beacon, session "beacon"
 m1  the task title
 team next: claimed m1
 exit 0
+```
+
+The entity's rule refuses this lab, and the owner queues the seat's swap. The seat claims
+nothing while the swap waits, and the line names the way out:
+
+```console
+$ team policy set entity model-rule '*=!anthropic' ; echo "exit $?"
+policy: set model-rule=*=!anthropic at entity (lab)
+exit 0
+$ team swap queue claude-keeper ; echo "exit $?"
+swap queued: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z
+exit 0
+```
+
+```console caller=claude-keeper
+$ team next ; echo "exit $?"
+team next: claude-keeper waits on a swap: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z; nothing new is claimed until it runs or `team swap cancel claude-keeper`
+exit 1
 ```
 
 Rationale, behaviour, refusals and known limits: [docs/internal/next.md](../internal/next.md).

@@ -434,7 +434,12 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
       typedInto.set(pane, text);
       return true;
     },
-    pressEnter: () => true,
+    // Enter submits the composer: the text is sent and the box reads empty again (the CLI's turn
+    // is not modelled here — a screen that was idle stays idle).
+    pressEnter: (_session: string, pane: string) => {
+      typedInto.delete(pane);
+      return true;
+    },
     agentStatus: (_session: string, pane: string) => agentOf(pane)?.status ?? null,
     sleep,
     now,
@@ -473,7 +478,7 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     sendKey: () => true,
     pressEnter(session, pane) {
       shelled.add(pane);
-      return action.pressEnter();
+      return action.pressEnter(session, pane);
     },
     agentPanes: action.agentPanes,
     closeWorkspace: action.closeWorkspace,

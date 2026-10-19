@@ -58,7 +58,7 @@ export const watch: Section = {
         type: 'object',
         propertyNames: { enum: CHECK_NAMES.filter((name) => !ALWAYS_ON.includes(name)) },
         additionalProperties: { const: 'off' },
-        $comment: 'the five that always run (attention, missing, model-drift, prompt-escalation, approval) are refused here too',
+        $comment: 'the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too',
       },
     },
   },
@@ -122,7 +122,7 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
 }
 
 // The checks a file turns off: a map of check name to `off`. A name that doesn't exist is refused
-// with its line, and so is one of the four that always run (RFC 0002 § 4.2) — the schema refuses
+// with its line, and so is one of the six that always run (RFC 0002 § 4.2) — the schema refuses
 // them, and `team approve` validates before it fingerprints, so neither can approve them either.
 function readChecks(entry: YamlEntry | undefined, check: Check): string[] {
   const off: string[] = [];

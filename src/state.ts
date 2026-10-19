@@ -153,6 +153,46 @@ export type WorktreeState = {
 
 export type SwapRecord = { by: string; at: string };
 
+/** The model fields a swap moves a seat between, as the file declares them. */
+export type SwapModel = {
+  cli: string;
+  vendor: string;
+  model: string;
+  version: string;
+  display: string;
+};
+
+/**
+ * One queued model swap (Policies rule 11, OD-20261019-02): the seat takes no new task while the
+ * record stands, waits for the boundary the watch observes, and past `deadline` runs at the next
+ * pause between two turns. `from` and `to` are the file's words at queue time; `to` carries the
+ * launch line and the optional model fields a recipe brought. `waitFor` is the one line `status`
+ * prints under the seat's row. `forced` is the owner's `team swap now`: the log says the deadline
+ * did not decide. A record is the project's, not one session's, like the hold and the pause.
+ */
+export type QueuedSwap = {
+  from: SwapModel;
+  to: SwapModel & {
+    launch: string;
+    modelFrom?: 'launcher';
+    effort?: string;
+    account?: string;
+  };
+  reason: 'model-rule' | 'config' | 'owner';
+  queuedAt: string;
+  deadline: string;
+  waitFor: string;
+  /** The rule value in force when a rule-driven swap was queued. */
+  rule?: string;
+  /**
+   * The handover file the old conversation is asked to write, when the launch will not resume
+   * it: named when the swap is queued, so a run retried after a busy turn offers the same path
+   * and a file already written is used without asking again.
+   */
+  handover?: string;
+  forced?: { by: string; at: string };
+};
+
 /**
  * A hold on the team's work: the reason it was placed, who placed it and when, and the instant
  * it lapses (`until` absent: it stands until released). A hold past its `until` reads as no
@@ -283,6 +323,11 @@ export type State = {
    * the signed policy file untouched.
    */
   expired_policies?: string[];
+  /**
+   * The queued model swaps, by seat (Policies rule 11): the project's record, read and written
+   * by `team swap` and carried out by the watch. A seat keeps no new task while its entry stands.
+   */
+  swaps?: Record<string, QueuedSwap>;
   sessions: Record<string, SessionState>;
 };
 
@@ -395,6 +440,40 @@ function cleanedBrief(brief: unknown): BriefRecord | null {
   return claim;
 }
 
+/** Whether a value from the state file is a swap's model word: the five fields the file declares
+ *  and a recipe carries, each with text. */
+function isSwapModel(value: unknown): value is SwapModel {
+  if (value === null || typeof value !== 'object') return false;
+  const model = value as Partial<SwapModel>;
+  return ['cli', 'vendor', 'model', 'version', 'display'].every(
+    (key) => typeof (model as Record<string, unknown>)[key] === 'string' && (model as Record<string, string>)[key] !== '',
+  );
+}
+
+/** Whether a value from the state file is the record `team swap queue` writes. Anything else is
+ *  dropped at the read door, so a hand-edited file can never print or run what it made up. */
+function isQueuedSwap(value: unknown): value is QueuedSwap {
+  if (value === null || typeof value !== 'object') return false;
+  const swap = value as Partial<QueuedSwap>;
+  if (!isSwapModel(swap.from) || !isSwapModel(swap.to)) return false;
+  const to = swap.to as Partial<QueuedSwap['to']>;
+  if (typeof to.launch !== 'string' || to.launch === '') return false;
+  if (to.modelFrom !== undefined && to.modelFrom !== 'launcher') return false;
+  if (to.effort !== undefined && typeof to.effort !== 'string') return false;
+  if (to.account !== undefined && typeof to.account !== 'string') return false;
+  if (swap.reason !== 'model-rule' && swap.reason !== 'config' && swap.reason !== 'owner') return false;
+  if (typeof swap.queuedAt !== 'string' || Number.isNaN(Date.parse(swap.queuedAt))) return false;
+  if (typeof swap.deadline !== 'string' || Number.isNaN(Date.parse(swap.deadline))) return false;
+  if (typeof swap.waitFor !== 'string' || swap.waitFor === '') return false;
+  if (swap.rule !== undefined && typeof swap.rule !== 'string') return false;
+  if (swap.handover !== undefined && (typeof swap.handover !== 'string' || swap.handover === '')) return false;
+  if (swap.forced !== undefined) {
+    if (!swap.forced || typeof swap.forced.by !== 'string' || swap.forced.by === '') return false;
+    if (typeof swap.forced.at !== 'string' || Number.isNaN(Date.parse(swap.forced.at))) return false;
+  }
+  return true;
+}
+
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
 export function readState(dir: string): State {  const path = join(dir, STATE_FILE);
@@ -420,6 +499,17 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
     state.expired_policies = state.expired_policies.filter((item): item is string => typeof item === 'string');
   } else if (state.expired_policies !== undefined) {
     delete state.expired_policies;
+  }
+  // The queue enters from the file like the hold and the pause, and is cleaned at the same door:
+  // a key that is not a name by the lock's rule is dropped, and so is a record that is not the
+  // one `team swap queue` writes. Only that command writes a key, and it refuses anything but
+  // `validLockName`, so a key that survives this door is a seat name a reader prints.
+  if (state.swaps && typeof state.swaps === 'object') {
+    for (const [seat, swap] of Object.entries(state.swaps)) {
+      if (!validLockName(seat) || !isQueuedSwap(swap)) delete state.swaps[seat];
+    }
+  } else if (state.swaps !== undefined) {
+    delete state.swaps;
   }
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};

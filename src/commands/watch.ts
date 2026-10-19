@@ -28,6 +28,7 @@ import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, NUDGE_TEXT, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
@@ -58,6 +59,10 @@ import {
 } from '../bus/server.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
+import { queuedSwaps, swapLine } from '../swap/queue.ts';
+import { queueRuleBreaches } from '../swap/auto.ts';
+import { runDueSwaps, type SwapRunResult } from '../swap/run.ts';
+import { realSources as restartSources, type RestartSources } from './restart.ts';
 import {
   classifyPromptKind,
   createSeatStatusEngine,
@@ -155,6 +160,9 @@ export type WatchSources = {
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
+  /** The live world a queued swap's run reads: the restart path's own sources. Absent, the
+   *  watch queues the rule's breaches but carries no swap out (a test without a faked launch). */
+  swapSources?: RestartSources;
   /**
    * The watch's own workspace: `up`'s two steps, run by a hand start. Absent, no workspace can
    * be made here: the watch runs in this process, as one started by hand always did.
@@ -210,6 +218,7 @@ export const realWatchSources: WatchSources = {
   pid: process.pid,
   ownPane: ownWatchPane,
   home: homedir(),
+  swapSources: restartSources,
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, session === 'default' ? undefined : session),
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, session === 'default' ? undefined : session),
@@ -714,6 +723,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
         }
         const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
+        // The entity's model rule, read once for this pass: the breach list `team check` prints,
+        // narrowed to this team by name. The pass never reads the entity's files itself.
+        const modelRule = modelRuleOfPass(team, root, sources.home);
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           team, state, live, machine, now, memory,
@@ -722,6 +734,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // of that watch is.
           pause: whole.pause ?? null,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
+          modelRule,
           liveness: {
             machine: machineLiveness(sources.home),
             entity: entityLiveness(sources.home, team.entity),
@@ -749,6 +762,21 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             return { readings: folded.readings, value: folded };
           });
         if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
+        // The entity's model rule, carried out without a caller: a breaching seat the queue does
+        // not hold yet is queued here. Only the file's own watch queues — a foreign session
+        // writes nothing, and a watch with no home has no policy chain to read the wait from.
+        if (!foreign && sources.home !== undefined) {
+          try {
+            for (const [breaching, swap] of queueRuleBreaches({
+              dir, root, home: sources.home, team, rule: modelRule, by: 'the watch', now: sources.now,
+            })) tell(swapLine(breaching, swap, sources.now()), false);
+          } catch (error) {
+            tellOnce(told, 'rule-queue', `the model rule's swaps were not queued: ${(error as Error).message}`, tell);
+          }
+        }
+        // The seats this project's queue waits on, whoever queued them: the pass types no work
+        // drop into one, so it takes no task while its swap waits (the design's work-drop rule).
+        const waiting = new Set(queuedSwaps(readState(dir)).map(([seat]) => seat));
         // A liveness word the chain set aside: said once per process, as a line, never typed
         // into a seat and never a desktop notice. The value in force stands.
         for (const refusal of result.refusals) {
@@ -795,6 +823,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign && statusEngine !== undefined) {
           for (const nudgedSeat of statusEngine.drainNudges()) {
             if (result.work.some((item) => item.seat === nudgedSeat)) continue;
+            if (waiting.has(nudgedSeat)) continue;
             const fileSeat = team.seats.find((item) => item.name === nudgedSeat);
             const agent = live.agents.find((item) => item.name === nudgedSeat);
             if (!fileSeat || !agent || fileSeat.human === true || fileSeat.parked || fileSeat.stopped) continue;
@@ -811,6 +840,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign) {
           for (const item of result.work) {
             if (item.pane === ownPane) continue;
+            // No work drop moves a seat a swap waits on: the seat is at its boundary, or close
+            // to it, and a fresh task would take the swap past another wait.
+            if (waiting.has(item.seat)) continue;
             if (args.flags.has('no-nudge')) {
               say(`nudge not typed (--no-nudge): ${item.body}`, false);
               continue;
@@ -869,6 +901,68 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
+        // The queue is carried out here, after the pass typed everything it had to type, so a
+        // run inspects the boundary it will act on. `--no-nudge` is the watch that types
+        // nothing, and a run types (the exit, the launch): such a watch queues the rule's seats
+        // and leaves the run to a watch that may. A foreign session already writes nothing.
+        if (
+          !foreign
+          && !args.flags.has('no-nudge')
+          && sources.swapSources !== undefined
+          && sources.home !== undefined
+          && current.ok
+          && current.notice === undefined
+          && current.path !== undefined
+        ) {
+          try {
+            const ran = await runDueSwaps({
+              dir,
+              root,
+              home: sources.home,
+              path: current.path,
+              team,
+              session,
+              io,
+              json: false,
+              notes: [],
+              sources: sources.swapSources,
+              by: 'the watch',
+              owner: false,
+              now: sources.now,
+            });
+            // A ready swap is said once per new pane; a failure or a read-back mismatch once per
+            // record's own words — the queue retries a busy turn silently, and the queue itself
+            // already said what was queued.
+            for (const swapResult of ran) {
+              if (swapResult.kind === 'ready') {
+                const key = `swap-ready:${swapResult.seat}:${swapResult.pane}`;
+                if (told.has(key)) continue;
+                told.add(key);
+                tell(
+                  `swapped: ${swapResult.seat} in ${swapResult.pane} (read-back ${
+                    swapResult.readBack.kind === 'match' ? swapResult.readBack.model : 'unread'
+                  })`,
+                  true,
+                );
+              } else if (swapResult.kind === 'mismatch') {
+                const key = `swap-mismatch:${swapResult.seat}:${swapResult.readBack.shown}`;
+                if (told.has(key)) continue;
+                told.add(key);
+                tell(
+                  `team swap: ${swapResult.seat}: read-back: mismatch — the file declares ${swapResult.readBack.expected}, the screen shows ${swapResult.readBack.shown}; the swap failed`,
+                  true,
+                );
+              } else if (swapResult.kind === 'failed') {
+                const key = `swap-failed:${swapResult.seat}:${swapResult.why}`;
+                if (told.has(key)) continue;
+                told.add(key);
+                tell(`team swap: ${swapResult.seat}: ${swapResult.why}`, true);
+              }
+            }
+          } catch (error) {
+            tellOnce(told, 'swap-run', `the queue's swaps did not run: ${(error as Error).message}`, tell);
+          }
+        }
       }
       const flushed = owner?.flush();
       if (flushed?.error !== undefined) {

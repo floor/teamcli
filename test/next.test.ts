@@ -19,6 +19,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { NEXT_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import type { Fetch } from '../src/release/http.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { enqueueSwap } from '../src/swap/queue.ts';
 import type { TaskAdapter } from '../src/tasks/adapter.ts';
 import { LEASE_MS } from '../src/tasks/lease.ts';
 import { newMemory, pass, RING_TEXT } from '../src/watch/pass.ts';
@@ -513,6 +514,30 @@ describe('team next', () => {
     expect(refused.code).toBe(1);
     expect(refused.err).toBe(
       `team next: the team is paused (paused since ${at} by owner); nothing new is claimed until \`team resume\`\n`,
+    );
+    expect(lease().seat).toBe('lead');
+    expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });
+    expect(existsSync(join(root, '.agents', 'leases', 'm1.json'))).toBe(false);
+  });
+
+  test('a queued swap refuses a take and still lets the seat release what it holds', async () => {
+    ready(WITH);
+    expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
+    enqueueSwap(join(root, '.agents'), {
+      seat: 'lead',
+      from: { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' },
+      to: { cli: 'claude-code', vendor: 'deepseek', model: 'DeepSeek Flash', version: '4.0', display: 'DeepSeek Flash 4.0', launch: 'claude --model deepseek-flash' },
+      reason: 'owner',
+      waitSeconds: 1800,
+      waitFor: "the seat's boundary (quiet, no turn, no dialog, no lease, no work drop)",
+      now: new Date(now),
+    });
+    const refused = await run();
+    expect(refused.code).toBe(1);
+    expect(refused.err).toBe(
+      'team next: lead waits on a swap: lead: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (owner), '
+      + `queued ${new Date(now).toISOString()}, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), `
+      + `runs by ${new Date(now + 1800 * 1000).toISOString()}; nothing new is claimed until it runs or \`team swap cancel lead\`\n`,
     );
     expect(lease().seat).toBe('lead');
     expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });

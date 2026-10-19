@@ -1,0 +1,687 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/swap.schema.json",
+  "title": "team swap --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "dry_run",
+    "status",
+    "action_summary",
+    "project",
+    "session"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.swap"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "listed",
+        "rule",
+        "queued",
+        "forced",
+        "ran",
+        "run-failed",
+        "cancelled"
+      ]
+    },
+    "action_summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "detail"
+        ],
+        "properties": {
+          "step": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seat": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prefix": {
+            "type": "string",
+            "enum": [
+              "+",
+              "!",
+              "skip"
+            ]
+          }
+        }
+      }
+    },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "seat": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rule": {
+      "type": "string"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "allow",
+          "labs"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "allow": {
+            "type": "boolean"
+          },
+          "labs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "teams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "root",
+          "visibility"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "private"
+            ]
+          }
+        }
+      }
+    },
+    "breaches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "team",
+          "root",
+          "visibility",
+          "seat",
+          "role",
+          "vendor",
+          "model",
+          "proposal",
+          "reason"
+        ],
+        "properties": {
+          "team": {
+            "type": "string",
+            "minLength": 1
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "private"
+            ]
+          },
+          "seat": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "vendor": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "proposal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "donor",
+                  "recipe"
+                ],
+                "properties": {
+                  "donor": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "team",
+                      "root",
+                      "seat"
+                    ],
+                    "properties": {
+                      "team": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "root": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "seat": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "recipe": {
+                    "type": "object"
+                  }
+                }
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "ignored": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "root",
+          "why"
+        ],
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "swaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seat",
+          "swap"
+        ],
+        "properties": {
+          "seat": {
+            "type": "string",
+            "minLength": 1
+          },
+          "swap": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "from",
+              "to",
+              "reason",
+              "queuedAt",
+              "deadline",
+              "waitFor"
+            ],
+            "properties": {
+              "from": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cli",
+                  "vendor",
+                  "model",
+                  "version",
+                  "display"
+                ],
+                "properties": {
+                  "cli": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "vendor": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "display": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "to": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cli",
+                  "vendor",
+                  "model",
+                  "version",
+                  "display",
+                  "launch"
+                ],
+                "properties": {
+                  "cli": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "vendor": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "display": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "launch": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "modelFrom": {
+                    "type": "string",
+                    "const": "launcher"
+                  },
+                  "effort": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "account": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "model-rule",
+                  "config",
+                  "owner"
+                ]
+              },
+              "queuedAt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "deadline": {
+                "type": "string",
+                "minLength": 1
+              },
+              "waitFor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rule": {
+                "type": "string"
+              },
+              "handover": {
+                "type": "string",
+                "minLength": 1
+              },
+              "forced": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "by",
+                  "at"
+                ],
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "at": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "swap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "reason",
+        "queuedAt",
+        "deadline",
+        "waitFor"
+      ],
+      "properties": {
+        "from": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cli",
+            "vendor",
+            "model",
+            "version",
+            "display"
+          ],
+          "properties": {
+            "cli": {
+              "type": "string",
+              "minLength": 1
+            },
+            "vendor": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "display": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "to": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cli",
+            "vendor",
+            "model",
+            "version",
+            "display",
+            "launch"
+          ],
+          "properties": {
+            "cli": {
+              "type": "string",
+              "minLength": 1
+            },
+            "vendor": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "display": {
+              "type": "string",
+              "minLength": 1
+            },
+            "launch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelFrom": {
+              "type": "string",
+              "const": "launcher"
+            },
+            "effort": {
+              "type": "string",
+              "minLength": 1
+            },
+            "account": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "model-rule",
+            "config",
+            "owner"
+          ]
+        },
+        "queuedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deadline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "waitFor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rule": {
+          "type": "string"
+        },
+        "handover": {
+          "type": "string",
+          "minLength": 1
+        },
+        "forced": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "by",
+            "at"
+          ],
+          "properties": {
+            "by": {
+              "type": "string",
+              "minLength": 1
+            },
+            "at": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seat",
+          "result"
+        ],
+        "properties": {
+          "seat": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "swapped",
+              "mismatch",
+              "failed",
+              "stays"
+            ]
+          },
+          "old_pane": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pane": {
+            "type": "string",
+            "minLength": 1
+          },
+          "read_back": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resumed": {
+            "type": "string",
+            "minLength": 1
+          },
+          "handover": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "donor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "team",
+        "root",
+        "seat"
+      ],
+      "properties": {
+        "team": {
+          "type": "string",
+          "minLength": 1
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seat": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

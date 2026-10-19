@@ -228,7 +228,9 @@ when the budgets table would be printed, one object per row (`account`, `window`
 `resetsIn`, `seat`, `age`, `source`, `fallback`, `state`, `inside`, `reserve`). `inside` is true
 when a subscription's left figure is at or inside its reserve, `fallback` when the figure did not
 come from the first source the account names, and `reserve` the reserve that row was read against —
-the same figure the table's line names, null when the account has none. `summary` counts the
+the same figure the table's line names, null when the account has none. `swaps` is present only
+when the project waits on a queued model swap ([team swap](../commands/swap.md)): one `{ seat, swap }`
+entry per queue record, in seat order, the record exactly as the state holds it. `summary` counts the
 differences (`differences`, `owner_differences`), the plain closing line's own
 figures. The exit code is the same as without `--json`; the file's own warnings are `team
 doctor`'s to print, never this document's. A caller who

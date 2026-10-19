@@ -42,12 +42,14 @@ import { runSettings } from '../../src/commands/settings.ts';
 import { runConfig } from '../../src/commands/config.ts';
 import { runSessions } from '../../src/commands/sessions.ts';
 import { runStatus } from '../../src/commands/status.ts';
+import { runSwap } from '../../src/commands/swap.ts';
 import { runUp } from '../../src/commands/up.ts';
 import { runMessages } from '../../src/commands/messages.ts';
 import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPause } from '../../src/commands/pause.ts';
 import { runPlan } from '../../src/commands/plan.ts';
+import { runPolicy } from '../../src/commands/policy.ts';
 import { runProc } from '../../src/commands/proc.ts';
 import { runProjects } from '../../src/commands/projects.ts';
 import { runUsage } from '../../src/commands/usage.ts';
@@ -368,6 +370,10 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runNext(rest, io, { home: fixture.home, now: () => Date.parse(spec.now) });
     case 'plan':
       return runPlan(rest, io, { home: fixture.home, now: () => Date.parse(spec.now) });
+    case 'policy':
+      // The owner's signed declarations live under the fixture's own home; the clock is the
+      // page's, so a declaration's `date` is the page's instant.
+      return runPolicy(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'init':
       // No login is probed in a doc run: the skeleton's seat is claude-code's, deterministically.
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
@@ -418,6 +424,11 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runSessions(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'status':
       return runStatus(rest, io, world.statusSources());
+    case 'swap':
+      // The queue's clock is the page's: a queued swap's `queuedAt` and `deadline` are the
+      // page's instant and the wait that follows it. A run reads the world's own herdr, as the
+      // restart example does, never the machine's.
+      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now), sources: world.restartSources() });
     case 'list':
       return runList(rest, io, world.listSources());
     case 'up':

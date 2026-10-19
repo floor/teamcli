@@ -178,7 +178,9 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> has been idle for <n> minutes — reported to the owner` (or `… since the watch started — reported to the owner`) | the same idle period, quiet for `watch.idle_owner`: said once per idle period, and it is the owner's |
 | `every agent is idle` | every seat that is not the orchestrator, the operator or parked, quiet for `watch.team_idle` |
 | `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
+| `<seat>: declares vendor <vendor>, which the entity model rule <rule> refuses; <action>` | the entity's model rule (Policies rule 10) refuses the vendor the seat's file declares. `<action>` is `a swap to <cli> <model> <version> from <team>/<seat> is proposed`, or the reason no recipe is proposed; the swap is queued with `team swap queue <seat>`. The same breach is a `team check` difference in this team; a rule that cannot be read is said once to the owner, and no breach is judged |
 | `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled `Watch · <project>` aside |
+| `<name> (<pane>) runs <model> <version>, of the lab <lab>, which the entity model rule <rule> refuses for an unclaimed seat — reported, never closed` | an agent in the session no seat claims, whose screen names a model of a lab the rule's `*` entry refuses for a pane no seat answers for. Reported to its lead and by `team check`, and never closed: the pane may be doing work someone started by hand (OD-20261019-03). Only a model a shipped profile reads is judged; an unread pane is the plain extra report |
 | `approved before records were signed` | the record was written by an earlier `team`: not trusted, said once, and the watch keeps watching |
 | `<why the record was refused>` | a signed record that does not verify (changed after approval, another root, a replayed or rolled-back generation): said once, and the watch keeps watching |
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
@@ -588,8 +590,8 @@ team watch: a watch already runs for the session "beacon" (pid 4242)
 exit 1
 ```
 
-The five that can't be turned off — `attention`, `missing`, `model-drift`, `prompt-escalation` and
-`approval` — are
+The six that can't be turned off — `attention`, `missing`, `model-drift`, `model-rule`,
+`prompt-escalation` and `approval` — are
 refused by the schema itself, with the line, and so is a name that is no check. A command that
 reads such a file refuses it the same way, and the watch keeps the last copy that validated, with
 the checks as the owner approved them.
@@ -631,7 +633,7 @@ seats:
 
 ```console
 $ team up ; echo "exit $?"
-team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, prompt-escalation, approval always run
-team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-free, swap-growth, budget
+team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, model-rule, prompt-escalation, approval always run
+team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-free, swap-growth, budget
 exit 2
 ```

@@ -62,6 +62,7 @@ import { runConfig } from '../src/commands/config.ts';
 import { runSettings, type SettingsCommandOptions } from '../src/commands/settings.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
+import { runSwap } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runUsage } from '../src/commands/usage.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
@@ -80,6 +81,7 @@ import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { writeGrant } from '../src/permissions/grants.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
@@ -3505,6 +3507,23 @@ scene('next.paused', async (place) => {
   });
   return show(await nexted(place), 'nothing new is claimed until `team resume`');
 });
+scene('next.swap', async (place) => {
+  write(place, TASKS);
+  recordLead(place);
+  updateState(join(place.root, '.agents'), (state) => {
+    state.swaps = {
+      lead: {
+        from: { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' },
+        to: { cli: 'claude-code', vendor: 'deepseek', model: 'DeepSeek Flash', version: '4.0', display: 'DeepSeek Flash 4.0', launch: 'claude --model deepseek-flash' },
+        reason: 'owner',
+        queuedAt: NOW.toISOString(),
+        deadline: new Date(NOW.getTime() + 1800 * 1000).toISOString(),
+        waitFor: "the seat's boundary (quiet, no turn, no dialog, no lease, no work drop)",
+      },
+    };
+  });
+  return show(await nexted(place), 'nothing new is claimed until it runs or `team swap cancel lead`');
+});
 
 // The broker's own rows. One credential read is stood in everywhere: the shipped wiring reads
 // the owner's Keychain, which no scene may ever run. The socket is real — unix sockets under a
@@ -4774,6 +4793,193 @@ for (const [name, command, args, invalidArgs] of [
     return show(await replied(place, [SENT, 'the answer']), 'team reply:');
   });
   scene('reply.usage', async (place) => show(await replied(place, []), '<id> is required'));
+}
+
+{
+  // `team swap` reads the entity's model rule from the signed entity source and owns the
+  // project's queue. The rule is seeded through the same writer `team policy set` uses; the
+  // queue lives in the state file beside the team file.
+  const SWAP_TEAM = `format: 1
+project: acme
+entity: lab
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    label: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude --model deepseek-flash
+`;
+  async function swapped(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    over: Partial<RestartSources> = {},
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return {
+      code: await runSwap([...argv], io, {
+        home: place.home,
+        now: () => NOW,
+        sources: restartSources(place, over),
+      }),
+      out: io.out,
+      err: io.err,
+    };
+  }
+  function swapRule(place: Place, value = '*=!anthropic'): void {
+    const wrote = writePolicySet(place.home, { level: 'entity', target: 'lab', name: 'model-rule', value }, { now: NOW });
+    if (!wrote.ok) throw new Error(wrote.why);
+  }
+  scene('swap.listed', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, []), 'nothing queued');
+  });
+  scene('swap.rule', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['queue', 'lead']), 'declares no model rule');
+  });
+  scene('swap.seat', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['queue', 'nobody']), 'no seat "nobody"');
+  });
+  scene('swap.unchanged', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    return show(await swapped(place, ['queue', 'worker']), 'declares a model the rule allows');
+  });
+  scene('swap.target', async (place) => {
+    write(place, SWAP_TEAM);
+    // Both vendors are refused, so the entity holds no donor the target may copy from.
+    swapRule(place, '*=!anthropic+!deepseek');
+    return show(await swapped(place, ['queue', 'lead']), 'no seat of the entity');
+  });
+  scene('swap.queued', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    return show(await swapped(place, ['queue', 'lead']), 'swap queued: lead');
+  });
+  scene('swap.forced', async (place) => {
+    approve(place, SWAP_TRUST(place));
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    const oldPane = 'w9:p1';
+    let typed = '';
+    let shelled = false;
+    const ran = await swapped(place, ['now', 'lead'], owner, {
+      agents: () => [{ ...agent('lead'), pane: oldPane }],
+      launch: downLaunch({
+        typeText: (_session, pane, text) => {
+          if (pane === oldPane) typed = text;
+          return true;
+        },
+        pressEnter: (_session, pane) => {
+          if (pane === oldPane) shelled = true;
+          return true;
+        },
+      }),
+      screenText: (_session, pane) => (pane === oldPane ? (typed === '' ? IDLE : claudeBox(typed)) : undefined),
+      foreground: (_session, pane) => (pane === oldPane && shelled ? ['zsh'] : ['claude']),
+    });
+    expect(ran.out).toContain('swapped: lead in w1:p1 (read-back unread)');
+    return show(ran, 'swap forced: lead');
+  });
+  scene('swap.cancelled', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    return show(await swapped(place, ['cancel', 'lead']), 'swap cancelled: lead');
+  });
+  scene('swap.caller', async (place) => {
+    write(place, SWAP_TEAM);
+    // A seat of the team that is neither the orchestrator nor the operator: the verdict names
+    // no exact step, only that the call is a seat.
+    const worker: Caller = { kind: 'seat', name: 'worker', pane: 'w1:p2', session: 'acme' };
+    return show(await swapped(place, ['queue', 'lead'], worker), 'only the owner, the orchestrator or the operator');
+  });
+  scene('swap.detached', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['now', 'lead'], detachedCaller), 'a terminal outside herdr');
+  });
+  scene('swap.io', async (place) => {
+    write(place, SWAP_TEAM);
+    writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+    return show(await swapped(place, ['cancel', 'lead']), 'is not valid JSON');
+  });
+  scene('swap.not-queued', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['cancel', 'lead']), 'waits on no swap');
+  });
+  scene('swap.invocation', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['queue']), 'a <seat> is required for "swap queue"');
+  });
+  scene('swap.file', async (place) => show(await swapped(place, []), 'no team file'));
+  // The run's own outcomes. A run reads herdr before it does anything, so a scene that would
+  // run a swap stands herdr in; the stop is the down path's own typing, and the fake renders
+  // the exit text back so the stop reads it, then reports the shell once Enter is pressed.
+  const SWAP_TRUST = (place: Place): string => SWAP_TEAM.replace(
+    'workspace:\n',
+    `trust:\n  - ~/.config/team/lobbies/lab\n  - ${place.root}\nworkspace:\n`,
+  );
+  scene('swap.herdr', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    return show(
+      await swapped(place, ['--run'], owner, { agents: () => null }),
+      'herdr cannot be read, so no swap can be run now',
+    );
+  });
+  scene('swap.ran', async (place) => {
+    approve(place, SWAP_TRUST(place));
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    const oldPane = 'w9:p1';
+    let typed = '';
+    let shelled = false;
+    return show(await swapped(place, ['--run'], owner, {
+      agents: () => [{ ...agent('lead'), pane: oldPane }],
+      launch: downLaunch({
+        typeText: (_session, pane, text) => {
+          if (pane === oldPane) typed = text;
+          return true;
+        },
+        pressEnter: (_session, pane) => {
+          if (pane === oldPane) shelled = true;
+          return true;
+        },
+      }),
+      screenText: (_session, pane) => (pane === oldPane ? (typed === '' ? IDLE : claudeBox(typed)) : undefined),
+      foreground: (_session, pane) => (pane === oldPane && shelled ? ['zsh'] : ['claude']),
+    }), 'swapped: lead in w1:p1 (read-back unread)');
+  });
+  scene('swap.run-failed', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    // The record outlives the declaration: the file no longer declares the seat, so the run
+    // reports it and removes the record rather than launching over a name it cannot find.
+    write(place, SWAP_TEAM.replace('coordinator: lead\noperator: lead\n', 'coordinator: worker\noperator: worker\n').replace(LEAD, ''));
+    return show(
+      await swapped(place, ['--run'], owner, { agents: () => [] }),
+      'is no longer declared in the team file; its queued swap was removed',
+    );
+  });
 }
 
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
