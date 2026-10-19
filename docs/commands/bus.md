@@ -2,7 +2,10 @@
 
 Runs the foreground process that owns the project's event log (`events.jsonl`), runs the periodic
 reconciliation pass over durable message and seat records, and serves `publish` and `subscribe`
-over `.agents/bus.sock`. The owner starts it, in a terminal outside herdr, one per clone. Ctrl-C
+over `.agents/bus.sock`. The reconciliation pass and each subscription verify only the event
+records appended since the last verified sequence; when the log's checkpoint is missing or does
+not match — after a trim or a rewrite, or because a record was altered — the whole retained log is
+verified again, so an earlier alteration is still caught. The owner starts it, in a terminal outside herdr, one per clone. Ctrl-C
 stops it. Events are routed by the policy's table to a position — `lead`, `operator`, `sender`,
 `subject`, `owner` — or to a seat named by its plain name or registry agent id, and an event routed
 to `owner`, or one a watch addresses to `owner`, is delivered by the Runtime: the watch's
