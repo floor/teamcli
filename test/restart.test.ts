@@ -15,7 +15,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { readAgents } from '../src/registry/agents.ts';
+import { findAgent, readAgents, recordAgentSession, registerAgent } from '../src/registry/agents.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalStanding } from '../src/store/store.ts';
@@ -881,5 +881,143 @@ describe('team restart <seat>', () => {
     assertJsonErrorShape(io.out, { id: 'restart.usage', messageContains: 'a seat name is required' });
     expect(io.out).not.toContain('Usage:');
     expect(USAGE).toContain('Exits 0 when the seat is restarted');
+  });
+});
+
+// ---- the seat's own recorded conversation ---------------------------------------------------
+//
+// The resume id comes from the two team-owned records agreeing — the agent registry's
+// `reach.agent_session` and the seat state's own — bound to this team, seat, agent, CLI and
+// herdr session. A record that does not agree is never resumed: the restart says why and
+// launches fresh, exactly as it did before the records were read.
+describe('team restart resumes the seat\'s own recorded session', () => {
+  function seeded(opts: { registry?: string; state?: string; cli?: string } = {}) {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+        ...(opts.state === undefined ? {} : { agent_session: opts.state }),
+      };
+    });
+    let agentId: string | undefined;
+    if (opts.registry !== undefined) {
+      agentId = registerAgent(fixture.home, {
+        name: 'worker',
+        signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+        lab: 'anthropic',
+        cli: opts.cli ?? 'claude-code',
+        launcher: null,
+        launch: 'claude --model claude-opus-5-5',
+        reach: {
+          team: teamIdOf(fixture.root),
+          seat: 'worker',
+          session: 'acme',
+          pane: 'pane-old',
+          address: null,
+          agent_session: opts.registry,
+        },
+        seat_handle: 'seat_0123456789ab',
+        mcp: [],
+        skills: [],
+        lifecycle: 'running',
+        by: 'team up',
+      }).id;
+    }
+    return { fixture, run: makeHarness(fixture), agentId };
+  }
+
+  test('both records agreeing on one id resume it on the new declaration', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    expect(io.err).toBe('');
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: resuming session ses_keep on the new declaration');
+    // The relaunch's herdr reading carried no id here: the registry keeps the one it held rather
+    // than clearing it, so the next restart can still bind the conversation.
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_keep');
+  });
+
+  test('a state naming another session is never resumed, and the run says why', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_other' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('team restart: worker: not resuming its recorded session (the seat state and the agent record name different sessions)');
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: not resuming its recorded session (the seat state and the agent record name different sessions)');
+  });
+
+  test('a record written by another CLI is not resumed', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', cli: 'codex' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('worker: not resuming its recorded session (the record ran codex, the seat now declares claude-code)');
+  });
+
+  test('a live pane running another conversation is never resumed', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    // The pane on the recorded endpoint says it is running a different conversation: resuming the
+    // recorded one would put two live copies of the seat's history beside each other.
+    const listed = run.sources.agents;
+    run.sources.agents = (session) => (listed(session) ?? []).map((agent) => (
+      agent.name === 'worker' && agent.pane === 'pane-old' ? { ...agent, session: 'ses_live' } : agent
+    ));
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
+  });
+
+  test('a record that changes between the caller\'s read and the run lock is not resumed', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    // A concurrent writer lands a new conversation after the caller's own read: the state and the
+    // registry now agree on another id. The run lock serializes the restart, and the binding is
+    // read again under it, so what launches is the fresh conversation the records now name — never
+    // the id the caller saw a moment before. The writer lands on the run's second listing, after
+    // the caller's read and before the run lock's own.
+    const listed = run.sources.agents;
+    let calls = 0;
+    let moved = false;
+    run.sources.agents = (session) => {
+      calls += 1;
+      if (calls === 2) {
+        moved = true;
+        updateState(fixture.dir, (state) => {
+          const seat = state.sessions.acme?.seats.worker;
+          if (seat) seat.agent_session = 'ses_new';
+        });
+        recordAgentSession(fixture.home, agentId!, 'ses_new');
+      }
+      return listed(session);
+    };
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(moved).toBe(true);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('worker: not resuming its recorded session (the seat record changed before the launch)');
+  });
+
+  test('a dry run prints the resume the launch would use, and writes no log line', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--dry-run'], io, run.sources)).toBe(0);
+    expect(io.out).toContain('--resume ses_keep');
+    expect(io.out).toContain('dry run: nothing was run');
+    const logged = existsSync(join(fixture.dir, 'team.log')) ? readFileSync(join(fixture.dir, 'team.log'), 'utf8') : '';
+    expect(logged).not.toContain('resuming session');
+    expect(run.did.created).toBe(0);
   });
 });
