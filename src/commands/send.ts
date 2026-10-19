@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientSend } from '../client/send.ts';
@@ -46,6 +46,7 @@ import { buildIdentity, type BuildIdentity } from '../version.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send <seat> --brief <path> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send --client <grant-file> --key <key-file> <address> [--request-id <id>] <message>
        team send --client <grant-file> --key <key-file> <address> [--request-id <id>] --file <path>
        team send --confirm <id> [--json] [--dry-run]
@@ -158,7 +159,11 @@ outcome in one — {format, dry_run, status, action_summary, project, session, s
 channel, ids, thread?, reply?, plan?} — and --list prints its own: {format, project,
 session, seats, summary}. A run that exits 1 or 2 writes the structured error
 document instead — {error: {id, message, repair}} — and stderr stays empty.
---file reads the body from a file instead of the one <message> argument.
+--file reads the body from a file instead of the one <message> argument. --brief
+reads a whole draft brief into the body, exactly as --file does, and is the form
+to use when the message is a brief: a body that is only a path to a brief file
+(a lone path naming a briefs/….md file) is warned about on stderr, on either
+form, because a reader cannot open a file it was not given.
 
 A Claude Code seat's native leg is the sender's own cross-session SendMessage, which this
 process cannot make for it. A sender whose own file declares Claude Code gets the handoff
@@ -476,8 +481,29 @@ function declaredSeatNamed(
   return {};
 }
 
+/**
+ * The path a body only points at, or null. Narrow on purpose: one line that is a single path —
+ * no spaces, no sentence around it — under a `briefs` folder, ending in `.md`, that resolves to
+ * a regular file. Anything else is a body, not a pointer; a prose sentence that mentions a path
+ * is left alone, and the guard never refuses a send.
+ */
+function briefPointerIn(body: string, cwd: string, home: string): string | null {
+  const text = body.trim();
+  if (text === '' || text.includes('\n') || /\s/.test(text)) return null;
+  if (!/^(?:~\/|\/|\.{1,2}\/|briefs\/)/.test(text)) return null;
+  const full = text.startsWith('~/') ? join(home, text.slice(2)) : resolve(cwd, text);
+  if (extname(full) !== '.md') return null;
+  if (!full.split(sep).includes('briefs')) return null;
+  try {
+    if (!statSync(full).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return text;
+}
+
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id'], ['wait', 'json', 'list', 'dry-run']);
+  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
@@ -492,7 +518,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   }
   // The client path comes before any caller placement: a TTY can never make this run the owner,
   // and no leg but the signed drop is walked. `runClientSend` prints the declared limitation.
-  if (clientFlag) return runClientSend(args, io, host, json);
+  if (clientFlag) {
+    if (args.values.brief !== undefined) return usage(io, '--brief is for a send to a seat, not a client request', report, true);
+    return runClientSend(args, io, host, json);
+  }
   if (args.values.key !== undefined || args.values['request-id'] !== undefined) {
     return usage(io, '--key and --request-id are only meaningful with --client', report);
   }
@@ -518,13 +547,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const words = args.rest.slice(1);
   const file = args.values.file;
+  const brief = args.values.brief;
   if (!seatName) {
     return usage(io, 'a seat and a message are required', report);
+  }
+  if (brief !== undefined && file !== undefined) {
+    return usage(io, 'a brief and --file cannot both be given', report);
+  }
+  if (brief !== undefined && words.length > 0) {
+    return usage(io, 'a message and --brief cannot both be given', report);
   }
   if (file !== undefined && words.length > 0) {
     return usage(io, 'a message and --file cannot both be given', report);
   }
-  if (file === undefined && words.length === 0) {
+  if (file === undefined && brief === undefined && words.length === 0) {
     return usage(io, 'a message or --file is required', report);
   }
   const wait = args.flags.has('wait');
@@ -634,16 +670,25 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
   let body: string;
-  if (file !== undefined) {
+  const source = brief ?? file;
+  if (source !== undefined) {
     try {
-      body = readFileSync(resolve(io.cwd, file), 'utf8');
+      body = readFileSync(resolve(io.cwd, source), 'utf8');
     } catch {
-      return configuration(io, `the message file cannot be read: ${file}`, report);
+      return configuration(io, `the message file cannot be read: ${source}`, report);
     }
   } else {
     body = words.join(' ');
   }
   if (body.trim() === '') return usage(io, 'the message is empty', report);
+  // A body that is only a path to a brief is the one form the owner's rule forbids: the reader
+  // has the message but not the file it points at. The warning is the whole guard — the send
+  // still goes, because a path in a body is not proof of anything, and a false refusal would
+  // cost a real message.
+  const pointer = briefPointerIn(body, io.cwd, host.home);
+  if (pointer !== null) {
+    io.stderr(`team send: ${to.seat}: the body only points at a brief (${pointer}); send the brief itself, with --brief <file> or its text in the body\n`);
+  }
   // The receiver sees the sender before the message: the drop file, the frame and the daemon's
   // own write all carry the same first lines. The headline is the reading team's word on how a
   // sender reads — inside its own team a nickname, across teams `seat@team` under the default —
