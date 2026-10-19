@@ -3823,6 +3823,7 @@ scene('daemon.stopped', async (place) =>
         daemon: {
           socketPath: join(place.home, 'daemon.sock'),
           roots: [],
+          routes: [],
           health: () => daemonSnapshot,
           close: async () => {},
         },

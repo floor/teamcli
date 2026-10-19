@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
@@ -126,6 +126,30 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     expect(existsSync(daemonSocketPath(home))).toBe(false);
     const after = await daemonHealth(home);
     expect(after.state).toBe('not-running');
+  });
+
+  test('the same checkout named twice is hosted once and recorded once as a duplicate', async () => {
+    const { base, root, home } = scratch();
+    const link = join(base, 'repo-link');
+    symlinkSync(root, link);
+    const started = await startMachineDaemon({
+      home,
+      roots: [root, link],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 10_000,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      expect(started.daemon.routes).toHaveLength(1);
+      expect(started.daemon.routes[0]?.root).toBe(root);
+      expect(started.daemon.roots.map((one) => one.send)).toEqual(['serving', 'failed']);
+      expect(started.daemon.roots[1]?.root).toBe(root);
+      expect(started.daemon.roots[1]?.why).toBe('this checkout is already hosted by this daemon');
+    } finally {
+      await started.daemon.close();
+    }
   });
 
   test('status names a checkout whose endpoints were not hosted', async () => {
@@ -381,7 +405,7 @@ describe('team daemon status, install, uninstall and run', () => {
       await runDaemon(['run'], run, sourcesOf(home, {
         start: async () => {
           started.push('start');
-          return { kind: 'serving', daemon: { socketPath: '/tmp/x', roots: [], health: () => snapshot, close: async () => {} } };
+          return { kind: 'serving', daemon: { socketPath: '/tmp/x', roots: [], routes: [], health: () => snapshot, close: async () => {} } };
         },
       })),
     ).toBe(1);
@@ -414,6 +438,7 @@ describe('team daemon status, install, uninstall and run', () => {
         daemon: {
           socketPath: join(home, 'daemon.sock'),
           roots: [{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }],
+          routes: [],
           health: () => snapshot,
           close: async () => {
             closed = true;
@@ -449,6 +474,7 @@ describe('team daemon status, install, uninstall and run', () => {
               why: 'another bus server holds the project socket',
             },
           ],
+          routes: [],
           health: () => snapshot,
           close: async () => {},
         },

@@ -31,6 +31,7 @@ import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, ty
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
+import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './routes.ts';
 import {
   ensureMachineDir,
   writeDaemonState,
@@ -45,6 +46,8 @@ export type MachineRootStatus = DaemonRootState;
 export type MachineDaemon = {
   socketPath: string;
   roots: MachineRootStatus[];
+  /** The routing table a later machine-socket handler resolves a scope against. */
+  routes: readonly HostedRoute[];
   health(): DaemonHealthSnapshot;
   close(): Promise<void>;
 };
@@ -233,6 +236,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const inFlight = new Map<string, InFlight>();
   const connections = new Set<Socket>();
   const roots: MachineRootStatus[] = [];
+  const routes: HostedRoute[] = [];
   let heartbeatAt = since;
   let closed = false;
 
@@ -364,11 +368,36 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
       continue;
     }
+    // Routed by what the loader actually opened, never by the spelling of the argument: two
+    // spellings of one checkout are one route, or every scope naming it would be ambiguous.
+    const canonical = canonicalRoot(loaded.root);
+    if (canonical === null) {
+      status.why = 'the checkout root cannot be resolved to a folder';
+      roots.push(status);
+      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      continue;
+    }
+    if (duplicateRoute(routes, canonical) !== null) {
+      status.root = canonical;
+      status.why = 'this checkout is already hosted by this daemon';
+      roots.push(status);
+      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      continue;
+    }
+    status.root = canonical;
     status.team = loaded.team.project;
+    routes.push(
+      routeOf(
+        canonical,
+        loaded.team.project,
+        loaded.team.session,
+        loaded.team.seats.map((seat) => seat.name),
+      ),
+    );
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
     let send: Awaited<ReturnType<typeof startSendDaemon>>;
     try {
-      send = await startSendDaemon({ root: loaded.root, dir: loaded.root, team: loaded.team, host: sendHost });
+      send = await startSendDaemon({ root: canonical, dir: canonical, team: loaded.team, host: sendHost });
     } catch (error) {
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       roots.push(status);
@@ -406,7 +435,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     let bus: Awaited<ReturnType<typeof startBus>>;
     try {
       bus = await startBus({
-        root: loaded.root,
+        root: canonical,
         team: loaded.team,
         home,
         stderr: (text) => appendDaemonLog(home, text, now()),
@@ -423,7 +452,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (bus.kind === 'serving') {
       busHandles.push(bus.handle);
       status.bus = 'serving';
-      watch.busSocket = busSocket(loaded.root);
+      watch.busSocket = busSocket(canonical);
     } else {
       status.bus = 'failed';
       if (status.why === null) {
@@ -522,6 +551,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   return {
     kind: 'serving',
-    daemon: { socketPath, roots, health, close },
+    daemon: { socketPath, roots, routes: [...routes], health, close },
   };
 }
