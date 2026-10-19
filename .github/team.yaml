@@ -318,3 +318,12 @@ seats:
     version: "0.1.42"
     display: Jules 0.1.42
     launch: jules
+
+  - role: orchestrator
+    name: orchestrator-sol
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    display: GPT Sol 6.1
+    launch: codex
