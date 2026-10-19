@@ -96,6 +96,11 @@ provenance:
   updated_at: 2026-10-18T09:00:00.000Z
 ```
 
+The two identifiers are not interchangeable. A message record's `to_id` is this record's `agt_`
+id — the id a cross-session address and a message bind to — and never the state's `seat_` handle,
+which is the state's continuity key. A general-seat-brief record follows the same rule: it carries
+the recipient's `agt_` id when the registry holds a record for the seat, and null otherwise.
+
 ### 3.2 The team record
 
 Lives in `.config/team/teams.yaml`, keyed by team id. Written by a read-modify-write under a

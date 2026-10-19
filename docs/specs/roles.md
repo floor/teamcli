@@ -338,7 +338,7 @@ The exit ids of those commands belong to their own specifications (operations an
 
 | Entry | Meaning | Since | Source at the tag | Note |
 |---|---|---|---|---|
-| `general` | the default seat brief: what a seat is, who it reports to, and the one rule — tell your lead in one line when you finish or are blocked | 0.5.1 (delivery built on an unmerged feature branch ahead of int/0.5.1 8acb470b; the registry record planned) | `scripts/brief.ts` (unmerged feature branch; not at int/0.5.1 8acb470b) | built in; delivered by `up`, `add`, `restart` and `reload` as a signed message record by drop, never typed; overridable by an entity or a project (planned); `role-and-trade` and `start` follow |
+| `general` | the default seat brief: what a seat is, who it reports to, and the one rule — tell your lead in one line when you finish or are blocked | 0.5.1 (delivery built on an unmerged feature branch ahead of int/0.5.1 8acb470b; the registry record planned) | `scripts/brief.ts` (unmerged feature branch; not at int/0.5.1 8acb470b) | built in; delivered by `up`, `add`, `restart`, `reload`, `register` and `rename` as a claim and a signed message record by drop, never typed, and by `team brief rollout --apply` to a team already up; the claim in the session's `briefs` names the delivery's incarnation, runtime epoch, sha256, expected id, attempt and stage; overridable by an entity or a project (planned); `role-and-trade` and `start` follow |
 
 ## 7. Open points
 

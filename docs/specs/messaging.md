@@ -90,8 +90,25 @@ Fields (`src/commands/messages.ts`):
 | `at` | string | yes | — | ≤0.4 | when the record was written |
 | `body` | string | yes | — | ≤0.4 | the message body |
 | `from` | string | yes | — | ≤0.4 | the sender named on the record |
+| `from_id` | string \| null | no | `null` | 0.5.0 | the sender's registry agent id (`agt_`), or null for the owner and the launch |
+| `to_id` | string \| null | no | `null` | 0.5.0 | the recipient's registry agent id (`agt_`), never the state's `seat_` handle; null when the registry holds no record for the seat |
+| `rule` | string | yes | — | ≤0.4 | the admission rule the send judged |
+| `thread` | string | yes | — | ≤0.4 | the thread's first message id; a first message is its own thread |
+| `brief_sha256` | string | no | absent | 0.5.1 | a general-seat-brief delivery's canonical brief hash |
+| `incarnation` | string | no | absent | 0.5.1 | the delivery lifetime the brief record belongs to |
 
 Nothing at the tag writes this record.
+
+A general seat brief's delivery is this envelope with its own sender and id. Its `from` is
+`the launch`, its `from_id` null, and its `rule` names the launch's admission; `thread` is its own
+id, and `brief_sha256` and `incarnation` bind it to the delivered text and to the delivery
+lifetime. Its `to_id` is the recipient's `agt_` id when the registry has one — never the state's
+`seat_` handle — and null otherwise. Its id is not minted at random: it is the delivery lifetime
+and the delivered body read as a lowercase UUID (`sha256(incarnation "\n" attempt "\n" body)`,
+with the attempt omitted at zero), so one lifetime delivered again keeps the id and a reworded
+brief is a new message under the same lifetime. The record is written by the launch paths and by
+`team brief rollout --apply`, beside the claim in the session's state that names its expected id,
+the brief's sha256, the incarnation, the runtime epoch, the attempt and the stage.
 
 ### The receipt
 
@@ -108,6 +125,17 @@ never the approval key. A record that does not verify shows nothing and writes n
 | `root` | string | yes | — | ≤0.4 | the checkout binding |
 | `session` | string | yes | — | ≤0.4 | the session binding |
 | `at` | string | yes | — | ≤0.4 | when the receipt was written |
+| `brief_sha256` | string | no | absent | 0.5.1 | a general-seat-brief read's binding: the claim's brief hash |
+| `incarnation` | string | no | absent | 0.5.1 | the claim's delivery lifetime |
+| `brief_epoch` | string | no | absent | 0.5.1 | the runtime epoch the reading process was started under |
+| `brief_seat_handle` | string | no | absent | 0.5.1 | the seat's `seat_` handle as the read copied it from the state |
+| `brief_pane_root_pid` | number | no | absent | 0.5.1 | the pane's root process as the read copied it from the state |
+
+A brief read's binding is all three of `brief_sha256`, `incarnation` and `brief_epoch`, or none:
+the receipt an `inbox_read` or a `team drops --read` writes for the general seat brief carries
+them, and no ordinary receipt does. The three must still be the claim's when the receipt is read —
+the epoch ties the receipt to the runtime process that wrote it, so a receipt an earlier process,
+an earlier text or an earlier delivery left does not count for the current claim.
 
 ### The route record
 

@@ -38,6 +38,15 @@ there — the file that CLI already reads for a folder it was told to trust, wri
 home before the workspace is made, and left untouched when it or a folder above it is a link — and,
 through herdr: the workspace, the launch, and the name.
 
+For a seat this run starts, the general seat brief goes first, as a claim and a drop: the
+session's `briefs` records a fresh incarnation and runtime epoch, the brief's sha256 and the
+record's expected id before its signed record is posted at that id, and the launch line hands the
+seat's reader that epoch. A temporary seat is delivered like a declared one. A name held at the
+expected id by another file, a link or a folder is refused, never replaced or followed —
+[`team brief rollout --apply`](brief.md) recovers that delivery at the claim's next attempt. A
+delivery that cannot be written is said and logged, and the launch goes on;
+[`team check`](check.md) names the seat.
+
 ## Who may run it
 
 The owner. A seat of the team is refused before anything else is read: adding a seat is the

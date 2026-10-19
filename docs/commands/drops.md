@@ -10,30 +10,47 @@ into a notification.
 
 A drop is not only a send's. Before a launch types anything into a seat, the launch writes the
 general seat brief — TeamCLI's built-in default, the first text every seat gets — into that
-seat's folder as the same signed message record, and nothing is ever typed for it. `team up`
+seat's folder as the same signed message record, and nothing is ever typed for it. Every delivery
+is a claim in the session's state: the brief's sha256, the delivery's incarnation and runtime
+epoch, its attempt, and the ids of the deliveries it replaced (the newest fifty). `team up`
 writes it to every seat it launches or relaunches and to every declared seat the session records
-no launch of, human seats among them; `team add`, `team restart` and
-`team reload` write it to the one seat they act on and refuse a human seat's pane before any
-launch. It is read here like any other drop: `team drops --read` verifies it, writes its
-receipt and prints the brief.
+no launch of, human seats among them, and when this build's brief is ahead of a live seat's claim
+it also delivers to that seat without relaunching it; `team add`, `team register`, `team restart`,
+`team reload` and `team rename` write it to the seat they act on and refuse a human seat's pane
+before any launch. A listing shows only the delivery the seat's current claim names: the
+superseded ids its claim records are skipped by name, and a launch record whose digest or
+incarnation is not the claim's is not waiting mail. `team drops --read` serves the same current
+claim — it verifies the record, writes its receipt and prints the brief, and an earlier delivery
+is skipped without a receipt and without a refusal.
 
 `team drops --read` is the same folder served to the launch's own turn-start hook: the launch
 line names the seat and session, each waiting record is verified with the checkout's message
 key, its signed `<id>.read.json` receipt is written before its body is printed, and at most ten
-records are handed over a run. It asks for no placed caller, because a CLI's hook runs outside
-any pane.
+bodies are handed over a run, oldest first. A record that is malformed or an earlier delivery of
+the general seat brief is not a body and does not use one of the ten. It asks for no placed
+caller, because a CLI's hook runs outside any pane. The launch passes `--epoch <run_id>`, the
+runtime it started the reader under; a record the launch wrote is served only when the claim on
+disk is the same id, incarnation, digest and epoch, and a process started under an earlier
+runtime serves nothing until its seat is launched again. With no `--epoch` — a read by hand — the
+receipt binds the claim it serves.
 
 A receipt beside a drop says it was handed over, and a drop with one is read and not listed:
 the seat's inbox server writes `<id>.read.json` when an `inbox_read` call returns the message,
 and the turn-start `team drops --read` writes the same receipt before it hands a body over; it
 is the same signed status receipt `team messages` writes, signed with the checkout's message
 key. `team drops` verifies it; a file at that name the key did not sign, or one naming
-another message, seat, checkout or session, proves nothing and the drop is still listed.
+another message, seat, checkout or session, proves nothing and the drop is still listed. A
+receipt for the general seat brief also carries the claim's binding — its incarnation, the text's
+sha256 and the runtime epoch — and only a receipt carrying this claim's three counts as its read;
+one an earlier agent, an earlier text or an earlier runtime left does not. The read never
+replaces such a receipt: a name already held by a file that does not verify for this claim is a
+refusal, its body is not printed, and the file is left in place — only
+`team brief rollout --apply` moves past it, by recovering the delivery at a new id.
 
 ## Synopsis
 
     team drops [--follow] [--json]
-    team drops --read --seat <seat> [--session <session>]
+    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]
 
 ## Flags
 
@@ -44,11 +61,13 @@ another message, seat, checkout or session, proves nothing and the drop is still
 | `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, write its signed `<id>.read.json` receipt, then print its body; at most ten a run. `--seat` is required |
 | `--seat` | a seat name | the seat whose folder `--read` serves; only with `--read` |
 | `--session` | a session name | the launch's session, when given; only with `--read`, and it must be the team file's own |
+| `--epoch` | a runtime epoch | the epoch the launch started this reader under; when given, only a brief delivered under that epoch is served; only with `--read` |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 `--follow` and `--json` can't be used together: a follow is a stream of lines, not one document.
 `--read` can't be used with either: it answers one turn with the bodies, not a listing or a
-stream. `--seat` or `--session` without `--read` is an invocation error, not a silent no-op.
+stream. `--seat`, `--session` or `--epoch` without `--read` is an invocation error, not a silent
+no-op.
 
 ## What it reads and writes
 
@@ -58,11 +77,15 @@ folder that is not a repository, this folder's own team root — a team whose fi
 any checkout reads exactly the same way. A drop's file name is the send's id. A record's payload
 names its sender; a raw body file an earlier build wrote still names one on its first line.
 Names with a dot in them — `<id>.pending`, `<id>.taken`, `<id>.read.json`,
-`<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. Nothing is written
+`<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. A listing read for a placed seat
+skips the current brief claim's superseded ids by name, and a verified launch record whose digest
+or incarnation is not that claim's is not listed. Nothing is written
 or removed, and the folder is not created: a folder that does not exist yet is an empty one.
 `--read` is the one mode that writes: the signed `<id>.read.json` receipt beside each record it
 hands over (mode 0600), and nothing else — the drop itself is never moved or deleted. A message
-it cannot verify or receipt is a refusal, and its body is not printed.
+it cannot verify or receipt is a refusal, and its body is not printed; a receipt name held by a
+file that does not verify for the served claim is refused the same way, and the file is left in
+place.
 
 ## Who may run it
 
@@ -90,6 +113,7 @@ one line, `from <sender> — <path>`, for each drop that appears, and Ctrl-C sto
 | the folder was read | the context line, the `FROM  PATH` table, and `<n> drop` or `<n> drops` | 0 |
 | a follow ran and was stopped | the lines of the drops that appeared, and nothing else | 0 |
 | `--read` handed the waiting records over | their bodies, one after another with a blank line between; nothing when none wait | 0 |
+| `--read` found only earlier deliveries of the general seat brief | `team drops: <n> drop(s) carry an earlier general seat brief and are not served` on stderr, and no body | 0 |
 | the caller is not a placed seat of this team | `team drops: only a seat of this team reads its own drops; this call is <caller>`, or the no-pane / another-pane refusal | 1 |
 | the team file can't be read, or the drop folder can't be read | `team drops: <problem>` | 1 |
 | `--read` could not verify or receipt a waiting record | `team drops: <reason>`, and the unproven body is not printed | 1 |

@@ -36,14 +36,36 @@ reads
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.
 
-The general seat brief every launch delivers first is checked on the same pass. A seat the session
-launched — a human's pane too, once the session has launched anything — with no delivery record in
-the state is the difference `<seat>: the general seat brief has not been delivered`, repaired with
-`team reload <seat> or team up`, or with `team up` alone for a human's pane. A recorded delivery is
-not taken on trust: the check opens the record at the brief's id and verifies it against this
-checkout's message key and the brief's text. A record that is missing, unsigned, signed by another
-key or holding another body is `<seat>: the general seat brief's delivery record does not verify`,
-with the same repair.
+The general seat brief every launch delivers first is checked on the same pass. A delivery is a
+claim and a drop: the claim in the state names the delivery's incarnation, runtime epoch, the
+brief's sha256 and the id the record must have. A seat the session launched — a human's pane too,
+once the session has launched anything — with no claim, or with one an older build wrote before
+claims existed, is the difference `<seat>: the general seat brief has not been delivered`, repaired
+with `team reload <seat> or team up`, or with `team up` alone for a human's pane. A recorded
+delivery is not taken on trust: the check opens the record at the claim's id and verifies it
+against this checkout's message key, the claim's incarnation and this build's brief. A record that
+is missing, unsigned, signed by another key, bound to another lifetime or epoch, or holding
+another body is `<seat>: the general seat brief's delivery record does not verify`, with the same
+repair. When this build's brief is ahead of any seat's claim, the run prints the one rollout hint
+`run team brief rollout --apply to deliver the general seat brief to every live seat`, after the
+per-seat lines and before the summary. The `--json` document carries the same line as `hint`.
+
+A CLI seat is then asked for its read. `<seat>: the general seat brief has been delivered and not
+read` is repaired by the seat's own next turn; a seat whose record says it has no turn-start
+reader (`watcher` absent or `none`) is told how to read by hand, with
+`team drops --read --seat <seat>`, and how to install the launch's hooks, with
+`team reload <seat>`. The read receipt must bind the current claim — its id, incarnation, text hash
+and the epoch it was written under — so a receipt an earlier agent, an earlier text or an earlier
+runtime left is `<seat>: the general seat brief's read receipt is stale (an earlier agent or an
+earlier text)`, and a receipt file that does not verify for the claim is
+`<seat>: the general seat brief's read receipt does not verify`, whose repair is
+`team brief rollout --apply` recovering the delivery at a new id (the file that does not verify is
+left in place). A delivery whose launch did not reach ready keeps its launch difference and its
+read is not demanded: the seat reads `<seat>: the general seat brief has been delivered; launch not
+ready`, and a read that arrived before readiness is
+`<seat>: a read happened before readiness; the runtime is not confirmed`. A human seat is
+delivery-only and is never asked to read. `team check` writes none of this: it has no writer mode
+and no `--rollout`, and the only act it names is the seat's own read or a delivering command's.
 
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the

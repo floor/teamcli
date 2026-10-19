@@ -62,8 +62,9 @@ Reads the team file (or the one `--file` names), this machine's approval store, 
 workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
 with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
-heartbeat; and, under the session's `briefs`, each seat's general-brief record id and delivery
-time), each seat's general-brief record under `.agents/send-drops/<session>/<seat>/`,
+heartbeat; and, under the session's `briefs`, each seat's general-brief claim — its record id,
+delivery time, incarnation, runtime epoch, sha256, attempt, stage and the ids it superseded), each
+seat's general-brief record under `.agents/send-drops/<session>/<seat>/`,
 `.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
 starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
 workspace and pane for the watch. A real run holds the session mutator lock
@@ -244,21 +245,36 @@ relaunches, and every declared seat the session records no launch of, a human's 
 receive the general seat brief: TeamCLI's built-in default, embedded in the package (`src/launch/general-brief-text.ts`,
 generated from the accepted source by `scripts/brief.ts --write`; `brief:check` pins its bytes, and
 compares it with the source when one is given) so the package never reads a documentation checkout.
-`deliverGeneralBrief` (`src/launch/general-brief.ts`) signs one message record per seat and writes
-it into that seat's drop folder through the signed record writer; the record's id is the brief's
-sha256 read as a lowercase UUID, so a re-run leaves a verified record and its first time as they
-are, and a reworded brief is a new message. A file already at that id that is not this brief signed
-by this checkout's message key — planted, foreign, unsigned, another body — is replaced, and a link,
-a folder or a FIFO there is refused and never followed or replaced. Only a record read back and
-verified (`recordHolds`, `src/send/record.ts`) is recorded as delivered. The session's `briefs` map
-records each delivery — the record's id and its own `at` — in one locked state write, which is what
-[`team check`](check.md) verifies to name a seat the session launched without one. A seat the
+The delivery goes through `deliverBriefForAttribution` (`src/launch/general-brief.ts`), the one
+boundary every attribution path calls. A delivery is a claim and a drop: `writeClaim` records the
+seat's claim — a fresh incarnation and epoch for a seat this run attributes, the existing ones for
+a seat it only broadcasts to, the expected record id, the brief's sha256, attempt 0 and
+`stage: 'claimed'` — under the state lock before any file is written, and `deliverGeneralBrief`
+then signs the record at exactly that id, reads it back and verifies it (`recordHolds`,
+`src/send/record.ts`), and only then finalizes the claim's time and stage in the state. The id is
+derived from the incarnation and the delivered body (`briefIdOf`), so a re-run of one lifetime
+leaves a verified record and its first time as they are, and a reworded brief is a new message
+under the same lifetime. A name held at the expected id by another regular file, a link, a folder
+or a FIFO is never replaced, followed or removed: the delivery is reported and the recovery is
+`team brief rollout --apply`, which posts the record at the claim's next attempt and leaves the
+held name byte for byte. When this build's brief is ahead of any live or human seat's claim,
+every live or human declared seat is targeted, the unattributed ones without a relaunch.
+
+The claim's epoch is the runtime the launch hands the seat's reader: the launch line's
+`team drops --read --epoch <run_id>` (and `team mcp serve --epoch <run_id>`) names it through
+`currentBriefEpochs`, so a process started under an earlier runtime serves nothing until its seat
+is launched again. A launch that ends short of ready leaves its delivered record on disk and its
+seat record not ready; a receipt such a process wrote carries the pre-assigned epoch and
+[`team check`](check.md) reports it as a provisional read (`a read happened before readiness; the
+runtime is not confirmed`), never as a successful read. The session's `briefs` map is what the
+check verifies to name a seat the session launched without a current delivery. A seat the
 state records as already launched, and that this run leaves as it is, gets neither a drop nor a
-state entry. A drop that
+state entry when its claim is current. A drop that
 cannot be written is a line on stderr and in the log for that seat alone, and the launch carries
 on: the record on disk is the message, and the check names the seat. Nothing is typed for the
-brief, and `add`, `restart` and `reload` deliver through the same function, for the one seat each
-acts on — `reload` on its matching path included, so the repair `team check` names is a real one.
+brief, and `add`, `restart`, `reload`, `register` and `rename` deliver through the same boundary,
+for the seat each acts on — `reload` on its matching path included, so the repair `team check`
+names is a real one.
 
 A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file:
 `up` writes the approved rules text to `<project state folder>/rules/<seat>.md` — owner-only,
