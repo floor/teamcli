@@ -1739,6 +1739,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           pane: started.pane,
           ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
           ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+          ...(started.replaces === undefined ? {} : { replaces: started.replaces }),
           now: now(),
         });
         if ('note' in began) logLine(dir, 'up', callerLabel(caller), `${name}: ${began.note}`, now());

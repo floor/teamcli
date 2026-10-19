@@ -377,6 +377,11 @@ export type BeginInput = {
   pane: string;
   workspace?: string;
   cli_session?: string;
+  /**
+   * Why the open session this launch replaces ended, when the launcher closed it on purpose:
+   * a drift repair is a `swap`. Absent, a replaced session is a `crash`.
+   */
+  replaces?: SessionEndReason;
   now?: Date;
 };
 
@@ -395,9 +400,12 @@ export type EndInput = {
 /**
  * Records the start of a session for `seat` in `pane`. When the seat already has a session open
  * in this team and herdr session:
- * - the same pane and CLI session id is the same launch reported twice: nothing is written;
- * - anything else is a launch that found the old process gone: the old record ends as `crash`,
- *   then the new one starts with `previous` naming it.
+ * - the same pane and the same defined CLI session id is the same launch reported twice:
+ *   nothing is written;
+ * - anything else is a launch that replaces the old one: the old record ends as `crash`, or as
+ *   the `replaces` reason the caller gives (a drift repair is a `swap`), then the new one starts
+ *   with `previous` naming it. Two launches without a CLI session id are never the same launch:
+ *   a CLI that takes no id, relaunched in its pane, is a new session.
  * Recording never fails a launch: an error comes back as the note to log.
  */
 export function beginSession(input: BeginInput): { id: string } | { note: string } {
@@ -414,16 +422,19 @@ export function beginSession(input: BeginInput): { id: string } | { note: string
       );
       const latest = open.at(-1);
       if (latest !== undefined) {
-        const samePane = latest.pane === input.pane || (latest.pane === undefined && input.pane === undefined);
-        const sameCli = latest.cli_session === input.cli_session
-          || (latest.cli_session === undefined && input.cli_session === undefined);
-        if (samePane && sameCli) return { id: latest.id };
+        // Two launches are one only when both carry a CLI session id and the ids agree. A CLI
+        // that takes no id (`codex`, say) relaunched in its pane is a new session, never the old.
+        const sameLaunch = latest.pane === input.pane
+          && latest.cli_session !== undefined
+          && latest.cli_session === input.cli_session;
+        if (sameLaunch) return { id: latest.id };
+        const reason = input.replaces ?? 'crash';
         const closed = appendSessionEvent(home, team, root, {
           event: 'end',
           ts,
           id: latest.id,
-          reason: 'crash',
-          note: 'a new launch found this session open',
+          reason,
+          ...(reason === 'crash' ? { note: 'a new launch found this session open' } : {}),
         });
         if (!closed.ok) return closed;
       }

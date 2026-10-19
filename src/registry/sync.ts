@@ -302,9 +302,10 @@ export function registerSessionEnd(input: RegistryTeam, why: SessionEndReason = 
   }
 }
 
-/** The seats `up` left standing, written once at the end of its run. A seat the file stops, or one
- *  that is not ready, is ended as `stopped`; a ready one is registered or re-pointed. The team
- *  record is stopped when no seat is left running. */
+/** The seats `up` left standing, written once at the end of its run. A seat the file stops is
+ *  ended as `stopped`; a ready one is registered or re-pointed. A seat not yet ready — launched,
+ *  named, held at a dialog — keeps the record its launch wrote: only a real stop or `down` ends
+ *  a session. The team record is stopped when no seat is left running. */
 export function registerRun(
   input: RegistryTeam,
   seats: ReadonlyArray<{ seat: Seat; pane: string | null; handle?: string }>,
@@ -312,11 +313,14 @@ export function registerRun(
   const notes: string[] = [];
   let running = 0;
   for (const { seat, pane, handle } of seats) {
-    if (seat.stopped || pane === null) {
+    if (seat.stopped) {
       const ended = registerEnd(input, seat.name, 'stopped');
       if (ended) notes.push(ended.note);
       continue;
     }
+    // A seat still finding its feet has a live session, even when this run did not see it ready:
+    // ending it here would close a record the process still fills, with no start to reopen it.
+    if (pane === null) continue;
     const made = registerLaunch(input, seat, pane, handle);
     if ('note' in made) notes.push(made.note);
     else running += 1;

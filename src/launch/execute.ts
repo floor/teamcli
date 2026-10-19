@@ -22,6 +22,7 @@ import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
+import type { SessionEndReason } from '../sessions/registry.ts';
 
 export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'provider error' | 'rate limit' | 'unsent' | 'unknown';
 
@@ -148,7 +149,14 @@ export type Host = {
    */
   sessionStarted?(
     seat: string,
-    started: { pane: string; workspace?: string; command: string; cli_session?: string },
+    started: {
+      pane: string;
+      workspace?: string;
+      command: string;
+      cli_session?: string;
+      /** Why the open session this launch replaces ended, when this run closed it on purpose. */
+      replaces?: SessionEndReason;
+    },
   ): void;
   /** The seat is really running, so the next seat's ceiling check counts it. */
   running(seat: string): void;
@@ -874,6 +882,9 @@ export async function executePlan(
           ...(here.workspace === undefined ? {} : { workspace: here.workspace }),
           command: launch.command,
           ...(launch.sessionId === undefined ? {} : { cli_session: launch.sessionId }),
+          // A launch that follows a repair this run made on purpose replaces a session it chose
+          // to close: its record ends as a swap, never as a crash, and the new one links to it.
+          ...(relaunched.get(op.seat) === 'drift' ? { replaces: 'swap' as const } : {}),
         });
         host.running(op.seat);
         // The watcher is what this run left beside the seat: a hook the map installed, an MCP

@@ -265,7 +265,7 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     expect(readAgents(fixture.home)).toEqual([]);
   });
 
-  test('a run registers each ready seat, stops the seats the file stops or that are not ready, and stops the team when none runs', () => {
+  test('a run registers each ready seat, stops the seats the file stops, and leaves a seat not yet ready open', () => {
     const fixture = makeFixture();
     const input = registryOf(fixture);
     const seat = (name: string) => input.team.seats.find((item) => item.name === name)!;
@@ -284,8 +284,18 @@ describe('registry writers: the shared register-or-repoint rule', () => {
       { seat: seat('lead'), pane: null },
       { seat: seat('worker'), pane: null },
     ]);
-    expect(readAgents(fixture.home).map((agent) => agent.lifecycle)).toEqual(['stopped', 'stopped']);
+    // Not ready is not stopped: a seat at a trust dialog, or still launched or named, keeps the
+    // record its launch wrote — running, on its pane — until a real stop or `down` ends it.
+    expect(readAgents(fixture.home).map((agent) => agent.reach.seat).sort()).toEqual(['lead', 'worker']);
+    expect(readAgents(fixture.home).map((agent) => agent.lifecycle)).toEqual(['running', 'running']);
+    expect(readAgents(fixture.home).map((agent) => agent.reach.pane).sort()).toEqual(['pane-lead', 'pane-worker']);
     expect(getTeam(fixture.home, teamId)?.lifecycle).toBe('stopped');
+
+    // A seat the file stops is a real stop, even when this run has no pane for it.
+    registerRun(input, [{ seat: { ...seat('lead'), stopped: true }, pane: null }]);
+    const after = readAgents(fixture.home);
+    expect(after.find((agent) => agent.reach.seat === 'lead')?.lifecycle).toBe('stopped');
+    expect(after.find((agent) => agent.reach.seat === 'worker')?.lifecycle).toBe('running');
   });
 
   test('a registry that cannot be written is a note, never a throw', () => {
