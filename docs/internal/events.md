@@ -30,6 +30,18 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   sequence number (`seq: 1, 2, ...`). When `deduplicate` is enabled (the default), appending an
   event whose `(kind, record_id, session)` is already present in the retained log returns the
   existing record with `duplicate: true` without writing a second line.
+- **Incremental verification**: the bus keeps one checkpoint per retained log: the highest
+  sequence it has verified and a SHA-256 over the raw lines of every retained record at or below
+  that sequence, in retained order. A reconcile pass or a subscription parses the log, hashes that
+  prefix, and compares the digest with the checkpoint; when it matches, the bytes below the
+  checkpoint are the ones already verified, and only the records after that sequence are checked
+  against the message key. A read with no checkpoint, a different message key, or a digest that
+  does not match — a segment trimmed, a file rewritten, a record altered in place — verifies the
+  whole retained log and rebuilds the checkpoint. A record altered earlier is therefore still
+  caught: it changes the digest, and the read that sees the change falls back to the full verify
+  that finds it. File boundaries are not part of the digest, so a rotation that keeps every byte
+  keeps the checkpoint, while a trim does not. The checkpoint lives in the bus process's memory: a
+  restart, or a read from another process, starts from a full verify.
 - **No body, no instructions**: An event carries `v: 1`, `seq`, `ts`, `kind`, `session`,
   `record_id`, and optional routing/context tokens (`from`, `to`, `seat`, `subject`, `thread`,
   `via`, `reason`, `prompt`, `rule`). It never carries a message body.
@@ -155,7 +167,9 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 - **What a subscription reads**: a kind filter narrows what a subscriber is sent, never who
   receives a record. An event addressed by the raising side to a seat (`to`) reaches that seat, and
   the watch addresses its owner reports to `owner` this way; otherwise the routing table's
-  recipients decide.
+  recipients decide. The subscription reads through the bus's verification checkpoint (§1): the
+  records at or below its last verified sequence are trusted as its digest pins them, and only the
+  records after it are checked before they are sent.
 - **`team watch`**: the owner's delivery path subscribes at the start of each pass
   (`syncWatchBus`), applies events in sequence order, resyncs on `gap` (passing through whether the hole was retention), and hands owner-addressed
   events to `OwnerDelivery` (§4). Any watch publishes its check reports as events
