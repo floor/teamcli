@@ -914,6 +914,11 @@
         "urgent"
       ]
     },
+    "installer": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "the seat that records green-slice installs beside the owner: must name a declared seat, without count, and neither parked nor stopped. omitted means none, and only the owner records an install"
+    },
     "grant": {
       "type": "object",
       "additionalProperties": false,
