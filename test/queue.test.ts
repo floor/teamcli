@@ -1,17 +1,26 @@
 // `team queue add|list`: the local queue a team reads when its file declares no task source.
 // The add is atomic and validated through the file adapter; a declared file keeps its own path,
 // a declared broker source has no local queue, and a listing claims nothing.
+//
+// `team queue ready|install`: the green-slice producer. A seat records a finished commit ready
+// for the task its own live lease holds; the owner, or the one seat the file designates with an
+// approval in force, records the install. The installer is the verified caller, never an
+// argument, and no merge, clock or version comparison stands in for the install record.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { approvalOf } from '../src/approve/approval.ts';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
 import { runQueue, USAGE } from '../src/commands/queue.ts';
 import { loadTeamFile, NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
-import { QUEUE_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { GREEN_SLICE_OUTPUT_SCHEMA, QUEUE_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { storePath, writeApproval } from '../src/store/store.ts';
+import { pendingGreenSlices, type GreenSliceEvent } from '../src/tasks/green-slices.ts';
 import { fileSourceOf, readFileSource } from '../src/tasks/queue.ts';
+import { version } from '../src/version.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -51,9 +60,12 @@ const LINEAR = `${TEAM}tasks:
 `;
 
 const lead: Caller = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' };
+const worker: Caller = { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' };
 const otherPane: Caller = { kind: 'seat', name: 'lead', pane: 'w9:p1', session: 'acme' };
 const stranger: Caller = { kind: 'seat', name: 'stranger', pane: 'w3:p1', session: 'acme' };
 const owner = { kind: 'owner' } as const;
+/** The clock every lease and journal record is judged against, so an `until` is not a race. */
+const NOW = Date.parse('2026-10-20T10:00:00.000Z');
 
 let base: string;
 let root: string;
@@ -100,10 +112,49 @@ function writeQueue(text: string): void {
   writeFileSync(queueFile(), text);
 }
 
-async function run(argv: string[], caller: Caller = lead, cwd = root) {
+async function run(argv: string[], caller: Caller = lead, cwd = root, now: number = NOW) {
   const io = testIo(cwd, caller);
-  const code = await runQueue(argv, io, { home });
+  const code = await runQueue(argv, io, { home, now: () => now });
   return { code, out: io.out, err: io.err };
+}
+
+/** A live lease on `id`, held by `seat` on `pane` unless the scene says otherwise. */
+function lease(id: string, seat = 'lead', pane = 'w1:p1', until = new Date(NOW + 60_000).toISOString()): void {
+  mkdirSync(join(root, '.agents', 'leases'), { recursive: true });
+  const at = new Date(NOW - 60_000).toISOString();
+  writeFileSync(
+    join(root, '.agents', 'leases', `${id}.json`),
+    `${JSON.stringify({ format: 1, id, seat, pane, acquiredAt: at, renewedAt: at, until }, null, 2)}\n`,
+  );
+}
+
+function journalPath(): string {
+  return join(root, '.agents', 'green-slices.json');
+}
+
+function journal(): { format: 1; events: GreenSliceEvent[] } | null {
+  return existsSync(journalPath()) ? JSON.parse(readFileSync(journalPath(), 'utf8')) : null;
+}
+
+function writeJournal(events: unknown[]): void {
+  writeFileSync(journalPath(), `${JSON.stringify({ format: 1, events }, null, 2)}\n`);
+}
+
+/** The approval an owner's `team approve` of exactly the file on disk leaves on this machine. */
+function approve(): void {
+  const text = readFileSync(join(root, '.agents', 'team.yaml'), 'utf8');
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  writeApproval(
+    storePath(loaded.team.project, loaded.root, home),
+    { approval: approvalOf(loaded.team, loaded.root, new Date(NOW)), file: text },
+    loaded.team.seats,
+    home,
+  );
+}
+
+function writeTeam(text: string): void {
+  writeFileSync(join(root, '.agents', 'team.yaml'), text);
 }
 
 describe('team queue add', () => {
@@ -199,6 +250,7 @@ describe('team queue add', () => {
       [['add', 'a title', '--id', '-bad'], 'is not a task id'],
       [['add', 'a title', '--id', 'q1', '--assignee', 'ghost'], 'assignee "ghost" is not a seat of this team'],
       [['add', 'a title', '--id', 'q1', '--priority', 'a\nb'], '--priority must be one line of text or a number'],
+      [['add', 'a title', '--id', 'q1', '--commit', 'abcdef1'], '--commit is not used by queue add'],
       [['add', 'a title', '--id', 'q1', 'extra'], 'unexpected "extra"'],
     ];
     for (const [argv, message] of cases) {
@@ -318,6 +370,284 @@ describe('team queue list', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe('team queue ready', () => {
+  /** A queue holding `q1`, a recorded lead and worker, and the lead's live lease on `q1`. */
+  function set(): void {
+    ready();
+    writeQueue('- id: "q1"\n  title: "a leased task"\n');
+    lease('q1');
+  }
+
+  test('a seat records the green commit of the task its own lease holds', async () => {
+    set();
+    const recorded = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(recorded).toEqual({
+      code: 0,
+      out: `team acme, session "acme"\nready q1 at abcdef1 (${version()}) for lead\n`,
+      err: '',
+    });
+    expect(journal()).toEqual({
+      format: 1,
+      events: [
+        { kind: 'ready', task: 'q1', seat: 'lead', commit: 'abcdef1', version: version(), at: new Date(NOW).toISOString() },
+      ],
+    });
+  });
+
+  test('the same task, commit and version again is held, and the journal is not rewritten', async () => {
+    set();
+    await run(['ready', 'q1', '--commit', 'abcdef1']);
+    const before = readFileSync(journalPath(), 'utf8');
+    const again = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(again.code).toBe(0);
+    expect(again.out).toBe(`team acme, session "acme"\nq1 at abcdef1 (${version()}) is already recorded ready for lead\n`);
+    expect(readFileSync(journalPath(), 'utf8')).toBe(before);
+  });
+
+  test('no live lease, or a lease of another task, is refused', async () => {
+    ready();
+    writeQueue('- id: "q1"\n  title: "a leased task"\n');
+    const none = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(none.code).toBe(1);
+    expect(none.err).toContain('seat lead holds no live lease');
+    lease('q2');
+    const other = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(other.code).toBe(1);
+    expect(other.err).toContain('seat lead holds a live lease of q2, not q1');
+    expect(journal()).toBeNull();
+  });
+
+  test('an expired lease is no lease', async () => {
+    ready();
+    writeQueue('- id: "q1"\n  title: "a leased task"\n');
+    lease('q1', 'lead', 'w1:p1', new Date(NOW - 1).toISOString());
+    const refused = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('seat lead holds no live lease');
+  });
+
+  test('the owner and a seat of another team record no seat\'s slice', async () => {
+    set();
+    const byOwner = await run(['ready', 'q1', '--commit', 'abcdef1'], owner);
+    expect(byOwner.code).toBe(1);
+    expect(byOwner.err).toContain('only a seat of this team records a green slice ready; this call is owner');
+    const byStranger = await run(['ready', 'q1', '--commit', 'abcdef1'], stranger);
+    expect(byStranger.code).toBe(1);
+    expect(byStranger.err).toContain('only a seat of this team records a green slice ready; this call is stranger');
+    const elsewhere = await run(['ready', 'q1', '--commit', 'abcdef1'], otherPane);
+    expect(elsewhere.code).toBe(1);
+    expect(elsewhere.err).toContain(anotherPaneRefusal('lead', 'w1:p1'));
+  });
+
+  test('a seat the state records no pane for is refused with the repair', async () => {
+    project();
+    writeQueue('- id: "q1"\n  title: "a leased task"\n');
+    lease('q1');
+    const noPane = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(noPane.code).toBe(1);
+    expect(noPane.err).toContain(noPaneRefusal('lead'));
+  });
+
+  test('the task must be in the queue the seat works from', async () => {
+    project();
+    record();
+    lease('q1');
+    const missing = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toContain('the queue has no task "q1"');
+    expect(journal()).toBeNull();
+  });
+
+  test('a malformed commit or version is the invocation\'s refusal', async () => {
+    set();
+    const cases: [string[], string][] = [
+      [['ready', 'q1', '--commit', 'ABCDEF1'], 'is not a commit'],
+      [['ready', 'q1', '--commit', 'abc'], 'is not a commit'],
+      [['ready', 'q1', '--commit', 'abcdef1', '--version', 'bad/version'], 'is not a version'],
+      [['ready', 'q1'], '--commit is required'],
+      [['ready', 'q1', '--commit', 'abcdef1', '--id', 'q1'], '--id is not used by queue ready'],
+      [['ready'], 'a task is required'],
+    ];
+    for (const [argv, message] of cases) {
+      const refused = await run(argv);
+      expect(refused.code).toBe(2);
+      expect(refused.err).toContain(message);
+    }
+    expect(journal()).toBeNull();
+  });
+
+  test('--version names the build the seat ran', async () => {
+    set();
+    const recorded = await run(['ready', 'q1', '--commit', 'abcdef1', '--version', '0.6.0-rc.1']);
+    expect(recorded.code).toBe(0);
+    expect(recorded.out).toContain('ready q1 at abcdef1 (0.6.0-rc.1) for lead');
+    expect(journal()?.events[0]).toMatchObject({ version: '0.6.0-rc.1' });
+  });
+
+  test('a journal that is not JSON is refused, not swallowed', async () => {
+    set();
+    writeFileSync(journalPath(), 'not json\n');
+    const refused = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain(`${journalPath()} is not valid JSON; move it aside and run the command again`);
+    expect(readFileSync(journalPath(), 'utf8')).toBe('not json\n');
+  });
+
+  test('the journal\'s cap refusal propagates with its own sentence', async () => {
+    set();
+    writeJournal(
+      Array.from({ length: 256 }, (_, index) => ({
+        kind: 'ready',
+        task: `held-${index}`,
+        seat: 'lead',
+        commit: 'abcdef1',
+        version: '0.5.3',
+        at: new Date(NOW - 60_000).toISOString(),
+      })),
+    );
+    const refused = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('holds 256 pending green slices');
+  });
+
+  test('--json documents the record and the held fact under one schema', async () => {
+    set();
+    const recorded = await run(['ready', 'q1', '--commit', 'abcdef1', '--json']);
+    expect(recorded.code).toBe(0);
+    expect(recorded.err).toBe('');
+    const doc = assertMatchesOutputSchema<{ action: string; status: string; event: Record<string, unknown> }>(
+      recorded.out,
+      GREEN_SLICE_OUTPUT_SCHEMA,
+    );
+    expect(doc).toMatchObject({
+      format: 1,
+      project: 'acme',
+      session: 'acme',
+      action: 'ready',
+      status: 'recorded',
+      event: { kind: 'ready', task: 'q1', seat: 'lead', commit: 'abcdef1', version: version() },
+    });
+    const held = await run(['ready', 'q1', '--commit', 'abcdef1', '--json']);
+    expect(assertMatchesOutputSchema<{ status: string }>(held.out, GREEN_SLICE_OUTPUT_SCHEMA).status).toBe('held');
+  });
+});
+
+describe('team queue install', () => {
+  /** A queue holding `q1`, the lead's live lease and the seat's ready record for it. */
+  async function prepared(text = TEAM): Promise<void> {
+    ready(text);
+    writeQueue('- id: "q1"\n  title: "a leased task"\n');
+    lease('q1');
+    const recorded = await run(['ready', 'q1', '--commit', 'abcdef1']);
+    if (recorded.code !== 0) throw new Error(recorded.err);
+  }
+
+  test('the owner records the install, and it covers the ready', async () => {
+    await prepared();
+    const installed = await run(['install', 'q1', '--commit', 'abcdef1'], owner);
+    expect(installed).toEqual({
+      code: 0,
+      out: `team acme, session "acme"\ninstalled q1 at abcdef1 (${version()}) by owner\n`,
+      err: '',
+    });
+    expect(pendingGreenSlices(join(root, '.agents'))).toEqual([]);
+    expect(journal()?.events.map((event) => event.kind)).toEqual(['ready', 'install']);
+  });
+
+  test('a seat the file does not designate cannot install', async () => {
+    await prepared();
+    const refused = await run(['install', 'q1', '--commit', 'abcdef1'], worker);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('the team file designates no installer: only the owner records an install');
+    expect(journal()?.events.map((event) => event.kind)).toEqual(['ready']);
+  });
+
+  test('the designated seat records it, and installedBy is the verified caller', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    approve();
+    const installed = await run(['install', 'q1', '--commit', 'abcdef1', '--json'], worker);
+    expect(installed.code).toBe(0);
+    const doc = assertMatchesOutputSchema<{ action: string; event: Record<string, unknown> }>(
+      installed.out,
+      GREEN_SLICE_OUTPUT_SCHEMA,
+    );
+    expect(doc).toMatchObject({ action: 'install', event: { kind: 'install', installedBy: 'worker', task: 'q1' } });
+    expect(journal()?.events.at(-1)).toMatchObject({ kind: 'install', installedBy: 'worker' });
+  });
+
+  test('no flag names the installer: the argument parser refuses one', async () => {
+    await prepared();
+    const refused = await run(['install', 'q1', '--commit', 'abcdef1', '--installed-by', 'worker'], worker);
+    expect(refused.code).toBe(2);
+    expect(refused.err).toContain('unknown option --installed-by');
+  });
+
+  test('an unapproved designation admits nobody but the owner', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    const byWorker = await run(['install', 'q1', '--commit', 'abcdef1'], worker);
+    expect(byWorker.code).toBe(1);
+    expect(byWorker.err).toContain('the installer designation is not the approved one');
+    const byOwner = await run(['install', 'q1', '--commit', 'abcdef1'], owner);
+    expect(byOwner.code).toBe(0);
+    expect(journal()?.events.at(-1)).toMatchObject({ kind: 'install', installedBy: 'owner' });
+  });
+
+  test('a designation the owner approved and then changed is unapproved', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    approve();
+    writeTeam(`${TEAM}installer: lead\n`);
+    const byNew = await run(['install', 'q1', '--commit', 'abcdef1'], lead);
+    expect(byNew.code).toBe(1);
+    expect(byNew.err).toContain('the installer designation is not the approved one');
+    const byOld = await run(['install', 'q1', '--commit', 'abcdef1'], worker);
+    expect(byOld.code).toBe(1);
+    expect(byOld.err).toContain('only the owner or lead, the designated installer, records an install; this call is seat worker');
+  });
+
+  test('another unapproved edit does not withdraw an approved designation', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    approve();
+    writeTeam(`${TEAM}installer: worker\nrules:\n  - Run the tests your change touches.\n`);
+    const installed = await run(['install', 'q1', '--commit', 'abcdef1'], worker);
+    expect(installed.code).toBe(0);
+  });
+
+  test('the designated seat must stand on the pane the state records', async () => {
+    await prepared(`${TEAM}installer: worker\n`);
+    approve();
+    const byOtherSeat = await run(['install', 'q1', '--commit', 'abcdef1'], lead);
+    expect(byOtherSeat.code).toBe(1);
+    expect(byOtherSeat.err).toContain('only the owner or worker, the designated installer, records an install; this call is seat lead');
+    const elsewhere = await run(
+      ['install', 'q1', '--commit', 'abcdef1'],
+      { kind: 'seat', name: 'worker', pane: 'w9:p1', session: 'acme' },
+    );
+    expect(elsewhere.code).toBe(1);
+    expect(elsewhere.err).toContain(anotherPaneRefusal('worker', 'w2:p1'));
+  });
+
+  test('an install already recorded is held, and the version is part of the fact', async () => {
+    await prepared();
+    await run(['install', 'q1', '--commit', 'abcdef1'], owner);
+    const before = readFileSync(journalPath(), 'utf8');
+    const again = await run(['install', 'q1', '--commit', 'abcdef1'], owner);
+    expect(again.code).toBe(0);
+    expect(again.out).toBe(`team acme, session "acme"\nq1 at abcdef1 (${version()}) is already recorded installed by owner\n`);
+    expect(readFileSync(journalPath(), 'utf8')).toBe(before);
+    const otherVersion = await run(['install', 'q1', '--commit', 'abcdef1', '--version', '0.6.0'], owner);
+    expect(otherVersion.code).toBe(0);
+    expect(journal()?.events.filter((event) => event.kind === 'install')).toHaveLength(2);
+  });
+
+  test('a malformed journal is the record refusal here too', async () => {
+    await prepared();
+    writeFileSync(journalPath(), '[]\n');
+    const refused = await run(['install', 'q1', '--commit', 'abcdef1'], owner);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('is not a green-slice journal of format 1');
   });
 });
 

@@ -237,9 +237,17 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-own-team',
       why: 'adding to the local queue is the owner\'s or a declared seat\'s; the module refuses a seat the state cannot place on its recorded pane',
     },
+    'queue:install': {
+      kind: 'owner-or-own-team',
+      why: 'an install is the owner\'s, or the one seat the file designates with an approved `installer:` on its recorded pane; the module refuses every other seat',
+    },
     'queue:list': {
       kind: 'any-caller',
       why: 'the listing reads the checkout and the queue only, and asks for no session and no terminal',
+    },
+    'queue:ready': {
+      kind: 'seat-only',
+      why: 'a green slice ready is a declared seat\'s own record of the task its live lease holds, on the pane the state records for it; the owner is not admitted',
     },
     proc: {
       kind: 'owner-or-own-team',
