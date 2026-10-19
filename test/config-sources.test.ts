@@ -257,6 +257,15 @@ describe('the seat record', () => {
     expect(readAgents(home)).toHaveLength(1);
     expect(recordedGeneration(grantsDir(home), home)).toBeNull();
     expect(readFileSync(seatFile(otherId), 'utf8')).toBe(otherBytes);
+
+    // The plan refuses the same name for the same reason, so a preview never describes a target
+    // the write would not choose.
+    const plan = planConfigSet(home, { level: 'seat', target: 'builder-1', settings: [{ key: 'nickname', value: 'wren' }] });
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.why).toContain('is known to 2 teams');
+    expect(plan.why).toContain(teamIdOf(mine.root));
+    expect(readAgents(home)).toHaveLength(1);
   });
 
   test('an ambiguous bare name refuses the same way when the registry order reverses', () => {
@@ -269,6 +278,12 @@ describe('the seat record', () => {
     expect(refused.why).toContain(teamIdOf(mine.root));
     expect(readAgents(home)).toHaveLength(1);
     expect(readFileSync(seatFile(otherId), 'utf8')).toBe(otherBytes);
+
+    const plan = planConfigSet(home, { level: 'seat', target: 'builder-1', settings: [{ key: 'nickname', value: 'wren' }] });
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.why).toContain('is known to 2 teams');
+    expect(plan.why).toContain(teamIdOf(mine.root));
   });
 
   test('a value changed after signing refuses the whole source, naming the file', () => {

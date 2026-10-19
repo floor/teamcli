@@ -674,6 +674,10 @@ function seatTargetProblem(home: string, target: string, declaration?: SeatDecla
   // A caller that holds the declaration answers for its own team, registered or not: planning a
   // first write must not need the record the planning is meant to precede.
   if (declaration !== undefined && declaration.seat.name === target) return null;
+  // A bare name more than one team binds is refused at plan time as well as at write time: a
+  // preview must not describe a target the write would then refuse to choose.
+  const ambiguous = ambiguityProblem(target, seatBindings(home, target));
+  if (ambiguous !== null) return ambiguous;
   try {
     for (const record of Object.values(readTeams(home))) {
       if (record.roster.some((line) => line.agent === target || line.seat === target)) return null;
@@ -726,6 +730,16 @@ function seatBindings(home: string, name: string): Map<string, SeatDeclaration |
   return teams;
 }
 
+/**
+ * The refusal an unscoped bare seat name earns when more than one team knows it. Keyed by team and
+ * sorted, so the answer is the same in either registry order; the caller names an agent id to
+ * choose one.
+ */
+function ambiguityProblem(target: string, teams: Map<string, SeatDeclaration | null>): string | null {
+  if (teams.size <= 1) return null;
+  return `the seat name "${target}" is known to ${teams.size} teams (${[...teams.keys()].sort().join(', ')}); name the seat's agent id to choose one`;
+}
+
 /** Creates the record a declared seat never had: the first write's create, not a launch. Nothing
  *  starts, attaches or types; the identity words are the declaration's own. */
 function materializeSeat(home: string, declaration: SeatDeclaration): { ok: true; agentId: string } | { ok: false; why: string } {
@@ -767,12 +781,8 @@ export function seatRecordForWrite(
   if (teams.size === 0) {
     return { ok: false, why: `no registered agent "${target}" in ${agentsDir(home)}, and no team roster declares it` };
   }
-  if (teams.size > 1) {
-    return {
-      ok: false,
-      why: `the seat name "${target}" is known to ${teams.size} teams (${[...teams.keys()].sort().join(', ')}); name the seat's agent id to choose one`,
-    };
-  }
+  const ambiguous = ambiguityProblem(target, teams);
+  if (ambiguous !== null) return { ok: false, why: ambiguous };
   const teamId = [...teams.keys()][0];
   if (teamId === undefined) {
     return { ok: false, why: `no team declares the seat "${target}"` };
