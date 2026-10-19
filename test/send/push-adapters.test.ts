@@ -274,6 +274,7 @@ describe('codexPushAdapter (OpenAI Codex 0.161.0 runtime-push adapter)', () => {
     expect(await throwingAdapter.push(makeRequest())).toEqual({
       kind: 'unreachable',
       reason: 'codex queue failed: timed out after 5000ms',
+      timedOut: true,
     });
   });
 
@@ -725,5 +726,259 @@ seats:
     });
 
     expect(spawned).toBe(false);
+  });
+
+  test('codexRelayCapabilities, probeCodexNativeRoute, and deliverCodexNativeRoute integrate with B5 deliveryTimeoutInForce and 785d63e1f FallbackWalk', async () => {
+    const {
+      CODEX_NATIVE_ROUTE,
+      CODEX_NATIVE_TIMEOUT_MS,
+      CODEX_PREPROBE_TIMEOUT_MS,
+      CODEX_RECEIPT_TIMEOUT_SECONDS,
+      codexRelayCapabilities,
+      deliverCodexNativeRoute,
+      probeCodexNativeRoute,
+      receiptSecondsFor,
+      resolveCodexEscalationSeconds,
+      resolveCodexNativeAttemptTimeoutMs,
+    } = await import('../../src/send/push-adapters/codex-relay.ts');
+    const { deliveryEscalationDelay, deliveryTimeoutInForce } = await import('../../src/policy/delivery.ts');
+    const { loadTeamFile } = await import('../../src/file/load.ts');
+    const { beginFallbackWalk } = await import('../../src/send/fallback-walk.ts');
+
+    // 1. Capabilities and shared timing constants from src/policy/delivery.ts & src/policy/types.ts
+    expect(CODEX_NATIVE_ROUTE).toBe('native');
+    expect(CODEX_NATIVE_TIMEOUT_MS).toBe(15_000);
+    expect(CODEX_PREPROBE_TIMEOUT_MS).toBe(400);
+    expect(CODEX_RECEIPT_TIMEOUT_SECONDS).toBe(120);
+    expect(receiptSecondsFor(15)).toBe(120);
+    expect(receiptSecondsFor(15, 10)).toBe(15);
+
+    const caps = codexRelayCapabilities('0.161.0');
+    expect(caps.runtime).toBe('codex');
+    expect(caps.routes).toEqual(['native', 'durable-copy']);
+    expect(caps.native).toEqual({
+      supported: true,
+      command: ['codex', 'queue', '--thread', '<agent_session>', '--message', '<pointer>'],
+      timeoutMs: 15_000,
+      preprobeTimeoutMs: 400,
+      ack: false,
+      proof: 'queue-accepted-only',
+    });
+    expect(caps.durableCopy).toEqual({ supported: true });
+
+    // 2. Accepts already-resolved B5 deliveryTimeoutInForce & deliveryEscalationDelay without re-parsing
+    const scene = makeCodexPushScene('019a0000-1111-7222-8333-444455556666');
+    const loadedDefault = loadTeamFile(scene.root, { home: scene.home, checkOnly: true });
+    expect(loadedDefault.ok).toBe(true);
+    if (!loadedDefault.ok) throw new Error('expected team.yaml to load');
+
+    const defaultTimeouts = deliveryTimeoutInForce({
+      home: scene.home,
+      entity: 'floor',
+      projectId: 'acme',
+      root: scene.root,
+      team: loadedDefault.team,
+      seat: 'builder-3',
+    });
+    expect(defaultTimeouts).toEqual({
+      ok: true,
+      budgets: { socket: 15, 'mcp-inbox': 15, typed: 15, native: 15 },
+      level: 'default',
+    });
+    expect(resolveCodexNativeAttemptTimeoutMs(defaultTimeouts)).toEqual({
+      ok: true,
+      timeoutMs: 15_000,
+      attemptSeconds: 15,
+    });
+
+    const defaultEscalation = deliveryEscalationDelay({
+      home: scene.home,
+      entity: 'floor',
+      projectId: 'acme',
+      root: scene.root,
+      team: loadedDefault.team,
+      seat: 'builder-3',
+    });
+    expect(resolveCodexEscalationSeconds(defaultEscalation)).toEqual({
+      ok: true,
+      seconds: 300,
+    });
+
+    // Signed shortened delivery-timeout (native=6) at team level
+    setSignedCodexDaemonAtLevel(scene, 'team', 'native=6', { name: 'delivery-timeout' });
+    const loadedShortened = loadTeamFile(scene.root, { home: scene.home, checkOnly: true });
+    expect(loadedShortened.ok).toBe(true);
+    if (!loadedShortened.ok) throw new Error('expected team.yaml with delivery-timeout to load');
+
+    const shortenedTimeouts = deliveryTimeoutInForce({
+      home: scene.home,
+      entity: 'floor',
+      projectId: 'acme',
+      root: scene.root,
+      team: loadedShortened.team,
+      seat: 'builder-3',
+    });
+    expect(shortenedTimeouts).toEqual({
+      ok: true,
+      budgets: { socket: 15, 'mcp-inbox': 15, typed: 15, native: 6 },
+      level: 'team',
+    });
+    expect(resolveCodexNativeAttemptTimeoutMs(shortenedTimeouts)).toEqual({
+      ok: true,
+      timeoutMs: 6_000,
+      attemptSeconds: 6,
+    });
+
+    // 3. probeCodexNativeRoute preprobe (ready vs codex-daemon: off vs mismatched session)
+    const readyProbe = probeCodexNativeRoute({
+      root: scene.root,
+      home: scene.home,
+      session: 'teamcli',
+      seat: 'builder-3',
+      id: SAMPLE_ID,
+      sender: { seat: 'lead', team: 'acme' },
+    });
+    expect(readyProbe.status).toBe('ready');
+    if (readyProbe.status === 'ready') {
+      expect(readyProbe.threadId).toBe(scene.sessionId);
+      expect(readyProbe.pointer).toBe(
+        `From lead@acme: New team message ${SAMPLE_ID}: call inbox_read({"id":"${SAMPLE_ID}"})`,
+      );
+    }
+
+    expect(
+      probeCodexNativeRoute({
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        id: SAMPLE_ID,
+        sender: { seat: 'lead', team: 'acme' },
+        codexDaemon: 'off',
+      }),
+    ).toEqual({
+      status: 'unavailable',
+      reason: CODEX_DAEMON_OFF_REASON,
+    });
+
+    // 4. deliverCodexNativeRoute stages durable copy via packages/relay and feeds 785d63e1f FallbackWalk
+    const now = () => new Date('2026-10-20T01:00:00.000Z');
+    const dropDir = join(scene.dir, 'send-drops', 'teamcli', 'builder-3');
+    const signedRecordText = `${JSON.stringify({ payload: { id: SAMPLE_ID, body: 'hello' }, signature: 'sig' }, null, 2)}\n`;
+    const spawnCalls: { args: readonly string[]; timeoutMs: number }[] = [];
+
+    const walk = beginFallbackWalk({
+      caller: { kind: 'owner' },
+      team: loadedShortened.team,
+      root: scene.root,
+      home: scene.home,
+      now,
+      recipient: {
+        team: 'acme',
+        seat: 'builder-3',
+        toId: scene.agentId,
+        session: 'teamcli',
+        root: scene.root,
+      },
+      messageId: SAMPLE_ID,
+      record: signedRecordText,
+    });
+
+    const deliveredAttempt = await deliverCodexNativeRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy: { dir: dropDir, name: SAMPLE_ID },
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        sender: { seat: 'tester-2', team: 'teamcli' },
+      },
+      {
+        id: SAMPLE_ID,
+        record: signedRecordText,
+        pointer: SAMPLE_POINTER,
+      },
+      {
+        now,
+        deliveryTimeout: shortenedTimeouts,
+        spawn: (_bin, args, opts) => {
+          spawnCalls.push({ args, timeoutMs: opts.timeoutMs });
+          return { status: 0, stdout: 'Queued\n', stderr: '' };
+        },
+      },
+    );
+
+    // Enqueue is transport queue acceptance only (never 'read'); durable copy is staged at <dropDir>/<id>.
+    expect(deliveredAttempt.outcome).toBe('enqueue');
+    expect(readFileSync(join(dropDir, SAMPLE_ID), 'utf8')).toBe(signedRecordText);
+    expect(spawnCalls).toEqual([
+      {
+        args: ['queue', '--thread', scene.sessionId, '--message', SAMPLE_POINTER],
+        timeoutMs: 6_000,
+      },
+    ]);
+    expect(deliveredAttempt.walkAttempt).toEqual({
+      route: 'native',
+      outcome: 'delivered',
+      liveRoutesRemain: false,
+      at: new Date('2026-10-20T01:00:00.000Z'),
+      ms: 0,
+      reason: 'pushed to codex queue; no read receipt yet',
+      receipt: { kind: 'maybe-consumed' },
+    });
+    const deliveredNote = walk.note(deliveredAttempt.walkAttempt);
+    expect(deliveredNote.ok).toBe(true);
+    if (deliveredNote.ok) {
+      expect(deliveredNote.state).toBe('delivered');
+      expect(deliveredNote.marker.receipt).toEqual({ kind: 'maybe-consumed' });
+    }
+
+    // 5. Timeout / failure preserves the same staged record and message.id for the next fallback route
+    const timeoutAttempt = await deliverCodexNativeRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy: { dir: dropDir, name: SAMPLE_ID },
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        sender: { seat: 'tester-2', team: 'teamcli' },
+      },
+      {
+        id: SAMPLE_ID,
+        record: signedRecordText,
+        pointer: SAMPLE_POINTER,
+      },
+      {
+        now,
+        deliveryTimeout: shortenedTimeouts,
+        liveRoutesRemain: true,
+        spawn: (_bin, _args, opts) => ({
+          status: null,
+          stdout: '',
+          stderr: '',
+          error: new Error(`timed out after ${String(opts.timeoutMs)}ms`),
+        }),
+      },
+    );
+    expect(timeoutAttempt.outcome).toBe('unreachable');
+    if (timeoutAttempt.outcome !== 'enqueue') {
+      expect(timeoutAttempt.timedOut).toBe(true);
+    }
+    expect(timeoutAttempt.walkAttempt).toEqual({
+      route: 'native',
+      outcome: 'timeout',
+      liveRoutesRemain: true,
+      at: new Date('2026-10-20T01:00:00.000Z'),
+      ms: 0,
+      reason: 'codex queue could not run: timed out after 6000ms',
+      receipt: { kind: 'stored', id: SAMPLE_ID },
+    });
+    const timeoutNote = walk.note(timeoutAttempt.walkAttempt);
+    expect(timeoutNote.ok).toBe(true);
+    expect(readFileSync(join(dropDir, SAMPLE_ID), 'utf8')).toBe(signedRecordText);
   });
 });

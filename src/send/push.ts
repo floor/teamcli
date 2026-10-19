@@ -48,6 +48,9 @@ export type RuntimePushRequest = {
    *  through `agentSession`, never by discovery in those folders, and a test hands in a synthetic
    *  home. */
   home: string;
+  /** Optional per-attempt timeout in milliseconds, resolved by the caller from the recipient's
+   *  `delivery-timeout` (`native`) policy in `src/policy/delivery.ts`. */
+  timeoutMs?: number;
 };
 
 /** What an adapter says after one attempt. Only `enqueue` means the runtime took the pointer;
@@ -55,7 +58,7 @@ export type RuntimePushRequest = {
 export type RuntimePushOutcome =
   | { kind: 'enqueue' }
   | { kind: 'unsupported'; reason: string }
-  | { kind: 'unreachable'; reason: string };
+  | { kind: 'unreachable'; reason: string; timedOut?: boolean };
 
 /** One runtime's channel, for the CLI profiles it names. */
 export type RuntimePushAdapter = {

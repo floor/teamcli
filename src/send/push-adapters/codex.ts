@@ -16,14 +16,15 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveCodexDaemonPolicy } from '../../policy/codex-daemon.ts';
+import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../policy/codex-daemon.ts';
+import { DELIVERY_TIMEOUT_DEFAULTS } from '../../policy/types.ts';
 import { recordedSeatSession, type RecordedSeatSessionRead } from '../../registry/resume.ts';
 import { readState, type SeatState } from '../../state.ts';
 import { TRIGGER_MAX } from '../native.ts';
 import type { RuntimePushAdapter, RuntimePushOutcome, RuntimePushRequest } from '../push.ts';
 
-/** Default bound for one `codex queue` invocation, in milliseconds. */
-export const CODEX_QUEUE_TIMEOUT_MS = 5_000;
+/** Default bound for one `codex queue` invocation, in milliseconds (`DELIVERY_TIMEOUT_DEFAULTS.native * 1000` = 15s). */
+export const CODEX_QUEUE_TIMEOUT_MS = DELIVERY_TIMEOUT_DEFAULTS.native * 1000;
 
 /** Reason returned when `codex-daemon` policy is `off` for the target seat. */
 export const CODEX_DAEMON_OFF_REASON =
@@ -70,12 +71,15 @@ export type CodexPushAdapterOptions = {
   /** Optional explicit app-server endpoint (`ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`). */
   remote?: string;
   /**
-   * Optional `codex-daemon` policy value (`'on' | 'off'`, default resolved from the signed
-   * `entity -> project -> team -> seat` policy chain) or per-request resolver. When `'off'` or
-   * when any signed policy source in the chain is unreadable/invalid, `push()` fails closed
-   * (`unsupported`) without spawning `codex queue`.
+   * Optional `codex-daemon` policy value (`'on' | 'off'` or already-resolved `CodexDaemonResolution`,
+   * default resolved from the signed `entity -> project -> team -> seat` policy chain) or per-request
+   * resolver. When `'off'` or when any signed policy source in the chain is unreadable/invalid,
+   * `push()` fails closed (`unsupported`) without spawning `codex queue`.
    */
-  codexDaemon?: CodexDaemonPolicyValue | ((request: RuntimePushRequest) => CodexDaemonPolicyValue);
+  codexDaemon?:
+    | CodexDaemonPolicyValue
+    | CodexDaemonResolution
+    | ((request: RuntimePushRequest) => CodexDaemonPolicyValue | CodexDaemonResolution);
   /**
    * Optional per-request session-binding resolver. Defaults to `recordedSeatSession`
    * (`src/registry/resume.ts`).
@@ -195,7 +199,20 @@ export function codexPushAdapter(options: CodexPushAdapterOptions = {}): Runtime
         const daemonPolicy = typeof options.codexDaemon === 'function'
           ? options.codexDaemon(request)
           : options.codexDaemon;
-        if (daemonPolicy === 'off') {
+        if (typeof daemonPolicy === 'object' && daemonPolicy !== null) {
+          if (!daemonPolicy.ok) {
+            return {
+              kind: 'unsupported',
+              reason: `codex-daemon policy could not be verified (${daemonPolicy.why})`,
+            };
+          }
+          if (daemonPolicy.value === 'off') {
+            return {
+              kind: 'unsupported',
+              reason: CODEX_DAEMON_OFF_REASON,
+            };
+          }
+        } else if (daemonPolicy === 'off') {
           return {
             kind: 'unsupported',
             reason: CODEX_DAEMON_OFF_REASON,
@@ -296,23 +313,36 @@ export function codexPushAdapter(options: CodexPushAdapterOptions = {}): Runtime
         };
       }
 
+      const callTimeoutMs = request.timeoutMs ?? timeoutMs;
+      if (!Number.isFinite(callTimeoutMs) || callTimeoutMs <= 0) {
+        return {
+          kind: 'unsupported',
+          reason: 'codex queue timeout budget must be a positive number of milliseconds',
+        };
+      }
+
       const argv = remote === undefined
         ? (['queue', '--thread', threadId, '--message', request.pointer] as const)
         : (['queue', '--remote', remote, '--thread', threadId, '--message', request.pointer] as const);
       let outcome: CodexSpawnResult;
       try {
-        outcome = await runSpawn(binary, argv, { timeoutMs });
+        outcome = await runSpawn(binary, argv, { timeoutMs: callTimeoutMs });
       } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const timedOut = /timed out after \d+ms/i.test(msg);
         return {
           kind: 'unreachable',
-          reason: `codex queue failed: ${error instanceof Error ? error.message : String(error)}`,
+          reason: `codex queue failed: ${msg}`,
+          ...(timedOut ? { timedOut: true } : {}),
         };
       }
 
       if (outcome.error !== undefined) {
+        const timedOut = /timed out after \d+ms/i.test(outcome.error.message);
         return {
           kind: 'unreachable',
           reason: `codex queue could not run: ${outcome.error.message}`,
+          ...(timedOut ? { timedOut: true } : {}),
         };
       }
 
