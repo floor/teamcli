@@ -81,6 +81,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts and refuses to start on a signed policy source it cannot read or verify, with the
   problem on stderr and exit 2, and `team reply` reads the thread life and cap from the caller's
   chain.
+- **Seat status comes from herdr as events.** One `herdr wait agent-status` waiter per eligible
+  seat turns herdr's status transitions into signed event records, replacing screen polling where
+  herdr's status is reliable: `blocked` raises `seat.at-prompt` — the screen is read once to
+  classify the prompt — `done` raises `seat.done`, `idle` past the idle-lead threshold raises
+  `seat.idle` once per idle stretch, and `working` after `blocked` raises the new
+  `seat.unblocked`, which closes the open prompt notice and cancels its climb clock; `unknown`
+  raises no event, and a `blocked -> working -> blocked` flicker within the one-pass grace window
+  does not emit `seat.at-prompt` twice. Profiles whose herdr status is unreliable keep the screen
+  module, `human: true` seats are never waited on and their screens are never read, and a status
+  waiter never types or sends keys.
 
 ### Changed
 
