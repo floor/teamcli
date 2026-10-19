@@ -39,12 +39,12 @@ import {
 } from './seats.ts';
 
 export const USAGE = `Usage: team seat <seat> [--session <name>] [--file <path>] [--json]
-       team seat add <seat>
-       team seat remove <seat>
-       team seat restart <seat>
-       team seat rename <seat> <name>
+       team seat add <seat> [--session <name>] [--file <path>] [--json]
+       team seat remove <seat> [--session <name>] [--file <path>] [--json]
+       team seat restart <seat> [--session <name>] [--file <path>] [--json]
+       team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]
 
-Shows one seat as an object: its settings and where each value comes from, its status and state as \`team seats\` reads them, and the newest CLI session TeamCLI recorded for it in this session — the conversation, when it started and ended, and its cost when one was measured. Reads the team file, the state and the session registry; changes nothing. The lifecycle verbs group the commands of the same names — \`team seat add\` runs \`team add\`, and so on; the top-level commands stay, and their options are theirs.
+Shows one seat as an object: its settings and where each value comes from, its status and state as \`team seats\` reads them, and the newest CLI session TeamCLI recorded for it in this session — the conversation, when it started and ended, and its cost when one was measured. Reads the team file, the state and the session registry; changes nothing. The lifecycle verbs group the commands of the same names — \`team seat add\` runs \`team add\`, and so on — and take that command's own options; the top-level commands stay. A common option may come before the verb: \`team seat --json restart <seat>\` runs \`team restart <seat> --json\`.
 
 Exits 0 when the seat is shown, 1 when an owner-only flag is refused, the seat is not declared, or a session registry can't be read, and 2 when the invocation, the team file, or herdr can't be read.
 `;
@@ -56,15 +56,52 @@ export default seat;
 
 type Turn = { state: CliHookReading['state']; since: string };
 
+/** The options `team seat` and every grouped verb share; the valued ones by name. */
+const COMMON_VALUED = new Set(['session', 'file']);
+
+/** The words in dispatch order. A common option written ahead of the verb reaches that verb's
+ *  handler unchanged, so `team seat --json restart <seat>` is `team restart <seat> --json`; the
+ *  scan consumes an option's value, so a value spelled like a verb (a session called `restart`)
+ *  is never read as one. A first word that is not a verb is left exactly as the caller wrote it,
+ *  and stays the seat to read. */
+function verbFirst(argv: string[]): string[] {
+  const ahead: string[] = [];
+  let index = 0;
+  while (index < argv.length) {
+    const word = argv[index] as string;
+    if (word === '--json') {
+      ahead.push(word);
+      index += 1;
+      continue;
+    }
+    const [name, inline] = word.startsWith('--')
+      ? word.slice(2).split(/=(.*)/s) as [string, string | undefined]
+      : ['', undefined];
+    if (!COMMON_VALUED.has(name)) break;
+    if (inline !== undefined) {
+      ahead.push(word);
+      index += 1;
+      continue;
+    }
+    const value = argv[index + 1];
+    if (value === undefined) break;
+    ahead.push(word, value);
+    index += 2;
+  }
+  const verb = argv[index];
+  if (verb !== 'add' && verb !== 'remove' && verb !== 'restart' && verb !== 'rename') return argv;
+  return [verb, ...ahead, ...argv.slice(index + 1)];
+}
+
 export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = realSeatsSources): Promise<number> {
-  // The first word is read before the option parser: a grouped verb carries the top-level
-  // command's own options, which this command's `readArgs` would refuse.
-  const args = { rest: argv };
+  // The verb is read before the option parser: a grouped verb carries the top-level command's
+  // own options, which this command's `readArgs` would refuse.
+  const args = { rest: verbFirst(argv) };
   const verb = args.rest[0];
-  if (verb === 'add') return runAdd(argv.slice(1), rawIo);
-  if (verb === 'remove') return runRemove(argv.slice(1), rawIo);
-  if (verb === 'restart') return runRestart(argv.slice(1), rawIo);
-  if (verb === 'rename') return runRename(argv.slice(1), rawIo);
+  if (verb === 'add') return runAdd(args.rest.slice(1), rawIo);
+  if (verb === 'remove') return runRemove(args.rest.slice(1), rawIo);
+  if (verb === 'restart') return runRestart(args.rest.slice(1), rawIo);
+  if (verb === 'rename') return runRename(args.rest.slice(1), rawIo);
 
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);

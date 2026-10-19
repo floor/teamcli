@@ -1298,10 +1298,10 @@ Hidden: no
 Usage:
 
     team seat <seat> [--session <name>] [--file <path>] [--json]
-    team seat add <seat>
-    team seat remove <seat>
-    team seat restart <seat>
-    team seat rename <seat> <name>
+    team seat add <seat> [--session <name>] [--file <path>] [--json]
+    team seat remove <seat> [--session <name>] [--file <path>] [--json]
+    team seat restart <seat> [--session <name>] [--file <path>] [--json]
+    team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]
 
 ### Flags
 
@@ -1325,13 +1325,16 @@ Hidden: no
 
 Usage:
 
-    team seat add <seat>
+    team seat add <seat> [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1346,13 +1349,16 @@ Hidden: no
 
 Usage:
 
-    team seat remove <seat>
+    team seat remove <seat> [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1367,13 +1373,16 @@ Hidden: no
 
 Usage:
 
-    team seat rename <seat> <name>
+    team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1389,13 +1398,16 @@ Hidden: no
 
 Usage:
 
-    team seat restart <seat>
+    team seat restart <seat> [--session <name>] [--file <path>] [--json]
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--file` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

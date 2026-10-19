@@ -391,6 +391,46 @@ describe('the grouped lifecycle verbs', () => {
     expect(result.code).toBe(0);
     expect(result.out).toContain('  role          implementer\n');
   });
+
+  test('a common option before the verb reaches the same handler with the same words', async () => {
+    // `team seat --json restart` and `team restart --json` are one invocation written twice:
+    // the same handler, the same output, the same exit.
+    const cases = [
+      { ahead: ['--json', 'restart'], behind: ['restart', '--json'] },
+      { ahead: ['--session', 'acme', 'remove'], behind: ['remove', '--session', 'acme'] },
+      { ahead: ['--file', '.agents/team.yaml', 'rename'], behind: ['rename', '--file', '.agents/team.yaml'] },
+    ];
+    for (const one of cases) {
+      const first = await run(one.ahead);
+      const second = await run(one.behind);
+      expect(first).toEqual(second);
+      expect(first.code).toBe(2);
+    }
+  });
+
+  test('an option value spelled like a verb is never read as one', async () => {
+    // `restart` here is the session's and the file's value; a scan that took it for a verb would
+    // run the lifecycle command with no seat name at all.
+    const session = await run(['--session', 'restart']);
+    expect(session.code).toBe(2);
+    expect(session.err).toContain('team seat: a seat name is required');
+    const file = await run(['--file', 'restart']);
+    expect(file.code).toBe(2);
+    expect(file.err).toContain('team seat: a seat name is required');
+  });
+
+  test('the usage rows name each verb’s own flags', async () => {
+    // The grouped verbs accept the command's common options; `team add --help` and its siblings
+    // document the options only one verb takes.
+    const rows = USAGE.split('\n').filter((line) => line.startsWith('       team seat '));
+    for (const verb of ['add', 'remove', 'restart', 'rename']) {
+      const row = rows.find((line) => line.includes(`team seat ${verb} `));
+      expect(row).toBeDefined();
+      expect(row).toContain('[--session <name>]');
+      expect(row).toContain('[--file <path>]');
+      expect(row).toContain('[--json]');
+    }
+  });
 });
 
 describe('refusals', () => {

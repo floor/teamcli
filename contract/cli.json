@@ -2395,9 +2395,27 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
             },
             {
               "hidden": true,
@@ -2417,16 +2435,34 @@
           ],
           "subcommands": [],
           "usage": [
-            "team seat add <seat>"
+            "team seat add <seat> [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
           "flags": [
             {
               "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
             },
             {
               "hidden": true,
@@ -2446,16 +2482,34 @@
           ],
           "subcommands": [],
           "usage": [
-            "team seat remove <seat>"
+            "team seat remove <seat> [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
           "flags": [
             {
               "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
             },
             {
               "hidden": true,
@@ -2480,16 +2534,34 @@
           ],
           "subcommands": [],
           "usage": [
-            "team seat rename <seat> <name>"
+            "team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]"
           ]
         },
         {
           "flags": [
             {
               "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
             },
             {
               "hidden": true,
@@ -2509,16 +2581,16 @@
           ],
           "subcommands": [],
           "usage": [
-            "team seat restart <seat>"
+            "team seat restart <seat> [--session <name>] [--file <path>] [--json]"
           ]
         }
       ],
       "usage": [
         "team seat <seat> [--session <name>] [--file <path>] [--json]",
-        "team seat add <seat>",
-        "team seat remove <seat>",
-        "team seat restart <seat>",
-        "team seat rename <seat> <name>"
+        "team seat add <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat remove <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat restart <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]"
       ]
     },
     {
