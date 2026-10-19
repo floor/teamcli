@@ -50,6 +50,7 @@ import { dropMessage, readTriggerLine } from '../send/native.ts';
 import { pendingDropPath } from '../send/pending.ts';
 import { readRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
+import { wakeSender } from '../send/wake.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
@@ -224,8 +225,6 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     if (!('release' in lock)) continue;
     try {
       if (isBareShellPane(scene.dir, scene.session, seat.name, scene.sources.processes?.(pane, scene.session) ?? null)) continue;
-      const line = readTriggerLine(seat.name, scene.session);
-      if (line === null) continue;
       // The oldest due message that verifies supplies the audit: the read the trigger names
       // serves the whole folder, and the history line says which message the wake was for. A
       // message that does not verify cannot be read, so it neither earns a wake nor spends one,
@@ -235,6 +234,13 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
       if (audited === undefined || audited.payload === null) continue;
+      // The wake's first line names the sender the signed record carries, resolved through this
+      // home's registries. A sender that cannot be pinned is not typed nameless: the message
+      // stays unread, its reservations are never taken, and the report pass says why.
+      const sender = wakeSender(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team });
+      if (sender === null) continue;
+      const line = readTriggerLine(seat.name, scene.session, sender);
+      if (line === null) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an
       // earlier attempt whose effect is unknown, and no second line is typed for it.

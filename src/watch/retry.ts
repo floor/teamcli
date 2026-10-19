@@ -37,6 +37,7 @@ import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from 
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
 import { markTaken } from '../send/taken.ts';
+import { verifiedPayloadOf, wakeSender } from '../send/wake.ts';
 import type { Live } from '../status/compare.ts';
 import { readScreen } from './screen.ts';
 
@@ -128,7 +129,25 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
     giveUp(scene, dropDir, drop, `its drop file is gone from ${dropDir}`, true);
     return;
   }
-  const line = readTriggerLine(drop.to, scene.session);
+  // The wake names the sender its signed record carries. A drop whose record this home cannot
+  // verify and pin to one sender is not typed nameless: it is given up on with its file kept, so
+  // a person can still deliver it by hand.
+  const home = scene.home;
+  if (home === undefined) {
+    giveUp(scene, dropDir, drop, 'this watch has no home to verify its sender with');
+    return;
+  }
+  const payload = verifiedPayloadOf(dropDir, drop.id, home);
+  if (payload === null) {
+    giveUp(scene, dropDir, drop, "its signed record does not verify with this home's key");
+    return;
+  }
+  const sender = wakeSender(payload, home, { root: scene.root, session: scene.session, team: scene.team });
+  if (sender === null) {
+    giveUp(scene, dropDir, drop, 'its signed record does not name a sender this home can pin');
+    return;
+  }
+  const line = readTriggerLine(drop.to, scene.session, sender);
   if (line === null) {
     giveUp(scene, dropDir, drop, 'its trigger line would not fit in a pane');
     return;
@@ -154,14 +173,11 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
       giveUp(scene, dropDir, drop, 'the seat is back at its shell; nothing was typed');
       return;
     }
-    const home = scene.home;
-    const receipt = home === undefined
-      ? undefined
-      : (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
+    const receipt = (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
-      ...(receipt === undefined ? {} : { receipt }),
+      receipt,
     });
     if (result.outcome === 'delivered') {
       clearPending(dropDir, drop.id);
