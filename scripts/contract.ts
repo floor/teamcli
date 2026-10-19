@@ -33,8 +33,9 @@ const MARKDOWN_REL = 'docs/reference/cli.md';
 
 type Flag = { name: string; takesValue: boolean; repeatable: boolean; hidden: boolean };
 type Positional = { name: string; optional: boolean; repeatable: boolean };
-/** Who may run one command, as the map states it: the gate's kind, and the map's own sentence. */
-type Who = { gate: string; why: string };
+/** Who may run one command, as the map states it: the gate's kind, the map's own sentence, and —
+ *  where the module refuses a run with no terminal — the route its `detachedRefusal` prints. */
+type Who = { gate: string; why: string; terminal?: { who: string; where: string } };
 type Node = {
   name: string;
   hidden: boolean;
@@ -631,7 +632,11 @@ function whoOf(key: string): Who {
   if (gate === undefined) {
     throw new Error(`the command-to-capability map holds no row for "${key}": every command and subcommand the contract exposes needs one`);
   }
-  return { gate: gate.kind, why: gate.why };
+  // The terminal requirement is copied with the row: the module's `detachedRefusal` reads the
+  // same route, so a run with no terminal is refused exactly as the command refuses it.
+  return gate.terminal === undefined
+    ? { gate: gate.kind, why: gate.why }
+    : { gate: gate.kind, why: gate.why, terminal: gate.terminal };
 }
 
 function withWho(node: Node, key: string = node.name): Node {
@@ -721,7 +726,12 @@ function renderNode(node: Node, level: number): string[] {
   if (node.usage.length === 0) lines.push('Usage: none', '');
   else lines.push('Usage:', '', ...node.usage.map((line) => `    ${line}`), '');
   if (node.literals && node.literals.length > 0) lines.push(`Literal: ${node.literals.map((word) => `\`${word}\``).join(', ')}`, '');
-  if (node.who) lines.push(`${'#'.repeat(level + 1)} Who may run it`, '', `\`${node.who.gate}\` — ${node.who.why}`, '');
+  if (node.who) {
+    lines.push(`${'#'.repeat(level + 1)} Who may run it`, '', `\`${node.who.gate}\` — ${node.who.why}`, '');
+    if (node.who.terminal) {
+      lines.push(`A run with no terminal is refused: only ${node.who.terminal.who} runs this, from ${node.who.terminal.where}`, '');
+    }
+  }
   lines.push(`${'#'.repeat(level + 1)} Flags`, '');
   if (node.flags.length === 0) lines.push('None.', '');
   else {

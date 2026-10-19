@@ -27,11 +27,21 @@ export function isCapability(word: string): word is Capability {
 /** What admits a caller to one command, before any caller is read, and the words a refusal
  *  repeats. The gate is what the record's table says under "authorised by (0.5.0)". The
  *  `admission` and `pane-authority` rows name the gate that owns their commands: this map
- *  admits no one to either, and the resolver refuses them with the owner named. The rows added
- *  in 0.5.2 use three kinds of their own: `any-caller` asks for no record at all; `seat-only`
- *  admits a seat of the team on its recorded pane and not the owner; `leads-only` admits a seat
- *  the file marks `leads` and not the owner. */
-export type Gate =
+ *  admits no one to either, and the resolver refuses them with the owner named.
+ *
+ *  The rows added in 0.5.2 are named after the verdict function their command's module calls,
+ *  never a rule copied by hand, so a row cannot admit a caller its module refuses:
+ *  `any-caller` asks for no record at all; `seat-only` admits a seat of the team on its
+ *  recorded pane and not the owner; `leads-only` admits a seat the file marks `leads` and not
+ *  the owner; `team-change` is `mayChangeTeamVerdict` (the owner, the orchestrator's seat or
+ *  the operator's seat, on its recorded pane); `team-read` is `mayReadTeam` (a seat the state
+ *  places on its recorded pane, or an approved delegate pane). A row may also carry
+ *  `terminal`: the module refuses a run with no terminal through `detachedRefusal`, and the
+ *  requirement stands on top of the kind (`watch` is any caller with a terminal or its own
+ *  pane). */
+export type GateTerminal = { who: string; where: string };
+
+export type Gate = (
   | { kind: 'owner-only'; why: string }
   | { kind: 'owner-or-leads'; why: string }
   | { kind: 'owner-or-own-team'; why: string }
@@ -41,7 +51,13 @@ export type Gate =
   | { kind: 'pane-authority'; why: string }
   | { kind: 'any-caller'; why: string }
   | { kind: 'seat-only'; why: string }
-  | { kind: 'leads-only'; why: string };
+  | { kind: 'leads-only'; why: string }
+  | { kind: 'team-change'; why: string }
+  | { kind: 'team-read'; why: string }
+) & {
+  /** A run with no terminal is refused, by the same `detachedRefusal` the module calls. */
+  terminal?: GateTerminal;
+};
 
 /** The nine read surfaces the record names; each admits any seat with a registry record. Two
  *  of them — `available`, `waits` — are Runtime words the table names and no command module
@@ -114,9 +130,13 @@ function buildGates(): Record<string, Gate> {
     // tools from the contract asks who may run every word, and a row that copied its guard by
     // hand would drift from the module. `any-caller` admits any caller, owner or not, record or
     // not; `seat-only` admits a declared seat of the team on its recorded pane and not the
-    // owner; `leads-only` admits a seat the file marks `leads` and not the owner. A command whose
-    // verbs differ says so in its `why`, and the module, never this map, decides the verb's own
-    // refusal.
+    // owner; `leads-only` admits a seat the file marks `leads` and not the owner;
+    // `team-change` is the row whose module calls `mayChangeTeamVerdict`, and `team-read` the
+    // row whose module calls `mayReadTeam` — the same functions decide, never a copy of their
+    // rule. A row whose module refuses a run with no terminal carries `terminal` as well, so
+    // the requirement is stated instead of hidden behind a kind that reads wider. A command
+    // whose verbs differ says so in its `why`, and the module, never this map, decides the
+    // verb's own refusal.
     'ask-show': {
       kind: 'any-caller',
       why: 'it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read',
@@ -150,8 +170,8 @@ function buildGates(): Record<string, Gate> {
       why: 'the help text reads no team file and asks for no caller',
     },
     hold: {
-      kind: 'owner-or-leads',
-      why: 'a hold is the team\'s: the owner or `leads` on its own seat places and releases it',
+      kind: 'team-change',
+      why: 'a hold is the team\'s: the owner, the orchestrator\'s seat or the operator\'s seat, on its recorded pane, places and releases it',
     },
     issues: {
       kind: 'any-caller',
@@ -170,8 +190,8 @@ function buildGates(): Record<string, Gate> {
       why: 'a declared seat of this team plans, on the pane the state records for it; the owner and a run with no terminal are not admitted',
     },
     policy: {
-      kind: 'owner-or-own-team',
-      why: 'the view is read by the owner, a seat of the team on its recorded pane, or an approved delegate pane; set and unset are the owner\'s alone, from a terminal outside herdr',
+      kind: 'team-read',
+      why: 'the view is read by the owner, a seat the state places on its recorded pane, or an approved delegate pane; set and unset are the owner\'s alone, from a terminal outside herdr',
     },
     pr: {
       kind: 'any-caller',
@@ -179,7 +199,8 @@ function buildGates(): Record<string, Gate> {
     },
     proc: {
       kind: 'owner-or-own-team',
-      why: 'add and done are the owner\'s or a declared seat\'s, and list reads what status does, so an approved delegate pane may list too',
+      why: 'add and done are the owner\'s or a declared seat\'s, from a terminal; list reads what status does, so an approved delegate pane may list too',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
     },
     projects: {
       kind: 'any-caller',
@@ -202,8 +223,8 @@ function buildGates(): Record<string, Gate> {
       why: 'a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused',
     },
     seats: {
-      kind: 'owner-or-own-team',
-      why: 'the owner, a seat of the team on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner\'s alone',
+      kind: 'team-read',
+      why: 'the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner\'s alone',
     },
     tempo: {
       kind: 'owner-only',
@@ -216,10 +237,11 @@ function buildGates(): Record<string, Gate> {
     watch: {
       kind: 'any-caller',
       why: 'anyone in a terminal or its own pane starts the watch; a run with no terminal is refused before it starts',
+      terminal: { who: 'the owner or a placed seat', where: 'a terminal outside herdr or its own pane' },
     },
     worktree: {
-      kind: 'owner-or-leads',
-      why: 'the owner or `leads` on its own seat manages worktrees; --session and --file are the owner\'s',
+      kind: 'team-change',
+      why: 'the owner, the orchestrator\'s seat or the operator\'s seat manages worktrees; --session and --file are the owner\'s',
     },
     // Subcommand rows, keyed `command:subcommand`: a verb whose gate differs from its command's
     // states its own row, and every subcommand node of the contract repeats one — never the
@@ -256,13 +278,15 @@ function buildGates(): Record<string, Gate> {
     'proc:add': {
       kind: 'owner-or-own-team',
       why: 'the owner or a declared seat records its process; a seat of another team and a run with no terminal are refused',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
     },
     'proc:done': {
       kind: 'owner-or-own-team',
-      why: 'a seat clears its own, a lead clears another seat\'s, and the owner clears any',
+      why: 'a seat clears its own, a lead clears another seat\'s, and the owner clears any; a run with no terminal is refused',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
     },
     'proc:list': {
-      kind: 'owner-or-own-team',
+      kind: 'team-read',
       why: 'the owner, a seat the state places on its own pane, or an approved delegate pane reads the list',
     },
     'release:check': {
@@ -278,16 +302,16 @@ function buildGates(): Record<string, Gate> {
       why: 'removing a standing grant is the owner\'s edit, and the revocation channel of 0.5.0 is the owner at a terminal',
     },
     'worktree:list': {
-      kind: 'owner-or-leads',
-      why: 'the owner or `leads` on its own seat lists the worktrees; --session and --file are the owner\'s',
+      kind: 'team-change',
+      why: 'the owner, the orchestrator\'s seat or the operator\'s seat lists the worktrees; --session and --file are the owner\'s',
     },
     'worktree:new': {
-      kind: 'owner-or-leads',
-      why: 'the owner or `leads` on its own seat creates a worktree; --session and --file are the owner\'s',
+      kind: 'team-change',
+      why: 'the owner, the orchestrator\'s seat or the operator\'s seat creates a worktree; --session and --file are the owner\'s',
     },
     'worktree:remove': {
-      kind: 'owner-or-leads',
-      why: 'the owner or `leads` on its own seat removes a worktree; --session and --file are the owner\'s',
+      kind: 'team-change',
+      why: 'the owner, the orchestrator\'s seat or the operator\'s seat removes a worktree; --session and --file are the owner\'s',
     },
   };
   for (const word of READ_SURFACES) {

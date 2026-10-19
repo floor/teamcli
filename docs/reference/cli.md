@@ -476,7 +476,7 @@ Usage:
 
 ### Who may run it
 
-`owner-or-leads` — a hold is the team's: the owner or `leads` on its own seat places and releases it
+`team-change` — a hold is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, places and releases it
 
 ### Flags
 
@@ -783,7 +783,7 @@ Usage:
 
 ### Who may run it
 
-`owner-or-own-team` — the view is read by the owner, a seat of the team on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr
+`team-read` — the view is read by the owner, a seat the state places on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr
 
 ### Flags
 
@@ -928,7 +928,9 @@ Usage:
 
 ### Who may run it
 
-`owner-or-own-team` — add and done are the owner's or a declared seat's, and list reads what status does, so an approved delegate pane may list too
+`owner-or-own-team` — add and done are the owner's or a declared seat's, from a terminal; list reads what status does, so an approved delegate pane may list too
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
 
 ### Flags
 
@@ -952,6 +954,8 @@ Usage:
 #### Who may run it
 
 `owner-or-own-team` — the owner or a declared seat records its process; a seat of another team and a run with no terminal are refused
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
 
 #### Flags
 
@@ -979,7 +983,9 @@ Usage:
 
 #### Who may run it
 
-`owner-or-own-team` — a seat clears its own, a lead clears another seat's, and the owner clears any
+`owner-or-own-team` — a seat clears its own, a lead clears another seat's, and the owner clears any; a run with no terminal is refused
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
 
 #### Flags
 
@@ -1005,7 +1011,7 @@ Usage:
 
 #### Who may run it
 
-`owner-or-own-team` — the owner, a seat the state places on its own pane, or an approved delegate pane reads the list
+`team-read` — the owner, a seat the state places on its own pane, or an approved delegate pane reads the list
 
 #### Flags
 
@@ -1416,7 +1422,7 @@ Usage:
 
 ### Who may run it
 
-`owner-or-own-team` — the owner, a seat of the team on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone
+`team-read` — the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone
 
 ### Flags
 
@@ -1621,6 +1627,8 @@ Usage:
 
 `any-caller` — anyone in a terminal or its own pane starts the watch; a run with no terminal is refused before it starts
 
+A run with no terminal is refused: only the owner or a placed seat runs this, from a terminal outside herdr or its own pane
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1648,7 +1656,7 @@ Usage:
 
 ### Who may run it
 
-`owner-or-leads` — the owner or `leads` on its own seat manages worktrees; --session and --file are the owner's
+`team-change` — the owner, the orchestrator's seat or the operator's seat manages worktrees; --session and --file are the owner's
 
 ### Flags
 
@@ -1671,7 +1679,7 @@ Usage:
 
 #### Who may run it
 
-`owner-or-leads` — the owner or `leads` on its own seat lists the worktrees; --session and --file are the owner's
+`team-change` — the owner, the orchestrator's seat or the operator's seat lists the worktrees; --session and --file are the owner's
 
 #### Flags
 
@@ -1697,7 +1705,7 @@ Usage:
 
 #### Who may run it
 
-`owner-or-leads` — the owner or `leads` on its own seat creates a worktree; --session and --file are the owner's
+`team-change` — the owner, the orchestrator's seat or the operator's seat creates a worktree; --session and --file are the owner's
 
 #### Flags
 
@@ -1727,7 +1735,7 @@ Usage:
 
 #### Who may run it
 
-`owner-or-leads` — the owner or `leads` on its own seat removes a worktree; --session and --file are the owner's
+`team-change` — the owner, the orchestrator's seat or the operator's seat removes a worktree; --session and --file are the owner's
 
 #### Flags
 

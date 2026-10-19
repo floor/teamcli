@@ -228,7 +228,7 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
     // Seat grant still covers builder-01
     const decision = resolveCaller(
       { kind: 'seat', name: 'builder-01', pane: 'w1:p4', session: 'acme' },
-      { id: teamId, orchestrator: loadedAfter.team.orchestrator, seats: loadedAfter.team.seats },
+      { id: teamId, orchestrator: loadedAfter.team.orchestrator, operator: loadedAfter.team.operator, seats: loadedAfter.team.seats },
       fx.root,
       fx.home,
       'merge',
