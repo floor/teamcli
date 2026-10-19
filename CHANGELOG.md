@@ -139,6 +139,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoint lives in the bus process's memory, so a restart or a read from another process
   starts from a full verify. The bus's plain output and exit codes are unchanged.
 
+### Fixed
+
+- **A seat launched into a lobby keeps its inbox.** The launch now carries the team file it read
+  into the plan and the seat-inbox registration, and the registration names that file to
+  `team mcp serve` with `--file`: the server resolves the team from it instead of the folder it
+  started in, which a seat launched into a lobby does not have. With no file named, the folder's
+  team file is the fallback, and a team that cannot be read is still refused. `restart`'s real
+  launch registers the inbox like `up`, `add` and `reload` already do. The codex launch-line route
+  writes no config file of its own, so its two `-c` values now carry the `--file` pair, with the
+  path escaped as a JSON string inside the structured value so a path with spaces or quotes stays
+  one argument; the cursor route's written JSON names the launch file, and gemini's and grok's
+  `mcp add` argv carries the path byte for byte. A named file is read and only that file: an empty
+  name, a missing file, a folder or an unreadable file is a refusal that writes nothing, though
+  the folder holds a valid team of its own, and `team mcp serve` exits 2 with the loader's message
+  before it makes a listener or an inbox folder. `--file ''` is refused by the parser with
+  `team mcp: --file needs a value`.
+
 ## [0.5.1] - 2026-10-19
 
 ### Added
