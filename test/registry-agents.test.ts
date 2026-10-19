@@ -100,6 +100,11 @@ describe('the agent store', () => {
     expect(readFileSync(join(agentsDir(home), `${agent.id}.yaml`), 'utf8')).toContain('orphaned_at: "2026-10-19T12:00:00.000Z"');
 
     expect(() => updateAgent(home, agent.id, { orphaned_at: 'yesterday' })).toThrow(/orphaned_at/);
+
+    // `null` takes the current mark off the record: the field is absent again, not null on disk.
+    updateAgent(home, agent.id, { orphaned_at: null });
+    expect(getAgent(home, agent.id)?.orphaned_at).toBeUndefined();
+    expect(readFileSync(join(agentsDir(home), `${agent.id}.yaml`), 'utf8')).not.toContain('orphaned_at');
   });
 
   test('a malformed seat handle or an incomplete record is refused, and nothing is written', () => {

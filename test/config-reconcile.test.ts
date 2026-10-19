@@ -11,7 +11,9 @@ import { planConfigSet, readSeatConfigSource, writeConfigSet } from '../src/conf
 import type { SignedConfigRecord } from '../src/config/record.ts';
 import { readEvents } from '../src/bus/log.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
+import { loadTeamFile } from '../src/file/load.ts';
 import { agentsDir, getAgent, registerAgent, type AgentInit } from '../src/registry/agents.ts';
+import { registerLaunch } from '../src/registry/sync.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { installKey } from '../src/store/keys.ts';
 
@@ -247,5 +249,55 @@ describe('reconcile: a seat record whose declaration is gone', () => {
     // A later pass leaves the mark where the removal was first seen.
     expect(reconcilePass({ project: PROJECT, root: repo, session: SESSION, home, now: new Date('2026-10-20T00:00:00Z') }).ok).toBe(true);
     expect(getAgent(home, agentId)?.orphaned_at).toBe('2026-10-19T12:00:00.000Z');
+  });
+
+  test('a re-declared seat that launches keeps its id and signed setting and loses the current mark', () => {
+    const repo = join(base, 'reland-repo');
+    mkdirSync(join(repo, '.agents'), { recursive: true });
+    execSync('git init -q -b main', { cwd: repo });
+    const teamId = teamIdOf(repo);
+    const agentId = registerAgent(home, init({
+      reach: { team: teamId, seat: SEAT, session: SESSION, pane: 'w36:p1', address: null },
+    })).id;
+    writeFileSync(join(repo, '.agents', 'team.yaml'), DECLARED);
+    const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'nickname', value: 'b1' }] });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(writeConfigSet(home, plan, { now: new Date('2026-10-19T08:00:00Z') }).ok).toBe(true);
+
+    // The declaration goes away, the pass marks the record, and the seat comes back.
+    writeFileSync(join(repo, '.agents', 'team.yaml'), DECLARATION_GONE);
+    expect(reconcilePass({ project: PROJECT, root: repo, session: SESSION, home, now: new Date('2026-10-19T12:00:00Z') }).ok).toBe(true);
+    expect(getAgent(home, agentId)?.orphaned_at).toBe('2026-10-19T12:00:00.000Z');
+    writeFileSync(join(repo, '.agents', 'team.yaml'), DECLARED);
+    const loaded = loadTeamFile(repo, { home });
+    if (!loaded.ok) throw new Error('the restored team file does not load');
+    const seat = loaded.team.seats.find((one) => one.name === SEAT);
+    if (seat === undefined) throw new Error('the restored team file declares no seat');
+
+    const launched = registerLaunch({ home, root: repo, team: loaded.team, by: 'team up', session: SESSION }, seat, 'w36:p9');
+
+    expect('id' in launched ? launched.id : null).toBe(agentId);
+    const after = getAgent(home, agentId);
+    expect(after?.orphaned_at).toBeUndefined();
+    expect(after?.lifecycle).toBe('running');
+    expect(after?.reach.pane).toBe('w36:p9');
+    const read = readSeatConfigSource(home, agentId, SEAT);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.settings.map((entry) => [entry.key, entry.value])).toEqual([['nickname', 'b1']]);
+  });
+
+  test('a team file this build cannot read neither marks nor clears a record', () => {
+    const repo = join(base, 'unreadable-repo');
+    mkdirSync(join(repo, '.agents'), { recursive: true });
+    execSync('git init -q -b main', { cwd: repo });
+    const agentId = registerAgent(home, init({
+      reach: { team: teamIdOf(repo), seat: SEAT, session: SESSION, pane: 'w36:p1', address: null },
+    })).id;
+    writeFileSync(join(repo, '.agents', 'team.yaml'), 'format: [\n');
+
+    expect(reconcilePass({ project: PROJECT, root: repo, session: SESSION, home, now: new Date('2026-10-19T12:00:00Z') }).ok).toBe(true);
+    expect(getAgent(home, agentId)?.orphaned_at).toBeUndefined();
   });
 });
