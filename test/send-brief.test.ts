@@ -7,10 +7,14 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runDrops } from '../src/commands/drops.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { MESSAGE_ID, receiptPath, writeListener } from '../src/mcp/inbox.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { readHistory } from '../src/send/history.ts';
+import { signedReceiptOf, verifyReceipt } from '../src/send/record.ts';
+import { messageKeyState } from '../src/store/keys.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { testIo, type TestIo } from './helpers.ts';
 
@@ -26,7 +30,9 @@ afterEach(() => {
 
 type World = { base: string; root: string; dir: string; home: string; sockets: string };
 
-function world(): World {
+function world(input: { human?: boolean; cli?: string } = {}): World {
+  const cli = input.cli ?? 'claude-code';
+  const human = input.human ?? true;
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'send-brief-')));
   made.push(base);
   const root = join(base, 'acme');
@@ -50,13 +56,12 @@ trust:
 seats:
   - role: coordinator
     name: ${SEAT}
-    cli: claude-code
+    cli: ${cli}
     vendor: test
     model: Test
     version: "1"
-    launch: claude
-    human: true
-`);
+    launch: ${cli === 'claude-code' ? 'claude' : cli}
+${human ? '    human: true\n' : ''}`);
   return { base, root, dir, home, sockets };
 }
 
@@ -79,6 +84,7 @@ function fake(w: World): SendHost {
     native,
     now: () => NOW,
     home: w.home,
+    inboxGraceMs: 0,
   };
 }
 
@@ -86,10 +92,11 @@ function io(w: World): TestIo {
   return testIo(w.root, { kind: 'owner' });
 }
 
-/** The one drop record the send wrote, parsed. */
+/** The one drop record the send wrote, parsed. The inbox listener's dotfile and the `.pending`
+ *  marker beside the record are not records. */
 function record(w: World): { id: string; body: string } {
   const dropDir = join(w.dir, 'send-drops', SESSION, SEAT);
-  const names = readdirSync(dropDir);
+  const names = readdirSync(dropDir).filter((name) => MESSAGE_ID.test(name));
   expect(names).toHaveLength(1);
   const parsed = JSON.parse(readFileSync(join(dropDir, names[0]!), 'utf8')) as { payload: { id: string; body: string } };
   return parsed.payload;
@@ -235,5 +242,83 @@ describe('a body that only points at a brief is warned about', () => {
     const history = readHistory('acme', w.root, w.home);
     expect(history.ok).toBe(true);
     if (history.ok) expect(history.entries).toEqual([]);
+  });
+});
+
+// OD50 end to end: under `brief-transport: message` a full brief sent by the ordinary
+// `team send --brief` command travels the seat's own delivery walk, not a special channel. The
+// synthetic runtime boundary is a live inbox listener marker naming this test's pid — no real
+// pane or floor session — so the mcp-inbox leg takes the record. The seat's receipt-writing
+// `team drops --read` then hands the whole body over once and signs the receipt; the sender's
+// history line names the leg and the outcome.
+describe('a message-transport full brief sent end to end', () => {
+  test('the whole brief is delivered, read once, receipted and in the history', async () => {
+    const w = world({ human: false, cli: 'codex' });
+    const wrote = writePolicySet(
+      w.home,
+      { level: 'team', target: w.root, teamRoot: w.root, name: 'brief-transport', value: 'message' },
+      { now: NOW },
+    );
+    expect(wrote.ok).toBe(true);
+    const text = 'First line of the brief.\nSecond line: the whole body, not a pointer.\n';
+    const path = brief(w, 'lead-to-reader.md', text);
+    const dropDir = join(w.dir, 'send-drops', SESSION, SEAT);
+    mkdirSync(dropDir, { recursive: true });
+    writeListener(dropDir, {
+      v: 1,
+      seat: SEAT,
+      session: SESSION,
+      root: w.root,
+      cli: 'codex',
+      pid: process.pid,
+      ts: NOW.toISOString(),
+    });
+    const on = io(w);
+
+    // The ordinary send: the whole file becomes the body, and the mcp-inbox leg takes it.
+    const code = await runSend([SEAT, '--brief', path], on, fake(w));
+    expect(code, on.err).toBe(0);
+    expect(on.out).toBe(`team acme, session "briefs"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
+    const rec = record(w);
+    expect(rec.body).toBe(`${HEADER}\n\n${text}`);
+
+    // The sender's history names the leg, the id and the outcome.
+    const history = readHistory('acme', w.root, w.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries.at(-1)).toMatchObject({
+        to: SEAT,
+        id: rec.id,
+        via: 'mcp-inbox',
+        outcome: 'sent (unconfirmed)',
+      });
+    }
+
+    // The seat's own read hands the full body over and signs the receipt against the record.
+    const readIo = testIo(w.root, { kind: 'owner' });
+    const read = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], readIo, { home: w.home });
+    expect(read, readIo.err).toBe(0);
+    expect(readIo.out).toBe(`${HEADER}\n\n${text}\n`);
+    expect(readIo.err).toBe('');
+    const at = receiptPath(dropDir, rec.id);
+    const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
+    const key = messageKeyState(w.home);
+    if (receipt === null) throw new Error('the seat wrote no signed receipt');
+    if (key.kind !== 'key') throw new Error('the fixture left no message key');
+    expect(verifyReceipt(receipt, key.key)).toBe(true);
+    expect(receipt.payload).toMatchObject({
+      kind: 'receipt',
+      status: 'read',
+      id: rec.id,
+      to: SEAT,
+      root: w.root,
+      session: SESSION,
+    });
+
+    // Write-once: the next turn finds nothing waiting, so the full body is not served twice.
+    const againIo = testIo(w.root, { kind: 'owner' });
+    const again = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], againIo, { home: w.home });
+    expect(again, againIo.err).toBe(0);
+    expect(againIo.out).toBe('');
   });
 });
