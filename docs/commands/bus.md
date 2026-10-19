@@ -29,6 +29,12 @@ An unknown argument is refused with the usage and exit 2; `--json` is one of the
 `--json` runs on the daemon loop. Ctrl-C, or SIGTERM, ends the serve loop, removes the socket
 file, and exits 0.
 
+The bus reads three of the owner's event thresholds when it starts: how often it reconciles
+(`event-reconcile-interval-seconds`), how much of the event log it keeps
+(`event-retention-days`), and when a held record reaches the lead
+(`event-held-threshold-seconds`). A signed policy source that cannot be read or verified refuses
+the start (`team bus: <problem>`, exit 2) rather than running on numbers no level chose.
+
 ## Who may run it
 
 | Caller | May |

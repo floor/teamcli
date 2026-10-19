@@ -4310,6 +4310,10 @@ for (const [name, command, args, invalidArgs] of [
   scene('policy.refused', async (place) => show(await policyRun(place, ['set', 'team', 'dev-mode', 'on'], detachedCaller), 'only the owner runs this'));
   scene('policy.invalid', async (place) => {
     write(place, TEAM);
+    // A delay threshold above the release default is the same invalid-value exit, before writing.
+    const ceiling = await policyRun(place, ['set', 'team', 'held', '900']);
+    expect(ceiling.code).toBe(2);
+    expect(ceiling.err).toContain('may only be shortened');
     return show(await policyRun(place, ['set', 'team', 'dev-mode', 'maybe']), 'team policy:');
   });
   scene('policy.done', async (place) => {

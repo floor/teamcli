@@ -30,14 +30,17 @@ import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, standingOf, type Caller } from '../caller.ts';
+import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { EVENT_THRESHOLDS } from '../policy/events.ts';
+import { eventThresholdsInForce, type EventThresholds } from '../policy/index.ts';
+import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { sayThreshold } from '../settings/inherit.ts';
 import { senderHeader } from '../send/admit.ts';
 import { namingFor } from '../send/names.ts';
 import { appendHistory } from '../send/history.ts';
@@ -225,7 +228,14 @@ function findRecord(hits: { seat: string; path: string }[], root: string, sessio
  * reason is the first fact that ended the thread. A record or close that does not verify changes
  * nothing, exactly as it changes no status.
  */
-function threadStateOf(root: string, session: string, thread: string, key: KeyObject, now: Date): ThreadState {
+function threadStateOf(
+  root: string,
+  session: string,
+  thread: string,
+  key: KeyObject,
+  now: Date,
+  thresholds: Pick<EventThresholds, 'thread_ttl_seconds' | 'thread_cap'>,
+): ThreadState {
   let count = 0;
   let latest = 0;
   let closed = false;
@@ -247,19 +257,23 @@ function threadStateOf(root: string, session: string, thread: string, key: KeyOb
     if (verifyClose(close, key)) closed = true;
   }
   if (closed) return { open: false, reason: 'close' };
-  if (latest > 0 && now.getTime() - latest >= EVENT_THRESHOLDS.thread_ttl_seconds * 1_000) {
+  if (latest > 0 && now.getTime() - latest >= thresholds.thread_ttl_seconds * 1_000) {
     return { open: false, reason: 'ttl' };
   }
-  if (count >= EVENT_THRESHOLDS.thread_cap) return { open: false, reason: 'cap' };
+  if (count >= thresholds.thread_cap) return { open: false, reason: 'cap' };
   return { open: true, reason: null };
 }
 
 /** Why a thread that is not open cannot be closed, in the thread's own terms. */
-function closedWords(thread: string, reason: NonNullable<ThreadState['reason']>): string {
+function closedWords(
+  thread: string,
+  reason: NonNullable<ThreadState['reason']>,
+  thresholds: Pick<EventThresholds, 'thread_ttl_seconds' | 'thread_cap'>,
+): string {
   if (reason === 'ttl') {
-    return `the thread ${thread} ended: no record on it for ${String(EVENT_THRESHOLDS.thread_ttl_seconds / 3_600)}h`;
+    return `the thread ${thread} ended: no record on it for ${sayThreshold(thresholds.thread_ttl_seconds)}`;
   }
-  if (reason === 'cap') return `the thread ${thread} ended at its ${String(EVENT_THRESHOLDS.thread_cap)}-record cap`;
+  if (reason === 'cap') return `the thread ${thread} ended at its ${String(thresholds.thread_cap)}-record cap`;
   return `the thread ${thread} is already closed`;
 }
 
@@ -398,7 +412,32 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     return refused(io, json, `record ${id} is bound to another checkout`);
   }
 
-  const state = threadStateOf(root, session, answered.thread, key, host.now());
+  // The thread's life and cap are the owner's event thresholds, read from the caller's own chain:
+  // the seat placing this call may carry a shorter word than the team. A chain that will not
+  // load is the configuration refusal (`reply.configuration`), never a guess at the defaults.
+  const seatName = placed.kind === 'seat' ? placed.name : null;
+  const seat = seatName === null ? null : (team.seats.find((entry) => entry.name === seatName) ?? null);
+  const agentId = seatName === null ? null : (findAgent(host.home, { team: teamIdOf(root), seat: seatName })?.id ?? null);
+  const thresholds = eventThresholdsInForce({
+    home: host.home,
+    entity: team.entity,
+    projectId: projectIdOfTeam(host.home, team, root),
+    root,
+    team,
+    agentId,
+    seat,
+    now: host.now(),
+    upToLevel: seatName === null ? 'team' : 'seat',
+  });
+  if (!thresholds.ok) {
+    return configuration(
+      io,
+      json,
+      thresholds.refusals.map((refusal) => refusal.message).join('; ') || 'the event thresholds cannot be read',
+    );
+  }
+
+  const state = threadStateOf(root, session, answered.thread, key, host.now(), thresholds.thresholds);
   const at = host.now().toISOString();
   const startedAt = host.now().getTime();
 
@@ -409,7 +448,9 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
       raiseSecurityRefusal(team, root, host.home, dir, placed, 'placement', null, host.now());
       return refused(io, json, `seat ${me} is not this call on its own pane and session; this call is ${describeCaller(placed)}`);
     }
-    if (state.reason !== null) return refused(io, json, `${closedWords(answered.thread, state.reason)}; nothing was written`);
+    if (state.reason !== null) {
+      return refused(io, json, `${closedWords(answered.thread, state.reason, thresholds.thresholds)}; nothing was written`);
+    }
     const closePayload: ClosePayload = { kind: 'thread-close', id: answered.id, thread: answered.thread, by: me, root, session, at };
     const lockSeat = me;
     const lock = acquireSeatLock(dir, session, lockSeat);
