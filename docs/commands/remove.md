@@ -4,7 +4,8 @@ Takes one seat out of the team: asks it to exit, waits for its pane to come back
 closes its workspace, and edits the file so the seat is not started again. `--keep` leaves the seat
 in the file as `stopped: true`; a seat that is busy — working, blocked at a prompt, at its own exit
 question, on a screen the profile does not recognise, or holding unsent text — is left as it is,
-unless its owner abandons it.
+unless its owner abandons it. A seat the file marks `human: true` leaves the file without its pane
+being touched: nothing is typed into it; left running.
 
 ## Synopsis
 

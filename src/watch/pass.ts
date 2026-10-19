@@ -46,6 +46,7 @@ import { load } from './checks/load.ts';
 import { memory as memoryCheck } from './checks/memory.ts';
 import { missing } from './checks/missing.ts';
 import { modelDrift } from './checks/model-drift.ts';
+import { promptEscalation } from './checks/prompt-escalation.ts';
 import { restored } from './checks/restored.ts';
 import { swapFree } from './checks/swap-free.ts';
 import { swapGrowth } from './checks/swap-growth.ts';
@@ -146,9 +147,9 @@ export type PassResult = {
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
-// run, except the four that can't be turned off.
+// run, except the five that can't be turned off.
 export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, attention, providerError, unsent, idle];
-export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
+export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
 // permission prompt as idle, so the screen decides first. `team check` reads it too, over a pane
@@ -568,10 +569,10 @@ export function pass({
   return { reports, work: workDrops(team, live, observations, watch, now, memory, read), ring, mailboxNote, readings, machineReadings, labels, refusals: refused };
 }
 
-/** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
- *  box that already holds text are not due. The stamp lives in this process: a restart starts
- *  the idle clock again. A seat seen working clears its stamp, so the next quiet stretch waits
- *  `idle_first` once more. */
+/** Idle workers due a work drop this pass. Leads, parked and stopped seats, a seat whose pane is
+ *  a human's, a dialog and a box that already holds text are not due. The stamp lives in this
+ *  process: a restart starts the idle clock again. A seat seen working clears its stamp, so the
+ *  next quiet stretch waits `idle_first` once more. */
 function workDrops(
   team: TeamFile,
   live: Live,
@@ -585,7 +586,8 @@ function workDrops(
   const body = team.watch.nudge ?? NUDGE_TEXT;
   const due: PassResult['work'] = [];
   for (const obs of observations) {
-    if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) {
+    const fileSeat = team.seats.find((item) => item.name === obs.name);
+    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
       delete sent[obs.name];
       continue;
     }

@@ -52,6 +52,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -69,6 +70,8 @@ import { emptySession, mintSeatId, readState, updateState, type SeatState, type 
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
+import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -282,6 +285,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const workspaces = sources.workspaces(session);
   if (agents === null || workspaces === null) return herdrRefused(out, json);
 
+  // A pane the file marks as a human's is never typed into or launched over: this command is a
+  // stop followed by a launch, so it steps over the seat entirely and says why.
+  if (declared.human) {
+    return notReadyRefused(out, json, `${name} is a human's pane: nothing is typed into it or launched over it; left as it is`);
+  }
+
   // Inspect the target seat's current pane before any preflight or stop.
   const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, caller.kind === 'owner', sources);
   if (inspected.kind === 'replaced') return replacedRefused(out, json, name);
@@ -451,7 +460,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat], { project: team.project, root, home: sources.home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'restart', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
@@ -464,6 +473,26 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       cliHooks: installed,
       watchLabel: watchLabel(team.project),
     });
+    // The general seat brief goes first, before the plan types a rules line into the pane: one
+    // signed drop. A delivery that cannot be written is said and logged, and the launch goes on;
+    // `team check` names the seat with no record.
+    const briefs = deliverGeneralBrief({
+      dir,
+      root,
+      session,
+      seats: [planSeat.name],
+      home,
+      at: (sources.now?.() ?? new Date()).toISOString(),
+    });
+    const briefLine = (said: string): void => {
+      if (json) notes.push(said);
+      else out.stderr(`team restart: ${plainText(said)}\n`);
+      logLine(dir, 'restart', who, said, sources.now());
+    };
+    for (const delivery of briefs.deliveries) {
+      if (!delivery.ok) briefLine(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
+    }
+    if (briefs.recording !== undefined) briefLine(`the general seat brief was written and not recorded (${briefs.recording})`);
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.
     resetCliHookState(dir, session, [planSeat.name]);
@@ -666,7 +695,16 @@ function buildUpSeat(
     version: seat.version,
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: false,
+    // A human's pane: no launch, no key, no line. The plan skips it before any of that.
+    ...(seat.human ? { human: true as const } : {}),
     rules: rulesOf(team, seat, root),
+    sessionName: sessionDisplayName({
+      seat: seat.name,
+      nickname: seat.nickname ?? null,
+      team: teamIdOf(root),
+      teamName: team.project,
+      mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+    }),
     ...seatDeliveryOf(standing, team, seat, root, home, live),
     ...(start.lobby ? { lobby: true } : {}),
   };
@@ -705,6 +743,9 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: () => null,
     paneRun: launch.paneRun,
+    ...(launch.registerInbox
+      ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+      : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }
       : {}),

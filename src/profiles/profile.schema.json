@@ -79,6 +79,45 @@
       "items": { "type": "string", "minLength": 1 },
       "description": "optional: paths this CLI reads at start in its working folder; a trailing slash names a directory and every file under it, and the lobby gate refuses each of these at any depth"
     },
+    "mcp_inbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "optional: the team inbox's measured registration for this CLI; absent, its seats stay on the drop and typed legs",
+      "properties": {
+        "launch_args": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "arguments appended to the launch line; {seat}, {session}, {command} and {entry} are filled from the launch"
+        },
+        "add": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the CLI's own project-scope mcp add subcommand arguments, run in the seat's folder at launch"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the file add writes, relative to the seat's folder"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "a config file team writes itself, relative to the seat's folder"
+        }
+      },
+      "anyOf": [
+        { "required": ["launch_args"] },
+        { "required": ["add"] },
+        { "required": ["file"] }
+      ],
+      "allOf": [
+        { "not": { "required": ["add", "file"] } },
+        { "if": { "required": ["add"] }, "then": { "required": ["target"] } },
+        { "if": { "required": ["target"] }, "then": { "required": ["add"] } }
+      ]
+    },
     "timeouts": {
       "type": "object",
       "additionalProperties": false,

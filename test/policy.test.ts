@@ -36,7 +36,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
@@ -150,6 +150,15 @@ function makeFixture(yamlText: string = TEAM_YAML): {
     session.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
     session.seats.worker = { stage: 'ready', pane: 'w2:p1', workspace: 'w2' };
   });
+  // The launch delivered the general brief before it typed: each seat's record and state entry.
+  deliverBriefs({
+    dir: join(root, '.agents'),
+    root,
+    session: validated.team.session,
+    seats: validated.team.seats.map((seat) => seat.name),
+    home,
+    at: NOW.toISOString(),
+  });
 
   return {
     base,
@@ -184,7 +193,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     const delivery = resolvePolicy('delivery-order', []);
     expect(delivery.ok).toBe(true);
     if (delivery.ok) {
-      expect(delivery.effective.value).toEqual(['native', 'mcp-inbox', 'typed']);
+      expect(delivery.effective.value).toEqual(['mcp-inbox', 'drop', 'typed']);
       expect(delivery.effective.level).toBe('default');
     }
 
@@ -1187,7 +1196,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     }
   });
 
-  test('scene: unsigned legacy delivery_order loosening a signed project policy points repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
+  test('scene: unsigned legacy delivery_order that loosens a signed project policy is reported as the team’s difference, pointing the repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
     const fx = makeFixture();
     try {
       // Signed project policy delivery-order [typed]
@@ -1203,10 +1212,10 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       );
       expect(wroteProject.ok).toBe(true);
 
-      // Team file carries legacy delivery_order: [native, typed]
+      // Team file carries legacy delivery_order: [mcp-inbox, typed]
       const teamYamlPath = join(fx.root, '.agents', 'team.yaml');
       const baseYaml = readFileSync(teamYamlPath, 'utf8');
-      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [native, typed]\n`);
+      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [mcp-inbox, typed]\n`);
 
       let out1 = '';
       let err1 = '';
@@ -1227,8 +1236,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       });
       expect(code1).toBe(1);
       expect(err1).toBe('');
+      // The word adds `mcp-inbox` to the project's typed-only order, which a team level may not
+      // do: the policy chain refuses it, and that one difference stands in place of the legacy
+      // line taking effect.
       expect(out1).toContain(
-        'difference: policy "delivery-order" at level team ("native, typed") loosens level project ("typed")\n' +
+        'difference: policy "delivery-order" at level team ("mcp-inbox, typed") loosens level project ("typed")\n' +
           '  repair: remove or narrow delivery_order in .agents/team.yaml\n' +
           "  who: the team's lead\n",
       );
@@ -1387,7 +1399,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(await runPolicy(['--seat', 'worker', '--file', '.agents/team.yaml'], seatIo, { home: fx.home, now: () => NOW })).toBe(0);
       expect(seatIo.out).toContain('team beacon, session "beacon" · seat worker');
       expect(seatIo.out).toMatch(
-        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: native, mcp-inbox, typed\)/,
+        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: mcp-inbox, drop, typed\)/,
       );
       expect(seatIo.out).not.toContain('same as the team');
     } finally {

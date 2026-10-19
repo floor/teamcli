@@ -39,6 +39,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -55,12 +56,15 @@ import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffort
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
+import { registerInbox } from '../mcp/register.ts';
 
 export type AddSources = {
   home: string;
@@ -90,6 +94,7 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -439,6 +444,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // …); the plain line is the sentence it always printed.
     refuse(io, json, 'add', { id: built.id, message: built.error, repair: null });
     // exit: add.no-seat
+    // exit: add.human
     // exit: add.not-restored
     // exit: add.no-like
     // exit: add.until
@@ -949,12 +955,34 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and launches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat], { project: prepared.team.project, root, home: sources.home });
     const who = describeCaller(caller);
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
     const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
+    // The general seat brief goes first, before the plan types a rules line into the new seat's
+    // pane: one signed drop, human seats included. A delivery that cannot be written is said and
+    // logged, and the launch goes on; `team check` names the seat with no record.
+    const briefs = deliverGeneralBrief({
+      dir,
+      root,
+      session,
+      seats: [planSeat.name],
+      home: sources.home,
+      at: (sources.now?.() ?? new Date()).toISOString(),
+    });
+    for (const delivery of briefs.deliveries) {
+      if (delivery.ok) continue;
+      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+      out.stderr(`team add: ${plainText(said)}\n`);
+      logLine(dir, 'add', who, said, sources.now());
+    }
+    if (briefs.recording !== undefined) {
+      const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+      out.stderr(`team add: ${plainText(said)}\n`);
+      logLine(dir, 'add', who, said, sources.now());
+    }
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false };
@@ -1042,6 +1070,9 @@ function declaredSeat(
 ): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string; id: string } {
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) return { id: 'add.no-seat', error: `the file has no seat ${JSON.stringify(name)}` };
+  // A human's pane is never launched into or typed into. `add` names one seat, so it refuses
+  // with the reason rather than walk a plan that would skip the only seat it was asked to add.
+  if (seat.human) return { id: 'add.human', error: `${name} is a human's pane: nothing is typed into it or launched over it; left as it is` };
   let edited = current;
   if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
   const again = validateTeamFile(edited, { home, fs });
@@ -1133,8 +1164,17 @@ function seatPlan(
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: false,
+    // A human's pane: no launch, no key, no line. The plan skips it before any of that.
+    ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root),
+    sessionName: sessionDisplayName({
+      seat: seat.name,
+      nickname: seat.nickname ?? null,
+      team: teamIdOf(root),
+      teamName: team.project,
+      mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+    }),
     ...seatDeliveryOf(standing, team, seat, root, home, true),
     ...(start.lobby ? { lobby: true } : {}),
   };
@@ -1252,6 +1292,9 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: input.confirmLobby,
     paneRun: launch.paneRun,
+    ...(launch.registerInbox
+      ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+      : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
       : {}),

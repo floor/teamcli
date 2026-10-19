@@ -27,7 +27,7 @@ import { getTeam, noteTeam, setRoster, teamIdOf } from '../src/registry/teams.ts
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 const PANE = 'w1:p1';
@@ -119,6 +119,8 @@ function ready(w: World): void {
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
     session.seats.lead = { stage: 'ready', pane: PANE, workspace: 'w1' };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir: w.dir, root: w.root, session: 'acme', seats: ['lead'], home: w.home, at: NOW.toISOString() });
 }
 
 /** The check scene's reading of herdr: the one seat running on its recorded pane, its screen the

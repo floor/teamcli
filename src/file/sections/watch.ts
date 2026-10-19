@@ -58,7 +58,7 @@ export const watch: Section = {
         type: 'object',
         propertyNames: { enum: CHECK_NAMES.filter((name) => !ALWAYS_ON.includes(name)) },
         additionalProperties: { const: 'off' },
-        $comment: 'the four that always run (attention, missing, model-drift, approval) are refused here too',
+        $comment: 'the five that always run (attention, missing, model-drift, prompt-escalation, approval) are refused here too',
       },
     },
   },

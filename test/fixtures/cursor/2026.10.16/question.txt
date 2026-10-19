@@ -1,0 +1,20 @@
+  Ask me to choose between alpha and beta           
+  before doing anything else.                       
+                                                    
+
+  Choose one before I continue.
+
+ ┌─────────────────────────────────────────────────┐
+ │ Clarifying Questions                            │
+ │                                                 │
+ │ Question 1 of 1                                 │
+ │                                                 │
+ │ 1. Which option do you want?                    │
+ │                                                 │
+ │   › [ ] Alpha                                   │
+ │     [ ] Beta                                    │
+ │     [ ] Other: (type to answer)                 │
+ │                                                 │
+ │ ↑/↓ option · ←/→ question · Space select ·      │
+ │ Enter next/submit · Esc to skip                 │
+ └─────────────────────────────────────────────────┘

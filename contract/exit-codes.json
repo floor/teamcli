@@ -158,6 +158,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.human",
+      "meaning": "the named seat is a human's pane",
+      "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.lobby",
       "meaning": "the lobby could not be created for the launch",
       "trigger": "team add worker"
@@ -466,6 +473,13 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.human",
+      "meaning": "the seat is a human's pane; no dialog key is pressed and no rules line is typed",
+      "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.label",
       "meaning": "the trust choice is not the recorded one",
       "trigger": "team answer lead trust"
@@ -658,6 +672,41 @@
       "id": "broker.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team broker"
+    },
+    {
+      "code": 0,
+      "command": "bus",
+      "id": "bus.started",
+      "meaning": "the bus started and served on .agents/bus.sock",
+      "trigger": "team bus"
+    },
+    {
+      "code": 0,
+      "command": "bus",
+      "id": "bus.stopped",
+      "meaning": "the bus served until it was stopped",
+      "trigger": "team bus"
+    },
+    {
+      "code": 1,
+      "command": "bus",
+      "id": "bus.refused",
+      "meaning": "the caller is not the owner at a terminal outside herdr, a bus is already running or starting, or the socket could not be bound",
+      "trigger": "team bus"
+    },
+    {
+      "code": 2,
+      "command": "bus",
+      "id": "bus.configuration",
+      "meaning": "not inside a git repository or the team file cannot be read",
+      "trigger": "team bus"
+    },
+    {
+      "code": 2,
+      "command": "bus",
+      "id": "bus.usage",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team bus extra"
     },
     {
       "code": 0,
@@ -1144,6 +1193,48 @@
     },
     {
       "code": 0,
+      "command": "drops",
+      "id": "drops.ok",
+      "meaning": "the caller's unread drops were listed, or followed until it stopped",
+      "trigger": "team drops"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team drops"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.refused",
+      "meaning": "the caller is not a placed seat of this team",
+      "trigger": "team drops"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.unreadable",
+      "meaning": "the drop folder can't be read",
+      "trigger": "team drops"
+    },
+    {
+      "code": 2,
+      "command": "drops",
+      "id": "drops.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team drops extra"
+    },
+    {
+      "code": 2,
+      "command": "drops",
+      "id": "drops.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team drops"
+    },
+    {
+      "code": 0,
       "command": "feed",
       "id": "feed.ok",
       "meaning": "the message feed was printed",
@@ -1481,6 +1572,13 @@
     {
       "code": 0,
       "command": "mcp",
+      "id": "mcp.serve-ended",
+      "meaning": "the inbox server's stdin closed and it stopped cleanly",
+      "trigger": "team mcp serve"
+    },
+    {
+      "code": 0,
+      "command": "mcp",
       "id": "mcp.up",
       "meaning": "every observed bridge leg is up",
       "trigger": "team mcp status"
@@ -1512,6 +1610,13 @@
       "id": "mcp.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team mcp"
+    },
+    {
+      "code": 2,
+      "command": "mcp",
+      "id": "mcp.serve-refused",
+      "meaning": "the inbox server can't start: the invocation, the team placement or its inbox folder can't be read",
+      "trigger": "team mcp serve"
     },
     {
       "code": 0,
@@ -1956,6 +2061,62 @@
     },
     {
       "code": 0,
+      "command": "raise",
+      "id": "raise.dry-run",
+      "meaning": "the route the raise would take; nothing was written",
+      "trigger": "team raise release.ready \"the release is ready for the owner\" --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "raise",
+      "id": "raise.merged",
+      "meaning": "the line was merged into the owner's open record, and the record counts it",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 0,
+      "command": "raise",
+      "id": "raise.raised",
+      "meaning": "the line reached the owner's mailbox as a signed record, and the owner was notified",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 1,
+      "command": "raise",
+      "id": "raise.capped",
+      "meaning": "ten raises have reached the owner today",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 1,
+      "command": "raise",
+      "id": "raise.io",
+      "meaning": "the event log or the owner's record can't be read or written",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 1,
+      "command": "raise",
+      "id": "raise.refused",
+      "meaning": "not the orchestrator's seat or a lead's",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 2,
+      "command": "raise",
+      "id": "raise.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team raise release.ready \"the release is ready for the owner\""
+    },
+    {
+      "code": 2,
+      "command": "raise",
+      "id": "raise.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team raise"
+    },
+    {
+      "code": 0,
       "command": "register",
       "id": "register.already",
       "meaning": "the seat is already recorded on that pane",
@@ -2260,6 +2421,13 @@
       "command": "reload",
       "id": "reload.grant-scope",
       "meaning": "the grant does not list reload",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.human",
+      "meaning": "the seat is a human's pane; nothing is closed, typed into or launched over it",
       "trigger": "team reload worker"
     },
     {
@@ -2635,6 +2803,34 @@
     },
     {
       "code": 0,
+      "command": "reply",
+      "id": "reply.replied",
+      "meaning": "the reply record was written on its thread, or its thread was closed",
+      "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
+    },
+    {
+      "code": 1,
+      "command": "reply",
+      "id": "reply.refused",
+      "meaning": "the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team",
+      "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
+    },
+    {
+      "code": 2,
+      "command": "reply",
+      "id": "reply.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
+    },
+    {
+      "code": 2,
+      "command": "reply",
+      "id": "reply.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team reply"
+    },
+    {
+      "code": 0,
       "command": "restart",
       "id": "restart.dry-run",
       "meaning": "the stop and launch plan was printed and nothing was touched",
@@ -2903,14 +3099,21 @@
       "code": 0,
       "command": "send",
       "id": "send.answered",
-      "meaning": "the seat's reply came back within the window",
+      "meaning": "a reply record on the thread arrived within the window",
       "trigger": "team send worker hello --wait"
     },
     {
       "code": 0,
       "command": "send",
+      "id": "send.confirmed",
+      "meaning": "a native handoff was recorded to the history and its pending record cleared",
+      "trigger": "team send --confirm 11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.delivered",
-      "meaning": "the seat's channel took the message",
+      "meaning": "the record is written and the seat's channel took the message",
       "trigger": "team send worker hello"
     },
     {
@@ -2930,6 +3133,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.native",
+      "meaning": "a native handoff was printed for the sender's own SendMessage, and nothing was delivered",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.record-dry-run",
       "meaning": "a recorded native delivery was resolved and nothing was written",
       "trigger": "team send --record builder-2 --channel native --ms 812 --dry-run"
@@ -2940,6 +3150,13 @@
       "id": "send.recorded",
       "meaning": "a native delivery the sender made itself was written to the history",
       "trigger": "team send --record builder-2 --channel native --ms 812"
+    },
+    {
+      "code": 0,
+      "command": "send",
+      "id": "send.sent-unconfirmed",
+      "meaning": "the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back",
+      "trigger": "team send worker hello"
     },
     {
       "code": 1,
@@ -2980,7 +3197,7 @@
       "code": 1,
       "command": "send",
       "id": "send.timeout",
-      "meaning": "sent on the socket, but no reply within the window",
+      "meaning": "the record was sent, and the wait window closed with no reply on the thread (the thread stays open)",
       "trigger": "team send worker hello --wait --timeout 10"
     },
     {

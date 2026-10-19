@@ -3,6 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, s
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { validLockName } from './lock/name.ts';
+import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
 
@@ -11,6 +12,9 @@ import { cleanClassification, type Classification } from './launch/progress.ts';
 // team alone: every write holds the lock and goes through a temporary file.
 
 export const SEAT_ID_PATTERN = /^seat_[0-9a-f]{12}$/;
+
+/** The id a general-brief delivery names: the lowercase UUID every drop record is named by. */
+export const BRIEF_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function isSeatId(value: unknown): value is string {
   return typeof value === 'string' && SEAT_ID_PATTERN.test(value);
@@ -25,12 +29,24 @@ export type RetainedSeat = {
   last_active?: string;
 };
 
+/** One seat's general-brief delivery: the record's id and when the seat received it. */
+export type BriefRecord = {
+  id: string;
+  at: string;
+};
+
 export type SeatState = {
   /** Stable seat handle (`seat_<12 lowercase hex>`), minted when the seat is first recorded. */
   id?: string;
   stage: 'launched' | 'named' | 'ready';
   /** The CLI the seat was launched with: `down` stops it under it when the file renamed it. */
   cli?: string;
+  /**
+   * How the seat's CLI learns a drop is waiting: the turn-start hook the launch installed, the
+   * MCP inbox its profile registers, or nothing. Written by the launch; absent on a seat
+   * launched before it was recorded.
+   */
+  watcher?: CliWatcher;
   /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
   last_active?: string;
   pane?: string;
@@ -143,6 +159,13 @@ export type SessionState = {
    * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
    */
   retained_seats?: Record<string, RetainedSeat>;
+  /**
+   * The general seat brief delivered to each seat: the record's id and when it landed, written by
+   * the launch that wrote the drop. `team check` reads it to name a seat the brief never reached;
+   * only a launch writes it, and only the delivery's own record is trusted to name its time. No
+   * `rules` value and no stage: a seat's brief is not its lifecycle.
+   */
+  briefs?: Record<string, BriefRecord>;
   /**
    * A lead seat (the orchestrator's or the operator's) stopped for a replacement by `team remove
    * <lead> --keep`: who stopped it and when. The file is not edited — a lead is never `stopped:` —
@@ -286,6 +309,26 @@ export function readState(dir: string): State {
       if (seat.waiting && typeof seat.waiting === 'object') {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);
       }
+    }
+    // A brief delivery enters from the file like every other value, and is cleaned here: the id
+    // is the record id the drop leg writes, and the time must parse. A seat name is a key, never
+    // a path, so any non-empty one stands; only a launch writes the map.
+    if (session.briefs && typeof session.briefs === 'object') {
+      for (const [seat, brief] of Object.entries(session.briefs)) {
+        if (
+          seat === '' ||
+          !brief ||
+          typeof brief !== 'object' ||
+          typeof brief.id !== 'string' ||
+          !BRIEF_ID_PATTERN.test(brief.id) ||
+          typeof brief.at !== 'string' ||
+          Number.isNaN(Date.parse(brief.at))
+        ) {
+          delete session.briefs[seat];
+        }
+      }
+    } else if (session.briefs !== undefined) {
+      delete session.briefs;
     }
     if (session.retained_seats && typeof session.retained_seats === 'object') {
       for (const [name, retained] of Object.entries(session.retained_seats)) {

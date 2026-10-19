@@ -8,7 +8,7 @@ import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { extractFolder, isEligible, labelMatches, versionMatches, wholeVersion, type TrustRecord } from '../src/profiles/trust-answer.ts';
+import { extractFolder, isEligible, keyOf, labelMatches, versionMatches, wholeVersion, type TrustRecord } from '../src/profiles/trust-answer.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -18,6 +18,7 @@ import { readGrants, writeGrant, writeRevocation } from '../src/permissions/gran
 import { teamIdOf } from '../src/registry/teams.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
 import { rulesFilePath } from '../src/launch/rules-file.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { testIo } from './helpers.ts';
 
 const cursorTrust = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
@@ -225,6 +226,26 @@ describe('what the captures show', () => {
     expect(agyTrust).toContain('enter Confirm');
   });
 
+  test('the 2026.10.16 record is the one the run applies to its own capture', () => {
+    const cursor = profileFor('cursor');
+    if (!cursor) throw new Error('profile');
+    const capture = readFileSync(new URL('./fixtures/cursor/2026.10.16/trust.txt', import.meta.url), 'utf8');
+    const record = cursor.answers.find((item) => item.capture === 'cursor/2026.10.16/trust.txt');
+    if (!record) throw new Error('record');
+    // The selection `team answer` and `team doctor` make: the exact version in force picks this
+    // record, eligible by its own registered capture.
+    expect(isEligible('cursor', record)).toBe(true);
+    expect(versionMatches(record, '2026.10.16-e3cb207')).toBe(true);
+    expect(cursor.answers.find((item) => isEligible('cursor', item) && versionMatches(item, '2026.10.16-e3cb207'))).toBe(record);
+    // Applied to its own capture: the screen is the dialog, the row `team` presses is the recorded
+    // label, the one folder between the anchors is the one the lobby path sits in, and the
+    // recorded key is still `a`.
+    expect(readScreen('cursor', capture).kind).toBe('trust');
+    expect(labelMatches(record, capture)).toBe(true);
+    expect(extractFolder(record.extract, capture)).toBe('<workspace>');
+    expect(keyOf(record.action)).toBe('a');
+  });
+
   test('a run of rows is joined only when it proves one wrapped path', () => {
     const codex = profileFor('codex');
     const codexRecord = codex?.answers[0];
@@ -309,6 +330,23 @@ describe('version matching', () => {
 });
 
 describe('team answer', () => {
+  test("a human seat takes no dialog key and no rules line", async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby).replace('    name: lead\n', '    name: lead\n    human: true\n'));
+    await approve(root, home);
+    // The pane shows a trust dialog and herdr names the agent: without the mark every check
+    // below would pass and the key would be pressed.
+    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toBe("lead: the pane is a human's; no dialog key is pressed and no rules line is typed; left as it is\n");
+    expect(host.keys).toEqual([]);
+    expect(host.typed).toEqual([]);
+    expect(host.entered).toBe(0);
+    expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain('answer [owner] lead: refused trust: human');
+  });
+
   test('cursor and antigravity each send their one key, then become ready', async () => {
     for (const cli of ['cursor', 'antigravity'] as const) {
       const { root, home, lobby, dir } = world();

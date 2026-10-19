@@ -20,7 +20,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
-import { testIo } from './helpers.ts';
+import { deliverBriefs, testIo } from './helpers.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 
@@ -263,6 +263,8 @@ describe('a restored seat outside its launcher, in status, check and doctor', ()
         agent_session: 'kept',
       };
     });
+    // The launch delivered the general brief before it typed: the seat's record and its state entry.
+    deliverBriefs({ dir: join(dir, '.agents'), root: dir, session: 'acme-web', seats: [seat], home, at: NOW.toISOString() });
     const agentAt = (name: string, pane: string, status: string, kind = 'claude'): HerdrAgent => ({
       name,
       agent: kind,

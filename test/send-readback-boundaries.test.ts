@@ -14,7 +14,7 @@ import { startSendDaemon, daemonDropDir, type DaemonHost, type SendDaemonHandle 
 import { readHistory } from '../src/send/history.ts';
 import { readPending } from '../src/send/pending.ts';
 import { filed } from './send-native-fixtures.ts';
-import { testIo } from './helpers.ts';
+import { recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T16:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -71,6 +71,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# These scenes walk the typed leg: the inbox is tried and skipped for want of a listener, then
+# the trigger line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -173,7 +176,7 @@ describe('the composer read-back at its boundaries', () => {
     const drops = join(world.dir, 'send-drops', 'acme', 'lead');
     const files = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
     expect(files.length).toBe(1);
-    expect(readFileSync(join(drops, files[0]!), 'utf8')).toBe(filed('the pane refused the Enter'));
+    expect(recordBody(join(drops, files[0]!))).toBe(filed('the pane refused the Enter'));
     expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
   });
 
@@ -258,7 +261,7 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'into a dialog'], io, host)).toBe(1);
-    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle; the drop file is at');
+    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle; the record is at');
     // The pane is a dialog by the time the line has settled: no Enter goes to it.
     expect(host.enters.length).toBe(0);
     expect(outcomes(world)).toEqual(['unreachable']);

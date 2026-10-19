@@ -7,7 +7,7 @@ process_names:
   - cursor-agent
 tested:
   from: '2026.10.01'
-  to: '2026.10.14'
+  to: '2026.10.16'
 unattended:
   - --force
   - --sandbox
@@ -54,12 +54,36 @@ trust_answer:
       after: 'directory?'
       before: '[a] Trust this workspace'
       box: true
+  # The same dialog again on cursor-agent 2026.10.16-e3cb207 (`cursor/2026.10.16/trust.txt`):
+  # the marked row is still `[a] Trust this workspace` and the key is still `a`.
+  - from: '2026.10.16-e3cb207'
+    to: '2026.10.16-e3cb207'
+    label: '[a] Trust this workspace'
+    action: '61'
+    capture: cursor/2026.10.16/trust.txt
+    extract:
+      after: 'directory?'
+      before: '[a] Trust this workspace'
+      box: true
 startup_reads:
   - CLAUDE.md
   - CLAUDE.local.md
   - AGENTS.md
   - .cursorrules
   - .cursor/rules/
+# The team inbox registers in the seat's own `.cursor/mcp.json`: cursor-agent has no `mcp
+# add` (2026.10.14 `mcp --help` lists login, list, list-tools, enable, disable), so team
+# merges the server into that file. Measured on 2026.10.14-0f9edde in a scratch folder: with
+# that file holding `mcpServers.team-inbox`, `cursor-agent mcp list` printed
+# `team-inbox: not loaded (needs approval)`, exit 0, and `cursor-agent --help` lists
+# `--approve-mcps` as "Automatically approve all MCP servers". So the launch approves the
+# server it just registered. The launch refuses to write the file where the project does
+# not ignore it, and leaves a file it cannot merge (a link, not JSON, not an object) as it
+# is.
+mcp_inbox:
+  launch_args:
+    - --approve-mcps
+  file: .cursor/mcp.json
 models:
   option:
     - --model

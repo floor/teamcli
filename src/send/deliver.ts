@@ -11,7 +11,7 @@
 // Enter. Only text the CLI drew unstyled is in the box.
 import { stripSgr } from '../ansi.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
-import { classify, readBox, readScreen } from '../watch/screen.ts';
+import { classify, classifyComposer, readBox, readScreen } from '../watch/screen.ts';
 import { POLL_MS, SETTLE_MS, sawSubmission, type NativePane } from './native.ts';
 
 /** The most Enters one delivery presses. */
@@ -126,7 +126,13 @@ function look(host: DeliverHost, pane: string, line: string, profile: string): L
   }
   const dialog = dialogKind(profile, screen);
   if (dialog !== null) return { state: 'dialog', kind: dialog };
-  if (read.kind !== 'unsent') return { state: 'empty', screen };
+  // A running turn reads `working` whatever the composer below it holds (the caution stages run
+  // before the composer stage), so a working screen is read at its composer too: a draft typed
+  // during the turn is unsent text, held like one, never typed over. The composer alone decides,
+  // and only when it reads `unsent` does the box count as held; an empty or unreadable box on a
+  // working screen is still the box this line goes into.
+  const unsent = read.kind === 'unsent' || (read.kind === 'working' && classifyComposer(profile, screen.split('\n')).kind === 'unsent');
+  if (!unsent) return { state: 'empty', screen };
   if (boxHoldsText(profile, line, screen)) return { state: 'trigger' };
   return { state: 'other', text: boxText(profile, screen) };
 }
@@ -149,6 +155,23 @@ export function dropIdOf(line: string): string | null {
 }
 
 /**
+ * Whether the screen shows a token in the transcript: a row (after SGR stripping) that names
+ * `token` and, when `excludeLine` is given, is not that line's own echo.
+ */
+export function showsTranscriptToken(screen: string, token: string, excludeLine?: string): boolean {
+  if (token === '') return false;
+  for (const row of stripSgr(screen).split('\n')) {
+    if (!row.includes(token)) continue;
+    if (excludeLine !== undefined) {
+      const fragment = row.trim().replace(/^[^A-Za-z0-9/~.]+/, '').replace(/[^A-Za-z0-9/~.]+$/, '');
+      if (fragment !== '' && excludeLine.includes(fragment)) continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
  * Whether the screen shows the seat reading the drop: a row that names the drop's id and is not the
  * trigger's own echo. A submitted line stays in the transcript (whole, or wrapped over several
  * rows, behind a bullet or a border), and that echo says the line was sent, not that anyone read
@@ -157,13 +180,7 @@ export function dropIdOf(line: string): string | null {
 export function showsDrop(screen: string, line: string): boolean {
   const id = dropIdOf(line);
   if (id === null) return false;
-  for (const row of stripSgr(screen).split('\n')) {
-    if (!row.includes(id)) continue;
-    const fragment = row.trim().replace(/^[^A-Za-z0-9/~.]+/, '').replace(/[^A-Za-z0-9/~.]+$/, '');
-    if (fragment !== '' && line.includes(fragment)) continue;
-    return true;
-  }
-  return false;
+  return showsTranscriptToken(screen, id, line);
 }
 
 function dialogStop(kind: string, tries: number): DeliverResult {

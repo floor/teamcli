@@ -220,6 +220,29 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "bus",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team bus"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -512,6 +535,60 @@
       "subcommands": [],
       "usage": [
         "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--follow",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--read",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "drops",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team drops [--follow] [--json]",
+        "team drops --read --seat <seat> [--session <session>]"
       ]
     },
     {
@@ -924,6 +1001,41 @@
             },
             {
               "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "serve",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team mcp serve --seat <seat> [--session <session>]"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--json",
               "repeatable": false,
               "takesValue": false
@@ -946,7 +1058,8 @@
       ],
       "usage": [
         "team mcp status [--json]",
-        "team mcp doctor [--json]"
+        "team mcp doctor [--json]",
+        "team mcp serve --seat <seat> [--session <session>]"
       ]
     },
     {
@@ -1507,6 +1620,52 @@
           "takesValue": false
         },
         {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "raise",
+      "positionals": [
+        {
+          "name": "kind",
+          "optional": false,
+          "repeatable": false
+        },
+        {
+          "name": "text",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team raise <kind> <text> [--dry-run] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": false,
           "name": "--pane",
           "repeatable": false,
@@ -1767,6 +1926,53 @@
       "usage": [
         "team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]",
         "team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--close",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "reply",
+      "positionals": [
+        {
+          "name": "id",
+          "optional": false,
+          "repeatable": false
+        },
+        {
+          "name": "text",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team reply <id> [<text>] [--close] [--json]",
+        "team reply <id> --close"
       ]
     },
     {
@@ -2052,6 +2258,12 @@
         },
         {
           "hidden": false,
+          "name": "--confirm",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -2129,6 +2341,7 @@
       "usage": [
         "team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]",
         "team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]",
+        "team send --confirm <id> [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]",
         "team send --list [--json]"

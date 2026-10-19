@@ -570,3 +570,38 @@ describe('one seat\'s delivery', () => {
     }
   });
 });
+
+describe("the inbox sentence follows the seat's CLI", () => {
+  // The rules v0.5.0 wrote for this seat, byte for byte (that tag's rulesOf, on this fixture):
+  // a seat whose CLI registers no inbox must keep getting exactly this text.
+  const V050_ANTIGRAVITY = [
+    'Rules for this session, from the team file:',
+    '- End every commit message and every pull request body with your signature, given below.',
+    '- Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
+    '- Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
+    '- In a protected checkout, never switch the branch, reset or commit.',
+    '- Run the tests your change touches, not the whole suite.',
+    '- Run a script with its interpreter; never chmod, chown, sudo or recursive rm.',
+    '- Your signature in a commit message, as a trailer, in a last paragraph of its own that holds trailers only: Agent: GPT-6 Sol · implementer',
+    '- Your signature in a pull request body, as its last line: **Agent:** GPT-6 Sol · implementer',
+    '- Protected checkouts, relative to the project root: .',
+    '- Work on the code in the worktree your brief names, never in the checkout you started in. Branches are named {kind}/{task}.',
+    'These are standing rules, not a task: reply ready and wait for your brief.',
+  ].join('\n');
+
+  test("an antigravity seat's rules are byte-identical to 0.5.0's", () => {
+    const { team, seat } = codexSeat();
+    const agy = { ...seat, cli: 'antigravity' };
+    expect(rulesOf(team, agy, '/nowhere')).toBe(V050_ANTIGRAVITY);
+  });
+
+  test("a codex seat's rules carry the inbox sentence, once, after the never-stop line", () => {
+    const { team, seat } = codexSeat();
+    const lines = rulesOf(team, seat, '/nowhere').split('\n');
+    const sentence =
+      '- If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.';
+    expect(lines.indexOf(sentence)).toBe(3);
+    expect(lines.filter((line) => line.includes('inbox_check'))).toHaveLength(1);
+    expect(lines[2]).toStartWith('- Never stop at a question:');
+  });
+});

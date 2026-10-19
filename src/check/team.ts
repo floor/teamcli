@@ -27,6 +27,7 @@ import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
+import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import {
@@ -60,6 +61,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
+import { recordHolds } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
@@ -305,6 +307,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...signingDifferences(team, state, live, root, sources.home),
+    ...generalBriefDifferences(team, state, root, sources.home, session),
     ...provenance.differences,
     ...attentionDifferences(team, state, live),
     ...labelDifferences(team, state, live),
@@ -676,6 +679,44 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
 }
 
 /**
+ * The general seat brief every launch delivers first, by drop. A session that has launched a seat,
+ * or recorded a delivery, is a session whose seats were due the brief: one with no record under
+ * `briefs` never received it. A recorded delivery is a claim about a file, so the file is checked,
+ * not the claim: the record at the current brief's id must be this brief and this checkout's
+ * message key must have signed it. A state entry naming anything else is a delivery that does not
+ * verify. The repair is the one both delivering paths answer to — `reload` for a CLI seat, `up`
+ * for a human's, where reload refuses to touch the pane. A seat the comparison already names as
+ * not running is left to that difference: its launch is its repair.
+ */
+function generalBriefDifferences(
+  team: TeamFile,
+  state: SessionState,
+  root: string,
+  home: string | undefined,
+  session: string,
+): Difference[] {
+  if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return [];
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    const recorded = state.briefs?.[seat.name];
+    const repair = seat.human === true ? 'team up' : `team reload ${seat.name} or team up`;
+    if (recorded === undefined) {
+      if (seat.human !== true && state.seats[seat.name] === undefined) continue;
+      out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
+      continue;
+    }
+    // Without a home there is no message key to verify with; the entry stands as before.
+    if (home === undefined) continue;
+    const id = generalBriefId();
+    const expected = generalBriefRecord({ to: seat.name, root, session, at: recorded.at });
+    const path = join(root, '.agents', 'send-drops', session, seat.name, id);
+    if (recorded.id === id && recordHolds(path, expected, home)) continue;
+    out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });
+  }
+  return out;
+}
+
+/**
  * The watch's own report texts, as differences with the repair beside them (§3.3a): one read of
  * each pane this project's state records for a seat of this team, through the watch's own reader.
  * No write, no key, no nudge, and no pane the state does not record for this team. `to` stays the
@@ -937,8 +978,9 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
 
 /**
  * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
- * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have, leaving
- * the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have,
+ * leaving the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ * `native` is the one leg a word may add, so a declaration naming it is no difference.
  */
 function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   let projectOrder: readonly DeliveryLeg[] | undefined;
@@ -973,6 +1015,9 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
   }
   for (const seat of team.seats) {
     if (seat.deliveryOrder === undefined) continue;
+    // A human seat walks `drop` alone whatever its word says, so the resolver's set-aside verdict
+    // never describes its delivery: human wins, and a word it writes is no difference.
+    if (seat.human === true) continue;
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({

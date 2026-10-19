@@ -161,6 +161,11 @@ describe('read from a repository', () => {
     });
   });
 
+  // The git wrapper below routes each call through a bun process of its own: under a loaded
+  // machine the runner's five-second default budget measures that spawn cost, not this scene's
+  // work. Thirty seconds fits several interpreter starts while still bounding the scene, and the
+  // assertions are unchanged — the wrapper logs the same argv and the check still pins
+  // `--end-of-options` before the branch and the remote.
   test('rev-list and diff put --end-of-options before the branch and the remote', () => {
     setup();
     git(project, 'checkout', '-q', '-b', 'fix/own');
@@ -201,7 +206,7 @@ process.exit(run.status === null ? 1 : run.status);
       expect(separator).toBeGreaterThanOrEqual(0);
       for (const name of names) expect(args.indexOf(name)).toBeGreaterThan(separator);
     }
-  });
+  }, 30_000);
 
   test('a deleted branch and a failed fetch are unproven', () => {
     setup();

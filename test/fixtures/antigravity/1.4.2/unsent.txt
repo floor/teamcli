@@ -1,0 +1,13 @@
+agy
+❯ agy
+
+      ▄▀▀▄        Antigravity CLI 1.4.2
+     ▀▀▀▀▀▀       <account>            
+    ▀▀▀▀▀▀▀▀      Gemini 4 Argon (Medium)
+   ▄▀▀    ▀▀▄     <workspace>                     
+  ▄▀▀      ▀▀▄
+
+─────────────────────────────────────────────────────
+> Fix the failing test
+─────────────────────────────────────────────────────
+                              Gemini 4 Argon · medium

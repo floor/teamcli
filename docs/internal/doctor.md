@@ -86,8 +86,11 @@ instead; a line only said to be unchecked, or a relative path that exists nowher
 note — `not checked: the command may create it`), one note per seat the state records from a launch
 that predates the process identity — `note  <seat>: launched before team recorded its process; run
 \`team register <seat>\` to record its process` — the registration being what completes the record
-(the seat's id and the pane's process identity, nothing relaunched). A lead's own seat — the
-orchestrator or the operator — draws no such note: it is the seat reading this line, and a
+(the seat's id and the pane's process identity, nothing relaunched). A record whose launch wrote
+the pane's process but not the seat's id draws the sibling note — `note  <seat>: launched before
+team recorded its id; run \`team register <seat>\` to record it` — the id being the one `team seats`
+shows as `-`. A lead's own seat — the
+orchestrator or the operator — draws neither note: it is the seat reading this line, and a
 whole-team restart is never the repair — one note per live seat
 whose file still carries the placeholder `version: "0"` `init` writes, saying what it runs and the
 one edit that pins it (or a warning when the model family differs, so the one edit covers both) — the watch, and the

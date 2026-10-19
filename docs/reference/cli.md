@@ -129,6 +129,25 @@ Usage:
 
 None.
 
+## `bus`
+
+Hidden: no
+
+Usage:
+
+    team bus
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `check`
 
 Hidden: no
@@ -280,6 +299,31 @@ Usage:
 | `--json` | no | no | no |
 | `--session` | yes | no | no |
 | `--wait` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+## `drops`
+
+Hidden: no
+
+Usage:
+
+    team drops [--follow] [--json]
+    team drops --read --seat <seat> [--session <session>]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--follow` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--read` | no | no | no |
+| `--seat` | yes | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -478,6 +522,7 @@ Usage:
 
     team mcp status [--json]
     team mcp doctor [--json]
+    team mcp serve --seat <seat> [--session <session>]
 
 ### Flags
 
@@ -504,6 +549,27 @@ Usage:
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `serve`
+
+Hidden: no
+
+Usage:
+
+    team mcp serve --seat <seat> [--session <session>]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--seat` | yes | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -825,6 +891,30 @@ Usage:
 
 None.
 
+## `raise`
+
+Hidden: no
+
+Usage:
+
+    team raise <kind> <text> [--dry-run] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `kind` | no | no |
+| `text` | no | no |
+
 ## `register`
 
 Hidden: no
@@ -968,6 +1058,31 @@ Usage:
 | --- | --- | --- |
 | `seat` | yes | no |
 | `new-seat` | yes | no |
+
+## `reply`
+
+Hidden: no
+
+Usage:
+
+    team reply <id> [<text>] [--close] [--json]
+    team reply <id> --close
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--close` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+| `text` | yes | no |
 
 ## `restart`
 
@@ -1119,6 +1234,7 @@ Usage:
 
     team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send --confirm <id> [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
@@ -1128,6 +1244,7 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--channel` | yes | no | no |
+| `--confirm` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |

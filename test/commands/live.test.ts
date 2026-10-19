@@ -20,6 +20,7 @@ import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { defaultFs } from '../../src/lobby/gate.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
+import { generalBriefId } from '../../src/launch/general-brief.ts';
 import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
@@ -1470,6 +1471,15 @@ describe('team up, live', () => {
     return made;
   }
 
+  /** The seats the fixture's file declares: its own four, and the counted second deepseek. */
+  const BRIEFED_SEATS = ['claude-coordinator-acme', 'codex-acme', 'deepseek-acme', 'deepseek-acme-2', 'grok-acme'];
+
+  /** The session's `briefs` map as the launch's one delivery leaves it: one entry per seat, the
+   *  id the brief's text derives, and the run's own time. */
+  function briefs() {
+    return Object.fromEntries(BRIEFED_SEATS.map((seat) => [seat, { id: generalBriefId(), at: NOW.toISOString() }]));
+  }
+
   function namedState() {
     return {
       format: 1,
@@ -1479,6 +1489,7 @@ describe('team up, live', () => {
             'claude-coordinator-acme': { stage: 'ready', pane: 'w1:p1', workspace: 'w1' },
             'codex-acme': { stage: 'named', pane: 'w2:p1', workspace: 'w2', start_cwd: '.' },
           },
+          briefs: briefs(),
           worktrees: {},
           watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
         },

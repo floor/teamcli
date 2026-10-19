@@ -7,7 +7,7 @@
 // owns — the shape `test/send.test.ts` measured. No pane is read and no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import type { NativePane } from '../../src/send/native.ts';
 import { sendFrame, type SendOutcome } from '../../src/send/uds.ts';
-import { testIo } from '../helpers.ts';
+import { recordBody, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-16T04:00:00.000Z');
 
@@ -54,6 +54,9 @@ seats:
     model: Test
     version: "1"
     launch: claude
+# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -168,7 +171,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
     expect(host.pane.enters).toBe(1);
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('a socket file that would refuse is not tried either', async () => {
@@ -208,25 +211,23 @@ describe('team send: a typed send with no socket at all', () => {
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(host.pane.typed[0]).toContain(path);
     expect(host.pane.typed[0]).not.toContain('hello');
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 });
 
-describe('team send: --wait to a Claude Code seat is refused', () => {
-  test('the refusal comes first, and nothing is typed or dialed', async () => {
+describe('team send: --wait to a Claude Code seat never dials the socket', () => {
+  test('the send walks the delivery order, dials no socket, and waits on the thread', async () => {
     const { root, sockets } = world();
-    const host = claudeHost(sockets, ['idle', 'working']);
+    const host = { ...claudeHost(sockets, ['idle', 'working']), waitMs: 0 };
     const io = owner(root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
-    // The frame a --wait waits on is the socket's, and this build writes none: the run is
-    // refused before any socket or pane is touched, and it is never rerouted to the typed
-    // trigger — a typed fallback could deliver a message no reply can come back from.
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
+    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.socketsTried).toEqual([]);
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
+    expect(host.frames).toEqual([]);
+    expect(host.pane.typed.length).toBe(1);
+    expect(host.pane.enters).toBe(1);
   });
 });

@@ -32,7 +32,7 @@ file, and exits 0.
 | --- | --- | --- |
 | it served until it was stopped | `team broker: answering on .agents/broker.sock` once the socket is bound and serving; `team broker: stopped` when the loop ended and the socket file was removed — every line to stderr, nothing on stdout | 0 |
 | it refused to start, or the team file's policy is refused | `team broker: <reason>` — the caller is not the owner, no task source, a source the broker does not serve, the Keychain credential was refused, a broker is already answering, or the socket could not be bound | 1 |
-| the invocation can't be read, or this folder is not a git checkout | `team broker: <problem>`, with the usage | 2 |
+| the invocation can't be read, or this folder is neither a checkout nor a team root | `team broker: <problem>`, with the usage | 2 |
 
 ## Example
 

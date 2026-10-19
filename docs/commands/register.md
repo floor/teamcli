@@ -14,6 +14,8 @@ the process is the one the seat's CLI profile names — the file's `cli` is the 
 the seat at its prompt — `idle` or `working`. A
 dialog, a CLI that has exited, another CLI in front, or a reading this version does not recognise
 is not a seat to record. Nothing is typed into the pane, and no workspace is created or closed.
+A seat the file marks `human: true` gets no rules file and no typed rules line either, even when a
+record written before the mark says a trust dialog waits: no rules line was typed; left as it is.
 The seat's two sidebar lines are written the way `up` and `add` write them after a launch: the
 workspace's label (`workspaceLabel`) and the pane's display line (`displayAgent`), re-applied from
 the file so a label or display that drifted is put back where the seat stands.

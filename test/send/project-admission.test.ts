@@ -72,7 +72,10 @@ trust:
 workspace:
   mode: shared
 seats:
-${team.seats.join('')}`);
+${team.seats.join('')}# These scenes walk the typed trigger: the inbox is tried and skipped for want of a
+# listener, then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
+`);
     roots[name] = root;
   }
   return { base, home, roots };
@@ -249,11 +252,16 @@ describe('the project level admits a pair the team rules refuse', () => {
     expect(typed.session).toBe('teamcli.io');
     expect(typed.pane).toBe('pane-io-lead');
     const drop = dropOf(typed.text);
-    // The header names the sender's agent id and the project rule that admitted it, before the body.
-    expect(drop.text).toContain(cliLead.id);
-    expect(drop.text).toContain(PROJECT_RULES[0]);
-    expect(drop.text).toContain(BODY);
-    expect(drop.text.indexOf(cliLead.id)).toBeLessThan(drop.text.indexOf(BODY));
+    // The signed record keeps the sender's identity — its seat and registry id — and the rule the
+    // project admitted the write under; the message inside opens with its sender, read by
+    // address, one line before the body.
+    const record = JSON.parse(drop.text) as { payload: { body: string; from: string; from_id: string; rule: string } };
+    expect(record.payload.from_id).toBe(cliLead.id);
+    expect(record.payload.from).toBe('lead');
+    expect(record.payload.rule).toBe(PROJECT_RULES[0]);
+    expect(record.payload.body).toContain(BODY);
+    expect(record.payload.body.startsWith('from lead@teamcli — admitted by: ')).toBe(true);
+    expect(record.payload.body.indexOf('— admitted by: ')).toBeLessThan(record.payload.body.indexOf(BODY));
   });
 
   test('the same pair is refused when no project names both teams', async () => {

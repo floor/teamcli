@@ -15,7 +15,7 @@ import { approvalStanding, storePath } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { readScreen, type Screen } from '../src/watch/screen.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T09:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -80,6 +80,8 @@ function remember(name: string, effort = 'high'): void {
       launch_line: 'claude --model claude-opus-5-5',
     };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir, root, session: 'acme', seats: [name], home, at: NOW.toISOString() });
 }
 
 function agent(name: string, status = 'idle'): HerdrAgent {
@@ -263,7 +265,16 @@ describe('reload preserves work without an approved copy', () => {
       expect(made.commands).toEqual([]);
       expect(readFileSync(file, 'utf8')).toBe(before);
       expect(readState(dir)).toEqual(state);
-      expect(existsSync(join(dir, 'team.log'))).toBe(false);
+      if (late) {
+        // The close path's refusal is said and logged, the way `up` says a seat it leaves out.
+        const record = kind === 'working' || status === 'working'
+          ? 'worker: left out: is working; nothing closed'
+          : 'worker: left out: holds unsent text; nothing closed';
+        expect(io.out).toContain(`${record}\n`);
+        expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain(`reload [owner] ${record}`);
+      } else {
+        expect(existsSync(join(dir, 'team.log'))).toBe(false);
+      }
       noApproval();
     });
   }

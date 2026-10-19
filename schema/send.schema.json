@@ -49,8 +49,11 @@
           "type": "string",
           "enum": [
             "delivered",
+            "delivered (read)",
+            "sent (unconfirmed)",
             "answered",
             "recorded",
+            "native",
             "dry-run"
           ]
         },
@@ -82,9 +85,22 @@
           "enum": [
             "socket",
             "typed",
+            "drop",
+            "mcp-inbox",
             "native",
             null
           ]
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confirm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
         },
         "ids": {
           "type": "object",
@@ -107,6 +123,12 @@
               ]
             }
           }
+        },
+        "thread": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "reply": {
           "type": "string"

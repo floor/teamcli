@@ -1562,6 +1562,55 @@
       "provenance": "capture"
     },
     {
+      "file": "antigravity/1.4.2/exit.txt",
+      "cli": "antigravity",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/idle.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/permission.txt",
+      "cli": "antigravity",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/question.txt",
+      "cli": "antigravity",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/trust.txt",
+      "cli": "antigravity",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/unsent.txt",
+      "cli": "antigravity",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/working.txt",
+      "cli": "antigravity",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "cursor/2026.10.14/exit.txt",
       "cli": "cursor",
       "classify": "unknown",
@@ -1598,6 +1647,55 @@
     },
     {
       "file": "cursor/2026.10.14/working.txt",
+      "cli": "cursor",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/exit.txt",
+      "cli": "cursor",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/idle.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/permission.txt",
+      "cli": "cursor",
+      "classify": "permission",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/question.txt",
+      "cli": "cursor",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/trust.txt",
+      "cli": "cursor",
+      "classify": "trust",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/unsent.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/working.txt",
       "cli": "cursor",
       "classify": "working",
       "composer": "idle",

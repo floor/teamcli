@@ -158,6 +158,7 @@ export const CHECK_NAMES = [
   'idle',
   'extra',
   'team-idle',
+  'prompt-escalation',
   'approval',
   'load',
   'memory',
@@ -167,10 +168,17 @@ export const CHECK_NAMES = [
   'budget',
 ] as const;
 
-// The checks the file cannot turn off (RFC 0002 § 4.2): the four whose condition is the one thing
-// the watch exists for. The schema refuses them in `watch.checks`, and the pass runs them
-// whatever the list says.
-export const ALWAYS_ON: readonly string[] = ['attention', 'missing', 'model-drift', 'approval'];
+// The checks the file cannot turn off (RFC 0002 § 4.2): the five whose condition is the one
+// thing the watch exists for — a missing seat, a wrong model, an unanswered prompt, the prompt
+// that climbs when its lead does not clear it, and the approval the rest reads against. The
+// schema refuses them in `watch.checks`, and the pass runs them whatever the list says.
+export const ALWAYS_ON: readonly string[] = [
+  'attention',
+  'missing',
+  'model-drift',
+  'prompt-escalation',
+  'approval',
+];
 
 /** A duration in whole minutes, as the report texts write it. */
 export function minutes(ms: number): number {

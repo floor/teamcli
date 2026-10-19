@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
+import { generalBriefId } from '../../src/launch/general-brief.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
@@ -196,6 +197,21 @@ describe('team add --json', () => {
     expect(doc.seat).toBe('worker');
     expect(doc.pane).toBe('w1:p1');
     expect(readState(join(project, '.agents')).sessions.acme?.seats.worker?.stage).toBe('ready');
+  });
+
+  test('a brief that cannot be written is a note in the document', async () => {
+    const made = world();
+    const path = join(project, '.agents', 'send-drops', 'acme', 'worker', generalBriefId());
+    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(path);
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker', '--json'], io, sources(made))).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(io.out, ADD_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.notes).toEqual([
+      'team add: worker: the general seat brief was not delivered (the record path is a folder)',
+    ]);
   });
 
   test('a dry run is the plan, and nothing is made', async () => {

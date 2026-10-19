@@ -26,6 +26,7 @@ import {
   paneShellBack,
   pressEnter,
   reportDisplayAgent,
+  sendKey,
   typeText,
   workspaceClose,
   workspaceCreate,
@@ -37,9 +38,11 @@ import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, reso
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
+import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -48,6 +51,8 @@ import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, versionVerdict } from '../profiles/profile.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
@@ -58,6 +63,7 @@ import { readScreen } from '../watch/screen.ts';
 import { realSources as doctorSources } from './doctor.ts';
 import { rulesFileProblem } from './status.ts';
 import type { Launch } from './up.ts';
+import { registerInbox } from '../mcp/register.ts';
 
 export const USAGE = `Usage: team reload <seat> [--file <path>] [--json]
 
@@ -93,6 +99,7 @@ const realLaunch: Launch = {
   sessionUp: () => null,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -105,6 +112,7 @@ const realLaunch: Launch = {
   paneText: (session, pane) => paneRead(pane, 200, aim(session)),
   typeText: (session, pane, text) => typeText(pane, text, aim(session)),
   pressEnter: (session, pane) => pressEnter(pane, aim(session)),
+  sendKey: (session, pane, key) => sendKey(pane, key, aim(session)),
   agentStatus: (session, pane) => agentStatus(pane, aim(session)),
   foreground: (session, pane) => paneForeground(pane, aim(session)),
   processInfo: (session, pane) => paneProcesses(pane, aim(session)),
@@ -280,6 +288,17 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // exit: reload.absent
     return 1;
   }
+  // A pane the file marks as a human's is never closed and never launched over: this command is
+  // a close followed by a launch, so it refuses before the record is read or anything is typed.
+  if (seat.human) {
+    refuse(io, json, 'reload', {
+      id: 'reload.human',
+      message: `${seat.name} is a human's pane: nothing is typed into it or launched over it; left as it is`,
+      repair: null,
+    });
+    // exit: reload.human
+    return 1;
+  }
   if (placed.kind === 'seat' && seat.name === placed.name) {
     refuse(io, json, 'reload', {
       id: 'reload.self',
@@ -324,7 +343,29 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // leave the check red. A seat with no home to look under has no file to compare.
   const rulesProblem = home === undefined ? null : rulesFileProblem(standing, team, seat, root, home);
   const driftDetail = [detail, rulesProblem === null ? null : 'rules'].filter((part): part is string => part !== null).join('; ');
+  const now = sources.now ?? (() => new Date());
+  // The lines plain output writes beside the document ride on it as notes under `--json`;
+  // stdout carries the one document and nothing else.
+  const jsonNotes: string[] = [];
+  const sayBrief = (said: string): void => {
+    if (json) jsonNotes.push(said);
+    else out.stdout(`team reload: ${said}\n`);
+    logLine(dir, 'reload', describeCaller(caller), said, now());
+  };
+  // The general seat brief goes to the seat on every path this command reaches it, the paths
+  // that leave it running included: the check names `team reload <seat>` as a repair, so a
+  // reload must deliver the brief even when nothing else drifts. Without a home there is no
+  // message key to sign the record with, so nothing is written.
+  const deliverBrief = (): void => {
+    if (home === undefined) return;
+    const briefs = deliverGeneralBrief({ dir, root, session, seats: [seat.name], home, at: now().toISOString() });
+    for (const delivery of briefs.deliveries) {
+      if (!delivery.ok) sayBrief(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
+    }
+    if (briefs.recording !== undefined) sayBrief(`the general seat brief was written and not recorded (${briefs.recording})`);
+  };
   if (detail === null && rulesProblem === null && source === null) {
+    deliverBrief();
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
       writeJson(io, 'team.reload', {
@@ -336,6 +377,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         session,
         seat: seat.name,
         pane: recorded.pane,
+        ...(jsonNotes.length === 0 ? {} : { notes: jsonNotes }),
       });
     } else {
       out.stdout(`${summary}\n`);
@@ -368,6 +410,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         else held.effort = compared.effort;
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
+      deliverBrief();
       if (json) {
         writeJson(io, 'team.reload', {
           format: 1 as const,
@@ -378,6 +421,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           session,
           seat: seat.name,
           pane: recorded.pane,
+          ...(jsonNotes.length === 0 ? {} : { notes: jsonNotes }),
         });
       } else {
         out.stdout(`${summary}\n`);
@@ -454,6 +498,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     const planned = {
       name: seat.name,
       cli: seat.cli,
+      // The mark rides the plan too: should a later path ever reach this object, `upPlan` skips
+      // the seat instead of closing or typing into a human's pane.
+      ...(seat.human ? { human: true as const } : {}),
       launch: seat.launch,
       cwd: seat.cwd,
       label: workspaceLabel(seat),
@@ -464,6 +511,20 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
       rules: rulesOf(team, seat, root),
+      // The same session display name a fresh `up` gives the seat: a relaunched claude session
+      // reads its sender like every other surface, and a reload is how most seats get relaunched.
+      sessionName: sessionDisplayName({
+        seat: seat.name,
+        nickname: seat.nickname ?? null,
+        team: teamIdOf(root),
+        teamName: team.project,
+        mode: senderNameModeFor({
+          ...(home === undefined ? {} : { home }),
+          root,
+          seat: seat.name,
+          file: team,
+        }),
+      }),
       // The same delivery a fresh `up` gives the seat: a message seat needs its per-seat file
       // and the one line to read, written and typed by the host below; an option seat needs
       // nothing here (its rules ride the launch line).
@@ -479,7 +540,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
-    const installed = installCliHooks(dir, session, [planned]);
+    const installed = installCliHooks(dir, session, [planned], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());
@@ -497,7 +558,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // run starts.
     resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
-    const now = sources.now ?? (() => new Date());
+    // The general seat brief goes first, before the plan types a rules line into the pane.
+    deliverBrief();
     let closed = false;
     const host: Host = {
       agentList: (current) => launch.agents(current),
@@ -513,6 +575,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       agentPanes: (current) => launch.agentPanes(current),
       createWorkspace: (current, cwd, label) => launch.createWorkspace(current, cwd, label),
       paneRun: (current, pane, command) => launch.paneRun(current, pane, command),
+      ...(launch.registerInbox
+        ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+        : {}),
       renameAgent: (current, pane, next) => launch.renameAgent(current, pane, next),
       reportDisplayAgent: (current, pane, text) => launch.reportDisplayAgent?.(current, pane, text) ?? true,
       closeWorkspace(current, workspace) {
@@ -547,6 +612,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             status: () => launch.agentStatus?.(current, pane) ?? null,
             type: (value) => launch.typeText?.(current, pane, value) ?? false,
             enter: () => launch.pressEnter?.(current, pane) ?? false,
+            // The profile's one clearing key, the same key `up` sends: a line this run typed
+            // whose read-back fails is cleared instead of left sitting in the box unsent.
+            ...(launch.sendKey
+              ? { key: (name: string) => launch.sendKey!(current, pane, name) }
+              : {}),
             file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
             foreground: () => launch.foreground(current, pane),
             report: (why) => {
@@ -607,7 +677,16 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         }
       },
       say: () => {},
-      final: () => {},
+      // A seat this run leaves out is said and logged the way `up` says its records: the refusal
+      // is the run's account of the seat, and throwing it away leaves the owner holding a line
+      // `team` typed and never sent, with nothing telling them so. A ready record says nothing
+      // here: a reload that worked keeps the one success line below, as it always did.
+      final(seat, record) {
+        if (record.kind !== 'left out') return;
+        const line = recordText(seat, record);
+        says(`${line}\n`);
+        logLine(dir, 'reload', describeCaller(caller), line, now());
+      },
       sleep: (ms) => launch.sleep(ms),
       now: () => launch.now().getTime(),
       log(_who, what) {
@@ -631,6 +710,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             session,
             seat: seat.name,
             pane: after.pane ?? recorded.pane,
+            ...(jsonNotes.length === 0 ? {} : { notes: jsonNotes }),
           });
         } else {
           out.stdout(`${summary}\n`);

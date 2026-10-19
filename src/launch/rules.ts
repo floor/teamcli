@@ -11,6 +11,10 @@ export interface RulesInput {
   /** The seat's profile's own rules, over the file's: a safety line the CLI makes necessary.
    *  Empty when the profile carries none. */
   profileRules?: readonly string[];
+  /** Whether the seat's CLI registers the team inbox at launch (its profile carries a measured
+   *  `mcp_inbox` route). Only such a seat has the `inbox_check` tool the sentence names, so only
+   *  such a seat is asked to call it. Absent reads as false. */
+  inbox?: boolean;
   /** The seat's signature lines, already rendered. */
   signature: { commit: string; pullRequest: string; commitPosition: 'last-line' | 'trailer' | 'anywhere' };
   workspace: {
@@ -37,6 +41,12 @@ export function seatRules(input: RulesInput): string[] {
   const own = [
     'End every commit message and every pull request body with your signature, given below.',
     `Never stop at a question: tell the orchestrator (${input.orchestrator}) in one line and keep working.`,
+    // The inbox is client-pull: a seat sees a message only when it asks. The sentence follows the
+    // CLI: only a profile with a measured `mcp_inbox` route gives the seat the tools it names, so
+    // every other seat's rules stay exactly as earlier builds wrote them.
+    ...(input.inbox === true
+      ? ['If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.']
+      : []),
     'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     'In a protected checkout, never switch the branch, reset or commit.',
   ];
@@ -98,6 +108,9 @@ export function rulesOf(team: TeamFile, seat: Seat, root: string): string {
       orchestrator: team.orchestrator,
       rules: team.rules,
       profileRules: profile?.standingRules ?? [],
+      // The route the launch registers is the profile's measured one (`src/mcp/register.ts`);
+      // a CLI whose profile carries none gets no inbox, and no line about one.
+      inbox: profile?.mcpInbox != null,
       signature: {
         commit: renderSignature(commits.template, seat),
         pullRequest: renderSignature(pullRequests.template, seat),

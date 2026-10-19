@@ -88,6 +88,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# These scenes walk the typed leg: the inbox is tried and skipped for want of a listener, then
+# the trigger line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -580,6 +583,42 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(host.enters).toEqual([]);
   });
 
+  test('holds a running turn whose composer holds a draft, typing nothing and keeping the draft', async () => {
+    // The release's own capture of text typed while a turn runs: the classifier reads the
+    // screen `working` (its caution stage runs before the composer stage), and only the
+    // composer read sees the draft. The typed leg must hold, never type into it.
+    const workingUnsent = readFileSync(new URL('./fixtures/claude-code/2.1.289/unsent-typing-while-running-ansi.txt', import.meta.url), 'utf8');
+    const w = setupWorld();
+    const host = makeHost(w);
+    host.native.paneText = () => workingUnsent;
+
+    const io = ownerIo(w.root);
+    expect(await runSend(['lead', 'do not clobber the running draft'], io, host)).toBe(1);
+    expect(io.err).toContain('held: the composer already holds unsent text');
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    // The draft is still where the owner left it.
+    expect(host.native.paneText('acme', 'pane-lead')).toBe(workingUnsent);
+  });
+
+  test('delivers into a running turn whose composer is empty', async () => {
+    const w = setupWorld();
+    const host = makeHost(w);
+    const busy = (box: string) => `✻ Thinking… (12s · esc to interrupt)\n${RULE}\n❯ ${box}\n${RULE}`;
+    host.native.paneText = (_session, pane) => {
+      const last = [...host.typed].reverse().find((t) => t.pane === pane);
+      return busy(last && !host.enters.includes(pane) ? last.text : '');
+    };
+
+    const io = ownerIo(w.root);
+    const code = await runSend(['lead', 'send into an empty working box'], io, host);
+    if (code !== 0) console.log('DEBUG', JSON.stringify(io.err), JSON.stringify(host.typed.length), JSON.stringify(host.enters.length));
+    expect(code).toBe(0);
+    expect(io.out).toContain('lead: delivered');
+    expect(host.typed.length).toBe(1);
+    expect(host.enters).toEqual(['pane-lead']);
+  });
+
   test('holds without typing when screen shows a dialog before typing', async () => {
     const w = setupWorld();
     const questionScreen = [
@@ -672,13 +711,14 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(host.enters).toEqual([]);
   });
 
-  test('--wait is refused on both sides: the CLI never asks, and the daemon refuses an older caller', async () => {
+  test('--wait bypasses the daemon and waits on the thread, while the daemon refuses an older caller', async () => {
     const w = setupWorld();
     writeFileSync(join(w.sockets, '222.sock'), '');
     // A deliver that would prove a dial: it counts the attempt and throws, so a swallow
     // somewhere on the path still leaves the count behind.
     let dialed = 0;
     const host = makeHost(w, {
+      waitMs: 0,
       deliver: async () => {
         dialed += 1;
         throw new Error('the socket was dialed');
@@ -689,13 +729,15 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     if (started.kind !== 'serving') throw new Error(started.kind);
     handles.push(started.handle);
 
-    // The CLI's own --wait refuses before the daemon is ever asked.
+    // The CLI's own --wait bypasses the daemon, delivers on the typed leg, and waits on the thread.
     const io = ownerIo(w.root);
-    const code = await runSend(['lead', 'ping over socket', '--wait'], io, host);
+    const code = await runSend(['lead', 'ping over socket', '--wait', '--timeout', '1'], io, host);
     expect(code).toBe(1);
-    expect(io.err).toContain('needs the native leg');
+    expect(io.err).toBe(
+      'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n',
+    );
 
-    // An older CLI that still asks the daemon for a waited send gets the same refusal from the
+    // An older CLI that still asks the daemon for a waited send gets the refusal from the
     // daemon's own gate, and the daemon dials nothing either.
     const asked = await requestDaemon(started.handle.socketPath, {
       v: 1,
@@ -711,11 +753,13 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(refused && 'detail' in refused ? refused.detail : '').toContain('needs the native leg');
     expect(dialed).toBe(0);
 
-    // Neither refusal writes a history line: nothing was sent.
+    // Only the CLI's timed-out thread wait wrote a history line; the daemon refusal wrote nothing.
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
-    expect(hist.entries).toEqual([]);
+    expect(hist.entries.map((e) => ({ to: e.to, outcome: e.outcome, via: e.via }))).toEqual([
+      { to: 'lead', outcome: 'timeout', via: 'typed' },
+    ]);
   });
 
   test('the daemon refuses a stopped seat for a caller that reaches it directly, and starts no worker', async () => {
@@ -743,6 +787,39 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(refused && 'detail' in refused ? refused.detail : '').toBe('native is stopped');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries).toEqual([]);
+  });
+
+  test("the daemon refuses a human's pane for a caller that reaches it directly, and starts no worker", async () => {
+    const w = setupWorld();
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('  - role: reviewer', '  - role: reviewer\n    human: true'));
+    const loaded = loadTeamFile(w.root, { home: w.home });
+    if (!loaded.ok) throw new Error('fixture team.yaml failed to reload');
+    const host = makeHost(w);
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: loaded.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    // The CLI's walk keeps its typing legs out for a human seat before the daemon is asked; a
+    // caller that reaches the daemon directly is refused at the queue, and no leg runs.
+    const asked = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'owner',
+      to: 'native',
+      body: 'for a person to read',
+    });
+    const refused = asked && 'outcome' in asked ? asked : null;
+    expect(refused?.outcome).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toBe("native: the pane is a human's, and nothing is typed into it");
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;

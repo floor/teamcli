@@ -28,6 +28,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.doctor` | `add` | 1 | doctor refuses the launch | `team add worker` |
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
 | `add.herdr` | `add` | 1 | herdr doesn't answer | `team add worker` |
+| `add.human` | `add` | 1 | the named seat is a human's pane | `team add worker` |
 | `add.lobby` | `add` | 1 | the lobby could not be created for the launch | `team add worker` |
 | `add.machine` | `add` | 1 | the machine is over a launch limit | `team add worker` |
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
@@ -72,6 +73,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.detached` | `answer` | 1 | a run with no terminal | `team answer lead trust` |
 | `answer.file-owner` | `answer` | 1 | --file is the owner's | `team answer lead trust --file .agents/team.yaml` |
 | `answer.folder` | `answer` | 1 | the dialog's folder is not the lobby's exact trust entry | `team answer lead trust` |
+| `answer.human` | `answer` | 1 | the seat is a human's pane; no dialog key is pressed and no rules line is typed | `team answer lead trust` |
 | `answer.label` | `answer` | 1 | the trust choice is not the recorded one | `team answer lead trust` |
 | `answer.no-pane` | `answer` | 1 | the state records no pane for the caller's seat | `team answer lead trust` |
 | `answer.policy` | `answer` | 1 | the dialogs.trust grant is not in force | `team answer lead trust` |
@@ -100,6 +102,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `broker.source` | `broker` | 1 | the team file declares no task source, or one the broker does not serve | `team broker` |
 | `broker.invocation` | `broker` | 2 | the invocation can't be read | `team broker extra` |
 | `broker.not-a-repo` | `broker` | 2 | not inside a git repository | `team broker` |
+| `bus.started` | `bus` | 0 | the bus started and served on .agents/bus.sock | `team bus` |
+| `bus.stopped` | `bus` | 0 | the bus served until it was stopped | `team bus` |
+| `bus.refused` | `bus` | 1 | the caller is not the owner at a terminal outside herdr, a bus is already running or starting, or the socket could not be bound | `team bus` |
+| `bus.configuration` | `bus` | 2 | not inside a git repository or the team file cannot be read | `team bus` |
+| `bus.usage` | `bus` | 2 | the invocation cannot be read | `team bus extra` |
 | `check.ok` | `check` | 0 | nothing needs acting on | `team check` |
 | `check.repaired` | `check` | 0 | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | `team check --repair` |
 | `check.file-owner` | `check` | 1 | --file is the owner's | `team check --file .agents/team.yaml` |
@@ -169,6 +176,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.herdr` | `down` | 2 | herdr doesn't answer | `team down` |
 | `down.invocation` | `down` | 2 | the invocation can't be read | `team down extra` |
 | `down.not-a-repo` | `down` | 2 | not inside a git repository | `team down` |
+| `drops.ok` | `drops` | 0 | the caller's unread drops were listed, or followed until it stopped | `team drops` |
+| `drops.file` | `drops` | 1 | the team file can't be read | `team drops` |
+| `drops.refused` | `drops` | 1 | the caller is not a placed seat of this team | `team drops` |
+| `drops.unreadable` | `drops` | 1 | the drop folder can't be read | `team drops` |
+| `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
+| `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
 | `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
@@ -217,11 +230,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `lock.invocation` | `lock` | 2 | the invocation can't be read | `team lock` |
 | `lock.project` | `lock` | 2 | the caller's project can't be read | `team lock heavy-run` |
 | `mcp.clear` | `mcp` | 0 | the bridge is clear: doctor found nothing missing | `team mcp doctor` |
+| `mcp.serve-ended` | `mcp` | 0 | the inbox server's stdin closed and it stopped cleanly | `team mcp serve` |
 | `mcp.up` | `mcp` | 0 | every observed bridge leg is up | `team mcp status` |
 | `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |
 | `mcp.missing` | `mcp` | 1 | doctor found something missing | `team mcp doctor` |
 | `mcp.not-set-up` | `mcp` | 1 | no bridge configuration exists in the lobby folder | `team mcp status` |
 | `mcp.invocation` | `mcp` | 2 | the invocation can't be read | `team mcp` |
+| `mcp.serve-refused` | `mcp` | 2 | the inbox server can't start: the invocation, the team placement or its inbox folder can't be read | `team mcp serve` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
 | `messages.file` | `messages` | 1 | the team file can't be read | `team messages` |
@@ -285,6 +300,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `projects.listed` | `projects` | 0 | the projects are listed | `team projects` |
 | `projects.unreadable` | `projects` | 1 | the project registry cannot be read | `team projects` |
 | `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
+| `raise.dry-run` | `raise` | 0 | the route the raise would take; nothing was written | `team raise release.ready "the release is ready for the owner" --dry-run` |
+| `raise.merged` | `raise` | 0 | the line was merged into the owner's open record, and the record counts it | `team raise release.ready "the release is ready for the owner"` |
+| `raise.raised` | `raise` | 0 | the line reached the owner's mailbox as a signed record, and the owner was notified | `team raise release.ready "the release is ready for the owner"` |
+| `raise.capped` | `raise` | 1 | ten raises have reached the owner today | `team raise release.ready "the release is ready for the owner"` |
+| `raise.io` | `raise` | 1 | the event log or the owner's record can't be read or written | `team raise release.ready "the release is ready for the owner"` |
+| `raise.refused` | `raise` | 1 | not the orchestrator's seat or a lead's | `team raise release.ready "the release is ready for the owner"` |
+| `raise.file` | `raise` | 2 | the team file can't be read | `team raise release.ready "the release is ready for the owner"` |
+| `raise.usage` | `raise` | 2 | the invocation can't be read | `team raise` |
 | `register.already` | `register` | 0 | the seat is already recorded on that pane | `team register worker` |
 | `register.dry-run` | `register` | 0 | the seat would be registered; nothing was written | `team register worker --dry-run` |
 | `register.ready` | `register` | 0 | the running seat's record was written | `team register worker` |
@@ -329,6 +352,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.grant-no-pane` | `reload` | 1 | no pane is recorded for the granted seat | `team reload worker` |
 | `reload.grant-omitted` | `reload` | 1 | the file grants nothing | `team reload worker` |
 | `reload.grant-scope` | `reload` | 1 | the grant does not list reload | `team reload worker` |
+| `reload.human` | `reload` | 1 | the seat is a human's pane; nothing is closed, typed into or launched over it | `team reload worker` |
 | `reload.launch` | `reload` | 1 | the close happened and the new launch did not reach ready | `team reload worker` |
 | `reload.not-idle` | `reload` | 1 | the seat is not at an idle prompt; nothing closed | `team reload worker` |
 | `reload.not-running` | `reload` | 1 | the seat has no ready pane to close | `team reload worker` |
@@ -382,6 +406,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `rename.refused` | `rename` | 1 | the caller is not the owner or leads, the target seat exists, or the target clashes with a nickname | `team rename worker lead` |
 | `rename.invalid` | `rename` | 2 | the team file or new seat name is invalid | `team rename worker Bad_Name` |
 | `rename.invocation` | `rename` | 2 | the invocation can't be read | `team rename` |
+| `reply.replied` | `reply` | 0 | the reply record was written on its thread, or its thread was closed | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.refused` | `reply` | 1 | the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.configuration` | `reply` | 2 | the team file can't be read | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.usage` | `reply` | 2 | the invocation can't be read | `team reply` |
 | `restart.dry-run` | `restart` | 0 | the stop and launch plan was printed and nothing was touched | `team restart worker --dry-run` |
 | `restart.ready` | `restart` | 0 | the seat was restarted in a new pane | `team restart worker` |
 | `restart.abandon-working` | `restart` | 1 | a seat caller passed --abandon on a working seat | `team restart worker --abandon` |
@@ -420,18 +448,21 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `seats.invocation` | `seats` | 2 | the invocation can't be read | `team seats extra` |
 | `seats.not-a-repo` | `seats` | 2 | not inside a git repository | `team seats` |
 | `seats.not-yours` | `seats` | 2 | the caller may not read this team | `team seats` |
-| `send.answered` | `send` | 0 | the seat's reply came back within the window | `team send worker hello --wait` |
-| `send.delivered` | `send` | 0 | the seat's channel took the message | `team send worker hello` |
+| `send.answered` | `send` | 0 | a reply record on the thread arrived within the window | `team send worker hello --wait` |
+| `send.confirmed` | `send` | 0 | a native handoff was recorded to the history and its pending record cleared | `team send --confirm 11111111-1111-4111-8111-111111111111` |
+| `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
+| `send.native` | `send` | 0 | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | `team send worker hello` |
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
+| `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
-| `send.timeout` | `send` | 1 | sent on the socket, but no reply within the window | `team send worker hello --wait --timeout 10` |
+| `send.timeout` | `send` | 1 | the record was sent, and the wait window closed with no reply on the thread (the thread stays open) | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |

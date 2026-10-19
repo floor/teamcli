@@ -15,7 +15,7 @@ import { noteTeam, setRoster, teamIdOf } from '../src/registry/teams.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T11:00:00Z');
 
@@ -71,6 +71,8 @@ function place(text: string): { root: string; home: string } {
       watch: { pid: 1, heartbeat: NOW.toISOString() },
     };
   });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({ dir: join(root, '.agents'), root, session: 'acme', seats: ['lead'], home, at: NOW.toISOString() });
   return { root, home };
 }
 

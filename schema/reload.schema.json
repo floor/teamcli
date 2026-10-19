@@ -112,6 +112,12 @@
         "string",
         "null"
       ]
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

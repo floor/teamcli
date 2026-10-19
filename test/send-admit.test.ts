@@ -534,7 +534,7 @@ describe('send admission: the owner-signed grant, verified pair by pair', () => 
     expect(grant).toEqual({ name: 'labs to teamcli' });
     // The header names the record, so the receiver reads which grant was the reason.
     expect(senderHeader(builderRadio, `an owner-signed grant naming send (${grant?.name ?? ''})`)).toBe(
-      `from ${BUILDER_RADIO} (builder-1 of radio, builder-1@radio) — admitted by: an owner-signed grant naming send (labs to teamcli)\n`,
+      'from builder-1 — admitted by: an owner-signed grant naming send (labs to teamcli)\n',
     );
   });
 
@@ -588,10 +588,10 @@ describe('send admission: the owner-signed grant, verified pair by pair', () => 
 });
 
 describe('the drop file header', () => {
-  test('an agent\'s header carries its id, its seat and the admitting rule', () => {
-    expect(senderHeader(builder1, "a seat to its own team's orchestrator")).toBe(
-      `from ${BUILDER_1} (builder-1 of teamcli, builder-1@teamcli) — admitted by: a seat to its own team's orchestrator\n`,
-    );
+  test('an agent\'s header carries its readable name and the admitting rule, and never its registry id', () => {
+    const header = senderHeader(builder1, "a seat to its own team's orchestrator");
+    expect(header).toBe('from builder-1 — admitted by: a seat to its own team\'s orchestrator\n');
+    expect(header).not.toContain(BUILDER_1);
   });
 
   test('a sender the registry holds no record for is spelled as the file\'s seat, and says the record is missing', () => {
@@ -606,7 +606,7 @@ describe('the drop file header', () => {
   test('the owner\'s header names the owner, and a grant is named as the grant', () => {
     expect(senderHeader(owner, 'the owner')).toBe('from the owner — admitted by: the owner\n');
     expect(senderHeader(builderRadio, 'an owner-signed grant naming send (labs to teamcli)')).toBe(
-      `from ${BUILDER_RADIO} (builder-1 of radio, builder-1@radio) — admitted by: an owner-signed grant naming send (labs to teamcli)\n`,
+      'from builder-1 — admitted by: an owner-signed grant naming send (labs to teamcli)\n',
     );
   });
 

@@ -36,6 +36,15 @@ reads
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.
 
+The general seat brief every launch delivers first is checked on the same pass. A seat the session
+launched — a human's pane too, once the session has launched anything — with no delivery record in
+the state is the difference `<seat>: the general seat brief has not been delivered`, repaired with
+`team reload <seat> or team up`, or with `team up` alone for a human's pane. A recorded delivery is
+not taken on trust: the check opens the record at the brief's id and verifies it against this
+checkout's message key and the brief's text. A record that is missing, unsigned, signed by another
+key or holding another body is `<seat>: the general seat brief's delivery record does not verify`,
+with the same repair.
+
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
 the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane
@@ -99,6 +108,10 @@ meet the refusal every command gives them and exit 1.
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |
 
 ## Example
+
+```fixture
+briefs: delivered
+```
 
 ```yaml file=.agents/team.yaml
 format: 1

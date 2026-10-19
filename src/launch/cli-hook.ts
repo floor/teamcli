@@ -5,6 +5,17 @@
 // are keyed by session as well as seat: two sessions may each hold a seat of the same name, and
 // neither session's file may answer for the other's seat.
 //
+// The turn-start hook is also the seat's watcher for the drop leg: it runs this install's
+// `team drops --read --seat <seat> --session <session>` before the turn begins and prints what
+// that command prints as the turn's context. The read verifies each signed record with the
+// message key, writes the signed `<id>.read.json` status receipt through the one receipt module
+// (`src/send/record.ts`) before any body is shown, and prints the bodies; the hook only escapes
+// them into the `additionalContext` object the CLI reads, so no receipt is ever written by the
+// shell. The seat and session are the launch's, written into this settings file at install time —
+// the same rule as `team mcp serve`.
+// A CLI whose launch installs this hook takes the drop leg; one whose launch installs neither
+// this hook nor an MCP inbox is a CLI that watches nothing (`cliWatcher`).
+//
 // Only a CLI whose own per-launch settings file reaches command hooks is served here
 // (`supportsCliHook`). Nothing under the owner's CLI home is read or written: the settings file
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
@@ -14,16 +25,21 @@ import {
   writeSync, type Stats,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import type { CliHookReading } from '../labels/state.ts';
-import { shellQuote, supportsCliHook } from '../profiles/profile.ts';
+import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
+import {
+  commandGuardAvailable, commandGuardEntry, commandGuardHookCommand, type CommandGuardContext,
+} from './command-guard.ts';
 
 /** `O_NOFOLLOW` is POSIX: a platform without it gets 0, and the `lstat` checks above every open
  *  still refuse a link. */
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
-/** What a launch needs to decide on a hook: the seat's name, its CLI, and the line it runs. */
-export type CliHookSeat = { name: string; cli: string; launch: string };
+/** What a launch needs to decide on a hook: the seat's name, its CLI, and the line it runs. A
+ *  human's pane is never launched into, and it carries no guard even if a caller names it. */
+export type CliHookSeat = { name: string; cli: string; launch: string; human?: boolean };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
  *  no `/`, no leading `.` or `..`), and a `.json` name within the filesystem's limit. */
@@ -77,6 +93,26 @@ function setsSettings(launch: string): boolean {
   return /(^|\s)--settings(=|\s|$)/.test(launch);
 }
 
+/** How a seat's CLI learns that a drop is waiting for it: the start-of-turn hook this module
+ *  installs, the MCP inbox server the launch registers where the CLI has an MCP front, or
+ *  nothing. A launch line that sets its own settings gets no hook from this run, so that seat is
+ *  served by its MCP inbox when it has one; a CLI with neither route watches nothing, and the
+ *  send side leaves the drop leg out of its order (`src/send/delivery.ts`). The launch records
+ *  the watcher it leaves (`SeatState.watcher`) and the dry run says it on the launch line. */
+export type CliWatcher = 'hook' | 'inbox' | 'none';
+
+/**
+ * `hookInstalled` is what this run knows about the hook: false when the seat is absent from the
+ * run's own settings map, so the hook will not be there and the seat falls back to its MCP
+ * inbox. A caller that has no map (a plan built by hand, a file-shape reading that has no run)
+ * leaves it true and reads what the launch would install.
+ */
+export function cliWatcher(cli: string, launch: string, hookInstalled = true): CliWatcher {
+  if (hookInstalled && supportsCliHook(cli) && !setsSettings(launch)) return 'hook';
+  const inbox = profileFor(cli)?.mcpInbox ?? null;
+  return inbox === null ? 'none' : 'inbox';
+}
+
 /** One hook command: the state file, replaced whole. The word goes to a temp file beside it and
  *  is renamed over the name, so a link planted at the state path is replaced, never written
  *  through — plain `> path` would follow it. The temp name comes from `mktemp`, which creates it
@@ -87,23 +123,104 @@ function hookCommand(statePath: string, state: 'working' | 'idle'): string {
   return `umask 077; f=$(mktemp ${shellQuote(`${statePath}.new.XXXXXX`)}) && printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f" && mv -f "$f" ${shellQuote(statePath)}`;
 }
 
-/** The settings text one seat's launch loads: `working` at turn start, `idle` at turn end. */
-export function cliHookSettings(statePath: string): string {
+/**
+ * The command the hook runs to read the seat's drops: this install's own CLI, the way
+ * `watchCommand` builds the watchdog's line, so `team` need not be on the CLI's PATH. The seat
+ * and session are appended by `dropReadCommand`; the read itself is `team drops --read`, the one
+ * place a record is verified and its signed receipt written.
+ */
+export function dropReadRunner(): string {
+  const here = fileURLToPath(import.meta.url);
+  const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  return `${shellQuote(process.execPath)} ${shellQuote(cli)} drops --read`;
+}
+
+/**
+ * The awk program that makes one body safe inside `additionalContext`: a JSON string may hold any
+ * byte only when the quote, the backslash and every control character are escaped. Each character
+ * is written as itself or as its exact JSON escape (`\n` is the record separator the program
+ * inserts between lines); the escaping is pinned by `test/cli-hook.test.ts` against bodies
+ * holding quotes, backslashes, tabs and control bytes.
+ */
+const LANDING_ESCAPER = (() => {
+  // The escape this byte writes, as the exact text JSON needs. JSON.stringify is also the awk
+  // literal for it: JSON and awk agree on `\\` and `\"`, and none of these texts holds a control
+  // byte of its own.
+  const written = (byte: number, text: string): [number, string] => [byte, text];
+  const entries: Array<[number, string]> = [
+    written(0x5c, '\\\\'),
+    written(0x22, '\\"'),
+    written(0x09, '\\t'),
+    written(0x0d, '\\r'),
+    written(0x08, '\\b'),
+    written(0x0c, '\\f'),
+  ];
+  const named = new Set(entries.map(([byte]) => byte));
+  for (let byte = 0x01; byte <= 0x1f; byte++) {
+    if (byte === 0x0a || named.has(byte)) continue;
+    entries.push(written(byte, `\\u${byte.toString(16).padStart(4, '0')}`));
+  }
+  const compare = (byte: number): string => {
+    if (byte === 0x5c) return '"\\\\"';
+    if (byte === 0x22) return '"\\""';
+    // Not a literal control byte: the awk macOS ships reads a raw CR as a line end, which splits
+    // the program. `sprintf("%c", n)` names the same byte without putting it in the source.
+    return `sprintf("%c", ${String(byte)})`;
+  };
+  // A character loop, not `gsub`: measured on this machine's awk (20200816), a replacement's
+  // `\\` came out as two backslashes rather than one, so a `gsub` table would depend on the awk
+  // reading it. Concatenation has no replacement escapes; the text each branch writes is exactly
+  // the JSON escape.
+  const branches = entries
+    .map(([byte, text], index) => `${index === 0 ? 'if' : 'else if'} (c == ${compare(byte)}) out = out ${JSON.stringify(text)}`)
+    .join('; ');
+  return `function esc(s,   out, i, c) { out = ""; for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); ${branches}; else out = out c } return out } { printf "%s%s", (NR > 1 ? "\\\\n" : ""), esc($0) }`;
+})();
+
+/**
+ * The turn-start command that hands the seat's waiting drops to the turn. `team drops --read`
+ * does the work — it lists the seat's folder, verifies each signed record with the message key,
+ * writes the signed `<id>.read.json` receipt before returning a body, and prints at most
+ * `DROP_READ_BATCH` bodies; this command only turns that text into the one
+ * `additionalContext` object the CLI reads. A read that fails or finds nothing prints no object
+ * at all. The body is read from the runner's stdout and escaped here, so a body holding quotes,
+ * backslashes or control bytes cannot break the JSON; a pipe that fails still prints nothing.
+ */
+function dropReadCommand(seat: string, session: string): string {
+  const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
+  return [
+    `ctx=$(${dropReadRunner()} --seat ${shellQuote(seat)} --session ${shellQuote(session)} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
+    `if [ -n "$ctx" ]; then printf ${envelope} "$ctx"; fi`,
+  ].join('\n');
+}
+
+/** The settings text one seat's launch loads: `working` at turn start, `idle` at turn end, the
+ *  turn-start read of the seat's drop folder when it has one, and — for a claude-code seat — the
+ *  PreToolUse command guard. Two commands share `UserPromptSubmit`: the state word first, so a
+ *  read that takes a moment still leaves the seat reading `working`, then the folder read whose
+ *  stdout the CLI adds to the turn. */
+export function cliHookSettings(statePath: string, drops?: { seat: string; session: string }, guard?: string): string {
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
-  return `${JSON.stringify({
-    hooks: { UserPromptSubmit: [hook('working')], Stop: [hook('idle')] },
-  }, null, 2)}\n`;
+  const start: unknown[] = [hook('working')];
+  if (drops) {
+    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session) }] });
+  }
+  const hooks: Record<string, unknown> = {};
+  if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
+  hooks.UserPromptSubmit = start;
+  hooks.Stop = [hook('idle')];
+  return `${JSON.stringify({ hooks }, null, 2)}\n`;
 }
 
 /** What this run would install, without touching anything: the settings path per seat whose CLI
  *  supports the hook and whose launch line does not set its own settings. A dry run prints the
- *  launch line the real run types. */
+ *  launch line the real run types. A human's pane is never launched into, so it is planned none. */
 export function plannedCliHooks(dir: string, session: string, seats: readonly CliHookSeat[]): Record<string, string> {
   const planned: Record<string, string> = {};
   for (const seat of seats) {
-    if (!supportsCliHook(seat.cli) || setsSettings(seat.launch)) continue;
+    if (seat.human === true || !supportsCliHook(seat.cli) || setsSettings(seat.launch)) continue;
     const path = cliHookSettingsPath(dir, session, seat.name);
     if (path !== null) planned[seat.name] = path;
   }
@@ -166,8 +283,15 @@ function writeSettings(path: string, text: string): boolean {
 }
 
 /** Installs one settings file per planned seat. Returns the settings path of every seat whose
- *  file landed; a seat that failed is absent, and its launch goes without the flag. */
-export function installCliHooks(dir: string, session: string, seats: readonly CliHookSeat[]): Record<string, string> {
+ *  file landed; a seat that failed is absent, and its launch goes without the flag. A claude-code
+ *  seat's file also carries the PreToolUse command guard when the caller hands the context the
+ *  refusal event is raised with — every launch path (`up`, `add`, `restart`, `reload`) does. */
+export function installCliHooks(
+  dir: string,
+  session: string,
+  seats: readonly CliHookSeat[],
+  guard?: CommandGuardContext,
+): Record<string, string> {
   const planned = plannedCliHooks(dir, session, seats);
   if (Object.keys(planned).length === 0) return {};
   const folder = sessionFolderName(session);
@@ -176,11 +300,14 @@ export function installCliHooks(dir: string, session: string, seats: readonly Cl
   const states = join(dir, 'seat-state', folder);
   if (!ensureFolder(join(dir, 'hooks')) || !ensureFolder(join(dir, 'seat-state'))
     || !ensureFolder(hooks) || !ensureFolder(states)) return {};
+  const guarded = guard !== undefined && commandGuardAvailable();
   const landed: Record<string, string> = {};
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
     if (statePath === null) continue;
-    if (!writeSettings(settingsPath, cliHookSettings(statePath))) continue;
+    const drops = { seat, session };
+    const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
+    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command))) continue;
     landed[seat] = settingsPath;
   }
   return landed;

@@ -21,7 +21,7 @@ export function filed(body: string): string {
 
 export type World = { root: string; dir: string; sockets: string; home: string; cleanup: () => void };
 
-function teamFile(root: string, lobby: string): string {
+function teamFile(root: string, lobby: string, order: readonly string[]): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -54,10 +54,15 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# The team's word is the walk these scenes resolve. The plain-send suites keep the typed trigger:
+# the inbox is tried and skipped for want of a listener, then the line is typed, and the default's
+# drop step stays out. The native suite declares native first, because the handoff is the leg a
+# declared order is what puts in the walk.
+delivery_order: [${order.join(', ')}]
 `;
 }
 
-export function world(): World {
+export function world(order: readonly string[] = ['mcp-inbox', 'typed']): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-native-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
@@ -66,7 +71,7 @@ export function world(): World {
   mkdirSync(sockets, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home)));
+  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home), order));
   return {
     root,
     dir: join(root, '.agents'),
@@ -108,7 +113,7 @@ export function quietNative(): NativePane {
 export type Scripted = NativePane & { typed: string[]; enters: number };
 
 /** Status samples, one per read. `wait` resolves immediately so the polls cost nothing. */
-export function scripted(samples: string[]): Scripted {
+export function scripted(samples: string[], screen: string | null = null): Scripted {
   const typed: string[] = [];
   let enters = 0;
   let read = 0;
@@ -126,6 +131,7 @@ export function scripted(samples: string[]): Scripted {
       return true;
     },
     status: () => samples[Math.min(read++, samples.length - 1)] ?? 'idle',
+    paneText: () => screen,
     wait: async () => {},
   };
 }

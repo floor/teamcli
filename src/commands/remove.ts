@@ -456,6 +456,10 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const agent = listed[0];
   const cli = copySeat?.cli ?? '';
+  // A human's pane is never typed into: no exit line, no key, and no close. The removal takes
+  // the seat out of the file and leaves the pane running, saying why in `down`'s words.
+  const human = copySeat?.human === true;
+  if (agent && human) leave = true;
   // A caller other than the owner, on a seat herdr reports idle or done that this flow cannot ask
   // to leave: `--abandon`'s kind of power scoped to a caller who may not run it — the seat is
   // taken out of the team, the pane is left as it is (nothing typed, nothing closed, and the agent
@@ -577,6 +581,9 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         seat: {
           name, cli, pane: agent.pane, workspace: agent.workspace,
           state: copySeat ? (where === 'free' ? 'free' : where) : 'blocked',
+          // The leave above already steps over a human's pane; the mark keeps this call from
+          // typing into one even if a later path reaches it.
+          ...(human ? { human: true as const } : {}),
           ...(exitInBox ? { exitInBox: true } : {}),
           ...(screen.kind === 'exit question' ? { atExitQuestion: true } : {}),
         },
@@ -711,7 +718,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     const closing = swap
       ? `${what}; the file still names it the ${name === team.orchestrator ? 'orchestrator' : 'operator'}: \`team add ${name}\` starts its new agent`
       : left
-        ? `${what} (its pane ${left.pane} was left running; nothing was typed; ${left.renamed ? `it now reads as ${left.free}` : "it still carries the seat's name"})`
+        ? `${what} (${human ? "the pane is a human's; nothing is typed into it; left running" : `its pane ${left.pane} was left running; nothing was typed`}; ${left.renamed ? `it now reads as ${left.free}` : "it still carries the seat's name"})`
         : what;
     if (json) {
       // The status says what the run did; the closing line is the summary.

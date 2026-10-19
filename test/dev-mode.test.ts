@@ -3,7 +3,9 @@
 // caller-placement refusal into the same kind of warning. `team tempo` and `team broker` are
 // not dev-mode commands (`dev_mode.ts`): every non-owner call is refused in every mode, the
 // file's own orchestrator and operator included, before any credential is read. Unset, each
-// refusal stands. The run writes no approval, no signing key and no grant.
+// refusal stands. The run writes no approval record and no grant, and never creates the
+// approval's signing key; the message key (`messages.json`) is the one any first signed drop
+// creates, and it signs no approval.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -18,7 +20,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { readAgents } from '../src/registry/agents.ts';
-import { keyFolder } from '../src/store/keys.ts';
+import { generationsFolder, keyFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readState } from '../src/state.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
@@ -121,10 +123,16 @@ function sources(home: string, launch: Launch): UpSources {
   };
 }
 
-/** Approval records, the signing key, and a grant file. A rules file or a pane pointer is a mount. */
+/** Approval records, the approval's signing key and its generations, and a grant file. A rules
+ *  file or a pane pointer is a mount. The message key (`messages.json`, beside the approval key)
+ *  is not one of these: the launch's signed seat brief creates it the way any first signed drop
+ *  does, and it signs no approval. */
 function approvalArtifacts(home: string, root: string): string[] {
   const found: string[] = [];
-  if (existsSync(keyFolder(home))) found.push(keyFolder(home));
+  const approvalKey = join(keyFolder(home), 'key.json');
+  if (existsSync(approvalKey)) found.push(approvalKey);
+  const generations = generationsFolder(home);
+  if (existsSync(generations)) found.push(generations);
   const store = storePath('acme', root, home);
   for (const name of ['approval.json', 'approved.yaml']) {
     const path = join(store, name);
@@ -189,7 +197,9 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   expect(recordFile).toContain('  dev_mode: true\n');
 });
 
-/** Bytes of every approval, key, and grant under home. A rules file is not one of these. */
+/** Bytes of every approval record, the approval key and its generations, and grant under home.
+ *  The message key is not one of these: the launch's signed seat brief creates it the way any
+ *  first signed drop does, and it signs no approval. A rules file is not one of these either. */
 function durableBytes(home: string): string {
   const found: string[] = [];
   const take = (path: string) => {
@@ -217,11 +227,12 @@ function durableBytes(home: string): string {
   walk(home);
   const keys = keyFolder(home);
   if (existsSync(keys)) {
+    const messageKey = join(keys, 'messages.json');
     const walkKey = (dir: string) => {
       for (const name of readdirSync(dir)) {
         const path = join(dir, name);
         if (statSync(path).isDirectory()) walkKey(path);
-        else take(path);
+        else if (path !== messageKey) take(path);
       }
     };
     walkKey(keys);

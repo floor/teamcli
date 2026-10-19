@@ -11,7 +11,7 @@
 
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DELIVERY_LEGS, isLivenessSeconds, type DeliveryLeg, type LivenessThresholds } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, isLivenessSeconds, isSenderNameMode, SENDER_NAME_MODES, type DeliveryLeg, type LivenessThresholds, type SenderNameMode } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -41,6 +41,12 @@ export type ProjectRecord = {
    * aside where the thresholds resolve, and the inherited value stands.
    */
   liveness?: Partial<LivenessThresholds>;
+  /**
+   * How a sender reads in TeamCLI's own headlines for this project's teams: `auto` (the default
+   * when the record declares none), `nickname`, `seat`, or `seat@team`. Written under
+   * `sender_name`. It changes the human headline only — every record keeps the registry id.
+   */
+  senderName?: SenderNameMode;
   /** Owner-signed project-level policy declarations (Kernel amendment 02 §2.12), when present. */
   policies?: Record<string, YamlValue>;
   provenance: ProjectProvenance;
@@ -177,6 +183,7 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         teams: fields.teams ?? [],
         ...(fields.deliveryOrder !== undefined ? { deliveryOrder: fields.deliveryOrder } : {}),
         ...(fields.liveness !== undefined ? { liveness: fields.liveness } : {}),
+        ...(fields.senderName !== undefined ? { senderName: fields.senderName } : {}),
         ...(fields.policies !== undefined ? { policies: fields.policies } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
@@ -205,6 +212,11 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
     }
     if (record.liveness !== undefined) {
       record = { ...record, liveness: checkedLiveness(record.liveness, (what) => { throw new ProjectsError(what); }) };
+    }
+    // The word must be one a reader can act on: a headline is never guessed at, and a project
+    // record a later reader refuses would make every display in its teams fail.
+    if (record.senderName !== undefined && !isSenderNameMode(record.senderName)) {
+      throw new ProjectsError(`"sender_name" must be one of: ${SENDER_NAME_MODES.join(', ')}`);
     }
     for (const [other, held] of Object.entries(projects)) {
       if (other !== id && held.name === record.name) throw new ProjectsError(`a project named ${record.name} is already ${other}`);
@@ -317,6 +329,7 @@ function emit(projects: Record<string, ProjectRecord>): string {
     // Only when the project declares one: a registry written before the field keeps its bytes,
     // so a record read and written back is the file it was.
     if (project.deliveryOrder) lines.push(`    delivery_order: [${project.deliveryOrder.map(scalar).join(', ')}]`);
+    if (project.senderName !== undefined) lines.push(`    sender_name: ${scalar(project.senderName)}`);
     if (project.liveness !== undefined) {
       const said = LIVENESS_KEYS
         .filter((key) => project.liveness?.[key] !== undefined)
@@ -378,6 +391,11 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
   const liveness = raw.liveness === undefined
     ? undefined
     : checkedLiveness(raw.liveness, (what) => bad(what));
+  // The project's word on how a sender reads in a headline, when the record writes one.
+  const senderNameWord = raw.sender_name ?? undefined;
+  if (senderNameWord !== undefined && !isSenderNameMode(senderNameWord)) {
+    bad(`"sender_name" must be one of: ${SENDER_NAME_MODES.join(', ')}`);
+  }
   const policies = isMap(raw.policies) && Object.keys(raw.policies).length > 0 ? raw.policies : undefined;
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
@@ -392,6 +410,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     teams: teams as string[],
     ...(order !== undefined ? { deliveryOrder: order as DeliveryLeg[] } : {}),
     ...(liveness !== undefined ? { liveness } : {}),
+    ...(senderNameWord !== undefined ? { senderName: senderNameWord as SenderNameMode } : {}),
     ...(policies !== undefined ? { policies } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };

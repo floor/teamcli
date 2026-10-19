@@ -80,9 +80,19 @@
               "enum": [
                 "native",
                 "mcp-inbox",
-                "typed"
+                "typed",
+                "drop"
               ]
             }
+          },
+          "senderName": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "nickname",
+              "seat",
+              "seat@team"
+            ]
           },
           "provenance": {
             "type": "object",

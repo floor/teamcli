@@ -1,10 +1,11 @@
 # team route
 
-Answers one seat's address for the native channel: a sender that delivers with its own cross-session
-tool asks here first, then delivers itself, then writes the delivery down with
-[team send](send.md) `--record`. The CLI neither delivers nor dials anything: it judges the pair,
-resolves the recipient live, reads the address from the registry and the recipient's own pane, and
-records that it handed the address out.
+Answers one seat's address for the native channel: the pair's rule, the recipient's live pane, and
+the socket its session listens on. [team send](send.md) is the one-step path — a sender whose own
+file declares Claude Code is answered with a native handoff: the exact `to:` target, the body and
+the `--confirm` line, and its own cross-session SendMessage carries the message. This CLI neither
+delivers nor dials anything: it judges the pair, resolves the recipient live, reads the address,
+and records that it handed the address out.
 
 ## Synopsis
 
@@ -33,7 +34,8 @@ now stands on would be that seat's. A seat herdr does not name there, names twic
 another CLI is refused, and no address is answered.
 
 The answer opens on the team's context line, `team <project>, session "<session>"`, names the
-recipient's agent id, session, CLI and pane, and its socket with the state the reading found it in:
+recipient's agent id, session — the herdr session it runs in, not a SendMessage target — CLI and
+pane, and its socket with the state the reading found it in:
 
 - the recorded address, while its own process still runs in the pane and its path is still there —
   `live`;
@@ -67,26 +69,27 @@ was run`, and writes nothing, no log line included.
 
 ## Telling a seat to use it
 
-A team's `rules:` carries one item that wires a seat to both halves — the route first, the seat's
-own delivery to the session this answer prints, then the record:
+A team's `rules:` carries one item that wires a seat to the one-step send — the handoff, the
+seat's own call to the target it prints, then the confirm line that records it:
 
-> - Deliver to another seat natively when `team route <seat>` admits the pair and answers
->   `native yes` — route first, then your own cross-session SendMessage to the session the answer
->   prints, then write the delivery down with `team send --record <seat> --channel native --ms <n>`
->   — and fall back to plain `team send <seat> <message>` only on a definite failure, the route
->   refused, the seat not Claude's, or your SendMessage call itself failed or reported no such
->   session; a call that returned delivered the message, so record it native and never send it
->   again however long an answer takes, and a delivery is recorded exactly once, by the path that
->   delivered it.
+> - Deliver to another seat natively when `team send <seat> <message>` answers with a native
+>   handoff: make your own cross-session SendMessage to the `to:` line it prints, with the body
+>   it prints, then run the `team send --confirm <id>` line it prints — and never also send that
+>   message by the typed path. Fall back to plain `team send <seat> <message>` only on a definite
+>   failure, the handoff refused, the seat not Claude's, or your SendMessage call itself failed or
+>   reported no such session; a call that returned delivered the message, so confirm it and never
+>   send it again however long an answer takes, and a delivery is recorded exactly once, by the
+>   path that delivered it.
 
 The item is quoted for the owner to paste — no team file ships with it, and this repository never
-writes one. A seat whose CLI is not Claude's never sees `native yes`, so the line reads to it as
+writes one. A seat whose CLI is not Claude's never prints a handoff, so the line reads to it as
 it always behaved, plain `team send`. Only a definite failure falls back: a missing, slow or
 absent answer is not a delivery signal, and the plain send that does fall back builds admission
-from the same records this command judges with, so it cannot deliver what a refusal refused. A
-Claude sender addresses the session by the name printed above, never the socket path: the `socket`
-column and its state are the audit's and a non-Claude dialer's, and `stale`, `unread` or `none` is
-a warning about the pane, never a reason to hand-dial.
+from the same records this command judges with, so it cannot deliver what a refusal refused. The
+`session` line above is the herdr session the seat runs in, never a SendMessage target: the
+target is the `to:` line the handoff prints — this command's `socket` path in the form the
+cross-session tool takes — and `stale`, `unread` or `none` is a warning about the pane, never a
+reason to hand-dial a path the handoff did not print.
 
 ## Output and exit codes
 

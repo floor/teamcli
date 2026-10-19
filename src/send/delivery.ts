@@ -2,10 +2,13 @@
 // team, seat — as the files on this machine declare it. The team's own word (`delivery_order`
 // at the top level) and the seat's (the same key on a seat) live in the team file; the
 // project's is the registry record's `delivery_order`; no record in this build carries an
-// entity's word, so that level is always silent here. runSend resolves `host.delivery` when a
-// caller hands a chain in — tests do — and this reading otherwise.
+// entity's word, so that level is always silent here. A seat that declares no word of its own
+// takes the one its shape implies: a human's pane walks the drop file alone, and a CLI whose
+// launch installs no watcher never walks the drop leg at all. runSend resolves `host.delivery`
+// when a caller hands a chain in — tests do — and this reading otherwise.
 import { loadTeamFile } from '../file/load.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
+import { cliWatcher } from '../launch/cli-hook.ts';
 import type { ProjectRecord } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
@@ -23,6 +26,8 @@ export type DeliveryChain = Partial<Record<SettingLevel, readonly DeliveryLeg[] 
  * `ofTeam`. A registry that cannot answer — a file that does not read, or a team two projects
  * name — is read as no word rather than failing the send, the same way a team file that cannot
  * be loaded is. The entity level is silent: no record in this build carries an entity's order.
+ * The seat's word is the file's; when the file gives none, the seat's shape supplies one — a
+ * human's drop-only order, and a watcherless CLI's order without the drop leg.
  */
 export function deliveryChainOf(input: {
   /** The receiving team's root. */
@@ -51,10 +56,25 @@ export function deliveryChainOf(input: {
   } catch {
     project = undefined;
   }
-  const seat = file?.seats.find((one) => one.name === input.seat)?.deliveryOrder;
+  const found: Seat | undefined = file?.seats.find((one) => one.name === input.seat);
+  const seat = found?.deliveryOrder ?? seatDefault(found);
   return {
     ...(project !== undefined ? { project } : {}),
     ...(file?.deliveryOrder ? { team: file.deliveryOrder } : {}),
     ...(seat !== undefined ? { seat } : {}),
   };
+}
+
+/**
+ * The word a seat's own shape puts when the file declares none: a human's pane walks the drop
+ * file alone, whatever the default; and a CLI whose launch installs no watcher can never take a
+ * drop, so the drop leg is left out of its order — the launch's plan says which CLI watches
+ * nothing and why. A seat with a watcher, and one no profile answers for, declare nothing and
+ * take the default order. A word the file does declare is the seat's, never replaced here.
+ */
+function seatDefault(seat: Seat | undefined): readonly DeliveryLeg[] | undefined {
+  if (seat === undefined) return undefined;
+  if (seat.human === true) return ['drop'];
+  if (cliWatcher(seat.cli, seat.launch) === 'none') return ['mcp-inbox', 'typed'];
+  return undefined;
 }

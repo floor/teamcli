@@ -18,7 +18,7 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
 
@@ -99,6 +99,15 @@ function place(options: { stale?: boolean } = {}): { root: string; home: string 
     });
     if (options.stale !== false) session.seats.gone = { stage: 'ready', pane: 'w9:p1', workspace: 'w9' };
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
+  });
+  // The launch delivered the general brief before it typed: each seat's record and state entry.
+  deliverBriefs({
+    dir: join(root, '.agents'),
+    root,
+    session: 'acme',
+    seats: SEATS.map((seat) => seat.name),
+    home,
+    at: NOW.toISOString(),
   });
   return { root, home };
 }

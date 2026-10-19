@@ -21,6 +21,7 @@ import { runFeed, USAGE } from '../src/commands/feed.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { FEED_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { appendHistory, historyPath, MAX_HISTORY_BYTES, readHistory } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
@@ -66,11 +67,11 @@ seats:
     launch: claude
   - role: implementer
     name: helper
-    cli: claude-code
+    cli: codex
     vendor: test
     model: Test
     version: "1"
-    launch: claude
+    launch: codex -m implementer
   - role: reviewer
     name: native
     cli: codex
@@ -78,6 +79,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# This fixture's sends exercise the typed leg: the inbox is tried and skipped for want of a
+# listener, then the trigger line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -132,7 +136,7 @@ function recordSeat(dir: string, seat: string, pane: string): void {
 
 /** The agent record `up` writes for a launched seat: the identity admission reads, and the id
  *  the drop file's header names. */
-function registerSeat(home: string, seat: string, role: string): void {
+function registerSeat(home: string, seat: string, role: string, cli = 'claude-code'): void {
   const id = `agt_${Buffer.from(seat).toString('hex').slice(0, 12).padEnd(12, '0')}`;
   const file = join(home, '.config', 'team', 'agents', `${id}.yaml`);
   mkdirSync(dirname(file), { recursive: true });
@@ -146,7 +150,7 @@ function registerSeat(home: string, seat: string, role: string): void {
       '  version: "1"',
       `  role: "${role}"`,
       'lab: "test"',
-      'cli: "claude-code"',
+      `cli: "${cli}"`,
       'launcher: null',
       'launch: "claude"',
       'reach:',
@@ -176,7 +180,7 @@ describe('team send history log & team feed', () => {
     const { root, dir, home, sockets } = world();
     // A seat to its own team's orchestrator: the pair the authority rules admit without a grant.
     recordSeat(dir, 'helper', 'pane-helper');
-    registerSeat(home, 'helper', 'implementer');
+    registerSeat(home, 'helper', 'implementer', 'codex');
     const host = hostFor(home, sockets);
     const callerIo = testIo(root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
 
@@ -196,23 +200,26 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'id', 'ms', 'outcome', 'to', 'ts', 'via']);
-    // The seat's send files the body under its header: the id admission admitted, and the rule.
-    const seatHeader = 'from agt_68656c706572 (helper, helper@acme) — admitted by: a seat to its own team\'s orchestrator\n\n';
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+    // The seat's send files the body under its header: the seat's readable name, and the rule.
+    const seatHeader = 'from helper — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
       ts: NOW.toISOString(),
       from: 'helper',
       to: 'lead',
+      from_team: teamIdOf(root),
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
       outcome: 'delivered',
+      // The thread is the first message's id; a first message is its own thread's id.
+      thread: sentDoc.ids.sent,
       ms: 0,
       via: 'typed',
-      // The walk landed on the typed leg through both legs ahead of it: the socket write this
-      // build does not make, and the mcp-inbox leg it does not carry.
+      // The walk landed on the typed leg through the inbox ahead of it: no server was listening.
+      // The native leg is not in the order in force — the default is mcp-inbox, drop, typed — so
+      // it is not walked, and nothing about it is recorded.
       failed: [
-        'native: unavailable; the frame path is a socket write this build does not make',
-        'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+        'mcp-inbox: no live inbox listener',
       ],
     });
 
@@ -250,8 +257,7 @@ describe('team send history log & team feed', () => {
       via: 'typed',
     });
     expect(doc.events[0]?.failed).toEqual([
-      'native: unavailable; the frame path is a socket write this build does not make',
-      'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+      'mcp-inbox: no live inbox listener',
     ]);
   });
 
@@ -294,7 +300,144 @@ describe('team send history log & team feed', () => {
     const plainIo = testIo(root);
     expect(await runFeed(['--limit', '1', '--json'], plainIo, { home })).toBe(0);
     const plainDoc = JSON.parse(plainIo.out) as { events: Record<string, unknown>[] };
-    expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'to', 'ts', 'via']);
+    expect(Object.keys(plainDoc.events[0] ?? {}).sort()).toEqual(['body', 'from', 'id', 'outcome', 'status', 'to', 'ts', 'via']);
+  });
+
+  test('a line that records its sender\'s team reads by address; one without it reads the plain seat', async () => {
+    const { root, home } = world();
+    const acme = teamIdOf(root);
+    // The reader's own roster gives `helper` a nickname, and so does another registered team. A
+    // line from the other team must read by its address, never as the local nickname; an older
+    // line that records no team must read as the plain seat name rather than guess a local one.
+    upsertTeam(home, acme, {
+      project: 'acme',
+      session: 'acme',
+      root,
+      roster: [{ agent: 'agt_aaaaaaaaaaaa', seat: 'helper', role: 'implementer', nickname: 'Bea' }],
+      at: NOW.toISOString(),
+    });
+    const labs = 'cccccccccccc';
+    upsertTeam(home, labs, {
+      project: 'labs',
+      session: 'labs',
+      root: join(base, 'labs'),
+      roster: [{ agent: 'agt_bbbbbbbbbbbb', seat: 'helper', role: 'implementer', nickname: 'Hermes' }],
+      at: NOW.toISOString(),
+    });
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      from_team: labs,
+      body: `${OWNER_HEADER}from the other team`,
+      id: 'seed-cross',
+      outcome: 'delivered',
+    });
+    appendHistory('acme', root, home, {
+      ts: new Date(NOW.getTime() + 60_000).toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: `${OWNER_HEADER}an older line`,
+      id: 'seed-old',
+      outcome: 'delivered',
+    });
+
+    const io = testIo(root);
+    expect(await runFeed([], io, { home })).toBe(0);
+    expect(io.out).toContain('helper@labs -> lead');
+    expect(io.out).toContain('helper -> lead');
+    expect(io.out).not.toContain('Bea');
+    expect(io.out).not.toContain('Hermes');
+
+    // The document keeps the machine shape: the team on the line that recorded it, nothing on
+    // the line that did not.
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const doc = JSON.parse(jsonIo.out) as { events: Array<Record<string, unknown>> };
+    expect(doc.events.find((entry) => entry.id === 'seed-cross')?.from_team).toBe(labs);
+    expect(doc.events.find((entry) => entry.id === 'seed-old')?.from_team).toBeUndefined();
+  });
+
+  test('one message is one row: a later receipt replaces the unconfirmed line it updates', async () => {
+    const { root, home } = world();
+    const body = `${OWNER_HEADER}sweep the pane`;
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      spec: 'lead@acme',
+      resolved: 'agt_0123456789ab',
+      body,
+      id: 'seed-inbox',
+      outcome: 'sent (unconfirmed)',
+      ms: 8,
+      via: 'mcp-inbox',
+    });
+    appendHistory('acme', root, home, {
+      ts: new Date(NOW.getTime() + 60_000).toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body,
+      id: 'seed-inbox',
+      outcome: 'delivered (read)',
+      via: 'mcp-inbox',
+    });
+
+    // The batch shows the later outcome once, and the address the send recorded stays on it.
+    const io = testIo(root);
+    expect(await runFeed([], io, { home })).toBe(0);
+    expect(io.out).toContain('1 event\n');
+    expect(io.out).not.toContain('sent (unconfirmed)');
+    expect((io.out.match(/owner -> lead/g) ?? []).length).toBe(1);
+    expect((io.out.match(/delivered \(read\) \(via mcp-inbox\)/g) ?? []).length).toBe(1);
+    // The milliseconds timed the send, not the receipt, so the row does not claim them.
+    expect(io.out).not.toContain('in 8 ms');
+
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const jsonDoc = JSON.parse(jsonIo.out) as { events: Record<string, unknown>[] };
+    expect(jsonDoc.events).toHaveLength(1);
+    expect(jsonDoc.events[0]).toMatchObject({ id: 'seed-inbox', outcome: 'delivered (read)', via: 'mcp-inbox' });
+    expect(jsonDoc.events[0]?.spec).toBe('lead@acme');
+    expect(jsonDoc.events[0]?.resolved).toBe('agt_0123456789ab');
+    expect(jsonDoc.events[0]?.ms).toBeUndefined();
+  });
+
+  test('--follow prints an outcome update for an id it has already shown', async () => {
+    const { root, home } = world();
+    const body = `${OWNER_HEADER}follow the pane`;
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body,
+      id: 'seed-follow',
+      outcome: 'sent (unconfirmed)',
+      via: 'mcp-inbox',
+    });
+
+    const io = testIo(root);
+    const code = await runFeed(['--follow'], io, {
+      home,
+      poll: async (tick) => {
+        if (tick === 0) {
+          appendHistory('acme', root, home, {
+            ts: new Date(NOW.getTime() + 60_000).toISOString(),
+            from: 'owner',
+            to: 'lead',
+            body,
+            id: 'seed-follow',
+            outcome: 'delivered (read)',
+            via: 'mcp-inbox',
+          });
+          return true;
+        }
+        return false;
+      },
+    });
+    expect(code).toBe(0);
+    expect((io.out.match(/sent \(unconfirmed\)/g) ?? []).length).toBe(1);
+    expect((io.out.match(/delivered \(read\)/g) ?? []).length).toBe(1);
   });
 
   test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
@@ -320,11 +463,8 @@ describe('team send history log & team feed', () => {
       ),
     ).toBe(1);
 
-    // 4. a --wait refusal writes nothing either. The waited outcomes are out of this build's
-    // reach while the socket is off, so the answered and timeout lines are seeded straight into
-    // the history — as the native leg's will be — and the feed renders the history, not the
-    // runs that made it.
-    expect(await runSend(['lead', 'msg-refused-wait', '--wait'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(1);
+    // 4. answered and timeout: a waited send that gets no reply within its window records timeout
+    // with the thread open; answered is seeded alongside it so the feed renders both waited outcomes.
     appendHistory('acme', root, home, {
       ts: NOW.toISOString(),
       from: 'owner',
@@ -335,16 +475,13 @@ describe('team send history log & team feed', () => {
       ms: 0,
       via: 'socket',
     });
-    appendHistory('acme', root, home, {
-      ts: NOW.toISOString(),
-      from: 'owner',
-      to: 'lead',
-      body: `${OWNER_HEADER}msg-timeout`,
-      id: 'seed-timeout',
-      outcome: 'timeout',
-      ms: 0,
-      via: 'socket',
-    });
+    expect(
+      await runSend(
+        ['lead', 'msg-timeout', '--wait', '--timeout', '1'],
+        testIo(root, { kind: 'owner' }),
+        hostFor(home, sockets, { waitMs: 0 }),
+      ),
+    ).toBe(1);
 
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);

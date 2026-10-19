@@ -1,9 +1,11 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
+import { selfRunner } from '../mcp/register.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
+import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import type { WaitingRecord } from '../state.ts';
 
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
@@ -17,10 +19,14 @@ export const IDLE_POLL_MS = 2000;
 export type Op =
   | { do: 'server'; session: string }
   | { do: 'wait-session'; session: string; seconds: number }
-  | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true }
+  | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true; watcher?: CliWatcher }
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined }
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string }
+  /** `cli` and `cwd` let the launch register the seat's team inbox in its folder before the
+   *  command runs (`execute.ts`). `watcher` is how the seat will learn a drop is waiting, as
+   *  this run leaves it; recorded with the launch. Absent only on a hand-built op: every planned
+   *  launch names them. */
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; watcher?: CliWatcher }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -43,6 +49,8 @@ export type Op =
       seat: string;
       label: string;
       cli: string;
+      /** How this launch leaves the seat watching for drops; recorded with the idle record. */
+      watcher?: CliWatcher;
       seconds: number;
       command: string;
       pane?: string;
@@ -167,8 +175,18 @@ export interface UpSeat {
    *  would refuse. */
   repairLine: string;
   stopped: boolean;
+  /** The pane is a human's: the file marks it `human: true`. Nothing is launched into it and
+   *  no key or line is typed into it; the plan leaves the seat as it is and says why. */
+  human?: true;
   /** The seat's rules, as one text: what a launch option embeds and what its file holds. */
   rules: string;
+  /**
+   * The display name the seat's session carries, when its CLI takes one (Claude Code's `--name`):
+   * the seat's readable name under the project's `sender_name` word (`src/send/names.ts`), so a
+   * person reading the session sees whom it belongs to. Absent leaves the launch line as the file
+   * wrote it.
+   */
+  sessionName?: string;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
    *  one line typed in its pane. Absent when the path can't be typed safely. */
   rulesFile?: { path: string; line: string };
@@ -316,6 +334,14 @@ export function paneOf(label: string): string {
   return `<pane of ${label}>`;
 }
 
+/** How the seat learns that a drop is waiting, in the dry run's own words. Said on the launch
+ *  line, so a seat that watches nothing is known before a send leaves it a file no one reads. */
+function watcherNote(watcher: CliWatcher): string {
+  if (watcher === 'hook') return 'reads its drops at each turn start';
+  if (watcher === 'inbox') return 'reads its drops through its MCP inbox';
+  return 'watches nothing: a drop sent here is never read';
+}
+
 /** Every step of `team up`, in order. Nothing here runs anything. */
 export function upPlan(input: UpInput): Step[] {
   const { session } = input;
@@ -340,6 +366,15 @@ export function upPlan(input: UpInput): Step[] {
       steps.push({ kind: 'skip', text: `${seat.name}: ${seat.grantKeep}` });
       continue;
     }
+    // A pane that is a human's is never launched into or typed into: no workspace is made,
+    // no command runs, and the seat is left exactly as it was.
+    if (seat.human) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: the pane is a human's; nothing is launched into it or typed into it; left as it is`,
+      });
+      continue;
+    }
     if (seat.stopped) {
       steps.push({ kind: 'skip', text: `${seat.name}: stopped in the file; start it with \`team add ${seat.name}\`` });
       continue;
@@ -357,6 +392,15 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
+    // How this seat's CLI will learn a drop is waiting, as this run leaves it: the turn-start
+    // hook only when the run's settings map holds the seat's file, so a hook that did not land
+    // is a seat on its MCP inbox (or watching nothing). No map at all is a plan built by hand:
+    // it reads what the launch would install.
+    const watcher = cliWatcher(
+      seat.cli,
+      seat.launch,
+      input.cliHooks === undefined || input.cliHooks[seat.name] !== undefined,
+    );
     // No recorded process, and the pane is a shell or another model. Nothing is closed and
     // nothing is launched: a ready seat keeps its record, and a seat still at launch is left
     // out instead of being waited on.
@@ -563,19 +607,27 @@ export function upPlan(input: UpInput): Step[] {
         ...(said ? { note: `${said}; would launch` } : {}),
         // A seat that waits in the lobby is created in it: the host confirms that folder again
         // directly before this create (`execute.ts`), with nothing in between.
-        do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}) },
+        do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}), watcher },
       });
     }
-    const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name]);
+    // The place's session is the herdr session this launch aims at. A file route binds the
+    // team file's own session instead (`mcp/register.ts`), read in the seat's folder: the
+    // server refuses any other.
+    const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
+      seat: seat.name,
+      session,
+      ...selfRunner(),
+    }, seat.sessionName);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
       const said = takeNotice();
+      const watched = watcherNote(watcher);
       steps.push({
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
-        ...(said ? { note: `${said}; would launch` } : {}),
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, ...(said ? { notice: said } : {}) },
+        note: said ? `${said}; would launch; ${watched}` : watched,
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(said ? { notice: said } : {}), watcher },
       });
     }
     const rules = profile.rulesMode;
@@ -595,6 +647,7 @@ export function upPlan(input: UpInput): Step[] {
           seat: seat.name,
           label: seat.label,
           cli: seat.cli,
+          watcher,
           seconds: profile.idleTimeout,
           command,
           pane: seat.pane,
@@ -698,6 +751,9 @@ export interface DownSeat {
    *  `exited` comes from the process reading alone — the pane's own shell is back in front and
    *  no CLI process is in its foreground list — never from an unrecognised screen. */
   state: 'free' | 'working' | 'blocked' | 'unknown' | 'unsent' | 'exited';
+  /** The pane is a human's: the file marks it `human: true`. No exit line or key is typed into
+   *  it, and the seat is left running; the plan says why. */
+  human?: true;
   /** The seat's box holds exactly the profile's exit text — left by an earlier run that never
    *  confirmed it — and the profile carries the key that empties the box. */
   exitInBox?: boolean;
@@ -753,6 +809,16 @@ export function downPlan(input: DownInput): Step[] {
       steps.push({
         kind: 'skip',
         text: `${seat.name}: left running; only the owner stops the orchestrator's or the operator's seat`,
+      });
+      left++;
+      continue;
+    }
+    // A pane that is a human's is never typed into: no exit line, no key, and no close of the
+    // workspace it is in. The seat is left running and said so.
+    if (seat.human) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: the pane is a human's; nothing is typed into it; left running`,
       });
       left++;
       continue;

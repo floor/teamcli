@@ -40,7 +40,7 @@ recorded one.
 | a lease was released, or there was nothing to take or to release | the context line and `team next: released <id>`, or `team next: nothing is takeable` / `team next: nothing is assigned to you` / `team next: nothing is held` | 0 |
 | the wait ended on a stop signal, or a clock that did not advance | `team next: stopped waiting` | 0 |
 | refused: not a seat on its recorded pane, the team file can't be read or its policy is refused, the task file is missing or not a list, nothing was taken and a record is not a task, or the broker path refused | `team next: <reason>`; under `--json`, a `team.error` document on stdout with `id` the contract row and `repair` the way out | 1 |
-| the invocation can't be read, or this folder is not a git checkout | `team next: <problem>`, with the usage for the invocation; under `--json`, a `team.error` document | 2 |
+| the invocation can't be read, or this folder is neither a checkout nor a team root | `team next: <problem>`, with the usage for the invocation; under `--json`, a `team.error` document | 2 |
 
 Under `--json` the command prints one `team.next` document: its `schema` tag first, then `format`, `dry_run` (`false`), `status` (the outcome word), `action` (`claim`, `release`, or `none`), `action_summary` (the same closing line the plain run prints), `project`, `session`, and `task` — the claimed record's `id` and `title`, or `null`. A claimed record prints its block only in the plain run; the document carries its id and title.
 

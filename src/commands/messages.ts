@@ -1,12 +1,18 @@
-// `team messages`: verify a record that is already waiting, print its body, and write the receipt.
-// Nothing in this build writes the first real record. A report still leaves as the watch's nudge.
-// The signature is integrity: every seat runs as the owner-user, so it is not proof of who sent it.
+// `team messages`: verify a record that is already waiting, print its body, and write the read
+// receipt that makes its status move.
+//
+// A send of this version writes a signed record into the recipient's transport tree,
+// `<root>/.agents/send-drops/<session>/<seat>/<id>` (`src/send/record.ts`), and this command reads
+// it there. The older `.agents/messages/<seat>/<id>.json` store is still read, read-only, so a
+// record a previous build left verifies the same way; nothing writes it any more. The signature
+// is integrity: every seat runs as the owner-user, so it is not proof of who sent it.
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import {
   contextLine,
@@ -23,7 +29,9 @@ import {
   writeJsonError,
   type OutputDifference,
 } from '../output/index.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { compareSeatNames } from '../seat-names.ts';
+import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
@@ -34,14 +42,29 @@ import {
   verifyDomain,
   type Json,
 } from '../store/keys.ts';
+import {
+  receiptFile as recordReceiptFile,
+  receiptHolds,
+  recordFile,
+  signedRecordOf,
+  signReceiptPayload,
+  verifyRecord,
+  writeReceipt,
+  type ReceiptPayload,
+  type ReceiptStatus,
+  type RecordPayload,
+  type SignedRecord,
+} from '../send/record.ts';
 
 export const USAGE = `Usage: team messages [--json]
 
-Exits 0 when the inbox is read, 1 when the caller, team file, or message record is refused, 2 when the invocation can't be read or this folder is not a git repository.
+Exits 0 when the inbox is read, 1 when the caller, team file, or message record is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
+/** The payload the older `.agents/messages` store holds. New sends write a signed record into
+ *  the transport tree instead; this shape is read, never written. */
 export type MessagePayload = {
   kind: 'message';
   id: string;
@@ -53,7 +76,9 @@ export type MessagePayload = {
   from: string;
 };
 
-export type ReceiptPayload = {
+/** The receipt the older store's read writes. New reads write `src/send/record.ts`'s receipt,
+ *  which carries its status. */
+export type LegacyReceiptPayload = {
   kind: 'receipt';
   id: string;
   to: string;
@@ -72,7 +97,8 @@ export const realSources: MessagesSources = { home: homedir(), now: () => new Da
 export const messages: Command = (argv, io) => runMessages(argv, io, realSources);
 export default messages;
 
-/** `.agents/messages/<seat>/<id>.json`. The filename is the id; the directory is the recipient. */
+/** `.agents/messages/<seat>/<id>.json`: the store a previous build wrote. The filename is the
+ *  id; the directory is the recipient. */
 export function messageFile(root: string, seat: string, id: string): string {
   return join(root, '.agents', 'messages', seat, `${id}.json`);
 }
@@ -81,7 +107,20 @@ export function receiptFile(root: string, seat: string, id: string): string {
   return join(root, '.agents', 'messages', seat, `${id}.read.json`);
 }
 
-type Candidate = { seat: string; id: string; path: string };
+/** The folder a session's records live in: `<root>/.agents/send-drops/<session>/<seat>`. */
+export function recordDir(root: string, session: string, seat: string): string {
+  return join(root, '.agents', 'send-drops', session, seat);
+}
+
+/** One candidate file: a signed record in the transport tree, or a legacy message file. */
+type Candidate = {
+  store: 'record' | 'legacy';
+  seat: string;
+  id: string;
+  path: string;
+  /** The session directory the record was found under (records only). */
+  session?: string;
+};
 
 export type Unacked = { id: string; to: string; at: string };
 
@@ -125,7 +164,7 @@ function text(value: unknown): value is string {
   return typeof value === 'string';
 }
 
-/** The payload a message signature covers, or null when the file is not that shape. */
+/** The payload a legacy message signature covers, or null when the file is not that shape. */
 function messagePayload(value: unknown): MessagePayload | null {
   if (!isRecord(value)) return null;
   const payload = value.payload;
@@ -137,7 +176,7 @@ function messagePayload(value: unknown): MessagePayload | null {
   return payload as MessagePayload;
 }
 
-function receiptMatches(path: string, seat: string, id: string, root: string, session: string, key: KeyObject): boolean {
+function legacyReceiptMatches(path: string, seat: string, id: string, root: string, session: string, key: KeyObject): boolean {
   if (!isFile(path)) return false;
   const parsed = readJson(path);
   if (!isRecord(parsed) || !isRecord(parsed.payload) || !text(parsed.signature)) return false;
@@ -149,7 +188,7 @@ function receiptMatches(path: string, seat: string, id: string, root: string, se
   return verifyDomain(RECEIPT_DOMAIN, payload as Json, parsed.signature, key);
 }
 
-function candidates(root: string): Candidate[] {
+function legacyCandidates(root: string): Candidate[] {
   const dir = join(root, '.agents', 'messages');
   if (!isDir(dir)) return [];
   const out: Candidate[] = [];
@@ -165,37 +204,102 @@ function candidates(root: string): Candidate[] {
       if (!NAME.test(id)) continue;
       const path = join(seatDir, name);
       if (!isFile(path)) continue;
-      out.push({ seat, id, path });
+      out.push({ store: 'legacy', seat, id, path });
     }
   }
   return out;
 }
 
+/** The marker names a send leaves beside a record; none of them is a message. */
+function isMarkerName(name: string): boolean {
+  return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read') || name.endsWith('.json');
+}
+
+/** The prefix a work nudge's file carries: the watch writes it into the same folder, and it is a
+ *  prompt for the seat, not a message record (`work-<uuid>`). */
+const WORK_PREFIX = 'work-';
+
+/** The signed records in `<root>/.agents/send-drops/<session>/<seat>/<id>`. A name that is not a
+ *  record's id — a pending marker, a taken marker, an inbox receipt, a work nudge — is not a
+ *  candidate. */
+function recordCandidates(root: string, session: string): Candidate[] {
+  const dir = join(root, '.agents', 'send-drops', session);
+  if (!isDir(dir)) return [];
+  const out: Candidate[] = [];
+  for (const seat of readdirSync(dir).sort(compareSeatNames)) {
+    if (!NAME.test(seat)) continue;
+    const seatDir = join(dir, seat);
+    if (!isDir(seatDir)) continue;
+    for (const name of readdirSync(seatDir).sort()) {
+      if (!NAME.test(name) || isMarkerName(name) || name.startsWith(WORK_PREFIX)) continue;
+      const path = join(seatDir, name);
+      if (!isFile(path)) continue;
+      // A body file written before the record spine is plain text. It stays in the folder for
+      // its seat to read, but it names no message: the inbox neither shows nor refuses it. A
+      // JSON file is held to the record's shape.
+      if (readJson(path) === undefined) continue;
+      out.push({ store: 'record', seat, id: name, path, session });
+    }
+  }
+  return out;
+}
+
+function candidates(root: string, session: string): Candidate[] {
+  return [...recordCandidates(root, session), ...legacyCandidates(root)];
+}
+
+/** Whether the record at `candidate` already has a verifying read receipt: the one receipt module's
+ *  answer, shared with the inbox, `team drops` and the watch. */
+function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject): boolean {
+  const path = recordReceiptFile(
+    recordDir(root, candidate.session ?? session, candidate.seat),
+    candidate.id,
+    'read' as ReceiptStatus,
+  );
+  return receiptHolds(
+    path,
+    candidate.id,
+    'read',
+    { to: candidate.seat, root, session: candidate.session ?? session },
+    key,
+  );
+}
+
 /**
- * Records with no verifying receipt. A missing message key yields nothing: a signature cannot
- * be checked, and this read does not create the key. The watch rings from this list.
+ * Records with no verifying read receipt. A missing message key yields nothing: a signature
+ * cannot be checked, and this read does not create the key. The watch rings from this list.
  */
 export function listUnacked(root: string, session: string, home: string): Unacked[] {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
   const out: Unacked[] = [];
-  for (const candidate of candidates(root)) {
-    if (receiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
-    const parsed = readJson(candidate.path);
-    const payload = messagePayload(parsed);
-    if (!payload || !isRecord(parsed) || !text(parsed.signature)) continue;
+  for (const candidate of candidates(root, session)) {
+    if (candidate.store === 'legacy') {
+      if (legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
+      const parsed = readJson(candidate.path);
+      const payload = messagePayload(parsed);
+      if (!payload || !isRecord(parsed) || !text(parsed.signature)) continue;
+      if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
+      if (payload.session !== session || !samePath(payload.root, root)) continue;
+      if (!verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature, state.key)) continue;
+      out.push({ id: candidate.id, to: candidate.seat, at: payload.at });
+      continue;
+    }
+    if (recordReadHeld(candidate, root, session, state.key)) continue;
+    const record = signedRecordOf(readJson(candidate.path));
+    if (record === null) continue;
+    const payload = record.payload;
     if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
-    if (payload.session !== session || !samePath(payload.root, root)) continue;
-    if (!verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature, state.key)) continue;
+    if (payload.session !== (candidate.session ?? session) || !samePath(payload.root, root)) continue;
+    if (!verifyRecord(record, state.key)) continue;
     out.push({ id: candidate.id, to: candidate.seat, at: payload.at });
   }
   return out;
 }
 
 /**
- * Writes one record the way a sender would, signing with the message key. The message key is
- * created here when it does not exist yet. Tests and the evidence harness are the only callers;
- * no command writes a record.
+ * Writes one legacy record the way a previous sender did, signing with the message key. Tests
+ * and the evidence harness are the only callers; only the transport tree is written by a send.
  */
 export function plantMessage(home: string, root: string, seat: string, id: string, payload: MessagePayload, signature?: string): void {
   const key = messageKeyOf(home);
@@ -205,9 +309,73 @@ export function plantMessage(home: string, root: string, seat: string, id: strin
   writeAtomic(path, `${JSON.stringify({ payload, signature: signed }, null, 2)}\n`);
 }
 
+/**
+ * Writes one signed record into the transport tree as a sender would. Tests and the evidence
+ * harness are the only callers; a send builds and signs its own record (`src/send/record.ts`).
+ */
+export function plantRecord(
+  home: string,
+  root: string,
+  session: string,
+  seat: string,
+  id: string,
+  body: string,
+  fields: Partial<Pick<RecordPayload, 'from' | 'from_id' | 'to_id' | 'rule' | 'at' | 'thread' | 'in_reply_to'>> = {},
+): string {
+  const key = messageKeyOf(home);
+  const at = fields.at ?? new Date().toISOString();
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: seat,
+    to_id: fields.to_id ?? null,
+    root,
+    session,
+    at,
+    body,
+    from: fields.from ?? 'lead',
+    from_id: fields.from_id ?? null,
+    rule: fields.rule ?? 'the lead to a seat of its own team',
+    thread: fields.thread ?? id,
+    ...(fields.in_reply_to !== undefined ? { in_reply_to: fields.in_reply_to } : {}),
+  };
+  const record: SignedRecord = { payload, signature: signDomain(MESSAGE_DOMAIN, payload as unknown as Json, key) };
+  const dir = recordDir(root, session, seat);
+  mkdirSync(dir, { recursive: true });
+  const path = recordFile(dir, id);
+  writeAtomic(path, `${JSON.stringify(record, null, 2)}\n`);
+  return path;
+}
+
 type Problem = { kind: 'shape' | 'id' | 'seat' | 'root' | 'session' | 'signature'; text: string };
 
-function problemOf(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | MessagePayload {
+type Verified = { from: string; from_id: string | null; to: string; at: string; body: string };
+
+function recordProblem(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
+  const where = `${candidate.seat}/${candidate.id}`;
+  const record = signedRecordOf(readJson(candidate.path));
+  if (record === null) return { kind: 'shape', text: `${where} does not verify: the record is not a message record` };
+  const payload = record.payload;
+  if (payload.id !== candidate.id) {
+    return { kind: 'id', text: `${where} does not verify: its id is ${payload.id}, and the filename is the id` };
+  }
+  if (payload.to !== candidate.seat) {
+    return { kind: 'seat', text: `${where} does not verify: it is addressed to ${payload.to}` };
+  }
+  if (!samePath(payload.root, root)) {
+    return { kind: 'root', text: `${where} does not verify: it is bound to another checkout` };
+  }
+  if (payload.session !== (candidate.session ?? session)) {
+    return { kind: 'session', text: `${where} does not verify: it is bound to session ${JSON.stringify(payload.session)}` };
+  }
+  if (!verifyRecord(record, key)) {
+    return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
+  }
+  return { from: payload.from, from_id: payload.from_id, to: payload.to, at: payload.at, body: payload.body };
+}
+
+function problemOf(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
+  if (candidate.store === 'record') return recordProblem(candidate, root, session, key);
   const where = `${candidate.seat}/${candidate.id}`;
   const parsed = readJson(candidate.path);
   const payload = messagePayload(parsed);
@@ -227,22 +395,43 @@ function problemOf(candidate: Candidate, root: string, session: string, key: Key
   if (!verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature as string, key)) {
     return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
   }
-  return payload;
+  // The older store never carried the sender's registry id.
+  return { from: payload.from, from_id: null, to: payload.to, at: payload.at, body: payload.body };
 }
 
-function writeReceipt(home: string, root: string, payload: MessagePayload, at: string): void {
-  const receipt: ReceiptPayload = {
+/**
+ * Writes the read receipt for a record that was shown. The receipt carries its status
+ * (`read`), is signed with the message key, and is write-once; the older store keeps its own
+ * receipt shape.
+ */
+function writeReadReceipt(home: string, candidate: Candidate, payload: Verified, root: string, session: string, at: string): void {
+  if (candidate.store === 'record') {
+    const receipt: ReceiptPayload = {
+      kind: 'receipt',
+      status: 'read',
+      id: candidate.id,
+      to: candidate.seat,
+      root,
+      session: candidate.session ?? session,
+      at,
+    };
+    const signed = signReceiptPayload(receipt, home);
+    const written = writeReceipt(recordDir(root, candidate.session ?? session, candidate.seat), signed, home);
+    if (!written.ok) throw new Error('the read receipt could not be written');
+    return;
+  }
+  const receipt: LegacyReceiptPayload = {
     kind: 'receipt',
-    id: payload.id,
-    to: payload.to,
-    root: payload.root,
-    session: payload.session,
+    id: candidate.id,
+    to: candidate.seat,
+    root,
+    session,
     at,
   };
   const key = messageKeyState(home);
   if (key.kind !== 'key') throw new Error('the message key disappeared before the receipt was signed');
   const signature = signDomain(RECEIPT_DOMAIN, receipt as Json, key.key);
-  writeAtomic(receiptFile(root, payload.to, payload.id), `${JSON.stringify({ payload: receipt, signature }, null, 2)}\n`);
+  writeAtomic(receiptFile(root, candidate.seat, candidate.id), `${JSON.stringify({ payload: receipt, signature }, null, 2)}\n`);
 }
 
 /** The mailbox row the table prints and `--json` carries. A record that does not verify is a row
@@ -253,30 +442,40 @@ type MailboxRow = {
   id: string;
   seat: string;
   from: string | null;
+  /** The sender's registry id, when the record carries one. The table resolves it to the
+   *  project's readable name; the JSON row keeps the record's own `from`. */
+  from_id: string | null;
   to: string | null;
   sent: string | null;
   sent_display: string;
   status: 'shown' | 'refused';
 };
 
-/** `.agents/messages/<seat>/<id>.json` as the caller reads it in the refusal's repair. */
+/** The record's path as the caller reads it in the refusal's repair. */
 function mailboxPath(candidate: Candidate): string {
+  if (candidate.store === 'record') {
+    return `.agents/send-drops/${candidate.session ?? ''}/${candidate.seat}/${candidate.id}`;
+  }
   return `.agents/messages/${candidate.seat}/${candidate.id}.json`;
 }
 
 /** What an unverifying record's repair is, per failed check. It names the file the caller already
  *  sees in the table; moving it where its own payload says it belongs is the repair for a misfiled
  *  record, and removing it is the repair for one nothing can make verify. */
-function repairOf(candidate: Candidate, problem: Problem, payload: MessagePayload | null): string {
+function repairOf(candidate: Candidate, problem: Problem, payload: MessagePayload | RecordPayload | null): string {
   const path = mailboxPath(candidate);
+  const moveTarget = (seat: string, id: string): string =>
+    candidate.store === 'record'
+      ? `.agents/send-drops/${candidate.session ?? ''}/${seat}/${id}`
+      : `.agents/messages/${seat}/${id}.json`;
   switch (problem.kind) {
     case 'id':
       return payload
-        ? `move ${path} to .agents/messages/${candidate.seat}/${payload.id}.json, or remove it`
+        ? `move ${path} to ${moveTarget(candidate.seat, payload.id)}, or remove it`
         : `remove ${path}, or restore it from the sender`;
     case 'seat':
       return payload
-        ? `move ${path} to .agents/messages/${payload.to}/${candidate.id}.json, or remove it`
+        ? `move ${path} to ${moveTarget(payload.to, candidate.id)}, or remove it`
         : `remove ${path}, or restore it from the sender`;
     case 'root':
       return `remove ${path}: it is bound to another checkout`;
@@ -319,20 +518,25 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // exit: messages.invocation
     return 2;
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    // `team messages` takes no `--file`, so the no-repository refusal must not offer one.
-    if (json) {
-      writeJsonError(io, 'messages.not-a-repo', NOT_A_REPO_NO_FILE, null);
-    } else {
-      io.stderr(`team messages: ${NOT_A_REPO_NO_FILE}\n`);
-    }
-    // exit: messages.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team messages` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
   if (!loaded.ok) {
-    const message = loaded.errors[0]?.message ?? 'the team file can\'t be read';
+    const problem = loaded.errors[0];
+    const message = problem?.message ?? 'the team file can\'t be read';
+    if (problem !== undefined && isNoRepository(problem)) {
+      const shown = withoutFileOffer(message);
+      if (json) {
+        writeJsonError(io, 'messages.not-a-repo', shown, null);
+      } else {
+        io.stderr(`team messages: ${shown}\n`);
+      }
+      // exit: messages.not-a-repo
+      return 2;
+    }
     if (json) {
       writeJsonError(io, 'messages.file', message, null);
     } else {
@@ -341,11 +545,16 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // exit: messages.file
     return 1;
   }
+  const root = loaded.root;
   const session = loaded.team.session;
+  // The table's FROM cell is the readable name the project's `sender_name` asks for; the row's
+  // `from` stays the record's own value, which is what `--json` carries.
+  const naming = namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team });
   const state = messageKeyState(sources.home);
-  const waiting = candidates(root).filter((candidate) => {
+  const waiting = candidates(root, session).filter((candidate) => {
     if (state.kind !== 'key') return true;
-    return !receiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
+    if (candidate.store === 'record') return !recordReadHeld(candidate, root, session, state.key);
+    return !legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
   });
   if (waiting.length === 0) {
     // An empty inbox is a reading, not a refusal: the table has its headers and no rows, the note
@@ -363,7 +572,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         counts: { messages: 0, shown: 0, refused: 0 },
       });
     } else {
-      io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], [], ['nothing is waiting'], ttyStyle(io)));
+      io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], [], ['nothing is waiting'], ttyStyle(io), naming));
     }
     // exit: messages.none
     return 0;
@@ -380,37 +589,54 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   }
   const now = sources.now();
   const rows: MailboxRow[] = [];
-  /** The body of each record that verified, by `<seat>/<id>`: the table's key, so the body the
-   *  run prints and the body its `--json` row carries are one value. */
+  /** The body of each record that verified, by `<store>/<seat>/<id>`: the table's key, so the
+   *  body the run prints and the body its `--json` row carries are one value. */
   const bodies = new Map<string, string>();
-  const verified: { candidate: Candidate; payload: MessagePayload }[] = [];
+  const verified: { candidate: Candidate; payload: Verified }[] = [];
   const differences: OutputDifference[] = [];
+  const rowKey = (candidate: Candidate): string => `${candidate.store}/${candidate.seat}/${candidate.id}`;
   for (const candidate of waiting) {
     const result = problemOf(candidate, root, session, state.key);
-    const parsed = messagePayload(readJson(candidate.path));
+    const parsedLike = candidate.store === 'record'
+      ? (signedRecordOf(readJson(candidate.path))?.payload ?? null)
+      : messagePayload(readJson(candidate.path));
     if ('text' in result) {
       rows.push({
         id: candidate.id,
         seat: candidate.seat,
-        from: parsed?.from ?? null,
-        to: parsed?.to ?? null,
-        sent: parsed?.at ?? null,
-        sent_display: formatRelativeTime(parsed?.at, now),
+        from: parsedLike?.from ?? null,
+        from_id: parsedLike !== null && 'from_id' in parsedLike ? (parsedLike.from_id as string | null) : null,
+        to: parsedLike?.to ?? null,
+        sent: parsedLike?.at ?? null,
+        sent_display: formatRelativeTime(parsedLike?.at, now),
         status: 'refused',
       });
-      differences.push({ what: result.text, repair: repairOf(candidate, result, parsed), who: 'any seat' });
+      differences.push({ what: result.text, repair: repairOf(candidate, result, parsedLike), who: 'any seat' });
+      // The refusal is raised to the owner as its rule and object — the record's id, its seat
+      // and its path — and never its content.
+      raiseRefusalEvent({
+        project: loaded.team.project,
+        root,
+        home: sources.home,
+        session,
+        kind: 'record.invalid',
+        rule: result.kind,
+        object: { id: candidate.id, seat: candidate.seat, path: mailboxPath(candidate) },
+        now,
+      });
       continue;
     }
     rows.push({
       id: candidate.id,
       seat: candidate.seat,
       from: result.from,
+      from_id: result.from_id,
       to: result.to,
       sent: result.at,
       sent_display: formatRelativeTime(result.at, now),
       status: 'shown',
     });
-    bodies.set(`${candidate.seat}/${candidate.id}`, result.body);
+    bodies.set(rowKey(candidate), result.body);
     verified.push({ candidate, payload: result });
   }
   if (json) {
@@ -418,8 +644,9 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       format: 1 as const,
       project: loaded.team.project,
       session,
-      rows: rows.map((row) => {
-        const body = bodies.get(`${row.seat}/${row.id}`);
+      rows: rows.map((row, index) => {
+        const candidate = waiting[index];
+        const body = candidate === undefined ? undefined : bodies.get(rowKey(candidate));
         return {
           id: row.id,
           from: row.from,
@@ -442,12 +669,12 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       },
     });
   } else {
-    io.stdout(renderMailbox(loaded.team.project, session, rows, verified.map((one) => ({ candidate: one.candidate, body: one.payload.body })), differences, [], ttyStyle(io)));
+    io.stdout(renderMailbox(loaded.team.project, session, rows, verified.map((one) => ({ candidate: one.candidate, body: one.payload.body })), differences, [], ttyStyle(io), naming));
   }
   // The receipt means the body was shown. `io.stdout` returning is that boundary: a throw leaves
   // no receipt, and the record stays unacked.
   for (const one of verified) {
-    writeReceipt(sources.home, root, one.payload, sources.now().toISOString());
+    writeReadReceipt(sources.home, one.candidate, one.payload, root, session, sources.now().toISOString());
   }
   if (differences.length > 0) {
     // exit: messages.shape
@@ -473,12 +700,15 @@ function renderMailbox(
   differences: readonly OutputDifference[],
   notes: readonly string[],
   style: ReturnType<typeof ttyStyle>,
+  naming: SenderNaming,
 ): string {
   const lines = [contextLine(project, session)];
+  const readableFrom = (row: MailboxRow): string | null =>
+    row.from === null ? null : senderDisplayName({ seat: row.from, id: row.from_id }, naming);
   lines.push(
     ...renderTable({
       headers: ['ID', 'FROM', 'TO', 'SENT', 'STATUS'],
-      rows: rows.map((row) => [row.id, row.from, row.to, row.sent_display, row.status]),
+      rows: rows.map((row) => [row.id, readableFrom(row), row.to, row.sent_display, row.status]),
       indent: '  ',
       style,
     }),
