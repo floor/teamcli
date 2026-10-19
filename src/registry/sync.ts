@@ -174,8 +174,8 @@ export function registerLaunch(
       ? updateAgent(home, known.id, {
         name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
         // The declaration and this launch both name the seat again: the current orphan marker
-        // comes off the live record with its id and signed settings kept. The earlier removal
-        // stays in the event history; this clears the state, not the record of what happened.
+        // comes off the live record with its id and signed settings kept. Only the current mark
+        // is cleared; the record and its signed entries stay.
         orphaned_at: null,
         ...(stated === undefined ? {} : { provenance: stated }), ...seatHandle,
       })

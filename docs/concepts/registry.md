@@ -34,8 +34,7 @@ its record at the first successful settings write aimed at it, seeded from the d
 `registered` with no pane, session or state; a dry run, a refused write and an unset that finds
 nothing to remove create nothing. Removing a declaration never deletes a record: the record is
 marked orphaned and keeps its signed settings. A seat the file declares again and a launch then
-finds keeps the same id and signed settings and has the current mark cleared; the earlier removal
-stays in the event history.
+finds keeps the same id and signed settings and has the current mark cleared.
 
 ## The team record
 

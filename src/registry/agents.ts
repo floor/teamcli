@@ -223,7 +223,7 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
       provenance: nextProvenance,
     };
     // `null` takes the orphan mark off the live record: the field is absent again, the way a
-    // record that was never orphaned reads, while the history that marked it stays in the log.
+    // record that was never orphaned reads, with its id and signed settings kept.
     if (rest.orphaned_at === null) delete next.orphaned_at;
     if (settingsDelta !== undefined) {
       const settings: Record<string, YamlValue> = { ...(next.settings ?? {}) };
