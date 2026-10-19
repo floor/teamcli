@@ -35,7 +35,9 @@ one key, and the level below shows through again. Only the owner writes. The val
 same checks the read describes: the key must be one a seat holds (`model`, `effort`, `nickname`,
 `delivery_order`, `human`), a model must be one the seat's launch profile names — it is recorded
 as the launch id, so a later launch reads the same model — an effort must be one the seat's vendor
-carries, and a nickname must not clash with another seat's name or nickname. A governed key then
+carries, and a nickname must not clash with another seat's name or nickname — the word another seat
+signed standing where its file word does, so a signed word is what a new one is checked against. A
+governed key then
 passes the policy in force over the seat: a value that drops or reorders the delivery order is
 within, one that adds a leg the policy does not is refused.
 
@@ -58,7 +60,10 @@ before the record is replaced.
 | `none` | no value is in force and the key has no release default: the cell reads `-` |
 
 `APPLIES` is the registry's timing for the key: `restart that resumes` for the values a CLI takes at
-its next start, `at once` for the ones TeamCLI reads on its next command.
+its next start, `at once` for the ones TeamCLI reads on its next command. A signed `nickname` is
+the name `team send` prints and addresses (`@<nickname>`, `<nickname>@<team>`, `team send --list`)
+in place of the team file's; a signed `delivery_order` and `human` are the words the next send
+walks. The replaced file word addresses nobody.
 
 ## Exit codes
 

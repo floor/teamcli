@@ -117,7 +117,8 @@ The outcome is always one of `delivered` (or `delivered (read)`), `sent (unconfi
 `answered`, `held`, `not-submitted`, `timeout`,
 `unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster,
-each seat's human name as its `@<nickname>` address, and the seats of the other teams of the
+each seat's human name as its `@<nickname>` address (the name a seat signed standing where the
+file's word did), and the seats of the other teams of the
 caller's entity, each of those as `<seat>@<team>` (a human name there as `<nickname>@<team>`).
 Broadcast is not in this build. Any seat's shell can run it — agy, grok, codex or claude — and it is the only path
 by which one agent types into another seat's pane: agents do not send keys through herdr.
@@ -201,6 +202,11 @@ answers is refused with each address that would pick one. A `<seat>@<team>` or
 `<nickname>@<team>` resolves through the named team's roster only; when the roster has no line
 for it, the agent records are asked by the same seat name, so a registry whose roster has not
 caught up still addresses the seat.
+
+A seat's signed `nickname` ([team settings](settings.md)) stands where the roster's projection of
+the file's word did, for every address above and for the `--list` row: the word the record
+replaced addresses nobody, and a record that does not verify signs no word, so the file's own word
+keeps addressing the seat.
 
 The registries — `~/.config/team/agents/<id>.yaml` and `~/.config/team/teams.yaml` — are the
 address. The live herdr read is the fallback for a record that carries no pane yet, by the seat's
@@ -389,7 +395,7 @@ line on stderr and has none.
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
-| listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat` or `<n> seats` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
+| listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat` or `<n> seats` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, the word a seat signed standing where the file's word does, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | native | 0 | `<seat>: native: nothing was sent; make the call with your own SendMessage, then record it`, then the `to:` target, the body and the `team send --confirm <id>` line, on stdout, for a handoff |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (native, <n> ms)` on stdout, when `--confirm` runs before the recipient's transcript shows the handoff's nonce |
