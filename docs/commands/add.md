@@ -41,7 +41,8 @@ through herdr: the workspace, the launch, and the name.
 For a seat this run starts, the general seat brief goes first, as a claim and a drop: the
 session's `briefs` records a fresh incarnation and runtime epoch, the brief's sha256 and the
 record's expected id before its signed record is posted at that id, and the launch line hands the
-seat's reader that epoch. A temporary seat is delivered like a declared one. A name held at the
+seat's reader that epoch. A temporary seat is delivered like a declared one, and every other live
+or human declared seat is delivered to as well, without touching its pane. A name held at the
 expected id by another file, a link or a folder is refused, never replaced or followed —
 [`team brief rollout --apply`](brief.md) recovers that delivery at the claim's next attempt. A
 delivery that cannot be written is said and logged, and the launch goes on;

@@ -61,10 +61,16 @@ stopped pane's folder: its next launch delivers it, and the plan prints `not run
 delivered at its next launch`. A human seat is delivered to exactly like a CLI seat and is never
 read — the plan and apply always say `human <seat>: delivery only`.
 
-The attribution commands (`team up`, `add`, `restart`, `reload`, `register`, and the swap/resume
-path) call the same boundary with `broadcast: true`, so a launch that begins with an upgrade also
-updates the rest of the team. A rollout is never required by a launch: each is complete on its
-own, and a second run of either finds the seats current.
+The attribution commands call the same boundary, each with the targets its own path works out.
+`team add`, `team restart` and `team register` pass `broadcast: true`: they attribute the seat
+they acted on and reach every live or human declared seat as well. `team up` attributes the seats
+its plan launches or adopts, and `team reload` the seat it acts on; the other live or human seats
+are targeted only when this build's brief is ahead of their claim. Every path that launches a seat
+writes the claim and its signed drop before the launch line is typed. `team rename` attributes
+the seat under its new name, after the state's own rename. The swap and resume paths go through
+the restart path where that caller exists; no call of their own is on this head. A rollout is
+never required by a launch: each is complete on its own, and a second run of either finds the
+seats current.
 
 ## A held name, and recovery
 

@@ -36,8 +36,8 @@ After the record is written, the run delivers the general seat brief through the
 launch calls. A seat this run adopts is attributed at the seat's name, so its claim is minted
 fresh — a new incarnation and runtime epoch — while an already-recorded seat keeps the lifetime
 its claim holds; the claim, naming the brief's sha256 and the record's expected id, is written
-before the signed drop at that id. The run also delivers to the rest of the live team when this
-build's brief is ahead of their claims, without touching their panes; a `--dry-run` writes neither
+before the signed drop at that id. The run also delivers to every other live or human declared
+seat, without touching their panes; a `--dry-run` writes neither
 a claim nor a drop. A name held at the expected id by another file, a link or a folder is refused,
 never replaced or followed — [`team brief rollout --apply`](brief.md) recovers that delivery at
 the claim's next attempt.

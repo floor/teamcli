@@ -23,8 +23,8 @@ session's `briefs` records a fresh incarnation and runtime epoch, the brief's sh
 record's expected id, and the signed drop is posted at exactly that id. The relaunch's turn-start
 reader names the claim's epoch (`team drops --read --epoch <run_id>`), so the process that just
 stopped — a reader started under the old epoch — cannot satisfy the new claim. The run also
-delivers to the rest of the live team when this build's brief is ahead of their claims, without
-touching their panes. A name held at the expected id by another file, a link or a folder is
+delivers to every other live or human declared seat, without touching their panes. A name held at
+the expected id by another file, a link or a folder is
 refused, never replaced or followed — [`team brief rollout --apply`](brief.md) recovers that
 delivery at the claim's next attempt. A delivery that cannot be written is said and logged, and
 the restart goes on; [`team check`](check.md) names the seat.
