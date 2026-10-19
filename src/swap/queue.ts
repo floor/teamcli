@@ -136,14 +136,14 @@ export function noteHandover(dir: string, seat: string, queuedAt: string, path: 
  */
 export function swapDue(
   swap: QueuedSwap,
-  observed: { working: boolean; prompt: boolean; boundary: boolean; broken: boolean },
+  observed: { working: boolean; prompt: boolean; boundary: boolean; broken: boolean; unsent: boolean },
   now: Date,
 ): boolean {
   if (swap.forced) return true;
   if (observed.broken) return true;
   if (observed.boundary) return true;
   const pastDeadline = Date.parse(swap.deadline) <= now.getTime();
-  return pastDeadline && !observed.working && !observed.prompt;
+  return pastDeadline && !observed.working && !observed.prompt && !observed.unsent;
 }
 
 /** The one line every reader prints for a queued swap (`team status`, `team swap`). */

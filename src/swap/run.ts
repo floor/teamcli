@@ -31,6 +31,8 @@ export type SwapObservation = {
   quiet: boolean;
   working: boolean;
   prompt: boolean;
+  /** The input box holds text nobody sent: never a boundary, and never due past the deadline. */
+  unsent: boolean;
   broken: boolean;
   boundary: boolean;
 };
@@ -107,14 +109,18 @@ export function observeSwap(
   if (agents === null) return null;
   const agent = agents.find((candidate) => candidate.name === seat.name);
   if (!agent) {
-    return { running: false, quiet: false, working: false, prompt: false, broken: false, boundary: false };
+    return { running: false, quiet: false, working: false, prompt: false, unsent: false, broken: false, boundary: false };
   }
   const cwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
   const screen = sources.screen(session, agent.pane, seat.cli, cwd);
   const theirWord = herdrUnreliable(seat.cli);
-  const quiet = theirWord
-    ? screen.kind === 'idle' || screen.kind === 'unsent'
-    : agent.status === 'idle' || agent.status === 'done';
+  // Text in the input box is not the boundary the design names: the stop would refuse it as
+  // unsent, and a watch that called it a boundary would log an attempt every pass. It is also
+  // never the past-deadline pause `swapDue` reads.
+  const unsent = screen.kind === 'unsent';
+  const quiet = !unsent && (theirWord
+    ? screen.kind === 'idle'
+    : agent.status === 'idle' || agent.status === 'done');
   const working = agent.status === 'working' || screen.kind === 'working';
   const prompt = screen.kind === 'permission'
     || screen.kind === 'trust'
@@ -127,7 +133,7 @@ export function observeSwap(
   // swaps at once rather than waiting for a boundary it may never reach.
   const broken = screen.kind === 'provider error' || screen.kind === 'rate limit';
   const boundary = quiet && !working && !prompt && liveLeaseOf(root, seat.name, now.getTime()) === null;
-  return { running: true, quiet, working, prompt, broken, boundary };
+  return { running: true, quiet, working, prompt, unsent, broken, boundary };
 }
 
 /** The queued swaps of this team that are due now, run one at a time. The queue is re-read
