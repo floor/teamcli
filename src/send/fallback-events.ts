@@ -144,6 +144,13 @@ export type FallbackContext = {
   recipientTeam?: TeamFile;
 };
 
+/** What an escalation pass needs: everything `noteTransport` takes except the sender's verified
+ *  `Caller`. A pass fires markers a host already recorded and never invents an identity — the
+ *  event's sender is the tag fixed in the marker at its first fact — so a caller-free daemon can
+ *  schedule due escalations without fabricating an owner or a seat. Transport facts still require
+ *  the full `FallbackContext`. */
+export type EscalationContext = Omit<FallbackContext, 'caller'>;
+
 /** One attempt, as the marker's bounded summary keeps it. The durable ledger keeps every one. */
 export type AttemptRecord = {
   route: TransportRoute;
@@ -299,7 +306,7 @@ export type EscalationDelay = {
  * no compatibility rule of its own.
  */
 export function escalationDelayOf(
-  ctx: FallbackContext,
+  ctx: EscalationContext,
   recipient: CanonicalRecipient,
   at: string,
 ): EscalationDelay {
@@ -550,7 +557,7 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
  * escalation delay cannot be resolved, no escalation is scheduled — fail closed — and the refusal
  * is reported; a later pass under a readable chain schedules it from the original failure time.
  */
-export function escalateDue(ctx: FallbackContext, options: { at?: Date } = {}): EscalationReport {
+export function escalateDue(ctx: EscalationContext, options: { at?: Date } = {}): EscalationReport {
   const at = options.at ?? ctx.now();
   const atIso = at.toISOString();
   const report: EscalationReport = { escalated: [], refused: [], unreadable: [], scanned: 0 };
@@ -584,7 +591,7 @@ type EscalationStep =
   | { kind: 'escalated'; entry: EscalationEntry };
 
 function escalateOne(
-  ctx: FallbackContext,
+  ctx: EscalationContext,
   recipient: CanonicalRecipient,
   messageId: string,
   at: Date,
@@ -682,7 +689,7 @@ type FlushResult =
  * finds the first record. The intent stays in the marker until both writes return, so a crash in
  * this function is retried next pass.
  */
-function flushOutbox(ctx: FallbackContext, marker: FallbackMarker, path: string): FlushResult {
+function flushOutbox(ctx: EscalationContext, marker: FallbackMarker, path: string): FlushResult {
   const intent = marker.outbox;
   if (intent === undefined) return { ok: true, kind: null, event: null, duplicate: false, mailbox: null };
 
@@ -773,7 +780,7 @@ type PublicationRead =
   | { kind: 'none' }
   | { kind: 'unreadable'; reason: string };
 
-function publicationPathOf(ctx: FallbackContext, recipient: CanonicalRecipient, messageId: string): string {
+function publicationPathOf(ctx: EscalationContext, recipient: CanonicalRecipient, messageId: string): string {
   return join(
     dirname(historyPath(ctx.team.project, recipient.root, ctx.home)),
     publicationLedgerFileName(recipient, messageId),
@@ -783,7 +790,7 @@ function publicationPathOf(ctx: FallbackContext, recipient: CanonicalRecipient, 
 /** Find the signed record this episode already published under `recordId`. A ledger that exists
  *  but cannot be read stops the caller: re-appending from a guess could duplicate the event. */
 function publicationOf(
-  ctx: FallbackContext,
+  ctx: EscalationContext,
   recipient: CanonicalRecipient,
   messageId: string,
   recordId: string,
@@ -815,7 +822,7 @@ function publicationOf(
 }
 
 function recordPublication(
-  ctx: FallbackContext,
+  ctx: EscalationContext,
   marker: FallbackMarker,
   intent: EventIntent,
   record: SignedEventRecord,
@@ -849,7 +856,7 @@ function verifies(record: SignedEventRecord, home: string): boolean {
 }
 
 /** The lock's directory, unique per canonical episode key, under the project's state store. */
-function withKeyLock<T>(ctx: FallbackContext, recipient: CanonicalRecipient, messageId: string, work: () => T): T {
+function withKeyLock<T>(ctx: EscalationContext, recipient: CanonicalRecipient, messageId: string, work: () => T): T {
   const storeDir = dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
   const ladder = ensureStoreLadder(storeDir, ctx.home);
   if (ladder !== null) throw new Error(ladder);
