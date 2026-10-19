@@ -49,8 +49,8 @@ before the record is replaced.
 A seat the team file declares that has never launched has no agent record yet. A write form aimed
 at it creates that record first, seeded from the seat's declaration — its name, signing words,
 lab, CLI and launch line, with no pane, session or state — and signs the setting there; a later
-launch finds the same record and keeps its id, so the settings signed before it are the ones the
-seat runs with. The create is the record, not a launch: nothing starts, attaches or types. A dry
+launch finds the same record and keeps its id, so the settings signed before it stay with the
+seat's agent. The create is the record, not a launch: nothing starts, attaches or types. A dry
 run creates the record too and still writes no setting, and an unset on such a seat reports the
 setting is not set. A printed `team settings <seat>` reads the declaration and the team's records
 without creating anything.
