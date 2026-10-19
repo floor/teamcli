@@ -4,8 +4,8 @@ import type { Section } from './section.ts';
 export const TEMPOS = ['relaxed', 'normal', 'urgent'] as const;
 export type Tempo = (typeof TEMPOS)[number];
 
-/** The five waits a tempo scales. `interval` is the pass rate and stays as written. */
-const SCALED = ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter'] as const;
+/** The six waits a tempo scales. `interval` is the pass rate and stays as written. */
+const SCALED = ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter'] as const;
 
 export const tempo: Section = {
   name: 'tempo',
@@ -18,7 +18,7 @@ export const tempo: Section = {
 };
 
 /**
- * The watch a tempo runs with. `normal` is the file as written. `relaxed` doubles the five
+ * The watch a tempo runs with. `normal` is the file as written. `relaxed` doubles the six
  * waits and `urgent` halves them, to the nearest second and never below one. An omitted
  * `idleRepeat` stays off, and `interval` is left as written.
  */

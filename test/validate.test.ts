@@ -90,12 +90,19 @@ describe('the complete example of the RFC', () => {
   });
 
   test('values with units are read into seconds, percent and bytes', () => {
-    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 300, idleOwner: 900, blindAfter: 300, idleRepeat: 1200, unsentAfter: 60, quotaMarks: [50, 75, 90] });
+    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 300, idleOwner: 900, blindAfter: 300, idleRepeat: 1200, unsentAfter: 60, unreadAfter: 600, quotaMarks: [50, 75, 90] });
     expect(team.machine).toEqual({
       loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
       swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
     });
     expect(team.limits).toEqual({ seats: 6, temporary: 2, vendors: { openai: 1, deepseek: 3 } });
+  });
+
+  test('the unread window is set by watch.unread_after, ten minutes when the file omits it', () => {
+    expect(team.watch.unreadAfter).toBe(600);
+    const written = validateTeamFile(`${minimal}watch:\n  unread_after: 90s\n`);
+    if (!written.ok) throw new Error(JSON.stringify(written.errors));
+    expect(written.team.watch.unreadAfter).toBe(90);
   });
 
   test('a signature renders in the vendor\'s spelling', () => {

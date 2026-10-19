@@ -416,6 +416,11 @@
           "type": "string",
           "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$"
         },
+        "unread_after": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a message may go without the seat's read receipt before the watch retries it once; the report to the sender and the lead follows at twice this window"
+        },
         "nudge": {
           "type": "string",
           "minLength": 1,

@@ -124,8 +124,8 @@ once per setting as a line of its own — never a report, never a typed line:
 
     liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
 
-`tempo` scales `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`, and the idle window
-after the tighten-only check; it never scales `idle_owner` or `blind_after`.
+`tempo` scales `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and `unread_after`, and
+the idle window after the tighten-only check; it never scales `idle_owner` or `blind_after`.
 
 ### 3.3 The sixteen checks
 
@@ -154,7 +154,8 @@ switch off.
 A file switches a check off under `watch.checks`; the four always-on checks ignore that switch.
 
 The shipped watch defaults, as `defaultWatch()` carries them: a pass every 120 s, `team_idle`
-600 s, `unsent_after` 60 s and `nudge_wait` 600 s (`src/file/sections/watch.ts`). The machine's
+600 s, `unsent_after` 60 s, `nudge_wait` 600 s and `unread_after` 600 s
+(`src/file/sections/watch.ts`). The machine's
 readings, checks 11 to 15, are logged every ten minutes: `READINGS_EVERY` is 600 s
 (`src/commands/watch.ts`).
 

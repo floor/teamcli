@@ -614,9 +614,10 @@ tempo: urgent
 ```
 
 - `relaxed`, `normal` or `urgent`.
-- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`, and doubles
-  the idle window the liveness chain resolved (`idle_first`). `urgent` halves them, to the
-  nearest second, and never below one second. `normal` leaves them as written.
+- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and
+  `unread_after`, and doubles the idle window the liveness chain resolved (`idle_first`).
+  `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
+  them as written.
 - The idle window is scaled after the chain checks its word: the tempo is the owner's dial on
   the timing, so `relaxed` lengthens the resolved window without reading as a team loosening a
   liveness threshold, and `urgent` shortens it. `idle_owner` and `blind_after` are never scaled.

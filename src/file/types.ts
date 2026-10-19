@@ -235,6 +235,9 @@ export type TeamFile = {
     teamIdle: number;
     nudgeWait: number;
     unsentAfter: number;
+    /** How long a delivered message may go without the seat's signed read receipt before the
+     *  watch retries it once; the report follows at twice this window. */
+    unreadAfter: number;
     quotaMarks: number[];
     // The checks this file turns off, by name. The four that can't be turned off never appear.
     checks: string[];
