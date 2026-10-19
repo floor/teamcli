@@ -1,11 +1,11 @@
 // `team mcp serve`: one seat's inbox, spoken to its CLI as MCP over stdio.
 //
-// The server is started by the seat's own launch line, so the seat, session and root are the
-// launch's and never a tool argument's. It writes `.inbox-listener` into the seat's drop folder
-// while it runs, serves two tools (`inbox_check`, `inbox_read`), and removes the marker when its
-// stdin closes. A read verifies the record's signature with the message key before it shows the
-// body, and writes `<id>.read.json` before the body is returned; that receipt is the only proof of
-// delivery this leg has, and it means the message was read, not acted on.
+// The server is started by the seat's own launch line, so the seat, session, team file and root
+// are the launch's and never a tool argument's. It writes `.inbox-listener` into the seat's drop
+// folder while it runs, serves two tools (`inbox_check`, `inbox_read`), and removes the marker
+// when its stdin closes. A read verifies the record's signature with the message key before it
+// shows the body, and writes `<id>.read.json` before the body is returned; that receipt is the
+// only proof of delivery this leg has, and it means the message was read, not acted on.
 //
 // Nothing here is a push: MCP is client-pull, so the seat notices a message when it calls
 // `inbox_check`. The drop-folder watch is the bounded fall-back, not this process.
@@ -40,7 +40,7 @@ export type ServeStreams = {
   close?(): void;
 };
 
-export type ServeOptions = { seat: string | undefined; session: string | undefined };
+export type ServeOptions = { seat: string | undefined; session: string | undefined; file?: string };
 
 /** Where the server reads the message key. The launch uses the process's home; a test pins its
  *  own, so no read can reach the home of the machine running the suite. */
@@ -205,7 +205,9 @@ export function handleLine(line: string, serving: Serving): string | null {
 /**
  * Runs the stdio server for one seat and returns the process exit code. The seat must be one the
  * team file declares, and `--session`, when given, must be the team's own session: the server
- * serves exactly one inbox. Exit 0 when stdin closes; 2 when it cannot start.
+ * serves exactly one inbox. `--file` is the team file the seat's launch read: a seat that starts
+ * in a lobby has no team file in its folder, so the registration names the launch's file and the
+ * server reads that instead of its own folder.
  */
 export async function runMcpServe(
   options: ServeOptions,
@@ -219,7 +221,7 @@ export async function runMcpServe(
     return 2;
   };
   if (options.seat === undefined || options.seat === '') return refuse('--seat <seat> is required');
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  const loaded = loadTeamFile(io.cwd, { ...(options.file === undefined ? {} : { file: options.file }), home: host.home });
   if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
   const team = loaded.team;
   const session = options.session ?? team.session;

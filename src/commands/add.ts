@@ -94,7 +94,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
+  registerInbox: (cli, seat, cwd, teamFile) =>
+    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -755,6 +756,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             ...(launchProblemDetail ? { launchProblemDetail } : {}),
           }],
           watchAlive: true,
+          teamFile: path,
           cliHooks: plannedCliHooks(dir, session, [planned]),
           watchLabel: watchLabel(prepared.team.project),
         });
@@ -857,6 +859,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       sessionRunning: live === 'running',
       seats: [seatForPlan],
       watchAlive: true,
+      teamFile: path,
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
       watchLabel: watchLabel(prepared.team.project),
     });
@@ -960,7 +963,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
     // The general seat brief goes first, before the plan types a rules line into the new seat's
     // pane: one signed drop, human seats included. A delivery that cannot be written is said and
     // logged, and the launch goes on; `team check` names the seat with no record.
@@ -1293,7 +1296,7 @@ function hostOf(input: {
     confirmLobby: input.confirmLobby,
     paneRun: launch.paneRun,
     ...(launch.registerInbox
-      ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+      ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }

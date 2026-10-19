@@ -86,6 +86,7 @@ mcp_inbox:
     - '{seat}'
     - --session
     - '{session}'
+    - '{file}'
   target: .grok/config.toml
 models:
   option:
