@@ -1631,7 +1631,7 @@ export const BRIEF_OUTPUT_SCHEMA: CommandSchemaSpec = {
         required: ['seat', 'action', 'hash12', 'id', 'from', 'reason', 'current'],
         properties: {
           seat: { type: 'string', minLength: 1 },
-          action: { type: 'string', enum: ['current', 'deliver', 'recover', 'recovered', 'not-running', 'human', 'failed'] },
+          action: { type: 'string', enum: ['current', 'deliver', 'recover', 'recovered', 'not-running', 'human', 'stale-listener', 'failed'] },
           // The delivered brief's digest, first twelve hex digits; null when the row names none.
           hash12: { type: ['string', 'null'] },
           id: { type: ['string', 'null'] },
@@ -1645,13 +1645,14 @@ export const BRIEF_OUTPUT_SCHEMA: CommandSchemaSpec = {
     counts: {
       type: 'object',
       additionalProperties: false,
-      required: ['current', 'deliver', 'recover', 'not_running', 'human', 'failed'],
+      required: ['current', 'deliver', 'recover', 'not_running', 'human', 'stale_listener', 'failed'],
       properties: {
         current: { type: 'integer', minimum: 0 },
         deliver: { type: 'integer', minimum: 0 },
         recover: { type: 'integer', minimum: 0 },
         not_running: { type: 'integer', minimum: 0 },
         human: { type: 'integer', minimum: 0 },
+        stale_listener: { type: 'integer', minimum: 0 },
         failed: { type: 'integer', minimum: 0 },
       },
     },

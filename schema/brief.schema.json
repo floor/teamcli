@@ -76,6 +76,7 @@
               "recovered",
               "not-running",
               "human",
+              "stale-listener",
               "failed"
             ]
           },
@@ -118,6 +119,7 @@
         "recover",
         "not_running",
         "human",
+        "stale_listener",
         "failed"
       ],
       "properties": {
@@ -138,6 +140,10 @@
           "minimum": 0
         },
         "human": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stale_listener": {
           "type": "integer",
           "minimum": 0
         },

@@ -35,14 +35,16 @@ import {
   type CurrentBriefClaim,
 } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
+import { inboxLive, NO_INBOX_LISTENER } from '../mcp/inbox.ts';
 import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { recordHolds } from '../send/record.ts';
 import { emptySession, readState, type SessionState } from '../state.ts';
+import { buildIdentity, type BuildIdentity } from '../version.ts';
 
-export const USAGE = `Usage: team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+export const USAGE = `Usage: team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
 
 Delivers this build's general seat brief to every declared seat that is live
 or human. The plan reads each seat's claim and the signed record the claim
@@ -50,13 +52,17 @@ names: a seat with no claim, an old build's claim or an earlier text is
 delivered at the id that delivery uses, and a name held by a file that is not
 this brief's, or by a link or a folder, is recovered at the claim's next
 attempt without touching what is there. A human seat is delivered and never
-read. A declared seat that is not running is left for its next launch. Without
---apply the plan is printed and nothing is written: no state, no drop, no
-receipt.
+read. A declared seat that is not running is left for its next launch. A seat
+whose live inbox server records another build is reported stale and is not
+written to: that server keeps the parsers it started with, and restarting the
+seat's CLI host is what reloads the installed build. Without --apply the plan
+is printed and nothing is written: no state, no drop, no receipt.
 
 Options:
   --apply    run the plan; each seat is reported as delivered, recovered or
              failed, and a seat already current is reported current
+  --seat     one declared seat to plan or deliver for; the others are left
+             untouched
   --session  the session to deliver in, the team file's own unless the owner
              names another
   --file     the team file to read, the owner's alone
@@ -76,15 +82,18 @@ brief.file-invalid).
 export type BriefSources = {
   home: string;
   now: () => Date;
+  /** The build this process runs, compared against a live inbox listener's marker. Left out
+   *  (a test's sources), the plan keeps the liveness-only answer. */
+  build?: () => BuildIdentity;
 };
 
-export const realSources: BriefSources = { home: homedir(), now: () => new Date() };
+export const realSources: BriefSources = { home: homedir(), now: () => new Date(), build: () => buildIdentity() };
 
 /** One seat's row: the action the plan takes (or, under `--apply`, the outcome), the record id
  *  it names, the short digest the console prints, and for a recovery the id left untouched. */
 export type BriefRow = {
   seat: string;
-  action: 'current' | 'deliver' | 'recover' | 'recovered' | 'not-running' | 'human' | 'failed';
+  action: 'current' | 'deliver' | 'recover' | 'recovered' | 'not-running' | 'human' | 'stale-listener' | 'failed';
   /** The first twelve hex digits of the brief digest the row names, when it names one. */
   hash12: string | null;
   id: string | null;
@@ -107,6 +116,7 @@ export type BriefDocument = {
     recover: number;
     not_running: number;
     human: number;
+    stale_listener: number;
     failed: number;
   };
 };
@@ -199,6 +209,7 @@ type Plan =
   | { kind: 'not-running' }
   | { kind: 'human'; current: boolean; claim: CurrentBriefClaim | null }
   | { kind: 'current'; claim: CurrentBriefClaim }
+  | { kind: 'stale-listener'; reason: string }
   | { kind: 'deliver'; id: string }
   | { kind: 'recover'; from: string; id: string };
 
@@ -226,6 +237,7 @@ function planSeat(input: {
   root: string;
   session: string;
   home: string;
+  build: BuildIdentity | null;
 }): Plan {
   const { seat } = input;
   const claim = currentBriefClaim(input.state.briefs?.[seat.name]);
@@ -234,6 +246,18 @@ function planSeat(input: {
   const current = currency({ seat: seat.name, claim, root: input.root, session: input.session, home: input.home });
   if (seat.human === true) return { kind: 'human', current, claim };
   if (current) return { kind: 'current', claim: claim as CurrentBriefClaim };
+  // A live inbox server started from another build cannot read the record this one signs until
+  // its host reloads it. The plan names that instead of writing a drop the server would refuse.
+  const inbox = inboxLive(
+    join(input.root, '.agents', 'send-drops', input.session, seat.name),
+    input.root,
+    input.session,
+    seat.name,
+    input.build,
+  );
+  if (!inbox.live && inbox.reason !== NO_INBOX_LISTENER) {
+    return { kind: 'stale-listener', reason: inbox.reason };
+  }
   const body = generalBriefBody();
   // A plan row for a seat with no claim shows the id a fresh lifetime would produce; the apply
   // mints the lifetime it writes, so that row's id is the one it reported, never this one.
@@ -276,6 +300,9 @@ function rowOf(seat: string, plan: Plan): BriefRow {
   if (plan.kind === 'current') {
     return { seat, action: 'current', hash12: short(plan.claim.sha256), id: plan.claim.id, from: null, reason: null, current: true };
   }
+  if (plan.kind === 'stale-listener') {
+    return { seat, action: 'stale-listener', hash12: null, id: null, from: null, reason: plan.reason, current: false };
+  }
   if (plan.kind === 'recover') {
     return { seat, action: 'recover', hash12, id: plan.id, from: plan.from, reason: null, current: false };
   }
@@ -296,19 +323,22 @@ function lineOf(row: BriefRow): string {
       return `not running ${row.seat}: delivered at its next launch\n`;
     case 'human':
       return `human ${row.seat}: delivery only\n`;
+    case 'stale-listener':
+      return `stale ${row.seat}: ${row.reason ?? ''}\n`;
     case 'failed':
       return `failed ${row.seat}: ${row.reason ?? ''}\n`;
   }
 }
 
 function countsOf(rows: readonly BriefRow[]): BriefDocument['counts'] {
-  const counts = { current: 0, deliver: 0, recover: 0, not_running: 0, human: 0, failed: 0 };
+  const counts = { current: 0, deliver: 0, recover: 0, not_running: 0, human: 0, stale_listener: 0, failed: 0 };
   for (const row of rows) {
     if (row.action === 'current') counts.current += 1;
     else if (row.action === 'deliver') counts.deliver += 1;
     else if (row.action === 'recover' || row.action === 'recovered') counts.recover += 1;
     else if (row.action === 'not-running') counts.not_running += 1;
     else if (row.action === 'human') counts.human += 1;
+    else if (row.action === 'stale-listener') counts.stale_listener += 1;
     else counts.failed += 1;
   }
   return counts;
@@ -320,7 +350,7 @@ function countsOf(rows: readonly BriefRow[]): BriefDocument['counts'] {
  * only the seat's claim and its signed drop — never a pane, never a session, never herdr.
  */
 export async function runBrief(argv: string[], io: Io, sources: BriefSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['session', 'file'], ['apply', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'seat'], ['apply', 'json']);
   // The raw argv, before the parser: `--nope --json` still answers with the structured error.
   const json = hasJsonFlag(argv);
   const apply = args.flags.has('apply');
@@ -376,23 +406,36 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
   }
   const session = aimedSession ?? loaded.team.session;
   const { root, team } = loaded;
+  // A named seat narrows the run to that seat: the others are not planned, not written and not
+  // asked about, so a targeted retry never re-delivers the whole team.
+  const aimedSeat = args.values.seat;
+  const seats = aimedSeat === undefined ? team.seats : team.seats.filter((seat) => seat.name === aimedSeat);
+  if (aimedSeat !== undefined && seats.length === 0) {
+    return invocation(io, json, `the team file declares no seat ${JSON.stringify(aimedSeat)}`);
+  }
+  const build = sources.build?.() ?? null;
   const stateOf = (): SessionState => readState(dir).sessions[session] ?? emptySession();
   const state = stateOf();
-  const before = team.seats.map((seat) => ({
+  const before = seats.map((seat) => ({
     seat,
-    plan: planSeat({ seat, state, root, session, home: sources.home }),
+    plan: planSeat({ seat, state, root, session, home: sources.home, build }),
   }));
   let rows: BriefRow[];
   if (!apply) {
     rows = before.map(({ seat, plan }) => rowOf(seat.name, plan));
   } else {
+    // A seat whose live listener is another build is not written to: its runtime cannot read
+    // this record, and the plan already names the restart it needs.
+    const deliverTo = new Set(
+      before.filter(({ plan }) => plan.kind !== 'stale-listener').map(({ seat }) => seat.name),
+    );
     const report = deliverBriefForAttribution({
       dir,
       root,
       session,
       home: sources.home,
       now: sources.now(),
-      team,
+      team: { ...team, seats: team.seats.filter((seat) => deliverTo.has(seat.name)) },
       state,
       attributed: [],
       broadcast: true,
@@ -400,7 +443,7 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
     const ended = new Map(report.deliveries.map((delivery) => [delivery.seat, delivery]));
     const out: BriefRow[] = [];
     for (const { seat, plan } of before) {
-      if (plan.kind === 'not-running') {
+      if (plan.kind === 'not-running' || plan.kind === 'stale-listener') {
         out.push(rowOf(seat.name, plan));
         continue;
       }
@@ -454,7 +497,7 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
   const after = apply ? stateOf() : state;
   const currentBySeat = new Map<string, boolean>();
   let incomplete = false;
-  for (const seat of team.seats) {
+  for (const seat of seats) {
     const due = live(after, seat.name) || seat.human === true;
     if (!due) continue;
     const held = currency({ seat: seat.name, claim: currentBriefClaim(after.briefs?.[seat.name]), root, session, home: sources.home });
@@ -463,7 +506,7 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
   }
   if (apply) {
     rows = rows.map((row) => {
-      if (row.action === 'not-running') return row;
+      if (row.action === 'not-running' || row.action === 'stale-listener') return row;
       const held = currentBySeat.get(row.seat) === true;
       // A row that says it delivered must not stand if the state does not agree.
       if (!held && row.action !== 'failed') {

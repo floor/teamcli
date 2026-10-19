@@ -22,15 +22,23 @@ the claim's next attempt. A declared seat the state does not record as running i
 its stopped folder: its next launch delivers it, and the plan says so. A human seat is delivered to
 like any other and is never read.
 
+A live inbox server keeps the parsers of the build it started with: installing a build does not
+reload a running process, and a server from an older build can refuse a record this build signs
+before it ever reaches its body. When a due seat's listener marker names another build — or
+records no build identity at all — the plan reports the seat `stale`, writes nothing to it, and
+says that the seat's CLI host must restart for its MCP server to reload the installed build. The
+check never downgrades a signature: the runtime is refreshed, not the record.
+
 ## Synopsis
 
-    team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+    team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--apply` | — | run the plan: write each due seat's claim and signed drop, recover a held name at the claim's next attempt, and report each seat as it ended; without it nothing is written |
+| `--seat` | a declared seat name | plan or deliver for that seat alone; the other seats are not planned, written or reported, so a targeted retry leaves the team alone |
 | `--session` | a session name | the session to deliver in; the team file's own unless the owner names another |
 | `--file` | a path | the team file to read; the owner's alone |
 | `--json` | — | print one `team.brief` document (`format: 1`, `project`, `session`, `apply`, `seats`, `counts`) instead of the per-seat lines |
@@ -45,7 +53,8 @@ Reads the team file — the one the checkout git names, or this folder's own tea
 `.agents/team.state.json`, the session's seat records and each seat's brief claim. It reads the
 drop folder of every seat the state records as running and of every human seat, at
 `.agents/send-drops/<session>/<seat>/`: the record the claim names is verified against the
-checkout's message key and compared with the claim's seat, session, incarnation and expected id.
+checkout's message key and compared with the claim's seat, session, incarnation and expected id,
+and a live `.inbox-listener` beside it is read for the build identity its server records.
 
 `--apply` writes the claim in the state under the state's lock, then the signed record at exactly
 the claim's id, and finalizes the claim at the record's own time. A name held by a foreign regular
@@ -72,17 +81,20 @@ The plan prints one line per declared seat:
 - `recover <seat>: the name at <id> is not this brief's; would deliver at <id>` — the name at the
   claim's id is held, and the delivery moves to the claim's next attempt;
 - `not running <seat>: delivered at its next launch` — not a target this run;
+- `stale <seat>: <reason>` — the seat's live inbox server runs another build, so the seat is not
+  written to; the reason says which host restart reloads the installed build;
 - `human <seat>: delivery only` — delivered, never read.
 
 `--apply` replaces `deliver` with the same line and `recover` with `recovered <seat>: the name at
-<id> is not this brief's; delivered at <id>`; a seat already current is printed as current, and a
-seat whose delivery failed is `failed <seat>: <reason>`.
+<id> is not this brief's; delivered at <id>`; a seat already current is printed as current, a
+stale seat is printed as stale and written nothing, and a seat whose delivery failed is
+`failed <seat>: <reason>`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the dry run finds every live or human seat current | the per-seat lines | 0 |
 | `--apply` leaves every live or human seat current | the per-seat lines | 0 |
-| the dry run finds delivery or recovery work | the per-seat lines | 1 |
+| the dry run finds delivery, recovery or stale work | the per-seat lines | 1 |
 | `--apply` leaves a live or human seat stale or failed | the per-seat lines, with the failed seat's reason | 1 |
 | a caller who is not the owner aims `--file` or `--session` | the owner-only refusal | 1 |
 | the invocation can't be read | `team brief: <problem>`, with the usage | 2 |
@@ -92,10 +104,10 @@ seat whose delivery failed is `failed <seat>: <reason>`.
 The `--json` document is `{"schema": {"name": "team.brief", "version": 1}, "format": 1,
 "project": …, "session": …, "apply": …, "seats": [{"seat", "action", "hash12", "id", "from",
 "reason", "current"}], "counts": {"current", "deliver", "recover", "not_running", "human",
-"failed"}}`. `action` is `current`, `deliver`, `recover`, `recovered`, `not-running`, `human` or
-`failed`; `hash12` is the first twelve hex digits of the brief's sha256; `from` and `reason` are
-`null` unless the row names them. An invocation or team-file error under `--json` prints the
-`team.error` document with its `brief.*` id instead.
+"stale_listener", "failed"}}`. `action` is `current`, `deliver`, `recover`, `recovered`,
+`not-running`, `stale-listener`, `human` or `failed`; `hash12` is the first twelve hex digits of
+the brief's sha256; `from` and `reason` are `null` unless the row names them. An invocation or
+team-file error under `--json` prints the `team.error` document with its `brief.*` id instead.
 
 ## Example
 
@@ -282,6 +294,7 @@ $ team brief rollout --json ; echo "exit $?"
     "recover": 0,
     "not_running": 0,
     "human": 1,
+    "stale_listener": 0,
     "failed": 0
   }
 }
@@ -293,7 +306,7 @@ The invocation is checked before anything is read:
 ```console
 $ team brief ; echo "exit $?"
 team brief: a subcommand is required: rollout
-Usage: team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+Usage: team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
 
 Delivers this build's general seat brief to every declared seat that is live
 or human. The plan reads each seat's claim and the signed record the claim
@@ -301,13 +314,17 @@ names: a seat with no claim, an old build's claim or an earlier text is
 delivered at the id that delivery uses, and a name held by a file that is not
 this brief's, or by a link or a folder, is recovered at the claim's next
 attempt without touching what is there. A human seat is delivered and never
-read. A declared seat that is not running is left for its next launch. Without
---apply the plan is printed and nothing is written: no state, no drop, no
-receipt.
+read. A declared seat that is not running is left for its next launch. A seat
+whose live inbox server records another build is reported stale and is not
+written to: that server keeps the parsers it started with, and restarting the
+seat's CLI host is what reloads the installed build. Without --apply the plan
+is printed and nothing is written: no state, no drop, no receipt.
 
 Options:
   --apply    run the plan; each seat is reported as delivered, recovered or
              failed, and a seat already current is reported current
+  --seat     one declared seat to plan or deliver for; the others are left
+             untouched
   --session  the session to deliver in, the team file's own unless the owner
              names another
   --file     the team file to read, the owner's alone

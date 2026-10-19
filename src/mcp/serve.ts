@@ -18,7 +18,8 @@ import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
 import { readState } from '../state.ts';
-import { version } from '../version.ts';
+import { buildIdentity, version } from '../version.ts';
+import type { BuildIdentity } from '../version.ts';
 import {
   ensureInboxFolder,
   inboxFolderHeld,
@@ -47,9 +48,10 @@ export type ServeStreams = {
 
 export type ServeOptions = { seat: string | undefined; session: string | undefined; file?: string; epoch?: string };
 
-/** Where the server reads the message key. The launch uses the process's home; a test pins its
- *  own, so no read can reach the home of the machine running the suite. */
-export type ServeHost = { home: string };
+/** Where the server reads the message key, and the build it stamps on its listener marker. The
+ *  launch uses the process's home; a test pins its own, so no read can reach the home of the
+ *  machine running the suite, and may pin the build identity it asserts. */
+export type ServeHost = { home: string; build?: BuildIdentity };
 
 export const realServeHost: ServeHost = { home: homedir() };
 
@@ -243,6 +245,7 @@ export async function runMcpServe(
   if (dropDir === null) {
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');
   }
+  const build = host.build ?? buildIdentity();
   const listener: InboxListener = {
     v: 1,
     seat: seat.name,
@@ -251,6 +254,8 @@ export async function runMcpServe(
     cli: seat.cli,
     pid: process.pid,
     ts: new Date().toISOString(),
+    version: build.version,
+    build: build.build,
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
   // The launch's own brief is served under the claim its state holds. The epoch is the one the

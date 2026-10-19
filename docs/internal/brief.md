@@ -100,7 +100,8 @@ a failed seat is retried by the next apply with no duplicate.
 ## What it reads and writes
 
 Reads the team file (the checkout's own, or this folder's team root), the session's state, and
-the drop folder of each live or human seat. `--apply` writes the claim in `.agents/team.state.json`
+the drop folder of each live or human seat, including the `.inbox-listener` its MCP server writes.
+`--apply` writes the claim in `.agents/team.state.json`
 and one signed record per due seat under `.agents/send-drops/<session>/<seat>/`; nothing else.
 Delivery is local file I/O with no network leg. A folder that cannot be written, a checkout with
 no message key, a link at the name or a read-back failure is reported for that seat alone, and a
@@ -113,6 +114,10 @@ later apply or launch retries it.
 - A recovery is `--apply`'s alone. A launch and every other attribution path report a held name
   and leave it; only a person decides to move past it.
 - A not-running seat is left entirely alone, stale claim included, until its next launch.
+- A seat whose live inbox server records a version or build other than this build's — or no build
+  identity at all — is reported stale and written nothing. The server keeps the parsers of the
+  build it started with, so a record this build signs can fail verification there; the fix is a
+  restart of the seat's CLI host, never a weaker signature.
 - A held symbolic link or folder is never followed, read or replaced, and a recovery does not
   change that: the new record lands at a new id beside it.
 - The rollout writes no receipt, so it cannot make a seat `read`; only the seat's own reader can.

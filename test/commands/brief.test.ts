@@ -31,8 +31,10 @@ import {
   generalBriefId,
   type CurrentBriefClaim,
 } from '../../src/launch/general-brief.ts';
+import type { InboxListener } from '../../src/mcp/inbox.ts';
 import { receiptFile } from '../../src/send/record.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
+import type { BuildIdentity } from '../../src/version.ts';
 import { deliverBriefs, recordAt, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-19T09:00:00Z');
@@ -195,11 +197,36 @@ function snapshot(): Record<string, string> {
 
 async function runRollout(
   argv: string[],
-  options: { caller?: Caller; cwd?: string } = {},
+  options: { caller?: Caller; cwd?: string; build?: BuildIdentity } = {},
 ): Promise<{ code: number; out: string; err: string }> {
   const io = testIo(options.cwd ?? root, options.caller ?? { kind: 'owner' });
-  const code = await runBrief(argv, io, { home, now: () => NOW });
+  const code = await runBrief(argv, io, {
+    home,
+    now: () => NOW,
+    ...(options.build === undefined ? {} : { build: () => options.build as BuildIdentity }),
+  });
   return { code, out: io.out, err: io.err };
+}
+
+/** The build the runs compare a listener marker against, unless a test pins another. */
+const BUILD: BuildIdentity = { version: '0.5.3-hotfix.1', build: '0123456789abcdef', builtAt: Date.parse(NOW_ISO) };
+
+/** A live listener marker in the seat's inbox, as a server leaves it. */
+function listener(seat: string, over: Partial<InboxListener> = {}): void {
+  const folder = dropDir(seat);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, '.inbox-listener'), `${JSON.stringify({
+    v: 1,
+    seat,
+    session: 'acme',
+    root,
+    cli: 'claude-code',
+    pid: process.pid,
+    ts: NOW_ISO,
+    version: BUILD.version,
+    build: BUILD.build,
+    ...over,
+  })}\n`);
 }
 
 describe('the rollout plan', () => {
@@ -250,7 +277,7 @@ describe('the rollout plan', () => {
         { seat: 'helper', action: 'not-running', hash12: null, id: null, from: null, reason: null, current: false },
         { seat: 'desk', action: 'human', hash12: H12, id: desk.id, from: null, reason: null, current: true },
       ],
-      counts: { current: 2, deliver: 0, recover: 0, not_running: 1, human: 1, failed: 0 },
+      counts: { current: 2, deliver: 0, recover: 0, not_running: 1, human: 1, stale_listener: 0, failed: 0 },
     });
     expect(snapshot()).toEqual(before);
   });
@@ -511,6 +538,84 @@ describe('the invocation and the team file', () => {
       code: 2,
       out: '',
       err: 'team brief: this team is not yours to read\n',
+    });
+  });
+});
+
+describe('a live listener from another build', () => {
+  test('the plan names the stale runtime, and --apply writes nothing to that seat', async () => {
+    remember('lead');
+    listener('lead', { version: '0.5.3', build: 'ffffffffffffffff' });
+    const before = snapshot();
+
+    const dry = await runRollout(['rollout', '--seat', 'lead'], { build: BUILD });
+    expect(dry.code).toBe(1);
+    expect(dry.err).toBe('');
+    expect(dry.out).toBe(
+      "stale lead: the inbox listener runs 0.5.3, this build is 0.5.3-hotfix.1; "
+      + "restart the seat's CLI host so its MCP server reloads this build\n",
+    );
+    expect(snapshot()).toEqual(before);
+
+    const applied = await runRollout(['rollout', '--seat', 'lead', '--apply'], { build: BUILD });
+    expect(applied.code).toBe(1);
+    expect(applied.out).toBe(dry.out);
+    expect(snapshot()).toEqual(before);
+    expect(claimOf('lead')).toBeNull();
+  });
+
+  test('a marker that records no build identity is stale, and one from this build is not', async () => {
+    remember('lead');
+    listener('lead', { version: undefined, build: undefined });
+    const legacy = await runRollout(['rollout', '--seat', 'lead'], {
+      build: { ...BUILD, builtAt: Date.parse(NOW_ISO) + 1_000 },
+    });
+    expect(legacy.code).toBe(1);
+    expect(legacy.out).toContain('started before this build (0.5.3-hotfix.1) was installed');
+    expect(legacy.out).toContain("restart the seat's CLI host");
+
+    // The same marker compared without a recorded install time says only that it cannot vouch
+    // for the runtime: no ordering is invented from the pid.
+    const unknown = await runRollout(['rollout', '--seat', 'lead'], { build: { ...BUILD, builtAt: 0 } });
+    expect(unknown.code).toBe(1);
+    expect(unknown.out).toContain('records no build identity');
+    expect(unknown.out).not.toContain('started before');
+
+    // A listener that names this build is a live inbox: the plan delivers as usual.
+    listener('lead');
+    const current = await runRollout(['rollout', '--seat', 'lead'], { build: BUILD });
+    expect(current.code).toBe(1);
+    expect(current.out.startsWith('deliver lead: ')).toBe(true);
+    const applied = await runRollout(['rollout', '--seat', 'lead', '--apply'], { build: BUILD });
+    expect(applied.code).toBe(0);
+    expect(claimOf('lead')?.sha256).toBe(GENERAL_BRIEF_SHA256);
+  });
+
+  test('--seat plans and delivers one seat, and an undeclared seat is an invocation error', async () => {
+    remember('lead');
+    remember('worker');
+    settle(['lead']);
+    const lead = claimOf('lead');
+    if (lead === null) throw new Error('the fixture delivered no claim');
+
+    const dry = await runRollout(['rollout', '--seat', 'worker']);
+    expect(dry.code).toBe(1);
+    expect(dry.out.startsWith('deliver worker: ')).toBe(true);
+    expect(dry.out).not.toContain('lead');
+    expect(dry.out).not.toContain('helper');
+    expect(dry.out).not.toContain('desk');
+
+    const applied = await runRollout(['rollout', '--seat', 'worker', '--apply']);
+    expect(applied.code).toBe(0);
+    expect(claimOf('worker')?.sha256).toBe(GENERAL_BRIEF_SHA256);
+    // The seat outside the target kept the claim and the record it stood on.
+    expect(claimOf('lead')?.id).toBe(lead.id);
+
+    const nobody = await runRollout(['rollout', '--seat', 'nobody']);
+    expect({ code: nobody.code, out: nobody.out, err: nobody.err }).toEqual({
+      code: 2,
+      out: '',
+      err: `team brief: the team file declares no seat "nobody"\n${USAGE}`,
     });
   });
 });

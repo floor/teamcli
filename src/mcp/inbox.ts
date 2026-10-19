@@ -40,6 +40,7 @@ import {
   type StatusContext,
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import type { BuildIdentity } from '../version.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -69,7 +70,9 @@ export const INBOX_FALLBACK_MS = 10 * 60_000;
  *  still unread when the fallback window ended. */
 export const INBOX_FALLBACK_REASON = `mcp-inbox: no receipt within ${String(INBOX_FALLBACK_MS / 60_000)}m`;
 
-/** What a running server leaves beside the inbox so `team send` can tell the leg is live. */
+/** What a running server leaves beside the inbox so `team send` can tell the leg is live. The
+ *  build fields are the identity of the code serving the inbox; a marker written before they
+ *  existed lacks them, and the reader treats that marker as a runtime it cannot vouch for. */
 export type InboxListener = {
   v: 1;
   seat: string;
@@ -78,6 +81,8 @@ export type InboxListener = {
   cli: string;
   pid: number;
   ts: string;
+  version?: string;
+  build?: string | null;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` and the marker's `ts` are there when
@@ -160,6 +165,8 @@ export function readListener(dropDir: string): InboxListener | null {
       cli: parsed.cli,
       pid: parsed.pid,
       ts: parsed.ts,
+      ...(typeof parsed.version === 'string' ? { version: parsed.version } : {}),
+      ...(typeof parsed.build === 'string' || parsed.build === null ? { build: parsed.build } : {}),
     };
   } catch {
     return null;
@@ -196,21 +203,67 @@ function sameRoot(left: string, right: string): boolean {
   return real(left) === real(right);
 }
 
+/**
+ * Whether a live marker's runtime is the build asking. A server started from an older build has
+ * that build's parsers in memory for as long as its process runs: a signed record this build
+ * writes can carry fields the older parser drops before it verifies, and the read it attempts
+ * fails on the signature. Installing a build does not reload a running server, so the marker's
+ * identity is how a sender tells the two apart instead of writing a drop nothing can read.
+ * A marker written without an identity is not vouched for: its start time can prove it predates
+ * this build, and nothing can prove it does not. The fix is always the seat's own restart — no
+ * check is downgraded and no process is killed from here.
+ */
+export type ListenerRuntime = { kind: 'current' } | { kind: 'stale'; reason: string };
+
+export function listenerRuntime(listener: InboxListener, build: BuildIdentity): ListenerRuntime {
+  const restart = "restart the seat's CLI host so its MCP server reloads this build";
+  if (listener.version !== undefined) {
+    if (listener.version !== build.version) {
+      return { kind: 'stale', reason: `the inbox listener runs ${listener.version}, this build is ${build.version}; ${restart}` };
+    }
+    if (listener.build != null && build.build != null && listener.build !== build.build) {
+      return { kind: 'stale', reason: `the inbox listener runs a different build of ${build.version}; ${restart}` };
+    }
+    return { kind: 'current' };
+  }
+  const started = Date.parse(listener.ts);
+  if (Number.isFinite(started) && build.builtAt > 0 && started < build.builtAt) {
+    return {
+      kind: 'stale',
+      reason: `the inbox listener started before this build (${build.version}) was installed and records no build identity; ${restart}`,
+    };
+  }
+  return { kind: 'stale', reason: `the inbox listener records no build identity; ${restart}` };
+}
+
 export type InboxLiveness = { live: true; listener: InboxListener } | { live: false; reason: string };
 
 /**
  * Whether a server is serving exactly this inbox: a well-formed marker for this seat, this
- * session and this root, whose process is still there. Anything else — no marker, a malformed
- * one, a dead pid, a marker naming another inbox — is `no live inbox listener`, and the send
- * hands the message to the next leg instead of writing into a folder nothing is reading.
+ * session and this root, whose process is still there and — when the caller names the build it
+ * is — whose runtime is that build. Anything else — no marker, a malformed one, a dead pid, a
+ * marker naming another inbox — is `no live inbox listener`, and the send hands the message to
+ * the next leg instead of writing into a folder nothing is reading. A live marker from another
+ * build is reported as such, so the walk records the stale runtime and the seat is restarted
+ * rather than silently fed. A caller that names no build keeps the liveness-only answer.
  */
-export function inboxLive(dropDir: string, root: string, session: string, seat: string): InboxLiveness {
+export function inboxLive(
+  dropDir: string,
+  root: string,
+  session: string,
+  seat: string,
+  build?: BuildIdentity | null,
+): InboxLiveness {
   const listener = readListener(dropDir);
   if (listener === null) return { live: false, reason: NO_INBOX_LISTENER };
   if (listener.seat !== seat || listener.session !== session || !sameRoot(listener.root, root)) {
     return { live: false, reason: NO_INBOX_LISTENER };
   }
   if (!listenerLive(listener)) return { live: false, reason: NO_INBOX_LISTENER };
+  if (build !== undefined && build !== null) {
+    const runtime = listenerRuntime(listener, build);
+    if (runtime.kind === 'stale') return { live: false, reason: runtime.reason };
+  }
   return { live: true, listener };
 }
 

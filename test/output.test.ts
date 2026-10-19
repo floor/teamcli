@@ -753,7 +753,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
               current: false,
             },
           ],
-          counts: { current: 0, deliver: 1, recover: 0, not_running: 0, human: 0, failed: 0 },
+          counts: { current: 0, deliver: 1, recover: 0, not_running: 0, human: 0, stale_listener: 0, failed: 0 },
         }),
       ],
       'team.down': [

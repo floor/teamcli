@@ -41,6 +41,7 @@ import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/u
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { buildIdentity, type BuildIdentity } from '../version.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -241,6 +242,9 @@ export type SendHost = {
    *  real host so `--timeout <s>` (default 120s) sets the window; a test sets a small number or 0
    *  to exercise the thread wait without sleeping. */
   waitMs?: number;
+  /** The build this process runs, compared against a live inbox listener's marker. Left out
+   *  (a test's host), the mcp-inbox leg keeps the liveness-only check. */
+  build?: () => BuildIdentity;
 };
 
 export const realHost: SendHost = {
@@ -264,6 +268,7 @@ export const realHost: SendHost = {
   now: () => new Date(),
   home: homedir(),
   projects: realProjectSources,
+  build: () => buildIdentity(),
 };
 
 const send: Command = (argv, io) => runSend(argv, io, realHost);
@@ -736,9 +741,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   for (const [at, leg] of walk.entries()) {
     if (leg === 'mcp-inbox') {
       // The seat's own inbox, not a pane: the leg takes the send only when a listener beside
-      // the message names this seat, session and root with a live pid. No listener is a leg
-      // that definitely cannot take it, and the walk moves on.
-      const live = inboxLive(dropDir, to.root, to.session, to.seat);
+      // the message names this seat, session and root with a live pid — and, when this process
+      // knows its own build, when that listener's marker names the same build. A listener left
+      // running from an older install has that build's parsers in memory and cannot read a
+      // record this build signs; the walk records the stale runtime and moves on.
+      const live = inboxLive(dropDir, to.root, to.session, to.seat, host.build?.());
       if (!live.live) {
         failures.push(`mcp-inbox: ${live.reason}`);
         continue;
