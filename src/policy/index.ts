@@ -92,3 +92,9 @@ export {
   type PolicyWritePlan,
   type SignedPolicyDiskEntry,
 } from './sources.ts';
+
+export {
+  briefTransportOf,
+  type BriefTransport,
+  type BriefTransportReading,
+} from './brief-transport.ts';

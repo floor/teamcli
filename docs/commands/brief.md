@@ -29,6 +29,15 @@ records no build identity at all — the plan reports the seat `stale`, writes n
 says that the seat's CLI host must restart for its MCP server to reload the installed build. The
 check never downgrades a signature: the runtime is refreshed, not the record.
 
+How a delivery travels is the [`brief-transport`](policy.md) policy, read at entity, project and
+team. `file`, the default, is exactly the claim and drop above. `message` writes the same claim
+and the same signed record, then sends the whole brief through the seat's own delivery legs, with
+the send command's own walk: the seat gets the whole body — never a pointer — and the send's
+receipt, history line and outcome are an ordinary send's. `memory` is an experiment that no
+runtime in this build proves zero-persistence for: a `memory` policy delivers nothing, refuses
+every seat and every `team send --brief`, and falls back to neither of the other two transports.
+A launch reads the same policy and delivers the same way.
+
 ## Synopsis
 
     team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientSend } from '../client/send.ts';
@@ -15,6 +15,7 @@ import type { Command, Io } from '../io.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
@@ -47,6 +48,7 @@ import { buildIdentity, type BuildIdentity } from '../version.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send <seat> --brief <path> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send --client <grant-file> --key <key-file> <address> [--request-id <id>] <message>
        team send --client <grant-file> --key <key-file> <address> [--request-id <id>] --file <path>
        team send --confirm <id> [--json] [--dry-run]
@@ -159,7 +161,11 @@ outcome in one — {format, dry_run, status, action_summary, project, session, s
 channel, ids, thread?, reply?, plan?} — and --list prints its own: {format, project,
 session, seats, summary}. A run that exits 1 or 2 writes the structured error
 document instead — {error: {id, message, repair}} — and stderr stays empty.
---file reads the body from a file instead of the one <message> argument.
+--file reads the body from a file instead of the one <message> argument. --brief
+reads a whole draft brief into the body, exactly as --file does, and is the form
+to use when the message is a brief: a body that is only a path to a brief file
+(a lone path naming a briefs/….md file) is warned about on stderr, on either
+form, because a reader cannot open a file it was not given.
 
 A Claude Code seat's native leg is the sender's own cross-session SendMessage, which this
 process cannot make for it. A sender whose own file declares Claude Code gets the handoff
@@ -477,8 +483,29 @@ function declaredSeatNamed(
   return {};
 }
 
+/**
+ * The path a body only points at, or null. Narrow on purpose: one line that is a single path —
+ * no spaces, no sentence around it — under a `briefs` folder, ending in `.md`, that resolves to
+ * a regular file. Anything else is a body, not a pointer; a prose sentence that mentions a path
+ * is left alone, and the guard never refuses a send.
+ */
+function briefPointerIn(body: string, cwd: string, home: string): string | null {
+  const text = body.trim();
+  if (text === '' || text.includes('\n') || /\s/.test(text)) return null;
+  if (!/^(?:~\/|\/|\.{1,2}\/|briefs\/)/.test(text)) return null;
+  const full = text.startsWith('~/') ? join(home, text.slice(2)) : resolve(cwd, text);
+  if (extname(full) !== '.md') return null;
+  if (!full.split(sep).includes('briefs')) return null;
+  try {
+    if (!statSync(full).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return text;
+}
+
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id'], ['wait', 'json', 'list', 'dry-run']);
+  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
@@ -493,7 +520,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   }
   // The client path comes before any caller placement: a TTY can never make this run the owner,
   // and no leg but the signed drop is walked. `runClientSend` prints the declared limitation.
-  if (clientFlag) return runClientSend(args, io, host, json);
+  if (clientFlag) {
+    if (args.values.brief !== undefined) return usage(io, '--brief is for a send to a seat, not a client request', report, true);
+    return runClientSend(args, io, host, json);
+  }
   if (args.values.key !== undefined || args.values['request-id'] !== undefined) {
     return usage(io, '--key and --request-id are only meaningful with --client', report);
   }
@@ -519,13 +549,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const words = args.rest.slice(1);
   const file = args.values.file;
+  const brief = args.values.brief;
   if (!seatName) {
     return usage(io, 'a seat and a message are required', report);
+  }
+  if (brief !== undefined && file !== undefined) {
+    return usage(io, 'a brief and --file cannot both be given', report);
+  }
+  if (brief !== undefined && words.length > 0) {
+    return usage(io, 'a message and --brief cannot both be given', report);
   }
   if (file !== undefined && words.length > 0) {
     return usage(io, 'a message and --file cannot both be given', report);
   }
-  if (file === undefined && words.length === 0) {
+  if (file === undefined && brief === undefined && words.length === 0) {
     return usage(io, 'a message or --file is required', report);
   }
   const wait = args.flags.has('wait');
@@ -634,17 +671,46 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const receiving = to.cross ? loadTeamFile(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
+  // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
+  // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
+  // send — the walk is the same one — while `memory` is refused with nothing written on either
+  // side: no drop, no frame, no inbox entry, no history line, and no fallback to `file`. The
+  // draft is not read when the policy refuses it, and no state or log line records the refusal,
+  // so the refusal itself leaves the tree as it found it. An ordinary send names no brief and
+  // never reads this policy.
+  if (brief !== undefined) {
+    const transport = briefTransportOf({
+      home: host.home,
+      root: to.root,
+      ...(receiving.ok && receiving.team.entity !== null ? { entity: receiving.team.entity } : {}),
+      now: host.now(),
+    });
+    if (transport.transport === 'memory') {
+      if (report.json) writeJsonError(io, 'send.refused', `refused: ${MEMORY_TRANSPORT_UNSUPPORTED}`);
+      else io.stderr(`team send: refused: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`);
+      return 1; // exit: send.refused
+    }
+  }
   let body: string;
-  if (file !== undefined) {
+  const source = brief ?? file;
+  if (source !== undefined) {
     try {
-      body = readFileSync(resolve(io.cwd, file), 'utf8');
+      body = readFileSync(resolve(io.cwd, source), 'utf8');
     } catch {
-      return configuration(io, `the message file cannot be read: ${file}`, report);
+      return configuration(io, `the message file cannot be read: ${source}`, report);
     }
   } else {
     body = words.join(' ');
   }
   if (body.trim() === '') return usage(io, 'the message is empty', report);
+  // A body that is only a path to a brief is the one form the owner's rule forbids: the reader
+  // has the message but not the file it points at. The warning is the whole guard — the send
+  // still goes, because a path in a body is not proof of anything, and a false refusal would
+  // cost a real message.
+  const pointer = briefPointerIn(body, io.cwd, host.home);
+  if (pointer !== null) {
+    io.stderr(`team send: ${to.seat}: the body only points at a brief (${pointer}); send the brief itself, with --brief <file> or its text in the body\n`);
+  }
   // The receiver sees the sender before the message: the drop file, the frame and the daemon's
   // own write all carry the same first lines. The headline is the reading team's word on how a
   // sender reads — inside its own team a nickname, across teams `seat@team` under the default —
@@ -2047,12 +2113,166 @@ async function deliverComposeSeat(
   return delivered(io, seatName, report, 'typed brief');
 }
 
+/** What a brief's walk reports to its caller, in words the launch can print or log. */
+export type BriefWalkResult = {
+  /** The leg that took the send; null when none did, or when no leg was walked. */
+  via: DeliveryLeg | null;
+  /** Whether the walk ran at all. A settings record the store disowns stops it before any leg. */
+  walked: boolean;
+  /** The reasons legs did not take the send, and why a walk did not run. */
+  failures: readonly string[];
+  /** 0 when a leg took the send (or no walk ran), 1 when the walk ran out of legs. */
+  exit: number;
+};
+
+/**
+ * The delivery half of `brief-transport: message` (OD50). The launch has already claimed the
+ * brief and written its signed record; this walks the receiving seat's own delivery order with
+ * the same legs, the same order resolution and the same history a send uses, so the brief earns
+ * the receipts a send earns. The record's identity — its id, thread, body and claim binding — is
+ * the launch's own and is never re-minted here; every leg writes or finds that same record.
+ *
+ * The walk does not print the send command's lines: the caller hands an `io` that captures them
+ * and reports the outcome in its own words. A seat whose signed settings record cannot be read is
+ * walked by no leg at all — routing on a declaration the store disowns could type into a human's
+ * pane — and the record the launch already wrote stands as the delivery. This build's native leg
+ * is a socket write it does not make and a SendMessage a launch cannot send, so it is recorded
+ * and passed; the mcp-inbox, typed and drop legs are the same functions `team send` walks.
+ */
+export async function walkBriefDelivery(input: {
+  io: Io;
+  host: SendHost;
+  /** The receiving team's `.agents` folder. */
+  dir: string;
+  root: string;
+  /** The receiving team's project; left out, the loaded team file's own. */
+  project?: string;
+  session: string;
+  seat: string;
+  cli: string;
+  payload: RecordPayload;
+}): Promise<BriefWalkResult> {
+  const seatName = input.seat;
+  const from = input.payload.from;
+  const startedAt = input.host.now().getTime();
+  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const read = resolveSeatOverrides({ home: input.host.home, root: input.root, seat: seatName });
+  if (!read.ok) {
+    return {
+      via: null,
+      walked: false,
+      exit: 0,
+      failures: [`the receiving seat's settings record cannot be read: ${read.why}`],
+    };
+  }
+  let file: TeamFile | undefined;
+  try {
+    const loaded = loadTeamFile(input.root, { home: input.host.home });
+    if (loaded.ok) file = loaded.team;
+  } catch {
+    // A file that cannot even be read declares nothing, as one that does not validate does.
+  }
+  const order = deliveryOrder(deliveryChainOf({
+    root: input.root,
+    seat: seatName,
+    home: input.host.home,
+    ...(file === undefined ? {} : { file }),
+    projectOfTeam: (id: string) => (input.host.projects ? input.host.projects.ofTeam(id) : projectRegistry.ofTeam(input.host.home, id)),
+    overrides: read.overrides,
+  }));
+  const declared = file?.seats.find((seat) => seat.name === seatName);
+  const project = input.project ?? file?.project ?? '';
+  // A human's pane never takes typing, whatever its order says: its walk is the drop leg alone,
+  // and the legs this ruling kept out are named first, exactly as a send's walk records them.
+  const human = read.overrides.human ?? (declared?.human === true);
+  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
+  const report: Report = {
+    json: false,
+    seat: seatName,
+    sent: null,
+    project,
+    session: input.session,
+    from_team: teamIdOf(input.root),
+  };
+  const failures: string[] = [];
+  if (human) {
+    for (const leg of order) {
+      if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
+      else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
+      else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
+    }
+  }
+  for (const leg of walk) {
+    if (leg === 'mcp-inbox') {
+      const live = inboxLive(dropDir, input.root, input.session, seatName, input.host.build?.());
+      if (!live.live) {
+        failures.push(`mcp-inbox: ${live.reason}`);
+        continue;
+      }
+      const exit = await deliverInbox(input.io, input.dir, from, from, project, input.root, input.session, seatName, dropDir, input.payload, input.host, report, startedAt, failures);
+      return { via: 'mcp-inbox', walked: true, exit, failures };
+    }
+    if (leg === 'native') {
+      // This build's send reads `native` as the frame on a cross-session socket — a socket write
+      // SOCKET_SEND does not make here — or as a handoff to a Claude Code sender's own
+      // SendMessage, which a launch cannot make. The leg is recorded and passed.
+      failures.push('native: the launch cannot make a cross-session SendMessage');
+      continue;
+    }
+    if (leg === 'typed') {
+      const compose = profileFor(input.cli)?.compose ?? null;
+      const trigger = readTriggerLine(seatName, input.session);
+      if (trigger === null && compose === null) {
+        failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+        continue;
+      }
+      const found = findAgent(input.host, input.session, seatName);
+      if (!found.ok) {
+        failures.push(`typed: ${found.reason}`);
+        continue;
+      }
+      if (isBareShellPane(input.dir, input.session, seatName, input.host.processInfo(input.session, found.pane))) {
+        failures.push('typed: the seat is back at its shell; nothing was typed');
+        continue;
+      }
+      if (compose === null) {
+        if (trigger === null) {
+          failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+          continue;
+        }
+        const exit = await deliverNative(input.io, input.dir, input.root, from, from, project, input.session, seatName, input.cli, found.pane, dropDir, input.payload, trigger, input.host, report, startedAt, undefined, failures);
+        return { via: 'typed', walked: true, exit, failures };
+      }
+      // The seat's own folder: the record's `cwd` under the receiving team's root, else the
+      // folder this delivery already writes to.
+      const seatCwd = declared === undefined ? input.dir : resolve(input.root, declared.cwd);
+      const exit = await deliverComposeSeat(input.io, input.dir, input.root, from, from, project, input.session, seatName, input.cli, found.pane, dropDir, input.payload, seatCwd, input.host, report, startedAt, failures);
+      return { via: 'typed', walked: true, exit, failures };
+    }
+    const exit = await deliverDropped(input.io, input.dir, input.root, from, from, project, input.session, seatName, dropDir, input.payload, input.host, report, startedAt, failures, null, human);
+    return { via: 'drop', walked: true, exit, failures };
+  }
+  const why = `no leg of its delivery order took the send${failures.length === 0 ? '' : ` (${failures.join('; ')})`}`;
+  appendHistory(project, input.root, input.host.home, {
+    ts: input.host.now().toISOString(),
+    from,
+    to: seatName,
+    ...historySender(report),
+    body: input.payload.body,
+    id: input.payload.id,
+    thread: input.payload.thread,
+    outcome: 'unreachable',
+    ms: input.host.now().getTime() - startedAt,
+    ...(failures.length > 0 ? { failed: [...failures] } : {}),
+  });
+  return { via: null, walked: true, exit: 1, failures };
+}
+
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
  *  message is on disk, and the one team.log line is the orchestrator's notice. Exit 1. */
 function typedBriefNotSubmitted(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
   return notSubmittedAt(io, dir, who, seat, reason, host, report);
 }
-
 /** A send that typed its line and was never taken: the trigger line of a drop-file send, or a
  *  compose seat's brief. One site, one exit id: both are the same outcome to a caller. */
 function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {

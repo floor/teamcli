@@ -30,7 +30,7 @@ import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, pan
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { deliverRules } from '../launch/deliver.ts';
-import { deliverBriefForAttribution } from '../launch/general-brief.ts';
+import { deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -669,6 +669,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         attributed: [],
         broadcast: true,
       });
+      await walkBriefDeliveries(briefs, { dir, home: sources.home });
       for (const delivery of briefs.deliveries) {
         if (delivery.ok) continue;
         const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
@@ -880,6 +881,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     attributed: [name],
     broadcast: true,
   });
+  await walkBriefDeliveries(briefs, { dir, home: sources.home });
   for (const delivery of briefs.deliveries) {
     if (delivery.ok) continue;
     const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;

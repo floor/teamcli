@@ -39,7 +39,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
+import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -992,6 +992,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       attributed: [planSeat.name],
       broadcast: true,
     });
+    await walkBriefDeliveries(briefs, { dir, home: sources.home });
     for (const delivery of briefs.deliveries) {
       if (delivery.ok) continue;
       const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
