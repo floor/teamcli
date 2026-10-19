@@ -1,4 +1,4 @@
-// Seat status from herdr as events (`FLO-1032` / workspace-adapters §6):
+// Seat status from herdr as events (workspace-adapters §6):
 // One `herdr wait agent-status` waiter per eligible seat turns herdr's status transitions into
 // signed events in `.agents/events.jsonl`, replacing periodic screen polling where herdr's
 // status is reliable:
@@ -127,10 +127,12 @@ export function isScreenVerifiedStatusCli(cli: string): boolean {
   return cli === 'antigravity' || cli === 'gemini' || cli === 'cursor';
 }
 
-/** Reconciles herdr's `agent_status` with a visible screen reading where herdr's status can lie:
+/** Reconciles herdr's `agent_status` with a visible screen reading ONLY for CLIs whose herdr status can lie
+ *  (`isScreenVerifiedStatusCli(cli)`: `jules`, `antigravity`, `gemini`, `cursor`):
+ *  - reliable CLIs (`claude-code`, `codex`, `grok`, etc.) keep `status` unchanged even if a stale working frame is on screen
  *  - any prompt screen (`permission`, `trust`, `question`, `exit question`, `vendor notice`, `rate limit`, `guard`, `login`) -> `'blocked'`
- *  - `antigravity`/`gemini` reporting `'idle'` while the screen shows `'working'` -> `'working'`
- *  - `cursor` reporting `'done'` while the screen shows `'working'` -> `'working'`
+ *  - `antigravity`/`gemini`/`jules` reporting `'idle'` while the screen shows `'working'` -> `'working'`
+ *  - `cursor`/`jules` reporting `'done'` while the screen shows `'working'` -> `'working'`
  *  - empty/absent `rawScreen` preserves `status` unchanged. */
 export function reconcileStatusWithScreen(
   cli: string,
@@ -138,6 +140,7 @@ export function reconcileStatusWithScreen(
   rawScreen: string | undefined | null,
   options?: ScreenOptions,
 ): HerdrAgentStatus {
+  if (!isScreenVerifiedStatusCli(cli)) return status;
   if (rawScreen === undefined || rawScreen === null || rawScreen === '') return status;
   const screen = readScreen(cli, rawScreen, options);
   if (
@@ -153,8 +156,16 @@ export function reconcileStatusWithScreen(
   if (classifyPromptKind(cli, rawScreen, options) !== 'unknown') {
     return 'blocked';
   }
-  if (screen.kind === 'working' && (status === 'idle' || status === 'done')) {
-    return 'working';
+  if (screen.kind === 'working') {
+    if (herdrUnreliable(cli) && (status === 'idle' || status === 'done')) {
+      return 'working';
+    }
+    if ((cli === 'antigravity' || cli === 'gemini') && status === 'idle') {
+      return 'working';
+    }
+    if (cli === 'cursor' && status === 'done') {
+      return 'working';
+    }
   }
   return status;
 }
@@ -204,6 +215,18 @@ export type HerdrStatusSourceOptions = {
   screenOptions?: ScreenOptions;
 };
 
+/** Ordered candidate target states for `{ not: current }` single-client transition waiting.
+ *  `herdr wait agent-status <pane> --status <s>` accepts a single status token per client and
+ *  returns immediately (`exit 0`) when the pane is already at `<s>`, so cycling one waiter process
+ *  per seat through likely target states keeps fleet process count at strictly 1 client per seat. */
+const WAIT_CANDIDATE_ORDER: Record<HerdrAgentStatus, readonly HerdrAgentStatus[]> = {
+  working: ['blocked', 'done', 'idle'],
+  idle: ['working', 'blocked', 'done'],
+  done: ['working', 'blocked', 'idle'],
+  blocked: ['working', 'done', 'idle'],
+  unknown: ['blocked', 'done', 'idle', 'working'],
+};
+
 /** Default `StatusSource` backed by `herdr wait agent-status` and `herdr pane read`. */
 export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): StatusSource {
   const now = options.now ?? (() => Date.now());
@@ -232,44 +255,29 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
         return { outcome: 'error', error: res.message, at };
       }
 
-      // `{ not: current }`: race candidate target statuses and abort the rest on first match.
-      const candidates = (['blocked', 'done', 'idle', 'working'] as const).filter(
-        (candidate) => candidate !== target.not,
-      );
-      const controller = new AbortController();
-      const onParentAbort = () => controller.abort();
-      signal?.addEventListener('abort', onParentAbort, { once: true });
+      // `{ not: current }`: keep strictly ONE `herdr wait agent-status` client process per seat
+      // by cycling sequentially through the candidate target statuses across `timeoutMs`.
+      const candidates =
+        WAIT_CANDIDATE_ORDER[target.not]
+        ?? (['blocked', 'done', 'idle', 'working'] as const).filter((candidate) => candidate !== target.not);
+      const totalTimeoutMs = Math.max(1, Math.round(timeoutMs));
+      const sliceTimeoutMs = Math.max(1, Math.floor(totalTimeoutMs / candidates.length));
 
-      try {
-        return await new Promise<StatusWaitResult>((resolve) => {
-          let settled = false;
-          let remaining = candidates.length;
-          for (const candidate of candidates) {
-            void waitFn(seat.pane, candidate, timeoutMs, session, controller.signal).then((res) => {
-              if (settled) return;
-              if (res.outcome === 'changed') {
-                settled = true;
-                controller.abort();
-                resolve({ outcome: 'changed', status: res.status, at: now() });
-                return;
-              }
-              if (res.outcome === 'error' && !controller.signal.aborted) {
-                settled = true;
-                controller.abort();
-                resolve({ outcome: 'error', error: res.message, at: now() });
-                return;
-              }
-              remaining -= 1;
-              if (remaining === 0 && !settled) {
-                settled = true;
-                resolve({ outcome: 'timeout', at: now() });
-              }
-            });
-          }
-        });
-      } finally {
-        signal?.removeEventListener('abort', onParentAbort);
+      for (const candidate of candidates) {
+        if (signal?.aborted) {
+          return { outcome: 'timeout', at: now() };
+        }
+        const res = await waitFn(seat.pane, candidate, sliceTimeoutMs, session, signal);
+        const at = now();
+        if (res.outcome === 'changed') {
+          return { outcome: 'changed', status: res.status, at };
+        }
+        if (res.outcome === 'error') {
+          if (signal?.aborted) return { outcome: 'timeout', at };
+          return { outcome: 'error', error: res.message, at };
+        }
       }
+      return { outcome: 'timeout', at: now() };
     },
 
     promptKind(seat): PromptKind {
@@ -332,6 +340,7 @@ type IdleStretch = {
 
 type SeatTrackerState = {
   status?: HerdrAgentStatus;
+  rawStatus?: HerdrAgentStatus;
   promptSpell?: PromptSpell;
   idleStretch?: IdleStretch;
   seq: number;
@@ -400,7 +409,7 @@ export type SeatStatusEngine = {
   statusOf(seatName: string): HerdrAgentStatus | undefined;
 };
 
-/** Checks whether `seatName` currently has assigned work on disk under `root` (`FLO-1032` / F5):
+/** Checks whether `seatName` currently has assigned work on disk under `root`:
  *  1. Active lease in `.agents/leases/<id>.json` (`lease.seat === seatName && Date.parse(lease.until) > atMs`)
  *  2. Assigned worktree (`worktrees[task].seat === seatName`) or temporary seat task in `.agents/state.json`
  *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding startup brief, `work-*`, and sidecars)
@@ -693,11 +702,14 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       return { seat: seatName, status: rawStatus, events: [], nudgeDue: false, skipped: 'unreliable' };
     }
 
-    // Reconcile status with screen when herdr's status for the CLI can report `idle` while working
-    // (`antigravity`/`gemini`), `done` while running (`cursor`), or a prompt screen while `idle` (`F3`/`F4`).
-    let status: HerdrAgentStatus = reconcileStatusWithScreen(seat.cli, rawStatus, rawScreen);
+    // Reconcile status with screen only for CLIs whose herdr status can report `idle` while working
+    // (`antigravity`/`gemini`), `done` while running (`cursor`), or unreliable status (`jules`).
+    let status: HerdrAgentStatus = isScreenVerifiedStatusCli(seat.cli)
+      ? reconcileStatusWithScreen(seat.cli, rawStatus, rawScreen)
+      : rawStatus;
     if (
       rawScreen === undefined
+      && isScreenVerifiedStatusCli(seat.cli)
       && status !== 'blocked'
       && shouldReadScreenForStatus(seat, status, true)
       && source.readUnreliableScreen !== undefined
@@ -713,7 +725,12 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         || screen.kind === 'rate limit'
       ) {
         status = 'blocked';
-      } else if (screen.kind === 'working' && (status === 'idle' || status === 'done')) {
+      } else if (
+        screen.kind === 'working'
+        && ((herdrUnreliable(seat.cli) && (status === 'idle' || status === 'done'))
+          || ((seat.cli === 'antigravity' || seat.cli === 'gemini') && status === 'idle')
+          || (seat.cli === 'cursor' && status === 'done'))
+      ) {
         status = 'working';
       }
     }
@@ -723,6 +740,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       state = { seq: 0 };
       states.set(seatName, state);
     }
+    state.rawStatus = rawStatus;
 
     const isLead = leads.has(seatName);
     const events: EmittedStatusEvent[] = [];
@@ -1122,9 +1140,11 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         };
       }
 
-      const current = states.get(seatName)?.status;
+      const seatState = states.get(seatName);
+      const current = seatState?.status;
+      const currentRaw = seatState?.rawStatus ?? current;
       const waitTarget: StatusTarget =
-        current !== undefined && current !== 'unknown' ? { not: current } : { not: 'unknown' };
+        currentRaw !== undefined && currentRaw !== 'unknown' ? { not: currentRaw } : { not: 'unknown' };
 
       let waited: StatusWaitResult;
       try {
@@ -1211,6 +1231,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
             let iterations = 0;
             while (!controller.signal.aborted && iterations < maxIterations) {
               iterations += 1;
+              const prevStatus = states.get(seat.name)?.status;
               const beforeMs = now();
               const step = await this.waitSeatOnce(seat.name, timeoutMs, pane, controller.signal);
               if (controller.signal.aborted || step.outcome === 'skipped') break;
@@ -1220,12 +1241,12 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
                 continue;
               }
               if (
-                step.outcome === 'timeout'
+                (step.outcome === 'timeout' || step.status === prevStatus)
                 && iterations < maxIterations
                 && now() <= beforeMs
               ) {
-                // Synchronous stub in tests that returned timeout without advancing the clock:
-                // yield on an abortable timer so the background loop does not spin the event loop.
+                // Synchronous stub in tests that returned timeout or unchanged status without advancing
+                // the clock: yield on an abortable timer so the background loop does not spin.
                 await sleepOrAbort(Math.min(timeoutMs, 50));
               }
             }
