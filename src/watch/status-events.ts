@@ -33,6 +33,7 @@ import {
   type HerdrWaitOutcome,
 } from '../herdr.ts';
 import { leadSeatsOf, recipientsForEvent, type TeamRoutingRoles } from '../bus/kinds.ts';
+import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_SHA256 } from '../launch/general-brief.ts';
 import { appendEvent, eventLogPath, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator } from '../bus/seats.ts';
@@ -40,8 +41,9 @@ import type { BusPublishOutcome } from '../bus/server.ts';
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { RECEIPT_STATUSES } from '../send/record.ts';
+import { isRead, readRecord, RECEIPT_STATUSES, verifyRecord } from '../send/record.ts';
 import { readState } from '../state.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
 import { notify as defaultNotify } from './notify.ts';
 import { readScreen, screenWord, type Screen, type ScreenOptions } from './screen.ts';
@@ -416,7 +418,11 @@ export type SeatStatusEngine = {
  *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding the startup brief — its
  *     current id and the superseded ids its claim replaced — `work-*`, and sidecars: dot files, the
  *     `.pending`/`.delivered`/`.closed.json` markers and the signed `<id>.<status>.json` receipts,
- *     which are metadata beside a delivery and never work of their own)
+ *     which are metadata beside a delivery and never work of their own; a message this checkout's
+ *     own key proves read or replied, and a launch brief record that same key signed for this
+ *     seat — including a superseded id the state no longer lists — are deliveries the seat has
+ *     taken, never work waiting. An unread, unsigned or unverifiable receipt proves nothing and
+ *     the drop stays work)
  *  4. Open `work.claimed` event for `seatName` in `.agents/events.jsonl` not yet closed by `work.done` or `work.released`. */
 export function seatHasAssignedWorkOnDisk(
   root: string,
@@ -467,6 +473,12 @@ export function seatHasAssignedWorkOnDisk(
   }
 
   // 3. Unacked message drop in `.agents/send-drops/<session>/<seatName>`.
+  //
+  // A receipt or a brief record settles a name only when this checkout's message key proves it; a
+  // home with no usable key proves nothing, so every name left below is still work.
+  const keyState = messageKeyState(options?.home);
+  const key = keyState.kind === 'key' ? keyState.key : undefined;
+  const context = { to: seatName, root, session };
   const dropDir = join(agentsDir, 'send-drops', session, seatName);
   if (existsSync(dropDir)) {
     try {
@@ -482,6 +494,27 @@ export function seatHasAssignedWorkOnDisk(
           || supersededBriefs.has(name)
         ) {
           continue;
+        }
+        if (key !== undefined) {
+          // The seat took this message: a signed read or reply receipt verifies for its id, this
+          // seat, this checkout and this session. A tampered, foreign-key or other-session
+          // receipt is not a read, and the name stays work.
+          if (isRead(dropDir, name, context, key)) continue;
+          // Every delivery of this build's brief is the launch's, not assigned work: the current
+          // id is skipped above from the claim, and a superseded id the state no longer lists is
+          // recognized from the record itself — same key, same sender, same delivered body.
+          const held = readRecord(join(dropDir, name), name);
+          if (
+            held.ok
+            && held.record !== null
+            && held.record.payload.to === seatName
+            && held.record.payload.session === session
+            && held.record.payload.from === GENERAL_BRIEF_FROM
+            && held.record.payload.brief_sha256 === GENERAL_BRIEF_SHA256
+            && verifyRecord(held.record, key)
+          ) {
+            continue;
+          }
         }
         return true;
       }
