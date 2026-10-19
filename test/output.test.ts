@@ -720,6 +720,29 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           notice: null,
         }),
       ],
+      // The rollout plan and its apply outcome: one canonical row for a delivery the plan would
+      // write, with the counts its summary carries. Every action word the schema allows is
+      // exercised by the command's own scenes; this payload proves the published shape.
+      'team.brief': [
+        jsonEnvelope('team.brief', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          apply: false,
+          seats: [
+            {
+              seat: 'worker',
+              action: 'deliver',
+              hash12: '4b273912a6c9',
+              id: '0d9c1f0e-5a2b-4c3d-8e4f-1a2b3c4d5e6f',
+              from: null,
+              reason: null,
+              current: false,
+            },
+          ],
+          counts: { current: 0, deliver: 1, recover: 0, not_running: 0, human: 0, failed: 0 },
+        }),
+      ],
       'team.down': [
         jsonEnvelope('team.down', {
           format: 1 as const,
@@ -975,6 +998,38 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           session: 'beacon',
           seats: [{ name: 'worker', nickname: null, cli: 'claude', role: 'builder', project: 'beacon', reach: 'socket', stopped: false }],
           summary: '1 seat',
+        }),
+      ],
+      // A queued swap as `team swap queue` writes it: the record the watch carries out at the
+      // seat's boundary, its donor recipe and the rule that chose it.
+      'team.swap': [
+        jsonEnvelope('team.swap', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'queued',
+          action_summary: 'swap: worker queued',
+          project: 'beacon',
+          session: 'beacon',
+          entity: 'floor',
+          seat: 'worker',
+          swap: {
+            from: { cli: 'claude-code', vendor: 'openai', model: 'gpt-5', version: '1.0', display: 'gpt-5 1.0' },
+            to: {
+              cli: 'claude-code',
+              vendor: 'anthropic',
+              model: 'Claude Opus',
+              version: '5.5',
+              display: 'Claude Opus 5.5',
+              launch: 'claude --model claude-opus-5-5',
+            },
+            reason: 'model-rule',
+            queuedAt: '2026-10-19T09:00:00.000Z',
+            deadline: '2026-10-19T09:30:00.000Z',
+            waitFor: "the seat's boundary (quiet, no turn, no dialog, no lease, no work drop)",
+            rule: '*=!openai',
+          },
+          donor: { team: 'beacon', root: '/work/beacon', seat: 'lead' },
+          notice: null,
         }),
       ],
       'team.tempo': [
