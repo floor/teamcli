@@ -303,6 +303,17 @@ export function mayChangeTeam(caller: Caller, team: Pick<TeamFile, 'orchestrator
 }
 
 /**
+ * Who may pause and resume a team: the owner, or the team's orchestrator on its own seat. The
+ * operator is not admitted here. A pause stops every seat's intake of new work, which is the
+ * orchestrator's own lever on the team, and the owner asked for it as one; an operator's own
+ * stop is `team hold`, which carries the operator too and changes nothing any seat does.
+ */
+export function mayPauseTeamVerdict(caller: Caller, team: Pick<TeamFile, 'orchestrator'>, at: SeatStanding): CallerVerdict {
+  if (caller.kind === 'owner') return { kind: 'ok' };
+  return callerVerdict(caller, team.orchestrator, at);
+}
+
+/**
  * The caller a command that changes the team must judge, and how a refusal names it. The decision
  * is made on the caller placed in the session the command asks about — the proof that its pane is
  * that session's. `shown` is the caller's own placement, without a session, as main described it:

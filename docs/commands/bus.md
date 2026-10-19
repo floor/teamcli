@@ -2,7 +2,10 @@
 
 Runs the foreground process that owns the project's event log (`events.jsonl`), runs the periodic
 reconciliation pass over durable message and seat records, and serves `publish` and `subscribe`
-over `.agents/bus.sock`. The owner starts it, in a terminal outside herdr, one per clone. Ctrl-C
+over `.agents/bus.sock`. The reconciliation pass and each subscription verify only the event
+records appended since the last verified sequence; when the log's checkpoint is missing or does
+not match — after a trim or a rewrite, or because a record was altered — the whole retained log is
+verified again, so an earlier alteration is still caught. The owner starts it, in a terminal outside herdr, one per clone. Ctrl-C
 stops it. Events are routed by the policy's table to a position — `lead`, `operator`, `sender`,
 `subject`, `owner` — or to a seat named by its plain name or registry agent id, and an event routed
 to `owner`, or one a watch addresses to `owner`, is delivered by the Runtime: the watch's
@@ -28,6 +31,12 @@ reconciliation pass).
 An unknown argument is refused with the usage and exit 2; `--json` is one of them, because no
 `--json` runs on the daemon loop. Ctrl-C, or SIGTERM, ends the serve loop, removes the socket
 file, and exits 0.
+
+The bus reads three of the owner's event thresholds when it starts: how often it reconciles
+(`event-reconcile-interval-seconds`), how much of the event log it keeps
+(`event-retention-days`), and when a held record reaches the lead
+(`event-held-threshold-seconds`). A signed policy source that cannot be read or verified refuses
+the start (`team bus: <problem>`, exit 2) rather than running on numbers no level chose.
 
 ## Who may run it
 

@@ -38,7 +38,7 @@ import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { filed } from './send-native-fixtures.ts';
-import { testIo } from './helpers.ts';
+import { claudeBox, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T16:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -559,6 +559,9 @@ describe('working seat retry and seat-lock coexistence', () => {
 
 describe('composer read-back, unsent draft protection, dialog guard, and bare-shell check', () => {
   test('holds without typing when composer already holds an unsent user draft (both daemon and direct)', async () => {
+    // This fake host carries no key surface: the box words are the fallback a delivery keeps
+    // where no measured way into the box exists. The shipped queue route, which reads the
+    // profile's measured keys, is the next test.
     const w = setupWorld();
     const unsentScreen = `${RULE}\n❯ user is typing a draft here\n${RULE}`;
     const host = makeHost(w);
@@ -599,6 +602,56 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(host.enters).toEqual([]);
     // The draft is still where the owner left it.
     expect(host.native.paneText('acme', 'pane-lead')).toBe(workingUnsent);
+  });
+
+  test('the shipped queue route copies an unsent draft, delivers, and pastes it back', async () => {
+    // The real daemon host carries the measured keys; with them, the queue's delivery empties
+    // the box, takes the trigger, and puts the owner's text back — the same delivery the direct
+    // leg makes. The fake models the composer: a key empties it, a bracketed paste redraws it.
+    const w = setupWorld();
+    const host = makeHost(w);
+    const draft = 'a draft for the queue';
+    let box = draft;
+    let sent = false;
+    const keys: string[] = [];
+    host.native.paneText = () => claudeBox(box);
+    host.native.typeText = (_session, pane, text) => {
+      const pasted = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
+      box = pasted ? pasted[1] ?? '' : text;
+      host.typed.push({ pane, text });
+      return true;
+    };
+    host.native.pressEnter = (_session, pane) => {
+      host.enters.push(pane);
+      box = '';
+      sent = true;
+      return true;
+    };
+    host.native.sendKey = (_session, _pane, key) => {
+      keys.push(key);
+      box = '';
+      return true;
+    };
+    host.native.status = () => (sent ? 'working' : 'idle');
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const io = ownerIo(w.root);
+    expect(await runSend(['lead', 'take the box'], io, host)).toBe(0);
+    // The queue's own delivery says what became of the owner's text: the draft receipt travels
+    // with the delivered line, its history entry and the response, as it does on the direct leg.
+    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (the unsent text was pasted back)\n');
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries.at(-1)).toMatchObject({ outcome: 'delivered', via: 'typed', note: 'the unsent text was pasted back' });
+    // claude-code's idle clear is ctrl+c; the trigger was typed, submitted, and the draft
+    // redrawn by a bracketed paste, with no literal typing of the draft.
+    expect(keys).toEqual(['ctrl+c']);
+    expect(host.typed[host.typed.length - 1]?.text).toBe(`\x1b[200~${draft}\x1b[201~`);
+    expect(box).toBe(draft);
   });
 
   test('delivers into a running turn whose composer is empty', async () => {

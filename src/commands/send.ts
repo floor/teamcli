@@ -29,7 +29,7 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor } from '../send/names.ts';
-import { bindPane, deliverTrigger, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
+import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { markTaken } from '../send/taken.ts';
@@ -60,10 +60,12 @@ left the seat's input box, and the pane is not a dialog this command already cla
 (question, permission, trust, vendor notice, provider error, rate limit). A screen that
 is one of those is not reached: the kind and the drop path are named, and nothing
 further is pressed. Who may call it is the registry's decision, default deny: the
-owner; an orchestrator to an orchestrator of its own team or entity; an assistant
-seat to its entity's coordinator; any seat to its own team's orchestrator; or an
-owner-signed grant naming send. The record is signed with the checkout's
-message key, and its payload names the sender and the rule that admitted it. --list sends nothing: it prints
+owner; an orchestrator to an orchestrator of its own team or entity; an orchestrator
+or operator to a seat of its own team; a seat whose role is operator to another such
+seat of its own team; an assistant seat to its entity's coordinator; any seat to its
+own team's orchestrator; or an owner-signed grant naming send. The record is signed
+with the checkout's message key, and its payload names the sender and the rule that
+admitted it. --list sends nothing: it prints
 the file's seats and the seats of the other teams of the same entity, each
 with the project its team sits in — another team's seat reads <seat>@<team> —
 and needs no caller check. --dry-run resolves the seat and the
@@ -108,14 +110,23 @@ The outcome is one of eight, and none of them is silent:
                reply follows on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
                held-message dialog keeps, printed held (socket) — and the pane was
-               left untouched because the seat remained busy, locked, in a dialog,
-               or holding an unsent draft (exit 1)
+               left untouched because the seat remained busy, locked, or in a dialog,
+               or its unsent text has no way out of the box this version measured:
+               the reason names the copy's path when one was kept. A box holding
+               unsent text does not hold the delivery: the text is copied beside the
+               drop, the box is cleared with the profile's measured keys, the trigger
+               is typed and pressed Enter, and the text is pasted back exactly, its
+               row unchanged, before the run's verdict (exit 1 only where the box
+               could not be cleared or the text put back); a box drawn over more than
+               one row is held untouched, since a soft wrap cannot be told from a
+               newline
   not-submitted the line was typed and the seat never took it (exit 1): Enter was
                pressed up to three times, and only to a box still holding exactly the
                trigger; the message names what the box holds, faint suggestions not
-               counted, and the drop path. A compose seat's brief that was typed and
-               never confirmed is also not-submitted: its message names the screen
-               that never came and the one line that repairs it
+               counted, the drop path, and where the unsent text went — pasted back,
+               or kept in its copy with the copy's path. A compose seat's brief that
+               was typed and never confirmed is also not-submitted: its message names
+               the screen that never came and the one line that repairs it
   timeout      --wait: the record was sent, and no reply record on the thread arrived
                within the window (exit 1); the thread stays open
   unreachable  the channel did not confirm (exit 1): the session is not running, no
@@ -1285,7 +1296,9 @@ function finishDaemonSend(
   report.sent = res.id;
   if (res.outcome === 'delivered') {
     const taken = res.evidence === 'taken' ? TAKEN_REASON : undefined;
-    return delivered(io, seatName, report, taken === undefined ? note : note === undefined ? taken : `${taken}; ${note}`);
+    // The daemon's typed leg moved any unsent text too: its receipt belongs on the same line.
+    const notes = [taken, note, res.draft].filter((one): one is string => one !== undefined);
+    return delivered(io, seatName, report, notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
@@ -1295,7 +1308,8 @@ function finishDaemonSend(
     const result: DeliverResult = { outcome: 'not-submitted', tries: res.tries, ...(res.box === null ? {} : { box: res.box }) };
     // The daemon keeps no pending record in the folder a watch scans, so this line promises no
     // retry: it names the drop and stops there.
-    return notSubmitted(io, dir, who, seatName, result, `the drop file is at ${res.drop_path}`, host, report);
+    const where = `the drop file is at ${res.drop_path}${res.draft === undefined ? '' : `; ${res.draft}`}`;
+    return notSubmitted(io, dir, who, seatName, result, where, host, report);
   }
   return refuse(io, dir, who, res.detail, host, report);
 }
@@ -1621,6 +1635,9 @@ async function deliverNative(
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
   let taken = false;
+  // An unsent draft the delivery moved out of the box and put back: its one-line word rides
+  // on the outcome heard here. The copy's path, when the put-back failed, is in that line.
+  let draft: string | undefined;
   try {
     let path: string;
     try {
@@ -1635,6 +1652,7 @@ async function deliverNative(
     path = written.path;
     const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli);
     const where = `the record is at ${path}`;
+    draft = result.draft === undefined ? undefined : draftNote(result.draft);
     // A held drop gets a record beside it, for the watch to deliver once the seat is free. The
     // line names that retry, so a sender does not have to guess whether the drop still travels.
     const retry = 'a running watch retries it when the seat is idle';
@@ -1657,10 +1675,10 @@ async function deliverNative(
     if (result.outcome === 'not-submitted') {
       appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
       markPending(dropDir, entry);
-      return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}`, host, report);
+      return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}${draft === undefined ? '' : `; ${draft}`}`, host, report);
     }
     taken = result.evidence === 'taken';
-    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
+    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)}${draft === undefined ? '' : `; ${draft}`})`, host.now());
     if (taken) {
       markTaken(dropDir, {
         id: msgId,
@@ -1680,6 +1698,7 @@ async function deliverNative(
   // A taken send is a delivery with its confirmation still to come: the history says so, and a
   // record beside the drop lets a running watch look for the later sign. It is never a retry
   // record — a taken line is never typed again.
+  const outcomeNote = [taken ? TAKEN_REASON : undefined, draft].filter((one): one is string => one !== undefined).join('; ');
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from,
@@ -1690,12 +1709,13 @@ async function deliverNative(
     id: msgId,
     thread: payload.thread,
     outcome: 'delivered',
-    ...(taken ? { note: TAKEN_REASON } : {}),
+    ...(outcomeNote === '' ? {} : { note: outcomeNote }),
     ms: host.now().getTime() - startedAt,
     via: 'typed',
     ...failed,
   });
-  return delivered(io, seatName, report, taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note);
+  const takenNote = taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note;
+  return delivered(io, seatName, report, draft === undefined ? takenNote : takenNote === undefined ? draft : `${takenNote}; ${draft}`);
 }
 
 /**
@@ -2387,7 +2407,9 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
  *  `coordinator:` key a 0.3.5/0.4 file still uses — named it. The receiving team's file is read for
  *  the same reason: its registry roster may have been written before the `leads` capability existed,
  *  so the record alone cannot say who leads it, and a send keyed on the record would refuse a lead
- *  whose file names one. The role is never read on either side.
+ *  whose file names one. A roster line's role word is read only by the operator pair, on both
+ *  sides and from the file's line where it writes one; every other rule reads a place, a
+ *  capability or a grant.
  */
 function admitRecordsOf(home: string, team: TeamFile, teamId: string, target: Target | null): AdmitTeams {
   const records = readTeams(home);
@@ -2408,7 +2430,9 @@ function admitRecordsOf(home: string, team: TeamFile, teamId: string, target: Ta
  *  operator, and the roster — the store's agent lines for the team, with the file's own seats
  *  behind them. A file seat carries `leads` where the file resolved it as the lead (from the
  *  `leads` mark or the legacy `coordinator:` key alike), so the project rules and the lead rule
- *  read the file's own place in the chain, never a role's word. An `entity:` the file names wins;
+ *  read the file's own place in the chain, never a role's word; the one rule that does read a role
+ *  word, the operator pair, gets the word the file writes today on a store line. An `entity:` the
+ *  file names wins;
  *  a file that names none keeps the entity the registry recorded, the precedence the listing and
  *  the nickname scope read — a key left out of the seed never erases a recorded entity. */
 function overlayTeam(home: string, records: AdmitTeams, team: TeamFile, teamId: string): void {
@@ -2418,8 +2442,12 @@ function overlayTeam(home: string, records: AdmitTeams, team: TeamFile, teamId: 
   const roster: AdmitTeam['roster'] = [];
   for (const agent of readAgents(home)) {
     if (agent.lifecycle === 'retired' || agent.reach.team !== teamId) continue;
+    // The file's line is the seat's present word: a role it writes now decides as it writes it,
+    // and the signing role the record was registered under stands only where the file no longer
+    // declares the seat.
+    const line = team.seats.find((seat) => seat.name === agent.reach.seat);
     roster.push({
-      agent: agent.id, seat: agent.reach.seat, role: agent.signing.role,
+      agent: agent.id, seat: agent.reach.seat, role: line?.role ?? agent.signing.role,
       ...(agent.reach.seat === assistantSeat ? { assistant: true } : {}),
     });
   }

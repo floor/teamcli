@@ -26,6 +26,17 @@ exit: /exit
 # composer to its empty placeholder. Used only to clear an exit text that did not read
 # back as typed, and only when the box holds exactly that text.
 exit_clear: ctrl+u
+# The measured way into the input box (2026-10-19, herdr 0.7.1, a 55-column pane, codex-cli
+# 0.161.0): one ctrl+u removed the draft's last row; the pair [ctrl+u, ctrl+k] cleared one row per
+# pass and left the box empty after the passes its rows counted (four for a three-line draft; the
+# extra pass harmless). A bracketed paste drew the lines back unchanged. Codex showed no composer
+# while a turn ran, so no keys were measured there: mid_turn stays false.
+input:
+  clear:
+    - ctrl+u
+    - ctrl+k
+  paste: bracketed
+  mid_turn: false
 # No `exit_confirm`: a 0.160.0 run on 2026-10-06 left a backgrounded shell running, sent
 # `/exit`, and one Enter put the pane back at its shell with no question asked — its exit
 # printed only advice ("Stop the current turn: run codex agents, select this task, and press
@@ -65,9 +76,9 @@ startup_reads:
 mcp_inbox:
   launch_args:
     - -c
-    - 'mcp_servers.team_inbox.command="{command}"'
+    - 'mcp_servers.team_inbox.command="{command_json}"'
     - -c
-    - 'mcp_servers.team_inbox.args=["{entry}","mcp","serve","--seat","{seat}"]'
+    - 'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}]'
 models:
   option:
     - -m

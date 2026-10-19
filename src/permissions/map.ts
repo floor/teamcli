@@ -34,7 +34,9 @@ export function isCapability(word: string): word is Capability {
  *  `any-caller` asks for no record at all; `seat-only` admits a seat of the team on its
  *  recorded pane and not the owner; `leads-only` admits a seat the file marks `leads` and not
  *  the owner; `team-change` is `mayChangeTeamVerdict` (the owner, the orchestrator's seat or
- *  the operator's seat, on its recorded pane); `team-read` is `mayReadTeam` (a seat the state
+ *  the operator's seat, on its recorded pane); `team-pause` is `mayPauseTeamVerdict` (the
+ *  owner or the orchestrator's seat, on its recorded pane — the operator is not admitted);
+ *  `team-read` is `mayReadTeam` (a seat the state
  *  places on its recorded pane, or an approved delegate pane). A row may also carry
  *  `terminal`: the module refuses a run with no terminal through `detachedRefusal`, and the
  *  requirement stands on top of the kind (`watch` is any caller with a terminal or its own
@@ -53,6 +55,7 @@ export type Gate = (
   | { kind: 'seat-only'; why: string }
   | { kind: 'leads-only'; why: string }
   | { kind: 'team-change'; why: string }
+  | { kind: 'team-pause'; why: string }
   | { kind: 'team-read'; why: string }
 ) & {
   /** A run with no terminal is refused, by the same `detachedRefusal` the module calls. */
@@ -185,6 +188,11 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat and asks for none either',
     },
+    pause: {
+      kind: 'team-pause',
+      why: 'a pause stops every seat\'s intake of new work, the orchestrator\'s own lever on the team: the owner or the orchestrator\'s seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`',
+      terminal: { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' },
+    },
     plan: {
       kind: 'seat-only',
       why: 'a declared seat of this team plans, on the pane the state records for it; the owner and a run with no terminal are not admitted',
@@ -218,6 +226,11 @@ function buildGates(): Record<string, Gate> {
       kind: 'admission',
       why: 'a reply is judged by the send admission exactly as a send is, with the reply rule; the caller must be the record\'s addressee',
     },
+    resume: {
+      kind: 'team-pause',
+      why: 'a resume reopens the intake a pause closed, by the same gate: the owner or the orchestrator\'s seat, on its recorded pane; the operator is not admitted',
+      terminal: { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' },
+    },
     route: {
       kind: 'admission',
       why: 'a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused',
@@ -225,6 +238,10 @@ function buildGates(): Record<string, Gate> {
     seats: {
       kind: 'team-read',
       why: 'the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner\'s alone',
+    },
+    sessions: {
+      kind: 'any-caller',
+      why: 'it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read',
     },
     tempo: {
       kind: 'owner-only',

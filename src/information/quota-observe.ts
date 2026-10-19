@@ -9,12 +9,15 @@ import { PANE_WINDOW, paneRead } from '../herdr.ts';
 import { figuresOf, type QuotaPattern } from '../profiles/quota.ts';
 import { quotaWith } from '../profiles/overrides.ts';
 import { readScreen, statusRow } from '../watch/screen.ts';
-import type { QuotaObservation, QuotaWindow } from './quota.ts';
+import type { CostObservation, QuotaObservation, QuotaWindow } from './quota.ts';
 import { PANE_UNREAD, USAGE_UNANSWERED } from './quota.ts';
 import { realKey, type MachineUsage, type UsageView } from './usage.ts';
 
 export type QuotaLive = {
   observations: QuotaObservation[];
+  /** The spend a seat's own screen printed this run, one observation per pane that printed one;
+   *  a seat whose screen printed no money figure has no entry here, never a zero. */
+  costs: CostObservation[];
   /** Collapsed problems, one entry per distinct why with its count. */
   notes: Array<{ why: string; count: number }>;
 };
@@ -52,6 +55,7 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
   const mineKey = view.mine === null ? null : realKey(view.mine);
   const teams = machine.teams.filter((team) => view.full || (mineKey !== null && realKey(team.root) === mineKey));
   const observations: QuotaObservation[] = [];
+  const costs: CostObservation[] = [];
   const notes = new Map<string, number>();
   const screens = new Map<string, string | null>();
   let wantsUsage = false;
@@ -72,7 +76,11 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
         if (screen === null) addNote(notes, PANE_UNREAD);
       }
       const target: SeatTarget = { seat: seat.seat, account: seat.account, ...(seat.pool ? { pool: seat.pool } : {}), cli: seat.cli };
-      observations.push(...statusQuota(seat.cli, screen, target, now, quotaWith(seat.cli, [])));
+      // Stamped with the session the pane was read in: a report that attributes a figure back
+      // to its seat holds two teams' same-named seats apart.
+      for (const one of statusQuota(seat.cli, screen, target, now, quotaWith(seat.cli, []))) observations.push({ ...one, session });
+      const cost = statusCost(seat.cli, screen, target, now);
+      if (cost !== null) costs.push({ ...cost, session });
     }
   }
   if (wantsUsage) {
@@ -80,7 +88,7 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
     if (text === null) addNote(notes, USAGE_UNANSWERED);
     else observations.push(...parseUsageOutput(text, now));
   }
-  return { observations: ageByReset(observations, now), notes: [...notes.entries()].map(([why, count]) => ({ why, count })) };
+  return { observations: ageByReset(observations, now), costs, notes: [...notes.entries()].map(([why, count]) => ({ why, count })) };
 }
 
 /**
@@ -238,6 +246,29 @@ export function statusQuota(cli: string, screen: string | null, target: SeatTarg
     });
   }
   return found;
+}
+
+/** The session spend a configurable claude-family status row prints. The real 2.1.299 capture
+ *  (test/usage-quota.test.ts:47, the row `status.test.ts` also pins) carries
+ *  `S: $5.8 ⣿⣄⣀⣀⣀ 24%`; only the dollar figure is read, and only from the row the profile's
+ *  own status patterns recognize. A row that prints no amount is no observation — the report
+ *  shows the seat's spend `unknown`, never a zero. Only the claude-family row has a capture in
+ *  this tree that prints money (`grep 'S: \$' test/` finds no other CLI's); the others give
+ *  none. */
+export function statusCost(cli: string, screen: string | null, target: SeatTarget, now: number): CostObservation | null {
+  if (cli !== 'claude-code' || screen === null) return null;
+  const row = statusRow(cli, screen);
+  if (row === null) return null;
+  const match = /(?:^|\s)S:\s*\$([0-9]+(?:\.[0-9]+)?)(?=\s|$)/.exec(row);
+  if (match === null) return null;
+  return {
+    seat: target.seat,
+    account: target.account,
+    amount: Number(match[1]),
+    currency: 'USD',
+    observedAt: now,
+    source: 'status line',
+  };
 }
 
 /**

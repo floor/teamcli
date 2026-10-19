@@ -41,6 +41,7 @@ import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
+import { runPause } from '../src/commands/pause.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { pr } from '../src/commands/pr.ts';
@@ -48,11 +49,13 @@ import { runProc, type ProcSources } from '../src/commands/proc.ts';
 import { runProjects, type ProjectSources, type ProjectView } from '../src/commands/projects.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runReply } from '../src/commands/reply.ts';
+import { runResume } from '../src/commands/resume.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
+import { runSessions } from '../src/commands/sessions.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -591,7 +594,7 @@ scene('add.reserved-name', async (place) => {
   return show(await added(place, ['lead'], owner, addSources(place)), '"lead" is reserved');
 });
 scene('add.temporary-unexpected', async (place) => show(await added(place, ['extra', '--temporary'], owner, addSources(place)), 'unexpected'));
-scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--like', 'lead'], owner, addSources(place)), '--like, --until and --worktree'));
+scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--until', 'result:out.md'], owner, addSources(place)), '--until and --worktree'));
 scene('add.not-a-repo', async (place) => show(await added(place, ['worker'], owner, addSources(place)), 'not inside a git repository'), false);
 scene('add.file', async (place) => show(await added(place, ['worker', '--file', 'missing.yaml'], owner, addSources(place)), 'no team file'));
 scene('add.file-invalid', async (place) => {
@@ -648,6 +651,10 @@ scene('add.human', async (place) => {
 scene('add.no-like', async (place) => {
   approve(place, TWO);
   return show(await added(place, ['--temporary', '--like', 'missing', '--until', 'result:out.md', '--file', place.file], owner, addSources(place)), 'no seat "missing"');
+});
+scene('add.like-exists', async (place) => {
+  approve(place, TWO);
+  return show(await added(place, ['worker', '--like', 'lead', '--file', place.file], owner, addSources(place)), 'already declares "worker"');
 });
 scene('add.until', async (place) => {
   approve(place, TWO);
@@ -2764,6 +2771,44 @@ scene('issues.shape', async (place) => {
 scene('issues.invocation', async (place) => show(await issued(place, ['extra']), 'unexpected'));
 scene('issues.not-a-repo', async (place) => show(await issued(place), 'run team from a project\n'), false);
 
+// The session registry's scenes write the append-only stream directly, in the shape the launch
+// commands append: one `start` event per session and one `end` for a session that ended.
+function sessionsRegistry(place: Place): string {
+  return join(storePath('acme', place.root, place.home), 'sessions.jsonl');
+}
+
+function startEvent(id: string, seat: string, ts: string): Record<string, unknown> {
+  return {
+    event: 'start', ts, id, project: 'acme', team: 'acme', seat, nickname: seat === 'lead' ? 'Lead' : undefined,
+    cli: 'claude-code', lab: 'anthropic', model: 'claude-opus-5-5', version: '5.5', account: 'anthropic',
+    herdr_session: 'acme', pane: 'w1:p1', cli_session: '2f6d1c1a-6f3b-4b4e-9d4a-1f0f0a2a9b7c', resumable: true,
+  };
+}
+
+async function sessionsRun(place: Place, argv: string[] = []): Promise<Ran> {
+  const io = testIo(place.root);
+  return { code: await runSessions(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('sessions.none', async (place) => show(await sessionsRun(place), '0 sessions'));
+scene('sessions.shown', async (place) => {
+  const file = sessionsRegistry(place);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, [
+    JSON.stringify(startEvent('ses_000000000001', 'lead', '2026-10-04T08:00:00.000Z')),
+    JSON.stringify({ event: 'end', ts: '2026-10-04T08:30:00.000Z', id: 'ses_000000000001', reason: 'owner-stop' }),
+    JSON.stringify(startEvent('ses_000000000002', 'worker', '2026-10-04T08:31:00.000Z')),
+  ].join('\n') + '\n');
+  const ran = await sessionsRun(place);
+  show(ran, 'ses_000000000001  lead    acme  claude-opus-5-5  2026-10-04 08:00Z  2026-10-04 08:30Z  owner-stop  unknown');
+  return ran;
+});
+scene('sessions.read', async (place) => {
+  mkdirSync(sessionsRegistry(place), { recursive: true });
+  return show(await sessionsRun(place), 'the session registry path is a directory');
+});
+scene('sessions.invocation', async (place) => show(await sessionsRun(place, ['--by', 'nothing']), 'must be one of model, team, entity'));
+
 // A machine lock is a directory under the scene's own home. The holder and the clock are
 // injected, so these scenes never read a team file or the wall clock. The project refusals are
 // the exception: they are that read, of a folder that has no team file.
@@ -2976,6 +3021,80 @@ scene('hold.invocation', async (place) => {
   return show(await held(place, []), 'a <reason> is required');
 });
 
+async function pausedTeam(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runPause(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('pause.placed', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, []), 'stop lead: no record');
+});
+scene('pause.paused', async (place) => {
+  write(place, TEAM);
+  await pausedTeam(place, []);
+  return show(await pausedTeam(place, []), 'already paused: paused since 2026-10-04T09:00:00.000Z by owner');
+});
+scene('pause.caller', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, [], other), 'only the owner or the orchestrator pauses the team; this call is other');
+});
+scene('pause.detached', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, [], detachedCaller), 'only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat');
+});
+scene('pause.io', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+  return show(await pausedTeam(place, []), 'is not valid JSON');
+});
+scene('pause.file', async (place) => show(await pausedTeam(place, []), 'no team file'));
+scene('pause.team', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, ['other']), 'no team named "other" is registered on this machine');
+});
+scene('pause.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await pausedTeam(place, ['--all', '--json']), "can't be used together");
+});
+
+async function resumedTeam(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runResume(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('resume.resumed', async (place) => {
+  write(place, TEAM);
+  await pausedTeam(place, []);
+  return show(await resumedTeam(place, []), 'resumed acme (paused since 2026-10-04T09:00:00.000Z by owner)');
+});
+scene('resume.not-paused', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, []), 'not paused');
+});
+scene('resume.caller', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, [], other), 'only the owner or the orchestrator resumes the team; this call is other');
+});
+scene('resume.detached', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, [], detachedCaller), 'only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat');
+});
+scene('resume.io', async (place) => {
+  write(place, TEAM);
+  writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+  return show(await resumedTeam(place, []), 'is not valid JSON');
+});
+scene('resume.file', async (place) => show(await resumedTeam(place, []), 'no team file'));
+scene('resume.team', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, ['other']), 'no team named "other" is registered on this machine');
+});
+scene('resume.invocation', async (place) => {
+  write(place, TEAM);
+  return show(await resumedTeam(place, ['--all', '--json']), "can't be used together");
+});
+
 {
   async function raised(place: Place, argv: readonly string[], caller: Caller = leadSeat): Promise<Ran> {
     const io = testIo(place.root, caller);
@@ -3097,6 +3216,14 @@ scene('next.shape', async (place) => {
 });
 scene('next.invocation', async (place) => show(await nexted(place, ['extra']), 'unexpected'));
 scene('next.not-a-repo', async (place) => show(await nexted(place), 'run team from a project\n'), false);
+scene('next.paused', async (place) => {
+  write(place, TASKS);
+  recordLead(place);
+  updateState(join(place.root, '.agents'), (state) => {
+    state.pause = { by: 'owner', at: NOW.toISOString(), stops: [{ seat: 'lead' }] };
+  });
+  return show(await nexted(place), 'nothing new is claimed until `team resume`');
+});
 
 // The broker's own rows. One credential read is stood in everywhere: the shipped wiring reads
 // the owner's Keychain, which no scene may ever run. The socket is real — unix sockets under a
@@ -4310,6 +4437,10 @@ for (const [name, command, args, invalidArgs] of [
   scene('policy.refused', async (place) => show(await policyRun(place, ['set', 'team', 'dev-mode', 'on'], detachedCaller), 'only the owner runs this'));
   scene('policy.invalid', async (place) => {
     write(place, TEAM);
+    // A delay threshold above the release default is the same invalid-value exit, before writing.
+    const ceiling = await policyRun(place, ['set', 'team', 'held', '900']);
+    expect(ceiling.code).toBe(2);
+    expect(ceiling.err).toContain('may only be shortened');
     return show(await policyRun(place, ['set', 'team', 'dev-mode', 'maybe']), 'team policy:');
   });
   scene('policy.done', async (place) => {

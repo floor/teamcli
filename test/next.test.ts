@@ -502,6 +502,23 @@ describe('team next', () => {
     expect(lease().seat).toBe('lead');
   });
 
+  test('a pause refuses a take and still lets the seat release what it holds', async () => {
+    ready(WITH);
+    expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
+    const at = new Date(now).toISOString();
+    updateState(join(root, '.agents'), (state) => {
+      state.pause = { by: 'owner', at, stops: [] };
+    });
+    const refused = await run();
+    expect(refused.code).toBe(1);
+    expect(refused.err).toBe(
+      `team next: the team is paused (paused since ${at} by owner); nothing new is claimed until \`team resume\`\n`,
+    );
+    expect(lease().seat).toBe('lead');
+    expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });
+    expect(existsSync(join(root, '.agents', 'leases', 'm1.json'))).toBe(false);
+  });
+
   test('the ring and the key stay put, and the issues page no longer says team next is not a command', async () => {
     ready();
     expect((await run()).code).toBe(0);

@@ -40,7 +40,15 @@ export type ReconcileOptions = {
 };
 
 export type ReconcileResult =
-  | { ok: true; raised: SignedEventRecord[] }
+  | {
+      ok: true;
+      raised: SignedEventRecord[];
+      /** The log signatures this pass checked; a pass that extends the bus's verification
+       *  checkpoint checks only the records appended since it. */
+      checked: number;
+      /** Whether this pass had to verify the whole retained log. */
+      full: boolean;
+    }
   | { ok: false; reason: string };
 
 const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
@@ -473,5 +481,5 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
     }
   }
 
-  return { ok: true, raised };
+  return { ok: true, raised, checked: existing.checked, full: existing.full };
 }

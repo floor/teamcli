@@ -171,7 +171,7 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(orchLabs, orchLabs, teams)).toEqual({ ok: true, rule: 'an orchestrator to another orchestrator' });
   });
 
-  test('the operator is the place the file declares, never the role word', () => {
+  test('the operator place reaches every seat; a role word alone reaches none', () => {
     // The file marks its operator by name: a seat written `role: implementer` there reaches
     // every seat of its own team, and a seat merely holding the role word `operator` does not.
     const ops = agent('agt_00000000000f', 'ops', 'teamcli');
@@ -194,6 +194,43 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(byWord, builder1, base).ok).toBe(false);
     // The place is the team's own: it reaches that team's seats and no other team's.
     expect(admitSend(ops, builderLabs, declared).ok).toBe(false);
+  });
+
+  test('two lines writing role operator reach each other, in one team only', () => {
+    // The one rule a role's own word decides: two seats of one team whose lines both write
+    // `operator`. Every other reach keeps reading the capability and the place, never a word.
+    const operatorA = agent('agt_000000000016', 'operator-a', 'teamcli');
+    const operatorB = agent('agt_000000000017', 'operator-b', 'teamcli');
+    const plain = agent('agt_000000000018', 'builder-2', 'teamcli');
+    const labOperator = agent('agt_000000000019', 'operator-a', 'labs');
+    const base = headless();
+    const withOperators: AdmitTeams = {
+      ...base,
+      teamcli: {
+        ...base.teamcli!,
+        roster: [
+          ...base.teamcli!.roster,
+          { agent: operatorA.id, seat: 'operator-a', role: 'operator' },
+          { agent: operatorB.id, seat: 'operator-b', role: 'operator' },
+          { agent: plain.id, seat: 'builder-2', role: 'builder' },
+        ],
+      },
+      labs: { ...base.labs!, roster: [...base.labs!.roster, { agent: labOperator.id, seat: 'operator-a', role: 'operator' }] },
+    };
+    const rule = { ok: true, rule: 'an operator to another operator of its own team' } as const;
+    expect(admitSend(operatorA, operatorB, withOperators)).toEqual(rule);
+    expect(admitSend(operatorB, operatorA, withOperators)).toEqual(rule);
+    // The roster line is the word admission reads, not the role the record was signed under.
+    expect(operatorA.signing.role).toBe('builder');
+    // One line with the word is no pair: the other side needs it too.
+    expect(admitSend(operatorA, plain, withOperators).ok).toBe(false);
+    expect(admitSend(plain, operatorA, withOperators).ok).toBe(false);
+    // And the pair never crosses teams, in either direction.
+    expect(admitSend(operatorA, labOperator, withOperators).ok).toBe(false);
+    expect(admitSend(labOperator, operatorA, withOperators).ok).toBe(false);
+    // A caller a command already placed carries its role on the side admission receives.
+    const placed: DeclaredSender = { seat: 'operator-a', team: 'teamcli', role: 'operator', declared: true };
+    expect(admitSend(placed, operatorB, withOperators)).toEqual(rule);
   });
 
   test('an owner-signed grant naming send admits the pair it was verified for', () => {
@@ -251,7 +288,7 @@ describe('send admission: the lead seat the roster capability names', () => {
   test('the capability names the lead: seat to seat still has no rule', () => {
     expect(admitSend(agy, second, fileTeams)).toEqual({
       ok: false,
-      why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
+      why: "agy-seat@aaa111aaa111 may not send to second-seat@aaa111aaa111: no rule admits it (the owner; an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; an operator to another operator of its own team; an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
 
@@ -451,6 +488,7 @@ describe('send admission: default deny', () => {
             why: `${from.name} may not send to ${to.name}: no rule admits it (` +
               'the owner; an orchestrator to another orchestrator; ' +
               'an orchestrator or operator to a seat of its own team; ' +
+              'an operator to another operator of its own team; ' +
               'an assistant seat to its entity\'s coordinator; ' +
               "a seat to its own team's orchestrator; an owner-signed grant naming send)",
           });
@@ -497,11 +535,12 @@ describe('send admission: default deny', () => {
   });
 
   test('without a verified grant, a grant-admitted pair is refused', () => {
-    // The refusal text carries the five rules, so a reader sees what would have admitted it.
+    // The refusal text carries every rule, so a reader sees what would have admitted it.
     expect(admitSend(builderRadio, builder1, teams)).toEqual({
       ok: false,
       why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; ' +
         'an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; ' +
+        'an operator to another operator of its own team; ' +
         "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });
@@ -582,6 +621,7 @@ describe('send admission: the owner-signed grant, verified pair by pair', () => 
       ok: false,
       why: 'builder-1@radio may not send to builder-1@teamcli: no rule admits it (the owner; ' +
         'an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; ' +
+        'an operator to another operator of its own team; ' +
         "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     });
   });

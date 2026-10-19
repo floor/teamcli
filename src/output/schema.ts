@@ -258,6 +258,9 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
         hold: {
           type: 'object',
         },
+        pause: {
+          type: 'object',
+        },
         procs: {
           type: 'array',
           items: { type: 'object' },
@@ -302,6 +305,9 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
     notice: { type: ['string', 'null'] },
+    pause: {
+      type: 'object',
+    },
     seats: {
       type: 'array',
       items: {
@@ -678,6 +684,70 @@ export const HOLD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** One stop point a pause records: the seat, and what its record and worktree held when the
+ *  pause was written. Every field but the seat is absent when the tool held nothing for it. */
+const PAUSE_STOP_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    stage: { type: 'string', enum: ['launched', 'named', 'ready'] },
+    branch: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+    last_active: { type: 'string', minLength: 1 },
+  },
+};
+
+/** Published `--json` output schema for `team pause` (`schema/pause.schema.json`). */
+export const PAUSE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.pause',
+  fileName: 'pause.schema.json',
+  title: 'team pause --json output',
+  statuses: ['paused'],
+  required: ['project', 'session', 'target', 'value', 'pause'],
+  properties: {
+    target: { type: 'string', const: 'team' },
+    value: { type: ['string', 'null'] },
+    pause: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at', 'stops'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+        reason: { type: 'string', minLength: 1 },
+        stops: { type: 'array', items: PAUSE_STOP_SCHEMA_FRAGMENT },
+      },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team resume` (`schema/resume.schema.json`): the record
+ *  that was cleared, stop points and all, so the caller keeps what the pause held. */
+export const RESUME_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.resume',
+  fileName: 'resume.schema.json',
+  title: 'team resume --json output',
+  statuses: ['resumed'],
+  required: ['project', 'session', 'target', 'value', 'resumed'],
+  properties: {
+    target: { type: 'string', const: 'team' },
+    value: { type: 'null' },
+    resumed: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at', 'stops'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+        reason: { type: 'string', minLength: 1 },
+        stops: { type: 'array', items: PAUSE_STOP_SCHEMA_FRAGMENT },
+      },
+    },
+  },
+});
+
 /** Published `--json` output schema for `team raise` (`schema/raise.schema.json`). `record` is the
  *  owner mailbox record's id, null on a dry run; `count` is the record's reading after this call,
  *  so a merge shows the running total. */
@@ -761,6 +831,87 @@ export const ISSUES_OUTPUT_SCHEMA: CommandSchemaSpec = {
           repos: { type: 'array', items: { type: 'string' } },
           needs: { type: 'array', items: { type: 'string' } },
           description: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team sessions` (`schema/sessions.schema.json`). */
+export const SESSIONS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.sessions',
+  fileName: 'sessions.schema.json',
+  title: 'team sessions --json output',
+  required: ['format', 'by', 'seat', 'sessions'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    by: { type: ['string', 'null'], enum: ['model', 'team', 'entity', null] },
+    seat: { type: ['string', 'null'] },
+    sessions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'seat', 'team', 'project', 'cli', 'lab', 'account', 'herdr_session', 'started', 'ended', 'reason'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          seat: { type: 'string', minLength: 1 },
+          nickname: { type: 'string', minLength: 1 },
+          team: { type: 'string', minLength: 1 },
+          project: { type: 'string', minLength: 1 },
+          entity: { type: 'string', minLength: 1 },
+          cli: { type: 'string', minLength: 1 },
+          lab: { type: 'string', minLength: 1 },
+          model: { type: 'string', minLength: 1 },
+          version: { type: 'string', minLength: 1 },
+          effort: { type: 'string', minLength: 1 },
+          account: { type: 'string', minLength: 1 },
+          herdr_session: { type: 'string', minLength: 1 },
+          pane: { type: 'string', minLength: 1 },
+          workspace: { type: 'string', minLength: 1 },
+          cli_session: { type: 'string', minLength: 1 },
+          resumable: { type: 'boolean' },
+          resume_until: { type: 'string', minLength: 1 },
+          handover: { type: 'string', minLength: 1 },
+          previous: { type: 'string', minLength: 1 },
+          next: { type: 'string', minLength: 1 },
+          started: { type: 'string', minLength: 1 },
+          ended: { type: ['string', 'null'] },
+          reason: {
+            type: ['string', 'null'],
+            enum: ['swap', 'restart', 'crash', 'owner-stop', 'quota', null],
+          },
+          note: { type: 'string', minLength: 1 },
+          tokens: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['source'],
+            properties: {
+              in: { type: 'integer', minimum: 0 },
+              out: { type: 'integer', minimum: 0 },
+              cached: { type: 'integer', minimum: 0 },
+              source: { type: 'string', enum: ['measured', 'estimated'] },
+            },
+          },
+          cost: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['amount', 'currency', 'source'],
+            properties: {
+              amount: { type: 'number', minimum: 0 },
+              currency: { type: 'string', minLength: 1 },
+              source: { type: 'string', enum: ['measured', 'estimated'] },
+            },
+          },
+          links: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              commits: { type: 'array', items: { type: 'string', minLength: 1 } },
+              prs: { type: 'array', items: { type: 'string', minLength: 1 } },
+              releases: { type: 'array', items: { type: 'string', minLength: 1 } },
+            },
+          },
         },
       },
     },
@@ -1775,12 +1926,15 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DELEGATE_OUTPUT_SCHEMA,
   REVOKE_OUTPUT_SCHEMA,
   HOLD_OUTPUT_SCHEMA,
+  PAUSE_OUTPUT_SCHEMA,
+  RESUME_OUTPUT_SCHEMA,
   RAISE_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   RELEASE_OUTPUT_SCHEMA,
   POLICY_OUTPUT_SCHEMA,
   ISSUES_OUTPUT_SCHEMA,
+  SESSIONS_OUTPUT_SCHEMA,
   FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,
