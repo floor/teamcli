@@ -1,20 +1,26 @@
-# Live proof: extraction and correction
+# Live proof: extraction, correction and host framing
 
-This page records runs against two commits:
+This page records runs against four commits:
 
 - `0635fd0d5313561066034e87adfda1bb239aa92b` — `feat(send): extract the socket and
   durable-copy transport into @teamcli/relay`. Its sections are historical: they keep what that
   commit did, including an existing-file limitation that the correction removed.
 - `585791b3ca679b5006754697b3239e09f7f664cd` — `fix(relay): publish the durable copy with
   create-or-match`. Its section records the correction's own runs.
+- `651cdb9d6` and `5a525041c` — `feat(relay): extract the machine socket framing host` and
+  `feat(relay): hand the raw request line to the framing handler`. Their section records the
+  framing host's focused synthetic tests at the second commit.
+- `8a3bfcd8f` — `refactor(daemon): frame the machine socket through the relay host`. Its section
+  records the machine-socket adapter's focused daemon tests.
 
 This page distinguishes measured results from unproven behavior and from plans for the next
 change. Nothing here is a claim about a runtime reading a message, and nothing here validates a
-release beyond the runs written down.
+release beyond the runs written down. No run installs or starts the machine's daemon service,
+removes a per-root listener, or claims a single endpoint.
 
 ## What was run
 
-Two kinds of run, both local and synthetic:
+Three kinds of run, all local and synthetic:
 
 - **Transport runs.** A measuring script built one synthetic scratch folder and one local socket
   peer it created for the test, then called `stage`, `deliver` and `capabilities` from the
@@ -22,6 +28,10 @@ Two kinds of run, both local and synthetic:
 - **Packed-install runs.** The extraction run packed the repository and installed the tarball
   into a fresh scratch prefix. The installed `team` command was run read-only, and the relay files
   in the installed tree and in the tarball were compared by SHA-256 with the commit's files.
+- **Focused synthetic tests.** The framing host's tests bind a socket in a fresh temp folder and
+  drive it with a client the test creates. The adapter's daemon tests start the daemon in a
+  scratch home and a scratch git root, with the machine socket in that home. No installed daemon,
+  no live seat, no owner file, no machine service.
 
 ## Transport results at the extraction commit (historical)
 
@@ -126,6 +136,82 @@ They do not show a signature check — the package compares bytes and never chec
 means — and they do not show a distributed or durable-storage guarantee beyond the file being
 written and read back in these runs.
 
+## Framing host at `5a525041c` and the daemon adapter at `8a3bfcd8f`
+
+The framing host module is `packages/relay/host/server.js` with `server.d.ts`; the daemon adapter
+is the accept, frame, bind and close section of `src/daemon/host.ts`. Both changes are local to
+this repository: the module is not a package export in this build, and the daemon still hosts
+each checkout's existing send and bus listeners, so N checkouts mean 2N+1 endpoints in one
+process. Nothing in these runs removes a per-root listener or installs or starts the daemon
+service.
+
+### What the framing host tests show
+
+Run at `5a525041c` in the repository:
+
+```
+$ bun test test/relay-host-server.test.ts
+ 12 pass
+ 0 fail
+ 37 expect() calls
+Ran 12 tests across 1 file.
+$ bun run typecheck
+$ tsc --noEmit
+```
+
+The tests use one synthetic socket in a fresh temp folder per case. They show:
+
+- one complete newline-terminated line is decoded and handed to the handler as untrusted data,
+  with its exact stripped line; a second line in the same write produces no second answer;
+- a line that is not JSON is refused before the handler sees it;
+- the frame limit counts the newline: with a limit of 8, seven characters plus the newline are
+  accepted and eight characters plus the newline are refused, never truncated;
+- with the default deadline off, a silent connection stays open; an explicit deadline answers
+  `deadline` for a frame that never arrives, while a handler that outlasts the deadline still
+  answers and is not refused;
+- a multi-byte character split across separate writes is decoded to one character before the
+  line is parsed;
+- a thrown or rejected handler is refused as `handler-error`; an asynchronous handler answers,
+  and concurrent connections keep their own inputs;
+- close destroys open connections and stops accepting; a bind error at an occupied path is
+  reported rather than repaired;
+- an unknown file at the socket path is reported as `EADDRINUSE` and left untouched, never
+  unlinked or repaired.
+
+### What the daemon adapter tests show
+
+Run at `8a3bfcd8f` in the repository:
+
+```
+$ bun test test/daemon-machine.test.ts test/daemon-health.test.ts \
+    test/send-daemon-boundaries.test.ts test/send-daemon.test.ts \
+    test/relay-host-server.test.ts
+ 63 pass
+ 0 fail
+ 354 expect() calls
+Ran 63 tests across 5 files.
+$ bun run typecheck
+$ tsc --noEmit
+```
+
+The daemon runs in a scratch home with a scratch git root. The adapter tests show:
+
+- the machine socket still answers health, and the daemon's state, startedBy and features still
+  match the existing expectations;
+- the `send` op still answers `daemon.auth-unsupported`;
+- a malformed line, a JSON value that is not an object, and a frame past the limit keep the
+  protocol's refusal bytes: `daemon.bad-frame` with `the request line is not JSON`, `the request
+  is not a JSON object`, and `the request line exceeds the frame limit` respectively;
+- a request carrying a `caller` or `scope` field does not get that field trusted or echoed: the
+  health answer contains no such value;
+- close destroys an idle connection;
+- the machine socket keeps mode 0600 in a 0700 folder.
+
+These runs do not show an installed daemon or a machine service start, one endpoint, a verified
+principal, or any read or effect beyond the answers named above. The queue module
+(`host/queue.js`) is not exercised by these runs; its contract is described in the README and is
+not measured on this page.
+
 ## Fixed invariants and this version's scope
 
 The policies are configurable: delivery order, a delivery timeout per route, and
@@ -135,7 +221,10 @@ receiver; every attempt recorded.
 
 This version makes the copy-before-attempt rule the caller's contract and performs one attempt
 without falling back. Receiver de-duplication, the attempt record, escalation and fallback are
-the next change. No server, listener or delivery queue exists in this version.
+the next change. The package starts no live server, listener or delivery queue: the framing host
+binds only when its caller calls `listen`, inside the caller's process, and the queue opens no
+socket. The daemon still hosts the per-root send and bus listeners, so N checkouts mean 2N+1
+endpoints in one process.
 
 ## Reviewed next behavior (not in this build, not measured)
 
@@ -158,7 +247,12 @@ A read receipt is not transport: an ordinary dial is not turned into a synchrono
 - A runtime reading a delivered frame. No read receipt is returned by this build.
 - Any wake, read or delivery of a durable copy.
 - Receiver de-duplication, attempt recording, fallback or escalation — none is active here.
-- Any server, listener or queue.
+- Any server, listener or queue started by this package outside a caller's own process; the
+  framing host and adapter runs above use a synthetic socket in a temp folder.
+- A single endpoint: the daemon still hosts 2N+1 endpoints for N checkouts.
+- A verified principal or auth binding: mutating daemon requests still answer
+  `daemon.auth-unsupported`.
+- The queued host's verdicts: its contract is described in the README, not measured on this page.
 - Exactly-once delivery, or any timing value in the reviewed-next section above.
 - Any behavior beyond the commits and runs written down on this page.
 
