@@ -39,10 +39,11 @@ import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS,
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { frameFor, replyLine } from '../send/frame.ts';
+import { frameFor, frameReplyFor } from '../send/frame.ts';
 import { declaredInboundOf, inboundIsLive, inboundSkipReason, type InboundDeclaration } from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 
@@ -735,13 +736,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
-  // walks; nothing declared leaves mcp-inbox, typed, drop. The words are the receiving team
-  // file's (its own key and the seat's) and the registry project's, read here, and the seat's
-  // signed settings say `delivery_order` and `human` in the file's place; a host that hands in a
-  // chain decides instead, which is how a test picks an order without a file to write. A record
-  // that exists and does not verify refuses the send: neither the order nor the human guard can
-  // be decided from a record the store disowns, and routing on the declaration would let a
-  // tampered `human` preference fall back to a typed pane.
+  // walks; nothing declared leaves mcp-inbox, typed, drop. Each level's word is the signed
+  // `delivery-order` policy its record holds, and the receiving team file's own keys, the
+  // seat's and the registry project's legacy words fill in where no signed record is held; the
+  // seat's signed settings say `delivery_order` and `human` in the file's place; a host that
+  // hands in a chain decides instead, which is how a test picks an order without a file to
+  // write. A record that exists and does not verify refuses the send: neither the order nor the
+  // human guard can be decided from a record the store disowns, and routing on the declaration
+  // would let a tampered `human` preference fall back to a typed pane.
   let overrides: SeatOverrides = {};
   if (!host.delivery) {
     const read = resolveSeatOverrides({ home: host.home, root: to.root, seat: to.seat });
@@ -759,6 +761,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     ...(to.cross ? {} : { file: team }),
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
     overrides,
+    now: host.now(),
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
   // A receiving Claude session that itself declares `crossSessionInbound: "accept"` takes the
@@ -860,7 +863,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         failures.push(`socket: ${inboundSkipReason(inbound.policy)}`);
         continue;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root);
       if (attempt.kind === 'delivered') {
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'socket', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
@@ -911,7 +914,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // its CLI's own screens instead: there is no drop-file trigger to build, and the walk is
     // run in this process (below), not handed to the daemon.
     const compose = profileFor(to.cli)?.compose ?? null;
-    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project });
+    // The receiving team's sender-line policy decides the words around the two names; a team
+    // file that did not read leaves the shipped floor format, never an unnamed wake.
+    const wakeFormat = senderLineFormatInForce({
+      home: host.home,
+      root: to.root,
+      team: receiving.ok ? receiving.team : null,
+      now: host.now(),
+    });
+    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project, format: wakeFormat });
     if (trigger === null && compose === null) {
       return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
     }
@@ -2503,6 +2514,8 @@ async function deliverSocketFrame(
   startedAt: number,
   wait = false,
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
+  /** The sending run's team root: the entity an owner-origin reply line is read from. */
+  callerRoot: string,
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -2517,7 +2530,9 @@ async function deliverSocketFrame(
   if (sendingTeam === undefined) {
     return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
   }
-  const frame = frameFor(body, msgId, replyLine(host.home, payload.from, sendingTeam));
+  const reply = frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
+  if ('missing' in reply) return { kind: 'fallback', reason: reply.missing };
+  const frame = frameFor(body, msgId, reply.line);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }

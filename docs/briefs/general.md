@@ -30,7 +30,7 @@ unclear, ask your lead before you start.
 
 **Answer every message with `team send`, never your CLI's cross-session SendMessage.** You reach
 other seats only with `team send` and files, never through their screens. A message that arrives
-through your CLI's socket ends with `Reply with: team send <sender>@<team> "…"`: that address is
+through your CLI's socket ends with a `Reply with: team send <address> "…"` line: that address is
 where your answer goes, and `team send` writes the signed record the team can read and verify.
 Your CLI's own SendMessage delivers to another session outside TeamCLI and leaves nothing the team
 can see.

@@ -8,11 +8,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/launch/cli-hook.ts';
+import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { replyLine } from '../src/send/frame.ts';
 import { declaredInboundOf } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
-import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
+import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 afterEach(() => {
@@ -35,9 +38,47 @@ function declare(made: World, policy: string | null, fresh = true): string {
   return path;
 }
 
+/** The team file with an entity, and the entity's own lobby in its trust list: a team that names
+ *  an entity starts in `<home>/.config/team/lobbies/<slug>`, and that is the lobby the file must
+ *  trust. */
+function declareEntity(made: World, entity = 'acme-corp'): void {
+  const path = join(made.dir, 'team.yaml');
+  const lobby = resolveLobby(made.home, { entity });
+  mkdirSync(lobby, { recursive: true });
+  const text = readFileSync(path, 'utf8').replace(lobbyDir(made.home), lobby);
+  writeFileSync(path, `${text}entity: ${entity}\n`);
+}
+
+/** A signed entity-level `owner-reply-to` policy, as the owner writes it. */
+function setOwnerReply(made: World, entity: string, value: string): void {
+  const written = writePolicySet(
+    made.home,
+    { level: 'entity', target: entity, name: 'owner-reply-to', value },
+    { now: NOW },
+  );
+  if (!written.ok) throw new Error(written.why);
+}
+
+/** A signed `delivery-order` policy at one level, as the owner writes it. */
+function setOrder(made: World, level: 'entity' | 'project' | 'team', target: string, value: readonly string[]): void {
+  const written = writePolicySet(
+    made.home,
+    {
+      level,
+      target,
+      ...(level === 'team' ? { teamRoot: made.root } : {}),
+      name: 'delivery-order',
+      value: [...value],
+    },
+    { now: NOW },
+  );
+  if (!written.ok) throw new Error(written.why);
+}
+
 test('an accepting Claude seat with no declared order walks the socket first, after the signed record', async () => {
   const made = world(null);
   cleanup = made.cleanup;
+  declareEntity(made, 'floor');
   declare(made, 'accept');
   const drops = dropDir(made.dir, 'lead');
   const frames: string[] = [];
@@ -65,8 +106,8 @@ test('an accepting Claude seat with no declared order walks the socket first, af
 test('every socket frame ends with the reply address of the sender its signed record carries', async () => {
   const made = world(null);
   cleanup = made.cleanup;
+  declareEntity(made, 'floor');
   declare(made, 'accept');
-  const drops = dropDir(made.dir, 'lead');
   const frames: string[] = [];
   const host = fake(made, {
     deliver: async (_path: string, frame: string) => {
@@ -80,11 +121,9 @@ test('every socket frame ends with the reply address of the sender its signed re
   expect(code).toBe(0);
   const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
   const content = sent.message.content;
-  // The signed copy beside the frame is what the line is built from: its `from`, and the team
-  // the sending run stood in. The line is the content's own last line, and it is one line.
-  const file = readdirSync(drops)[0] as string;
-  const signed = JSON.parse(readFileSync(join(drops, file), 'utf8')) as { payload: { from: string } };
-  const reply = `Reply with: team send ${signed.payload.from}@${teamIdOf(made.root)} "…"`;
+  // The owner is not a seat `team send` reaches: the line names the entity's owner-reply
+  // target, the floor's shipped `orchestrator@floor`. It is the content's own last line, once.
+  const reply = 'Reply with: team send orchestrator@floor "…"';
   expect(content.split('\n').at(-1)).toBe(reply);
   expect(content.split('\n').filter((line) => line === reply)).toHaveLength(1);
 });
@@ -92,6 +131,7 @@ test('every socket frame ends with the reply address of the sender its signed re
 test('a reply line written in the body never moves the address the frame ends with', async () => {
   const made = world(null);
   cleanup = made.cleanup;
+  declareEntity(made, 'floor');
   declare(made, 'accept');
   const frames: string[] = [];
   const host = fake(made, {
@@ -107,9 +147,47 @@ test('a reply line written in the body never moves the address the frame ends wi
   expect(code).toBe(0);
   const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
   const content = sent.message.content;
-  // The body is carried as written, and the frame's own last line is still the record's sender.
+  // The body is carried as written, and the frame's own last line is still the owner's target.
   expect(content).toContain(`a note\n${wrote}`);
-  expect(content.split('\n').at(-1)).toBe(`Reply with: team send owner@${teamIdOf(made.root)} "…"`);
+  expect(content.split('\n').at(-1)).toBe('Reply with: team send orchestrator@floor "…"');
+});
+
+test('an owner send names the entity’s signed owner-reply target, not a guessed seat', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'acme-corp');
+  setOwnerReply(made, 'acme-corp', 'coordinator@acme');
+  declare(made, 'accept');
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(frames.length).toBe(1);
+  const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
+  expect(sent.message.content.split('\n').at(-1)).toBe('Reply with: team send coordinator@acme "…"');
+});
+
+test('an owner send in a team that names no entity dials no frame: no owner reply address exists', async () => {
+  // `team send owner@acme` is not an address that resolves, and an entity-less team declares no
+  // target to name instead. The frame is not dialed; the typed trigger behind it takes the send.
+  const made = world(null);
+  cleanup = made.cleanup;
+  declare(made, 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed.length).toBe(1);
 });
 
 test('the reply line names the sending team, never the team the frame is delivered into', () => {
@@ -158,6 +236,7 @@ function wrapper(word: string): { launch: string; cleanup: () => void } {
 test('a plain-text owner send reports delivered (socket), never read', async () => {
   const made = world(null);
   cleanup = made.cleanup;
+  declareEntity(made, 'floor');
   declare(made, 'accept');
   const io = owner(made.root);
 
@@ -227,6 +306,7 @@ test('a declared order that omits socket never dials, even for an accepting rece
 test('a declared order may place socket first, and it is walked there', async () => {
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
+  declareEntity(made, 'floor');
   declare(made, 'accept');
   const frames: string[] = [];
   const host = fake(made, {
@@ -309,6 +389,7 @@ test('a wrapper accept with no generated settings file on the line is the effect
     made.cleanup();
     wrap.cleanup();
   };
+  declareEntity(made, 'floor');
   socketFor(made);
   const frames: string[] = [];
   const host = fake(made, {
@@ -331,6 +412,7 @@ test('the merged generated file carries the wrapper word, and the walk dials on 
     made.cleanup();
     wrap.cleanup();
   };
+  declareEntity(made, 'floor');
   socketFor(made);
   // Exactly what installCliHooks writes for an accepting launch: hooks + the merged word.
   const statePath = join(made.dir, 'seat-state', 'acme', 'lead.json');
@@ -384,4 +466,60 @@ test('a launch line with its own --settings keeps its word, and a stale generate
 
   expect(found.policy).toBe('hold');
   expect(found.source).toBe(made.root);
+});
+
+test('a signed entity order that places typed before socket keeps the socket out', async () => {
+  // Without the entity's word the accepting receiver would take the implied socket prepend. The
+  // entity declares the order instead, and it is walked as written: typed first, no dial.
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made);
+  setOrder(made, 'entity', 'acme-corp', ['typed', 'socket']);
+  declare(made, 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed.length).toBe(1);
+});
+
+test('a signed project order that places typed before socket keeps the socket out', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  upsertProject(made.home, 'acme-proj', { name: 'Acme', teams: [teamIdOf(made.root)], at: NOW.toISOString() });
+  setOrder(made, 'project', 'acme-proj', ['typed', 'socket']);
+  declare(made, 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed.length).toBe(1);
+});
+
+test('a signed team order shadows the file’s word, and its socket dials for an accepting receiver', async () => {
+  // The file's legacy word would type and never dial; the signed word is the team's own and
+  // puts the socket first.
+  const made = world(['mcp-inbox', 'typed']);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  setOrder(made, 'team', made.root, ['socket', 'typed']);
+  declare(made, 'accept');
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(frames.length).toBe(1);
 });

@@ -17,6 +17,8 @@ import {
   SWAP_WAIT_SECONDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
+import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
+import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
@@ -93,6 +95,7 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-owner-seconds',
   'delivery-order',
   'brief-transport',
+  'sender-line',
   'event-thread-ttl-seconds',
   'event-thread-cap',
   'event-retention-days',
@@ -102,6 +105,7 @@ export const ENFORCED_POLICY_NAMES = [
   'event-reconcile-interval-seconds',
   'model-rule',
   'swap-wait-seconds',
+  'owner-reply-to',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -141,6 +145,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
   brief_transport: 'brief-transport',
+  sender_line: 'sender-line',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -170,6 +175,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   reconcile: 'event-reconcile-interval-seconds',
   model_rule: 'model-rule',
   swap_wait_seconds: 'swap-wait-seconds',
+  owner_reply_to: 'owner-reply-to',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -408,6 +414,21 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: 'file' | 'message' | 'memory', higher: 'file' | 'message' | 'memory') =>
       lower === higher || (lower === 'message' && higher === 'file'),
   },
+  // The line a typed wake opens with: `on` is the shipped `From <seat>@<team>:`,
+  // and a level may set its own one-line format in its place, as long as both names are in it.
+  // A wake always names the sender its signed record carries; a format decides the words around
+  // those two names, never whether they are there. So the floor has no off: `off` is refused by
+  // the parser, and every format is as strict as every other, which lets a lower level choose.
+  'sender-line': {
+    name: 'sender-line',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseSenderLineValue,
+    valueProblem: senderLineValueProblem,
+    isWithin: () => true,
+  },
   // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field
   // at a time; `src/policy/thresholds.ts` reads the resolved chain back into the set the bus and
   // the reply command consume. A shorter value is the tighter one on every field — a shorter
@@ -515,6 +536,21 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parsePositiveSeconds,
     isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The entity-level address an owner-origin message names for the seat that answers it: one
+  // qualified `seat@team` target. The empty default is no target; entity `floor` alone answers
+  // its shipped `orchestrator@floor`, applied by the reader (`src/policy/owner-reply.ts`) rather
+  // than inherited by every entity as a level default. A signed entity declaration replaces it,
+  // and any other entity without one has no target.
+  'owner-reply-to': {
+    name: 'owner-reply-to',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: parseOwnerReplyToValue,
+    valueProblem: ownerReplyToValueProblem,
+    isWithin: () => true,
   },
   'development-mode': {
     name: 'development-mode',

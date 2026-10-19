@@ -38,6 +38,7 @@ import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeSender } from '../send/wake.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import type { Live } from '../status/compare.ts';
 import { readScreen } from './screen.ts';
 
@@ -147,7 +148,8 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
     giveUp(scene, dropDir, drop, 'its signed record does not name a sender this home can pin');
     return;
   }
-  const line = readTriggerLine(drop.to, scene.session, sender);
+  const format = senderLineFormatInForce({ home, root: scene.root, team: scene.team, now: scene.now });
+  const line = readTriggerLine(drop.to, scene.session, { ...sender, format });
   if (line === null) {
     giveUp(scene, dropDir, drop, 'its trigger line would not fit in a pane');
     return;
