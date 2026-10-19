@@ -353,7 +353,7 @@ function executeWrite(
   const { team } = current;
   const seat = team.seats.find((one) => one.name === parsed.seat);
   if (seat === undefined) return noSeatExit(io, json, parsed.seat, team.project);
-  const found = agentIdOf(home, current.root, team.project, seat.name);
+  const found = agentIdOf(home, current.root, seat.name);
   if (found.agentId === null) {
     const message = `seat "${seat.name}" has no registered agent record to hold its settings; run \`team up\` first`;
     if (json) {

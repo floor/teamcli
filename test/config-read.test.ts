@@ -6,9 +6,10 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentsDir, registerAgent, type AgentInit } from '../src/registry/agents.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
-import { readSeatSettings } from '../src/config/read.ts';
+import { agentIdOf, readSeatSettings } from '../src/config/read.ts';
 import { installKey } from '../src/store/keys.ts';
 
 let base: string;
@@ -111,5 +112,49 @@ describe('readSeatSettings', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.rows.find((entry) => entry.key === 'model')!.origin).toBe('team file');
+  });
+});
+
+describe('the seat found without a team record', () => {
+  test('finds the agent by its stable team id, not the team’s own name', () => {
+    const teamId = teamIdOf(root);
+    const agentId = registerAgent(home, {
+      ...init(),
+      reach: { team: teamId, seat: SEAT.name, session: 'acme', pane: 'w36:p1', address: null },
+    }).id;
+    const found = agentIdOf(home, root, SEAT.name);
+    expect(found.agentId).toBe(agentId);
+  });
+
+  test('derives the project and entity the project registry declares', () => {
+    const teamId = teamIdOf(root);
+    registerAgent(home, {
+      ...init(),
+      reach: { team: teamId, seat: SEAT.name, session: 'acme', pane: 'w36:p1', address: null },
+    });
+    upsertProject(home, 'acme', { name: 'Acme', teams: [teamId], entity: 'acme-entity' });
+    const found = agentIdOf(home, root, SEAT.name);
+    expect(found.projectId).toBe('acme');
+    expect(found.entity).toBe('acme-entity');
+  });
+
+  test('a tampered project record refuses the read instead of being skipped', () => {
+    const teamId = teamIdOf(root);
+    registerAgent(home, {
+      ...init(),
+      reach: { team: teamId, seat: SEAT.name, session: 'acme', pane: 'w36:p1', address: null },
+    });
+    upsertProject(home, 'acme', {
+      name: 'Acme',
+      teams: [teamId],
+      settings: {
+        workspace: { value: 'herdr', setter: 'owner', date: '2026-10-19T08:00:00.000Z', target: 'acme', generation: 2, signature: 'cd' },
+      },
+    });
+    const result = read();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusals.map((one) => one.level)).toEqual(['project']);
+    expect(result.refusals[0]!.why).toContain('not a setting of this release');
   });
 });
