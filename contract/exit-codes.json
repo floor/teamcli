@@ -165,6 +165,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.like-exists",
+      "meaning": "the new seat's name is already declared",
+      "trigger": "team add worker --like lead"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.lobby",
       "meaning": "the lobby could not be created for the launch",
       "trigger": "team add worker"
@@ -404,8 +411,8 @@
       "code": 2,
       "command": "add",
       "id": "add.temporary-flags",
-      "meaning": "--like, --until and --worktree need --temporary",
-      "trigger": "team add worker --like lead"
+      "meaning": "--until and --worktree need --temporary",
+      "trigger": "team add worker --until result:out.md"
     },
     {
       "code": 2,

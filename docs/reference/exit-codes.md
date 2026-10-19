@@ -29,6 +29,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
 | `add.herdr` | `add` | 1 | herdr doesn't answer | `team add worker` |
 | `add.human` | `add` | 1 | the named seat is a human's pane | `team add worker` |
+| `add.like-exists` | `add` | 1 | the new seat's name is already declared | `team add worker --like lead` |
 | `add.lobby` | `add` | 1 | the lobby could not be created for the launch | `team add worker` |
 | `add.machine` | `add` | 1 | the machine is over a launch limit | `team add worker` |
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
@@ -63,7 +64,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
 | `add.reserved-name` | `add` | 2 | a new seat may not be named lead | `team add lead` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
-| `add.temporary-flags` | `add` | 2 | --like, --until and --worktree need --temporary | `team add worker --like lead` |
+| `add.temporary-flags` | `add` | 2 | --until and --worktree need --temporary | `team add worker --until result:out.md` |
 | `add.temporary-unexpected` | `add` | 2 | an unexpected argument was passed to --temporary | `team add extra --temporary` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
