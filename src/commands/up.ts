@@ -51,7 +51,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
+import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -1317,6 +1317,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ...(watchFile ? { watchFile } : {}),
     teamFile: loaded.path,
     cliHooks,
+    briefEpochs: currentBriefEpochs(dir, session),
   });
 
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
@@ -1495,32 +1496,27 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
     stampGrantedTrust();
-    // The settings files land before the plan types a line, so every launch carries its flag. A
-    // seat whose file did not land is said once, in the log, and its launch is the plain line.
-    const installed = installCliHooks(dir, session, hookSeats(), { project: team.project, root, home: sources.home });
-    for (const name of Object.keys(cliHooks)) {
-      if (installed[name] === undefined) {
-        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
-      }
-    }
-    cliHooks = installed;
-    const plan = buildPlan();
     // The general seat brief goes first: one signed drop in the folder of every seat this plan
     // launches or relaunches, and of every declared seat the session records no launch of. A seat
     // the state records as already launched, which this run leaves as it is, is left exactly so:
     // no drop and no state entry. A delivery that cannot be written is said and logged, and the
-    // launch goes on; `team check` names the seat with no record.
-    const launchedSeats = plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    // launch goes on; `team check` names the seat with no record. The plan is built here with the
+    // planned settings map — the launch set does not depend on the files — so the claim exists
+    // before the settings files are written below, which name the epoch it was delivered under.
+    const planned = buildPlan();
+    const launchedSeats = planned.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
     const briefSeats = team.seats
       .filter((seat) => launchedSeats.includes(seat.name) || recorded?.seats[seat.name] === undefined)
       .map((seat) => seat.name);
-    const briefs = deliverGeneralBrief({
+    const briefs = deliverBriefForAttribution({
       dir,
       root,
       session,
-      seats: briefSeats,
       home: sources.home,
-      at: (sources.now?.() ?? new Date()).toISOString(),
+      now: sources.now?.() ?? new Date(),
+      team,
+      state: recorded ?? emptySession(),
+      attributed: briefSeats,
     });
     for (const delivery of briefs.deliveries) {
       if (delivery.ok) continue;
@@ -1533,6 +1529,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       stderrLine(`team up: ${said}\n`);
       logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
     }
+    // The settings files land before the plan types a line, so every launch carries its flag. A
+    // seat whose file did not land is said once, in the log, and its launch is the plain line.
+    const installed = installCliHooks(dir, session, hookSeats(), { project: team.project, root, home: sources.home });
+    for (const name of Object.keys(cliHooks)) {
+      if (installed[name] === undefined) {
+        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
+      }
+    }
+    cliHooks = installed;
+    const plan = buildPlan();
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
     resetCliHookState(dir, session, launchedSeats);

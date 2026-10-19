@@ -78,7 +78,7 @@ mcp_inbox:
     - -c
     - 'mcp_servers.team_inbox.command="{command_json}"'
     - -c
-    - 'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}]'
+    - 'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}{epoch_args}]'
 models:
   option:
     - -m

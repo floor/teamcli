@@ -39,7 +39,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
+import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -777,6 +777,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           watchAlive: true,
           teamFile: path,
           cliHooks: plannedCliHooks(dir, session, [planned]),
+          briefEpochs: currentBriefEpochs(dir, session),
           watchLabel: watchLabel(prepared.team.project),
         });
         out.stdout(plainText(formatPlan(preview)));
@@ -880,6 +881,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       watchAlive: true,
       teamFile: path,
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
+      briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(prepared.team.project),
     });
     if (json) {
@@ -974,25 +976,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
-    // The state hook lands before the plan types the launch line. A seat whose settings file did
-    // not land is said once, in the log, and launches with the file's own line.
-    const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat], { project: prepared.team.project, root, home: sources.home });
     const who = describeCaller(caller);
-    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
-      logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
-    }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
-    // The general seat brief goes first, before the plan types a rules line into the new seat's
-    // pane: one signed drop, human seats included. A delivery that cannot be written is said and
-    // logged, and the launch goes on; `team check` names the seat with no record.
-    const briefs = deliverGeneralBrief({
+    // The general seat brief goes first, before the state hook and the plan's rules line: the
+    // claim is written before the hook that resolves it and the signed drop before the launch,
+    // human seats included. A delivery that cannot be written is said and logged, and the launch
+    // goes on; `team check` names the seat with no record.
+    const briefs = deliverBriefForAttribution({
       dir,
       root,
       session,
-      seats: [planSeat.name],
       home: sources.home,
-      at: (sources.now?.() ?? new Date()).toISOString(),
+      now: sources.now?.() ?? new Date(),
+      team: prepared.team,
+      state: readState(dir).sessions[session] ?? emptySession(),
+      attributed: [planSeat.name],
+      broadcast: true,
     });
     for (const delivery of briefs.deliveries) {
       if (delivery.ok) continue;
@@ -1005,6 +1003,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       out.stderr(`team add: ${plainText(said)}\n`);
       logLine(dir, 'add', who, said, sources.now());
     }
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and launches with the file's own line.
+    const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat], { project: prepared.team.project, root, home: sources.home });
+    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
+      logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+    }
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false };

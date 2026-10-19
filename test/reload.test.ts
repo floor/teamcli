@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runReload, USAGE, type ReloadSources } from '../src/commands/reload.ts';
-import { generalBriefId } from '../src/launch/general-brief.ts';
+import { currentBriefClaim, generalBriefBody, generalBriefId } from '../src/launch/general-brief.ts';
 import { RELOAD_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { readRecord } from '../src/send/record.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -585,15 +585,29 @@ describe('team reload', () => {
     expect(doc).not.toHaveProperty('notes');
     // The drop is on disk and the session records the delivery: `team check`'s repair works
     // on a seat whose model, version and effort already match the file.
-    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
-    const looked = readRecord(path, generalBriefId());
-    expect(looked.ok && looked.record?.payload).toMatchObject({ to: 'worker', session: 'alpha' });
-    expect(readState(dir).sessions.alpha?.briefs?.worker).toEqual({ id: generalBriefId(), at: NOW.toISOString() });
+    const claim = currentBriefClaim(readState(dir).sessions.alpha?.briefs?.worker);
+    if (claim === null) throw new Error('the reload recorded no claim');
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', claim.id);
+    const looked = readRecord(path, claim.id);
+    expect(looked.ok && looked.record?.payload).toMatchObject({ to: 'worker', session: 'alpha', incarnation: claim.incarnation });
+    expect(claim.at).toBe(NOW.toISOString());
+    expect(claim.stage).toBe('ready');
   });
 
   test('--json: a brief that cannot be written is a note in the document', async () => {
     remember('worker', 'high');
-    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
+    // The seat's claim is this build's predecessor: a current claim with another text's digest,
+    // so the delivery is due. The next delivery keeps its lifetime and therefore its expected id,
+    // which this test holds with a folder before the run.
+    const incarnation = 'inc_0123456789ab';
+    const epoch = 'run_0123456789ab';
+    updateState(dir, (state) => {
+      const session = (state.sessions.alpha ??= emptySession());
+      session.briefs = {
+        worker: { id: generalBriefId(incarnation, generalBriefBody()), at: NOW.toISOString(), incarnation, epoch, sha256: 'a'.repeat(64), attempt: 0, stage: 'claimed' as const },
+      };
+    });
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId(incarnation, generalBriefBody()));
     mkdirSync(dirname(path), { recursive: true });
     mkdirSync(path);
     const { sources } = harness();

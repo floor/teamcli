@@ -38,7 +38,7 @@ import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, reso
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
+import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
@@ -354,20 +354,32 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     else out.stdout(`team reload: ${said}\n`);
     logLine(dir, 'reload', describeCaller(caller), said, now());
   };
-  // The general seat brief goes to the seat on every path this command reaches it, the paths
-  // that leave it running included: the check names `team reload <seat>` as a repair, so a
-  // reload must deliver the brief even when nothing else drifts. Without a home there is no
-  // message key to sign the record with, so nothing is written.
-  const deliverBrief = (): void => {
+  // The general seat brief goes to the seat on every path this command reaches it: the check
+  // names `team reload <seat>` as a repair, so a reload must deliver the brief even when nothing
+  // else drifts. A relaunch path attributes the seat and gets a fresh delivery lifetime. The two
+  // "already running" paths attribute nobody: the boundary still delivers there when this build's
+  // brief is ahead of the seat's claim, and an idempotent delivery leaves a current claim and its
+  // verified drop as they are. Without a home there is no message key to sign the record with, so
+  // nothing is written.
+  const deliverBrief = (attributed: boolean): void => {
     if (home === undefined) return;
-    const briefs = deliverGeneralBrief({ dir, root, session, seats: [seat.name], home, at: now().toISOString() });
+    const briefs = deliverBriefForAttribution({
+      dir,
+      root,
+      session,
+      home,
+      now: now(),
+      team,
+      state: readState(dir).sessions[session] ?? emptySession(),
+      attributed: attributed ? [seat.name] : [],
+    });
     for (const delivery of briefs.deliveries) {
       if (!delivery.ok) sayBrief(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
     }
     if (briefs.recording !== undefined) sayBrief(`the general seat brief was written and not recorded (${briefs.recording})`);
   };
   if (detail === null && rulesProblem === null && source === null) {
-    deliverBrief();
+    deliverBrief(false);
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
       writeJson(io, 'team.reload', {
@@ -412,7 +424,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         else held.effort = compared.effort;
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
-      deliverBrief();
+      deliverBrief(false);
       if (json) {
         writeJson(io, 'team.reload', {
           format: 1 as const,
@@ -539,6 +551,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         reload: { detail: driftDetail },
       },
     };
+    // The general seat brief goes first, before the state hook and the plan's rules line: the
+    // claim is written before the hook that resolves it and the signed drop before the launch.
+    deliverBrief(true);
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
@@ -555,14 +570,13 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       startWatch: false,
       teamFile: loaded.path,
       cliHooks: installed,
+      briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.
     resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
-    // The general seat brief goes first, before the plan types a rules line into the pane.
-    deliverBrief();
     let closed = false;
     const host: Host = {
       agentList: (current) => launch.agents(current),

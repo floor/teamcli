@@ -16,6 +16,11 @@
 // name a path; a drop or receipt that is a link is refused, never followed.
 import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  GENERAL_BRIEF_FROM,
+  GENERAL_BRIEF_RULE,
+  type CurrentBriefClaim,
+} from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
@@ -284,7 +289,16 @@ export type InboxRefusal = {
 
 export type InboxRead =
   | { ok: true; body: string }
-  | { ok: false; reason: string; refusal?: InboxRefusal };
+  | { ok: false; reason: string; refusal?: InboxRefusal; superseded?: true };
+
+/**
+ * The claim a brief's read is served under. `claim` is resolved again immediately before the
+ * receipt is written, so a delivery that landed while the record was being verified is seen: its
+ * id, incarnation, digest and epoch must all still be the ones the served record names. `epoch`
+ * is the runtime the reader was started under; absent — a manual `team drops --read` — the read
+ * binds the claim it serves, which is the same epoch on the receipt.
+ */
+export type BriefRead = { claim: () => CurrentBriefClaim | null; epoch?: string };
 
 /** The inbox a read serves: the launch's own folder, root, seat and session. */
 export type InboxTarget = { dropDir: string; root: string; seat: string; session: string };
@@ -297,8 +311,18 @@ export type InboxTarget = { dropDir: string; root: string; seat: string; session
  * its seat, session and root — before any body is shown. A file that is not a record, a tampered
  * signature, an absent key and a record bound elsewhere are all refused with no body and no
  * receipt written. The id is a lowercase UUID; no other string reaches the filesystem.
+ *
+ * A record the launch wrote is read only as the seat's **current** brief: when `brief` is given,
+ * the record's sender and rule must be the launch's, and the id, incarnation and delivered
+ * digest on it must be the claim's — resolved again directly before the receipt, so a delivery
+ * that replaced the claim mid-read is not served. An earlier brief is not a refusal: the read
+ * returns `superseded`, writes nothing and moves on. The runtime epoch the reader was started
+ * with (`brief.epoch`) must be the claim's too: a process started under an earlier runtime
+ * serves nothing until its seat is launched again. The receipt carries the claim's binding and
+ * the claim's diagnostics, and a name already held by a file that does not verify for this
+ * claim is refused rather than replaced — only the rollout's recovery may move past it.
  */
-export function readMessage(target: InboxTarget, id: string, home: string): InboxRead {
+export function readMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
   if (!MESSAGE_ID.test(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = join(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
@@ -336,6 +360,28 @@ export function readMessage(target: InboxTarget, id: string, home: string): Inbo
   if (!verifyRecord(looked.record, key.key)) {
     return refused('signature', `message ${JSON.stringify(id)} does not verify against this message key`);
   }
+  // The launch's own record is served only as the seat's current brief. The claim is resolved
+  // again directly before the receipt so a delivery that landed during this read is noticed.
+  const launchRecord = payload.from === GENERAL_BRIEF_FROM && payload.rule === GENERAL_BRIEF_RULE;
+  let binding: { incarnation: string; sha256: string; epoch: string } | undefined;
+  let servedClaim: CurrentBriefClaim | undefined;
+  if (launchRecord) {
+    const claim = brief?.claim() ?? null;
+    const epoch = brief?.epoch ?? claim?.epoch;
+    const serves = claim !== null
+      && claim.id === id
+      && claim.incarnation === payload.incarnation
+      && claim.sha256 === payload.brief_sha256
+      && epoch === claim.epoch;
+    if (!serves) return { ok: false, reason: 'the general seat brief has been superseded by a later delivery', superseded: true };
+    const again = brief?.claim() ?? null;
+    if (again === null || again.id !== claim.id || again.incarnation !== claim.incarnation
+      || again.sha256 !== claim.sha256 || again.epoch !== claim.epoch) {
+      return { ok: false, reason: 'the general seat brief has been superseded by a later delivery', superseded: true };
+    }
+    binding = { incarnation: claim.incarnation, sha256: claim.sha256, epoch: claim.epoch };
+    servedClaim = claim;
+  }
   // The signed status receipt `team messages` also writes: one shape under one name, so `statusOf`,
   // `team drops` and the watch all read it. It is write-once — a second read finds it there and
   // changes nothing, and no read can move the status backward.
@@ -347,9 +393,21 @@ export function readMessage(target: InboxTarget, id: string, home: string): Inbo
     root: target.root,
     session: target.session,
     at: new Date().toISOString(),
+    ...(binding === undefined ? {} : {
+      brief_sha256: binding.sha256,
+      incarnation: binding.incarnation,
+      brief_epoch: binding.epoch,
+      ...(servedClaim?.seat_handle === undefined ? {} : { brief_seat_handle: servedClaim.seat_handle }),
+      ...(servedClaim?.pane_root_pid === undefined ? {} : { brief_pane_root_pid: servedClaim.pane_root_pid }),
+    }),
   };
-  const written = writeReceipt(target.dropDir, signReceiptPayload(receipt, home), home);
-  if (!written.ok) return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
+  const written = writeReceipt(target.dropDir, signReceiptPayload(receipt, home), home, binding);
+  if (!written.ok) {
+    if (written.reason === 'the read receipt name is held by a file that does not verify for this brief') {
+      return { ok: false, reason: written.reason };
+    }
+    return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
+  }
   return { ok: true, body: payload.body };
 }
 

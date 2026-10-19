@@ -29,6 +29,8 @@ import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import type { CliHookReading } from '../labels/state.ts';
 import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
+import { readState } from '../state.ts';
+import { currentBriefClaim } from './general-brief.ts';
 import {
   commandGuardAvailable, commandGuardEntry, commandGuardHookCommand, type CommandGuardContext,
 } from './command-guard.ts';
@@ -185,11 +187,14 @@ const LANDING_ESCAPER = (() => {
  * `additionalContext` object the CLI reads. A read that fails or finds nothing prints no object
  * at all. The body is read from the runner's stdout and escaped here, so a body holding quotes,
  * backslashes or control bytes cannot break the JSON; a pipe that fails still prints nothing.
+ * `epoch`, when the launch has written the seat's claim, is the runtime the read is bound to: the
+ * hook then serves only a brief delivered under the same epoch.
  */
-function dropReadCommand(seat: string, session: string): string {
+function dropReadCommand(seat: string, session: string, epoch?: string): string {
   const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
+  const bound = epoch === undefined ? '' : ` --epoch ${shellQuote(epoch)}`;
   return [
-    `ctx=$(${dropReadRunner()} --seat ${shellQuote(seat)} --session ${shellQuote(session)} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
+    `ctx=$(${dropReadRunner()} --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
     `if [ -n "$ctx" ]; then printf ${envelope} "$ctx"; fi`,
   ].join('\n');
 }
@@ -199,13 +204,13 @@ function dropReadCommand(seat: string, session: string): string {
  *  PreToolUse command guard. Two commands share `UserPromptSubmit`: the state word first, so a
  *  read that takes a moment still leaves the seat reading `working`, then the folder read whose
  *  stdout the CLI adds to the turn. */
-export function cliHookSettings(statePath: string, drops?: { seat: string; session: string }, guard?: string): string {
+export function cliHookSettings(statePath: string, drops?: { seat: string; session: string; epoch?: string }, guard?: string): string {
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
   const start: unknown[] = [hook('working')];
   if (drops) {
-    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session) }] });
+    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session, drops.epoch) }] });
   }
   const hooks: Record<string, unknown> = {};
   if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
@@ -282,10 +287,21 @@ function writeSettings(path: string, text: string): boolean {
   }
 }
 
+/** The runtime epoch the seat's current claim names, when this run has written one. A state
+ *  file that cannot be read has no claim to bind: the hook then reads the claim it serves. */
+function claimEpochAt(dir: string, session: string, seat: string): string | undefined {
+  try {
+    return currentBriefClaim(readState(dir).sessions[session]?.briefs?.[seat])?.epoch;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Installs one settings file per planned seat. Returns the settings path of every seat whose
  *  file landed; a seat that failed is absent, and its launch goes without the flag. A claude-code
  *  seat's file also carries the PreToolUse command guard when the caller hands the context the
- *  refusal event is raised with — every launch path (`up`, `add`, `restart`, `reload`) does. */
+ *  refusal event is raised with — every launch path (`up`, `add`, `restart`, `reload`) does. A
+ *  seat whose brief this run delivered names the claim's epoch on its turn-start read. */
 export function installCliHooks(
   dir: string,
   session: string,
@@ -305,7 +321,8 @@ export function installCliHooks(
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
     if (statePath === null) continue;
-    const drops = { seat, session };
+    const epoch = claimEpochAt(dir, session, seat);
+    const drops = { seat, session, ...(epoch === undefined ? {} : { epoch }) };
     const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
     if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command))) continue;
     landed[seat] = settingsPath;

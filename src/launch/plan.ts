@@ -321,6 +321,12 @@ export interface UpInput {
    */
   cliHooks?: Readonly<Record<string, string>>;
   /**
+   * The runtime epoch each seat's general brief was delivered under, by seat name, when this run
+   * wrote a claim. A launch-line inbox route names it to the server, so the server serves only
+   * that delivery. Absent on a dry run, and for a seat this run delivered no brief to.
+   */
+  briefEpochs?: Readonly<Record<string, string>>;
+  /**
    * The team file this run read and validated, as its absolute path. A seat's folder may be a
    * lobby with no team file, so the launch's inbox registration and the server it names are told
    * this file. Absent on a plan built by hand, whose launches register from the seat's folder.
@@ -626,6 +632,7 @@ export function upPlan(input: UpInput): Step[] {
       session,
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
+      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
     }, seat.sessionName);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.

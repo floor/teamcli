@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import { PROFILES } from '../src/clis.ts';
 import type { Io } from '../src/io.ts';
-import { deliverGeneralBrief } from '../src/launch/general-brief.ts';
+import { currentBriefClaim, deliverBriefForAttribution } from '../src/launch/general-brief.ts';
 import { rulesText } from '../src/launch/rules.ts';
+import { readMessage } from '../src/mcp/inbox.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import { signedRecordOf, type SignedRecord } from '../src/send/record.ts';
-import { updateState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 
 /** The signed record at `path`, parsed: a test that asserts the message's body asserts the
  *  record's payload, never the envelope's bytes. Throws when the file is not a record. */
@@ -25,8 +27,10 @@ export function recordBody(path: string): string {
 
 /**
  * The launch's own general-brief delivery, for a fixture whose state records launched seats: one
- * signed record in each seat's drop folder and the session's `briefs` entry, exactly as `team up`
- * leaves them before it types. Throws when a delivery did not land, so a fixture never stands on
+ * claim in the session, one signed record in each seat's drop folder and the state's `briefs`
+ * entry, exactly as `team up` leaves them before it types. Each CLI seat then reads its brief the
+ * way its first turn's reader does, leaving the receipt bound to the claim, so the fixture stands
+ * where a settled team stands. Throws when a delivery did not land, so a fixture never stands on
  * a half-made world.
  */
 export function deliverBriefs(input: {
@@ -36,11 +40,34 @@ export function deliverBriefs(input: {
   seats: readonly string[];
   home: string;
   at?: string;
+  /** `false` leaves the drops unread: a launch that never reached the seat's first turn. */
+  read?: false;
 }): void {
-  const report = deliverGeneralBrief(input);
+  const report = deliverBriefForAttribution({
+    dir: input.dir,
+    root: input.root,
+    session: input.session,
+    home: input.home,
+    now: input.at === undefined ? new Date() : new Date(input.at),
+    team: { seats: input.seats.map((name) => ({ name })) },
+    state: readState(input.dir).sessions[input.session] ?? emptySession(),
+    attributed: input.seats,
+  });
   const failed = report.deliveries.filter((delivery) => !delivery.ok);
   if (failed.length > 0 || report.recording !== undefined) {
     throw new Error(`the fixture's briefs were not delivered: ${JSON.stringify(report)}`);
+  }
+  for (const delivery of report.deliveries) {
+    if (!delivery.ok || input.read === false) continue;
+    const target = {
+      dropDir: join(input.root, '.agents', 'send-drops', input.session, delivery.seat),
+      root: input.root,
+      seat: delivery.seat,
+      session: input.session,
+    };
+    const claimOf = () => currentBriefClaim(readState(input.dir).sessions[input.session]?.briefs?.[delivery.seat]);
+    const read = readMessage(target, delivery.id, input.home, { claim: claimOf });
+    if (!read.ok) throw new Error(`the fixture's brief was not read: ${read.reason}`);
   }
 }
 

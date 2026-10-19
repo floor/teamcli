@@ -11,6 +11,7 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
+import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
@@ -27,7 +28,7 @@ import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
-import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
+import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import {
@@ -62,14 +63,16 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
-import { recordHolds } from '../send/record.ts';
+import { recordHolds, receiptFile, receiptHolds } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
+import { heldAt } from '../launch/rules-file.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
+import { messageKeyState } from '../store/keys.ts';
 import type { Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
@@ -313,12 +316,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   );
   const provenance = devModeDifferences(team, root, sources.home, quiet);
   const attention = attentionDifferences(team, state, live, sources.now());
+  const briefs = generalBriefDifferences(team, state, root, sources.home, session);
   comparison.differences = orderAndAnnotateDifferences([
     // A seat the check names itself in its own stuck-prompt line is not named again in
     // `compare()`'s plain words: one line per held seat, the richer one.
     ...comparison.differences.filter((difference) => difference.promptSeat === undefined || !attention.named.has(difference.promptSeat)),
     ...signingDifferences(team, state, live, root, sources.home),
-    ...generalBriefDifferences(team, state, root, sources.home, session),
+    ...briefs.differences,
     ...provenance.differences,
     ...attention.differences,
     ...labelDifferences(team, state, live),
@@ -378,6 +382,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       notes,
       differences: differences.map(toJsonDifference),
       summary: summaryCounts(differences),
+      ...(briefs.stale ? { hint: ROLLOUT_HINT } : {}),
     });
   } else {
     const style = ttyStyle(io);
@@ -386,6 +391,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     for (const line of repaired) io.stdout(`repaired: ${line}\n`);
     for (const line of renderNotes(notes, { home: sources.home })) io.stdout(`${line}\n`);
     for (const line of renderDifferences(differences, style, sources.home)) io.stdout(`${line}\n`);
+    // One line, once, after the per-seat lines: this build's brief is ahead of a seat's claim,
+    // and the rollout is the repair that delivers it to every live seat. The exit stays as it is.
+    if (briefs.stale) io.stdout(`${ROLLOUT_HINT}\n`);
     io.stdout(`${renderSummary(differences)}\n`);
   }
   if (differences.length > 0) {
@@ -689,15 +697,22 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
   return out;
 }
 
+/** The one line the check prints when this build's brief is ahead of any declared seat's claim:
+ *  the rollout is the repair that delivers it to every live seat, once per run. */
+export const ROLLOUT_HINT = 'run team brief rollout --apply to deliver the general seat brief to every live seat';
+
 /**
  * The general seat brief every launch delivers first, by drop. A session that has launched a seat,
- * or recorded a delivery, is a session whose seats were due the brief: one with no record under
- * `briefs` never received it. A recorded delivery is a claim about a file, so the file is checked,
- * not the claim: the record at the current brief's id must be this brief and this checkout's
- * message key must have signed it. A state entry naming anything else is a delivery that does not
- * verify. The repair is the one both delivering paths answer to — `reload` for a CLI seat, `up`
- * for a human's, where reload refuses to touch the pane. A seat the comparison already names as
- * not running is left to that difference: its launch is its repair.
+ * or recorded a delivery, is a session whose seats were due the brief. The claim is what the check
+ * reads first: no claim, or one an older build wrote without the delivery lifetime, is a seat
+ * that has not been delivered. A current claim is checked against the file it names — a missing
+ * record is a delivery that never landed; an existing one that does not verify for the claim
+ * (another text, lifetime, epoch binding, a planted file, a link) is a delivery record that does
+ * not verify, and only the rollout's recovery may move past it. A CLI seat then needs read
+ * evidence binding the claim; a human seat is delivery-only. Every repair is one the delivering
+ * paths answer to, and the read repairs never waive the requirement: a seat whose launch installed
+ * no reader is told how to read by hand and how to install one. The returned `stale` flag is the
+ * one rollout hint the caller prints, once, when this build is ahead of any seat's claim.
  */
 function generalBriefDifferences(
   team: TeamFile,
@@ -705,26 +720,127 @@ function generalBriefDifferences(
   root: string,
   home: string | undefined,
   session: string,
-): Difference[] {
-  if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return [];
+): { differences: Difference[]; stale: boolean } {
+  if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return { differences: [], stale: false };
   const out: Difference[] = [];
+  let stale = false;
+  const key = home === undefined ? null : messageKeyState(home);
   for (const seat of team.seats) {
     const recorded = state.briefs?.[seat.name];
-    const repair = seat.human === true ? 'team up' : `team reload ${seat.name} or team up`;
-    if (recorded === undefined) {
-      if (seat.human !== true && state.seats[seat.name] === undefined) continue;
+    const running = state.seats[seat.name] !== undefined;
+    const human = seat.human === true;
+    const repair = human ? 'team up' : `team reload ${seat.name} or team up`;
+    const claim = currentBriefClaim(recorded);
+    if (claim === null) {
+      stale = true;
+      // A CLI seat this session never launched has no delivery due yet: its launch is its repair,
+      // and the comparison already names the launch if one was due.
+      if (recorded === undefined && !running && !human) continue;
       out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
       continue;
     }
-    // Without a home there is no message key to verify with; the entry stands as before.
-    if (home === undefined) continue;
-    const id = generalBriefId();
-    const expected = generalBriefRecord({ to: seat.name, root, session, at: recorded.at });
-    const path = join(root, '.agents', 'send-drops', session, seat.name, id);
-    if (recorded.id === id && recordHolds(path, expected, home)) continue;
-    out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });
+    if (claim.sha256 !== GENERAL_BRIEF_SHA256) stale = true;
+    if (home === undefined) {
+      // Without a home there is no message key to verify a signature with. A claim that is behind
+      // this build is still a delivery the seat does not have; a current one stands as recorded.
+      if (claim.sha256 !== GENERAL_BRIEF_SHA256) {
+        out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
+      }
+      continue;
+    }
+    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const expected = {
+      ...generalBriefRecord({
+        to: seat.name,
+        root,
+        session,
+        at: claim.at,
+        incarnation: claim.incarnation,
+        attempt: claim.attempt,
+      }),
+      // The claim's id is the delivered body's id: a handover variant is still the claim's record,
+      // and the canonical digest it carries is what ties the text to this build.
+      id: claim.id,
+      thread: claim.id,
+    };
+    const path = join(dropDir, claim.id);
+    if (heldAt(path).kind === 'missing') {
+      out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
+      continue;
+    }
+    if (!recordHolds(path, expected, home, { body: false, to_id: false })) {
+      out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });
+      continue;
+    }
+    if (human) continue;
+    if (key === null || key.kind !== 'key') continue;
+    const context = { to: seat.name, root, session };
+    const binding = briefBindingOf(claim);
+    const readVerified = receiptHolds(receiptFile(dropDir, claim.id, 'read'), claim.id, 'read', context, key.key, binding)
+      || receiptHolds(receiptFile(dropDir, claim.id, 'replied'), claim.id, 'replied', context, key.key, binding);
+    // A delivery is a file fact and never implies a successful attribution: a seat whose launch
+    // did not reach ready keeps its launch difference, and the read is not demanded of it. A read
+    // that arrived before readiness is provisional — the runtime it came from is not confirmed.
+    if (state.seats[seat.name]?.stage !== 'ready') {
+      out.push({
+        what: `${seat.name}: the general seat brief has been delivered; launch not ready`,
+        repair: `the launch's repair runs first; the seat's next turn reads it`,
+      });
+      if (readVerified) {
+        out.push({
+          what: `${seat.name}: a read happened before readiness; the runtime is not confirmed`,
+          repair: `the launch's repair runs first`,
+        });
+      }
+      continue;
+    }
+    if (readVerified) continue;
+    const readRepair = `the seat's next turn reads it; team reload ${seat.name} delivers it again`;
+    const watcher = state.seats[seat.name]?.watcher;
+    const readerRepair = watcher === undefined || watcher === 'none'
+      ? `${readRepair}; no turn-start reader is installed: the seat reads it with team drops --read --seat ${seat.name}, or team reload ${seat.name} installs the launch's hooks`
+      : readRepair;
+    const readHeld = heldAt(receiptFile(dropDir, claim.id, 'read')).kind;
+    const repliedHeld = heldAt(receiptFile(dropDir, claim.id, 'replied')).kind;
+    if (readHeld !== 'missing' || repliedHeld !== 'missing') {
+      out.push({
+        what: `${seat.name}: the general seat brief's read receipt does not verify`,
+        repair: 'team brief rollout --apply recovers this seat at a new id; the file that does not verify is left in place',
+      });
+      continue;
+    }
+    if (olderReadReceipt(dropDir, claim.id, context, key.key)) {
+      out.push({ what: `${seat.name}: the general seat brief's read receipt is stale (an earlier agent or an earlier text)`, repair: readerRepair });
+      continue;
+    }
+    out.push({ what: `${seat.name}: the general seat brief has been delivered and not read`, repair: readerRepair });
   }
-  return out;
+  return { differences: out, stale };
+}
+
+/** Whether this seat's folder holds a signed read receipt for another message: the read an
+ *  earlier agent or an earlier text left, which no longer binds the current claim. */
+function olderReadReceipt(
+  dropDir: string,
+  claimId: string,
+  context: { to: string; root: string; session: string },
+  key: Parameters<typeof receiptHolds>[4],
+): boolean {
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(read|replied)\.json$/.exec(name);
+    if (match === null) continue;
+    const id = match[1]!;
+    if (id === claimId) continue;
+    const status = match[2] as 'read' | 'replied';
+    if (receiptHolds(join(dropDir, name), id, status, context, key)) return true;
+  }
+  return false;
 }
 
 // The kinds the check names for a seat held at a prompt, in the words the brief gives them:

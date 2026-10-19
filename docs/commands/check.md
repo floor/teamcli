@@ -132,7 +132,7 @@ meet the refusal every command gives them and exit 1.
 ## Example
 
 ```fixture
-briefs: delivered
+briefs: delivered-and-read
 ```
 
 ```yaml file=.agents/team.yaml

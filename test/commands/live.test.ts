@@ -22,7 +22,7 @@ import { readScreen, type Screen } from '../../src/watch/screen.ts';
 import { beginSession, readStoreSessions, sessionsPath } from '../../src/sessions/registry.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
-import { generalBriefId } from '../../src/launch/general-brief.ts';
+import { GENERAL_BRIEF_SHA256, currentBriefClaim, generalBriefBody, generalBriefId } from '../../src/launch/general-brief.ts';
 import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
@@ -1477,10 +1477,38 @@ describe('team up, live', () => {
   /** The seats the fixture's file declares: its own four, and the counted second deepseek. */
   const BRIEFED_SEATS = ['claude-coordinator-acme', 'codex-acme', 'deepseek-acme', 'deepseek-acme-2', 'grok-acme'];
 
-  /** The session's `briefs` map as the launch's one delivery leaves it: one entry per seat, the
-   *  id the brief's text derives, and the run's own time. */
+  /** The session's `briefs` map as a session delivered under this build leaves it: a current
+   *  claim per seat, its id derived from the text, and the run's own time. */
   function briefs() {
-    return Object.fromEntries(BRIEFED_SEATS.map((seat) => [seat, { id: generalBriefId(), at: NOW.toISOString() }]));
+    const incarnation = 'inc_0123456789ab';
+    const epoch = 'run_0123456789ab';
+    const id = generalBriefId(incarnation, generalBriefBody());
+    return Object.fromEntries(BRIEFED_SEATS.map((seat) => [seat, {
+      id,
+      at: NOW.toISOString(),
+      incarnation,
+      epoch,
+      sha256: GENERAL_BRIEF_SHA256,
+      attempt: 0,
+      stage: 'ready' as const,
+    }]));
+  }
+
+  /** The scene's state after the run: the incident seat's own record is held still, and every
+   *  seat holds a current claim — a delivery mints a fresh lifetime, so the claims are read as
+   *  claims rather than compared byte for byte. */
+  function expectStateHeld(): void {
+    const after = JSON.parse(readFileSync(join(root, '.agents', 'team.state.json'), 'utf8')) as {
+      sessions: Record<string, { seats: unknown; worktrees: unknown; watch: unknown }>;
+    };
+    const expected = JSON.parse(JSON.stringify(namedState())) as { sessions: Record<string, { seats: unknown; worktrees: unknown; watch: unknown }> };
+    expect(after.sessions['acme-web']?.seats).toEqual(expected.sessions['acme-web']?.seats);
+    expect(after.sessions['acme-web']?.worktrees).toEqual(expected.sessions['acme-web']?.worktrees);
+    expect(after.sessions['acme-web']?.watch).toEqual(expected.sessions['acme-web']?.watch);
+    const claims = readState(join(root, '.agents')).sessions['acme-web']?.briefs ?? {};
+    for (const seat of BRIEFED_SEATS) {
+      expect(currentBriefClaim(claims[seat])).not.toBeNull();
+    }
   }
 
   function namedState() {
@@ -1533,7 +1561,7 @@ describe('team up, live', () => {
     );
     expect(sent).toEqual([]);
     expect(made.closes).toEqual([]);
-    expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
+    expectStateHeld();
   });
 
   test("the incident's other face: a box holding the CLI's own exit text is named, not typed onto", async () => {
@@ -1556,7 +1584,7 @@ describe('team up, live', () => {
     );
     expect(sent).toEqual([]);
     expect(made.closes).toEqual([]);
-    expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
+    expectStateHeld();
   });
 
   test('a named seat whose box is empty and idle is delivered to on the next up', async () => {
@@ -1654,7 +1682,7 @@ describe('team up, live', () => {
     // key — the box is read again after it, to the deadline, and nothing else is ever typed.
     expect(sent).toEqual(['Enter']);
     expect(again.closes).toEqual([]);
-    expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
+    expectStateHeld();
     const enter = calls.indexOf('pressEnter w2:p1');
     expect(enter).toBeGreaterThan(-1);
     expect(calls.slice(0, enter + 1)).toEqual([

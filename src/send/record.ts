@@ -389,16 +389,25 @@ export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWr
  * Whether the record at `path` is the one `expected` names: every field but `at` is the same —
  * `at` is the record's own time, so a re-run at a later clock leaves a delivered record as it
  * is — the checkout folders resolve to one, and this checkout's message key signed it. A link,
- * a folder or another user's file is not a record and never verifies.
+ * a folder or another user's file is not a record and never verifies. `body: false` leaves the
+ * body out of the comparison: a seat the launch replaced receives the brief with a handover
+ * sentence the reader of the claim cannot know, so the delivered body is pinned by the claim's
+ * id instead — the id hashes exactly the text that was written. `to_id: false` leaves the
+ * registry's id out: a record delivered before the seat's agent was registered is still that
+ * seat's brief after the launch registers it, and the signature is what proves who wrote it.
  */
-export function recordHolds(path: string, expected: RecordPayload, home: string): boolean {
+export function recordHolds(path: string, expected: RecordPayload, home: string, options?: { body?: false; to_id?: false }): boolean {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return false;
   const read = readRecord(path, expected.id);
   if (!read.ok || read.record === null) return false;
   const held = read.record.payload;
   const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'in_reply_to', 'brief_sha256', 'incarnation'] as const;
-  for (const field of fields) if (held[field] !== expected[field]) return false;
+  for (const field of fields) {
+    if (field === 'body' && options?.body === false) continue;
+    if (field === 'to_id' && options?.to_id === false) continue;
+    if (held[field] !== expected[field]) return false;
+  }
   if (!sameFolder(held.root, expected.root)) return false;
   return verifyRecord(read.record, key.key);
 }

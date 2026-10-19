@@ -84,6 +84,7 @@ mcp_inbox:
     - serve
     - --seat
     - '{seat}'
+    - '{epoch}'
     - --session
     - '{session}'
     - '{file}'

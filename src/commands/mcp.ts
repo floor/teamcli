@@ -36,7 +36,7 @@ import {
 
 export const USAGE = `Usage: team mcp status [--json]
        team mcp doctor [--json]
-       team mcp serve --seat <seat> [--session <session>] [--file <path>]
+       team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 Read-only: reports the MCP bridge's state and diagnoses what is missing.
 \`status\` prints one table per leg and the state they add up to; \`doctor\`
 turns the same surface into findings, each missing one with a one-line fix.
@@ -53,7 +53,9 @@ Its stdout carries JSON-RPC lines only. --seat is required; --session
 defaults to the team's session and must match it. --file is the team file
 the seat's launch read: a seat that starts in a lobby has none in its
 folder, so its registration names the launch's file and the server reads
-that. It exits 0 when stdin closes and 2 when the invocation or the team
+that. --epoch is the runtime epoch the launch registered the seat under: a
+server that has one serves only a brief delivered under that same epoch.
+It exits 0 when stdin closes and 2 when the invocation or the team
 placement can't be read.
 
 Exits 0 when every observed leg is up (status) or nothing is missing (doctor),
@@ -1085,7 +1087,7 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
 }
 
 export async function runMcp(argv: string[], io: Io, sources: McpSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'file'], ['json']);
+  const args = readArgs(argv, ['seat', 'session', 'file', 'epoch'], ['json']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
@@ -1104,7 +1106,7 @@ export async function runMcp(argv: string[], io: Io, sources: McpSources = realS
     if (args.flags.has('json')) return fail('unknown option --json');
     if (args.values.seat === undefined) return fail('--seat <seat> is required');
     if (args.rest.length > 1) return fail(`unexpected ${JSON.stringify(args.rest[1] as string)}`);
-    return runMcpServe({ seat: args.values.seat, session: args.values.session, ...(args.values.file === undefined ? {} : { file: args.values.file }) }, io);
+    return runMcpServe({ seat: args.values.seat, session: args.values.session, ...(args.values.file === undefined ? {} : { file: args.values.file }), ...(args.values.epoch === undefined ? {} : { epoch: args.values.epoch }) }, io);
   }
   // The two reports name no seat, so a launch option on them is the invocation error, not a
   // silent no-op.
@@ -1114,7 +1116,9 @@ export async function runMcp(argv: string[], io: Io, sources: McpSources = realS
       ? 'session'
       : args.values.file !== undefined
         ? 'file'
-        : null;
+        : args.values.epoch !== undefined
+          ? 'epoch'
+          : null;
   if (stray !== null) return fail(`unknown option --${stray}`);
   if (sub !== 'status' && sub !== 'doctor') {
     return fail(sub === undefined ? 'a subcommand is required: status, doctor or serve' : `unknown subcommand ${JSON.stringify(sub)}`);

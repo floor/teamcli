@@ -28,9 +28,12 @@ import {
 } from '../caller.ts';
 import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
+import { isBriefEpoch } from '../launch/brief-id.ts';
+import { currentBriefClaim } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
-import { listUnread, readMessage } from '../mcp/inbox.ts';
+import { listUnread, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { readState } from '../state.ts';
 import {
   contextLine,
   hasJsonFlag,
@@ -45,7 +48,7 @@ import { isRead, signedRecordOf, verifyRecord, type StatusContext } from '../sen
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
-       team drops --read --seat <seat> [--session <session>]
+       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]
 
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
@@ -61,13 +64,17 @@ Options:
              it and --follow can't be used together
   --read     hand the seat's waiting messages to a turn: each record is
              verified with the message key, its signed <id>.read.json receipt
-             is written before its body is printed, and at most ten are read a
-             run. The seat and session are the launch's, as with
+             is written before its body is printed, and at most ten bodies are
+             read a run. The seat and session are the launch's, as with
              \`team mcp serve\`: --seat is required and --session, when given,
-             must be the team file's. The launch's turn-start hook runs this,
-             so it takes no placed caller.
+             must be the team file's. A record the launch wrote is served only
+             as the seat's current general brief; an earlier delivery is
+             skipped, never shown. The launch's turn-start hook runs this, so
+             it takes no placed caller.
   --seat     the seat whose folder --read serves
   --session  the launch's session, which must be the team file's own
+  --epoch    the runtime epoch the launch started this reader under; when
+             given, only a brief delivered under that epoch is served
 
 Exits 0 when the folder is read, 1 when the caller is not a placed seat of this
 team, the team file can't be read, or the drop folder can't be read or a
@@ -123,8 +130,10 @@ function defaultPoll(): Promise<boolean> {
 
 export const realSources: DropsSources = { home: homedir(), poll: () => defaultPoll() };
 
-/** How many messages one `--read` hands over. A bounded batch keeps a turn from carrying an
- *  unbounded folder; whatever is left waits for the next turn, oldest first. */
+/** How many bodies one `--read` hands over. A bounded batch keeps a turn from carrying an
+ *  unbounded folder; whatever is left waits for the next turn, oldest first. A record that is
+ *  malformed, or an earlier delivery of the general seat brief, is not a body and does not use
+ *  one of the ten. */
 export const DROP_READ_BATCH = 10;
 
 /** Whether every step down to the seat's drop folder is a real folder of this user's. A step
@@ -273,7 +282,7 @@ function refuse(io: Io, json: boolean, message: string): number {
  * the ones already there, so a Monitor starts quiet.
  */
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session'], ['follow', 'json', 'read']);
+  const args = readArgs(argv, ['seat', 'session', 'epoch'], ['follow', 'json', 'read']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
@@ -281,16 +290,23 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const read = args.flags.has('read');
   // A launch option names a seat without the reading that serves one: no `--read` uses it, so it
   // is an invocation error rather than a silent no-op.
-  const stray = !read && args.values.seat !== undefined ? 'seat' : !read && args.values.session !== undefined ? 'session' : null;
-  if (args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null) {
+  const stray = !read && args.values.seat !== undefined
+    ? 'seat'
+    : !read && args.values.session !== undefined
+      ? 'session'
+      : !read && args.values.epoch !== undefined ? 'epoch' : null;
+  const epoch = args.values.epoch;
+  const badEpoch = read && epoch !== undefined && !isBriefEpoch(epoch);
+  if (args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
     const problem = args.error
       ?? (args.rest.length ? `unexpected "${args.rest[0] ?? ''}"`
         : stray !== null ? `unknown option --${stray}`
-          : read
-            ? (follow ? '--read and --follow cannot be used together'
-              : json ? '--read and --json cannot be used together'
-                : '--read needs --seat <seat>')
-            : "--follow and --json can't be used together");
+          : badEpoch ? `--epoch ${JSON.stringify(epoch)} is not a runtime epoch`
+            : read
+              ? (follow ? '--read and --follow cannot be used together'
+                : json ? '--read and --json cannot be used together'
+                  : '--read needs --seat <seat>')
+              : "--follow and --json can't be used together");
     if (json) {
       writeJsonError(io, 'drops.invocation', problem, null);
     } else {
@@ -344,13 +360,30 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     }
     const dropDir = join(dir, 'send-drops', readSession, seatName);
     const context: StatusContext = { to: seatName, root: loaded.root, session: readSession };
+    // The launch's own brief is served under the claim the seat's state holds now. A reader the
+    // launch started under an epoch serves only a brief delivered under that same runtime; a
+    // manual read has none and binds the claim it serves.
+    const claimOf = () => {
+      try {
+        return currentBriefClaim(readState(dir).sessions[readSession]?.briefs?.[seatName]);
+      } catch {
+        return null;
+      }
+    };
+    const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
     const waiting = listUnread(dropDir, context, sources.home);
     const bodies: string[] = [];
+    let superseded = 0;
     let refusal: string | null = null;
-    for (const message of waiting.slice(0, DROP_READ_BATCH)) {
-      const got = readMessage({ dropDir, root: loaded.root, seat: seatName, session: readSession }, message.id, sources.home);
+    for (const message of waiting) {
+      if (bodies.length >= DROP_READ_BATCH) break;
+      const got = readMessage({ dropDir, root: loaded.root, seat: seatName, session: readSession }, message.id, sources.home, brief);
       if (got.ok) {
         bodies.push(got.body);
+      } else if (got.superseded === true) {
+        // An earlier delivery of the general seat brief: not a body, not a refusal, and it does
+        // not use one of the ten this run hands over.
+        superseded += 1;
       } else {
         if (got.refusal !== undefined) {
           // The owner hears the rule and the object — the record's id, its seat and its path —
@@ -375,6 +408,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       // turn; the rest wait for the next. The refusal is the folder's own: the same exit the
       // listing answers with, marked once by `refuse`.
       return refuse(io, json, refusal);
+    }
+    if (bodies.length === 0 && superseded > 0) {
+      // Nothing this run can serve: every waiting launch record is an earlier delivery. The read
+      // is done with them, and a turn that ran the hook should not look like one with mail.
+      io.stderr(`team drops: ${String(superseded)} drop(s) carry an earlier general seat brief and are not served\n`);
     }
     return readOk();
   }

@@ -18,6 +18,7 @@ import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { seatIsStopped, takeOut } from '../../src/file/lines.ts';
+import { currentBriefClaim } from '../../src/launch/general-brief.ts';
 import { writePolicySet } from '../../src/policy/index.ts';
 import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
@@ -1135,13 +1136,30 @@ describe('team add', () => {
       // The launch delivered the general brief before it typed: the seat's record and its state entry.
       deliverBriefs({ dir: join(project, '.agents'), root: project, session: 'acme', seats: ['worker'], home, at: NOW.toISOString() });
       const before = readFileSync(join(project, '.agents/team.state.json'), 'utf8');
+      const beforeState = readState(join(project, '.agents'));
       const made = world();
       const closes: string[] = [];
       made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
       const listed: HerdrAgent = { name: 'worker', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null };
       made.launch.agents = () => [listed];
       made.launch.paneText = () => IDLE;
-      return { made, closes, listed, before };
+      return { made, closes, listed, before, beforeState };
+    }
+
+    /** A refusal the run reaches after the delivery went out: the seats and the work trees stand
+     *  as they were, and the seat's new claim is the delivery's own fresh lifetime, holding the
+     *  first id as superseded. The brief is a file fact, not a claim of launch. */
+    function expectDeliveredAndLeft(before: ReturnType<typeof readState>) {
+      const after = readState(join(project, '.agents'));
+      expect(after.sessions.acme?.seats).toEqual(before.sessions.acme?.seats);
+      expect(after.sessions.acme?.worktrees).toEqual(before.sessions.acme?.worktrees);
+      const held = currentBriefClaim(after.sessions.acme?.briefs?.worker);
+      const was = currentBriefClaim(before.sessions.acme?.briefs?.worker);
+      expect(held).not.toBeNull();
+      expect(was).not.toBeNull();
+      expect(held!.id).not.toBe(was!.id);
+      expect(held!.incarnation).not.toBe(was!.incarnation);
+      expect(held!.superseded).toContain(was!.id);
     }
 
     test('agent list binding failed', async () => {
@@ -1309,7 +1327,7 @@ describe('team add', () => {
     });
 
     test('an unrecognised screen still names abandon when the pane is the seat\'s again', async () => {
-      const { made, closes, listed, before } = setupReadySeat();
+      const { made, closes, listed, beforeState } = setupReadySeat();
       let reads = 0;
       made.launch.processInfo = () => {
         reads += 1;
@@ -1327,11 +1345,11 @@ describe('team add', () => {
       expect(io.out).not.toContain("worker: its pane is the seat's again; left as it is\n");
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
-      expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
+      expectDeliveredAndLeft(beforeState);
     });
 
     test('restarts to same between plan and close', async () => {
-      const { made, closes, listed, before } = setupReadySeat();
+      const { made, closes, listed, beforeState } = setupReadySeat();
       let reads = 0;
       made.launch.processInfo = () => {
         reads += 1;
@@ -1348,7 +1366,7 @@ describe('team add', () => {
       expect(io.out).not.toContain("worker: its pane is the seat's again; left as it is\n");
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
-      expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
+      expectDeliveredAndLeft(beforeState);
     });
   });
 });

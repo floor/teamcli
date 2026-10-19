@@ -32,7 +32,7 @@ import { runRename } from '../../src/commands/rename.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
-import { deliverGeneralBrief } from '../../src/launch/general-brief.ts';
+import { deliverBriefForAttribution } from '../../src/launch/general-brief.ts';
 import { signRecord } from '../../src/send/record.ts';
 import { runList } from '../../src/commands/list.ts';
 import { runSeats } from '../../src/commands/seats.ts';
@@ -61,7 +61,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { installKey } from '../../src/store/keys.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Io } from '../../src/io.ts';
-import { emptySession, updateState } from '../../src/state.ts';
+import { emptySession, readState, updateState } from '../../src/state.ts';
 import { blocksOf, EXIT_SUFFIX, transcript, type Block } from './blocks.ts';
 import { createFixture, type Fixture } from './fixture.ts';
 import { DEFAULT_SPEC, specOf, type ScreenKind, type Spec, type ToolState } from './spec.ts';
@@ -230,16 +230,34 @@ async function setup(page: Page): Promise<void> {
   installKey(fixture.home, JSON.parse(readFileSync(new URL('../fixtures/key.json', import.meta.url), 'utf8')));
 
   // A page that says its seats were launched has their brief too: the launch writes it into every
-  // declared seat's drop folder before it types, and records it in the state.
-  if (page.spec.briefs === 'delivered' && page.team) {
-    deliverGeneralBrief({
+  // declared seat's drop folder before it types, and records the claim in the state. A page that
+  // says the seats also read it has the receipt each CLI seat's turn-start reader leaves, written
+  // through the read path itself.
+  if ((page.spec.briefs === 'delivered' || page.spec.briefs === 'delivered-and-read') && page.team) {
+    deliverBriefForAttribution({
       dir,
       root: fixture.root,
       session: page.session,
-      seats: page.team.seats.map((seat) => seat.name),
       home: fixture.home,
-      at: page.spec.now,
+      now: new Date(page.spec.now),
+      team: page.team,
+      state: readState(dir).sessions[page.session] ?? emptySession(),
+      attributed: page.team.seats.map((seat) => seat.name),
     });
+    if (page.spec.briefs === 'delivered-and-read') {
+      const readIo: Io = {
+        stdout: () => {},
+        stderr: () => {},
+        cwd: fixture.root,
+        env: {},
+        stdinIsTTY: false,
+        caller: { kind: 'owner' },
+      };
+      for (const seat of page.team.seats) {
+        if (seat.human === true) continue;
+        await runDrops(['--read', '--seat', seat.name], readIo, { home: fixture.home });
+      }
+    }
   }
 
   // The session registry a page declares, written into the fixture home's own store before any

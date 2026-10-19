@@ -52,7 +52,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
+import { currentBriefEpochs, deliverBriefForAttribution } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -369,6 +369,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       watchAlive: true,
       teamFile: path,
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
+      briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
     });
     // The stop comes before the launch the plan prints; a seat that is not running is a skip.
@@ -491,6 +492,30 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         ? { stdout: () => {}, stderr: (text) => { notes.push(...text.split('\n').filter((line) => line !== '')); }, isTTY: false }
         : { stdout: io.stdout, stderr: io.stderr, isTTY: io.stdoutIsTTY ?? false },
     );
+    // The general seat brief goes first, before the state hook and the plan's rules line: the
+    // claim is written before the hook that resolves it and the signed drop before the launch. A
+    // delivery that cannot be written is said and logged, and the launch goes on; `team check`
+    // names the seat with no record.
+    const briefs = deliverBriefForAttribution({
+      dir,
+      root,
+      session,
+      home,
+      now: sources.now?.() ?? new Date(),
+      team,
+      state: readState(dir).sessions[session] ?? emptySession(),
+      attributed: [planSeat.name],
+      broadcast: true,
+    });
+    const briefLine = (said: string): void => {
+      if (json) notes.push(said);
+      else out.stderr(`team restart: ${plainText(said)}\n`);
+      logLine(dir, 'restart', who, said, sources.now());
+    };
+    for (const delivery of briefs.deliveries) {
+      if (!delivery.ok) briefLine(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
+    }
+    if (briefs.recording !== undefined) briefLine(`the general seat brief was written and not recorded (${briefs.recording})`);
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
@@ -506,28 +531,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       watchAlive: true,
       teamFile: path,
       cliHooks: installed,
+      briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
     });
-    // The general seat brief goes first, before the plan types a rules line into the pane: one
-    // signed drop. A delivery that cannot be written is said and logged, and the launch goes on;
-    // `team check` names the seat with no record.
-    const briefs = deliverGeneralBrief({
-      dir,
-      root,
-      session,
-      seats: [planSeat.name],
-      home,
-      at: (sources.now?.() ?? new Date()).toISOString(),
-    });
-    const briefLine = (said: string): void => {
-      if (json) notes.push(said);
-      else out.stderr(`team restart: ${plainText(said)}\n`);
-      logLine(dir, 'restart', who, said, sources.now());
-    };
-    for (const delivery of briefs.deliveries) {
-      if (!delivery.ok) briefLine(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
-    }
-    if (briefs.recording !== undefined) briefLine(`the general seat brief was written and not recorded (${briefs.recording})`);
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.
     resetCliHookState(dir, session, [planSeat.name]);
