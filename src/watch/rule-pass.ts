@@ -33,6 +33,7 @@ export function modelRuleOfPass(team: TeamFile, root: string, home: string | und
       proposal: breach.proposal
         ? `${breach.proposal.recipe.cli} ${breach.proposal.recipe.model} ${breach.proposal.recipe.version} from ${breach.proposal.donor.team}/${breach.proposal.donor.seat}`
         : null,
+      ...(breach.proposal ? { recipe: breach.proposal } : {}),
       reason: breach.reason ?? null,
     });
   }

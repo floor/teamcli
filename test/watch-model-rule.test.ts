@@ -82,12 +82,27 @@ function setRule(home: string, value: string): void {
   if (!wrote.ok) throw new Error(wrote.why);
 }
 
-const KEEPER_BREACH: ModelRuleBreachReading = {
-  rule: '*=!anthropic',
-  vendor: 'anthropic',
-  proposal: 'claude-code DeepSeek Flash 4.0 from beacon/worker',
-  reason: null,
-};
+function keeperBreach(root: string): ModelRuleBreachReading {
+  return {
+    rule: '*=!anthropic',
+    vendor: 'anthropic',
+    proposal: 'claude-code DeepSeek Flash 4.0 from beacon/worker',
+    // The record keeps the donor's recipe whole: the watch queues its breaching seats from it,
+    // so the reading carries what the run will write, not only the words it prints.
+    recipe: {
+      donor: { root, seat: 'worker', team: 'beacon' },
+      recipe: {
+        cli: 'claude-code',
+        vendor: 'deepseek',
+        model: 'DeepSeek Flash',
+        version: '4.0',
+        display: 'DeepSeek Flash 4.0',
+        launch: 'claude --model deepseek-flash',
+      },
+    },
+    reason: null,
+  };
+}
 
 describe('the model rule as one pass reads it', () => {
   test('the rule, its entries, and this team\'s breaching seat with the swap proposed', () => {
@@ -97,7 +112,7 @@ describe('the model rule as one pass reads it', () => {
       ok: true,
       rule: '*=!anthropic',
       entries: [{ subject: '*', allow: false, labs: ['anthropic'] }],
-      breaches: new Map([['keeper', KEEPER_BREACH]]),
+      breaches: new Map([['keeper', keeperBreach(w.root)]]),
     });
   });
 

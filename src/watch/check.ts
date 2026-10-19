@@ -14,6 +14,7 @@ import type { ModelRuleEntry } from '../policy/model-rule.ts';
 import type { LivenessThresholds } from '../settings/inherit.ts';
 import type { Live } from '../status/compare.ts';
 import type { SessionState } from '../state.ts';
+import type { ModelRecipe, RuleDonor } from '../swap/rule.ts';
 import type { Machine } from './machine.ts';
 import type { Screen } from './screen.ts';
 
@@ -46,6 +47,8 @@ export type ModelRuleBreachReading = {
   vendor: string;
   /** `<cli> <model> <version> from <team>/<seat>`, or null when no recipe is proposed. */
   proposal: string | null;
+  /** The proposed replacement itself, when one is: what the watch queues a swap from. */
+  recipe?: { donor: RuleDonor; recipe: ModelRecipe };
   /** Why no recipe is proposed, when none is. */
   reason: string | null;
 };
