@@ -106,6 +106,7 @@ export const ENFORCED_POLICY_NAMES = [
   'model-rule',
   'swap-wait-seconds',
   'owner-reply-to',
+  'codex-daemon',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -176,6 +177,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   model_rule: 'model-rule',
   swap_wait_seconds: 'swap-wait-seconds',
   owner_reply_to: 'owner-reply-to',
+  codex_daemon: 'codex-daemon',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -551,6 +553,21 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseOwnerReplyToValue,
     valueProblem: ownerReplyToValueProblem,
     isWithin: () => true,
+  },
+  // The Codex daemon on a seat's runtime: on unless a level says otherwise. `off` is a valid
+  // opt-out at every level, so a project, team or seat may switch off a daemon the levels above
+  // left on; `on` is only within an inherited `on`, so a level that turned the daemon off is not
+  // turned back on lower down. The runtime reader that consumes this value is owned elsewhere;
+  // this entry is only the name, its alias and the value rule.
+  'codex-daemon': {
+    name: 'codex-daemon',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseOnOff,
+    // 'off' is the opt-out and is always within; 'on' is only within an inherited 'on'.
+    isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => lower === 'off' || higher === 'on',
   },
   'development-mode': {
     name: 'development-mode',
