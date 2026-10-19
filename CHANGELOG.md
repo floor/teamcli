@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`team pause` and `team resume`.** A pause lives in the team state, never in the team file —
+  the file waits for the owner's approval, and a stop that waits is no stop. While it stands the
+  team takes no new work: `team next` claims nothing and names the pause with its repair, and the
+  watch's work nudges become one notice per non-human seat, at its first quiet prompt after the
+  pause landed and never twice for the same pause, saying to finish the step in hand, take nothing
+  new and hold no lock. `team status` and `team seats` print the pause above their rows, and a
+  human seat is never touched. The pause records a stop point for every declared seat that is not
+  a human's: the stage and last activity its record held, and the worktree it was given, branch
+  and folder. `team resume` deletes the record, restarts claims and nudges, and prints the stop
+  points it held — for one team, `resumed <project> (<pause line>)` then one `stop <seat>: …` line
+  each — so the lead can restart every seat from the place the tool holds; a resume with no pause
+  standing is refused. Both act on the team file of the folder when no name is given, on a
+  registered `<team>` by its name, project or id, or on every team in the machine's registry with
+  `--all` (an unreadable team is named on stderr and left as it is), and both judge every target's
+  caller before any state is written. The caller is the owner at a terminal outside herdr, or the
+  team's own orchestrator on the pane the state records for it. `--json` emits `team.pause` /
+  `team.resume` and is refused with `--all`.
+
 ## [0.5.1] - 2026-10-19
 
 ### Added
