@@ -23,6 +23,19 @@ exit: /exit
 # pane byte-for-byte to its idle screen. Used only to clear an exit text that did not
 # read back as typed, and only when the box holds exactly that text.
 exit_clear: ctrl+c
+# The measured way into the input box (2026-10-19, herdr 0.7.1, a 54-column pane, 2.1.303): at
+# idle one ctrl+c emptied a five-line draft and the screen returned to its idle prompt, the CLI
+# staying open; a ctrl+c on an already-empty idle box left it idle too. During a running turn
+# ctrl+c interrupts the turn, so the turn's own clear is ctrl+u, which removed about one row per
+# press and left the turn running. A draft pasted back with bracketed paste while the turn ran
+# stayed in the box with its rows unchanged, and Enter mid-turn queued the typed line.
+input:
+  clear:
+    - ctrl+c
+  clear_working:
+    - ctrl+u
+  paste: bracketed
+  mid_turn: true
 # The one key that confirms the CLI's own exit question, from the same 2.1.291 captures
 # (test/fixtures/exit-typing/): a seat with background work — a shell, a scheduled task —
 # answers the one Enter on `/exit` with "Background work is running" and the preselected

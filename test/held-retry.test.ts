@@ -125,19 +125,23 @@ type Pane = {
   moves?: boolean;
   typed: string[];
   enters: number;
+  /** The keys a delivery sent into this box, for the sources `scripts(one, true)` builds. */
+  keys: string[];
 };
 
 function pane(screen: string | null, status = 'idle'): Pane {
-  return { screen, status, submits: true, typed: [], enters: 0 };
+  return { screen, status, submits: true, typed: [], enters: 0, keys: [] };
 }
 
-function scripts(one: Pane): RetrySources {
+function scripts(one: Pane, withKeys = false): RetrySources {
   return {
     screen: () => one.screen,
     status: () => one.status,
     typeText: (_pane, text) => {
       one.typed.push(text);
-      one.screen = claudeBox(text);
+      // A bracketed paste redraws the box as its rows; a trigger is the box's text.
+      const pasted = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
+      one.screen = claudeBox(pasted ? pasted[1] ?? '' : text);
       return true;
     },
     pressEnter: () => {
@@ -149,6 +153,9 @@ function scripts(one: Pane): RetrySources {
       return true;
     },
     sleep: async () => {},
+    // The watch's real sources carry herdr's key sender; a scene that leaves it out is a
+    // fallback host, and its delivery holds on unsent text instead of moving it.
+    ...(withKeys ? { sendKey: (_pane: string, key: string) => { one.keys.push(key); one.screen = claudeBox(''); return true; } } : {}),
   };
 }
 
@@ -285,6 +292,53 @@ describe('retryHeldDrops', () => {
       },
     ]);
     expect(said).toEqual(['lead: a held send from owner was delivered on retry']);
+  });
+
+  test('a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-draft', 'from the owner\n\nhello');
+    const one = pane(claudeBox('a draft for the retry'));
+    const said: string[] = [];
+    const at = {
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: scripts(one, true),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    };
+
+    await retryHeldDrops(at);
+    // One clear, the trigger, one Enter, then the owner's text back as one bracketed paste.
+    expect(one.keys).toEqual(['ctrl+c']);
+    expect(one.typed).toEqual([
+      triggerLine(join(dropDir, 'drop-draft')) as string,
+      '\x1b[200~a draft for the retry\x1b[201~',
+    ]);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(existsSync(join(dropDir, 'drop-draft.draft'))).toBe(false);
+    // The retry's receipt names where the text went, as the send's own line would have.
+    expect(said).toEqual(['lead: a held send from owner was delivered on retry; the unsent text was pasted back']);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([
+      {
+        ts: NOW.toISOString(),
+        from: 'owner',
+        to: 'lead',
+        body: 'from the owner\n\nhello',
+        id: 'drop-draft',
+        outcome: 'delivered',
+        note: 'the unsent text was pasted back',
+        via: 'typed',
+      },
+    ]);
   });
 
   test('a seat the file marks human is never typed into: the marker is given up with the reason', async () => {
@@ -923,6 +977,51 @@ describe('team send leaves the record the retry reads', () => {
     if (!history.ok) return;
     expect(history.entries.map((entry) => entry.outcome)).toEqual(['held', 'delivered']);
     expect(history.entries[1]?.id).toBe(drop.id);
+  });
+
+  test('a retry that meets the owner\'s draft clears it, delivers, and pastes the text back', async () => {
+    // The watch's shipped sources carry herdr's key sender: unlike the no-key fallback above,
+    // the retry is a delivery, and a delivery moves the owner's text out of the way and puts it
+    // back exactly — the copy beside the drop is removed once the box reads it again.
+    const made = world();
+    const draft = 'a draft only its author can send';
+    const one = pane(claudeBox(draft));
+    const native: NativePane = {
+      typeText: (_session, _pane, text) => { one.typed.push(text); one.screen = claudeBox(text); return true; },
+      pressEnter: () => { one.enters += 1; return true; },
+      status: () => one.status,
+      wait: async () => {},
+      paneText: () => one.screen,
+    };
+    const host: SendHost = {
+      agents: () => [{ name: 'lead', pane: 'w1:p1' }],
+      processInfo: () => ({ shell: 111, foreground: [222] }),
+      socketsDir: made.sockets,
+      deliver: async () => ({ ok: true }),
+      native,
+      now: () => NOW,
+      home: made.home,
+    };
+    const io = testIo(made.root, { kind: 'owner' });
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('held: the composer already holds unsent text');
+    expect(one.typed).toEqual([]);
+
+    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const drop = readPending(dropDir)[0] as PendingDrop;
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one, true), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(one.keys).toEqual(['ctrl+c']);
+    expect(one.typed).toEqual([triggerLine(join(dropDir, drop.id)) as string, `\x1b[200~${draft}\x1b[201~`]);
+    expect(one.screen).toBe(claudeBox(draft));
+    expect(existsSync(join(dropDir, `${drop.id}.draft`))).toBe(false);
+    expect(readPending(dropDir)).toEqual([]);
   });
 
   test('a send stopped by a dialog writes the record, and the watch delivers it once the seat is idle', async () => {

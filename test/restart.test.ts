@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -120,16 +120,20 @@ function makeHarness(
     initialRunning?: boolean;
     workerStatus?: string;
     workerScreen?: 'idle' | 'working' | 'permission' | 'unsent' | 'unknown';
+    /** The text the unsent box draws, when `workerScreen` is `unsent`. */
+    workerDraft?: string;
+    /** The relaunched pane never draws the paste: the restore's read-back fails. */
+    pasteDrops?: boolean;
     closeFails?: boolean;
     doctorVersion?: string | null;
   } = {},
 ): {
   sources: RestartSources;
-  did: { typed: string[]; closed: string[]; created: number; runs: string[] };
+  did: { typed: string[]; pasted: string[]; closed: string[]; created: number; runs: string[] };
 } {
-  const did = { typed: [] as string[], closed: [] as string[], created: 0, runs: [] as string[] };
+  const did = { typed: [] as string[], pasted: [] as string[], closed: [] as string[], created: 0, runs: [] as string[] };
   let workerAlive = opts.initialRunning ?? true;
-  let boxedText = opts.workerScreen === 'unsent' ? claudeBox('draft') : claudeBox('');
+  let boxedText = opts.workerScreen === 'unsent' ? claudeBox(opts.workerDraft ?? 'draft') : claudeBox('');
   let shelled = false;
   const newPanes = new Map<string, { text: string; agent: boolean; name: string | null; workspace: string }>();
 
@@ -214,6 +218,17 @@ function makeHarness(
     agentPanes: () => currentAgents().map((a) => a.pane),
     agents: () => currentAgents(),
     paneText: (_session, pane) => newPanes.get(pane)?.text ?? IDLE,
+    // The relaunched seat's own box: a bracketed paste draws its text as the composer rows, so
+    // the delivery's read-back verifies exactly as it does on a real CLI.
+    typeText(_session, pane, text) {
+      did.pasted.push(text);
+      const slot = newPanes.get(pane);
+      const pasted = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
+      if (slot && pasted && !opts.pasteDrops) slot.text = claudeBox(pasted[1] ?? '');
+      return true;
+    },
+    pressEnter: () => true,
+    agentStatus: () => 'idle',
     foreground: () => ['claude'],
     sleep: async () => {},
     now: () => NOW,
@@ -510,12 +525,97 @@ describe('team restart <seat>', () => {
     expect(opsRun.did.closed).toEqual([]);
   });
 
-  test('refuses a busy seat without --abandon, and refuses when preflight fails before stopping the seat', async () => {
+  test('a seat holding unsent text is restarted: the text is copied, the pane closed without typing, and the text pasted back', async () => {
     const fixture = makeFixture();
     const busyRun = makeHarness(fixture, { workerScreen: 'unsent' });
     const ioBusy = testIo(fixture.root, { kind: 'owner' });
+    const copy = join(fixture.dir, 'restart-drafts', 'acme', 'worker.draft');
+    expect(await runRestart(['worker'], ioBusy, busyRun.sources)).toBe(0);
+    // Nothing was typed into the old box: the workspace closed, and the paste went to the new
+    // pane only after it was ready.
+    expect(busyRun.did.typed).toEqual([]);
+    expect(busyRun.did.closed).toEqual(['ws-old']);
+    expect(busyRun.did.created).toBe(1);
+    expect(busyRun.did.pasted).toEqual(['\x1b[200~draft\x1b[201~']);
+    expect(existsSync(copy)).toBe(false);
+    expect(ioBusy.out).toContain(`worker: input box: holds unsent text, copied to ${copy} and pasted back once the new pane is ready\n`);
+    expect(ioBusy.out).toContain('worker: unsent text pasted back\n');
+    expect(ioBusy.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+    expect(readFileSync(join(fixture.dir, 'team.log'), 'utf8')).toContain('restart [owner] worker: unsent text pasted back\n');
+
+    // Preflight doctor failure leaves the running seat untouched
+    const docRun = makeHarness(fixture, { doctorVersion: null });
+    const ioDoc = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], ioDoc, docRun.sources)).toBe(1);
+    expect(docRun.did.typed).toEqual([]);
+    expect(docRun.did.closed).toEqual([]);
+    expect(docRun.did.created).toBe(0);
+  });
+
+  test('a multi-line unsent draft is refused: its rows cannot be told from a soft wrap', async () => {
+    const fixture = makeFixture();
+    // The box draws the draft's rows at its own indent, exactly as a one-line draft the composer
+    // word-wrapped would draw: the screen cannot say which break is a newline, so nothing is
+    // copied and the pane is left as it is.
+    const draft = 'first line\nsecond line\n\nfourth line';
+    const run = makeHarness(fixture, { workerScreen: 'unsent', workerDraft: draft });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toBe('team restart: worker holds unsent text in its input box over more than one drawn row, where a soft wrap cannot be told from a newline; left as it is (the owner clears it in its pane, or team restart worker --abandon closes it)\n');
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.pasted).toEqual([]);
+    expect(existsSync(join(fixture.dir, 'restart-drafts', 'acme', 'worker.draft'))).toBe(false);
+  });
+
+  test('a draft that cannot be copied faithfully still refuses the restart, and nothing is closed', async () => {
+    const fixture = makeFixture();
+    const chip = makeHarness(fixture, { workerScreen: 'unsent', workerDraft: '[Pasted text #2 +7 lines]' });
+    const ioChip = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], ioChip, chip.sources)).toBe(1);
+    expect(ioChip.err).toBe('team restart: worker holds unsent text in its input box behind a paste chip; left as it is (the owner clears it in its pane, or team restart worker --abandon closes it)\n');
+    expect(chip.did.closed).toEqual([]);
+    expect(chip.did.created).toBe(0);
+
+    // A seat herdr reports mid-turn keeps the old word: its turn is not the restart's to end.
+    const working = makeHarness(fixture, { workerScreen: 'unsent', workerStatus: 'working' });
+    const ioWorking = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], ioWorking, working.sources)).toBe(1);
+    expect(ioWorking.err).toBe('team restart: worker holds unsent text in its input box; left as it is\n');
+    expect(working.did.closed).toEqual([]);
+  });
+
+  test('an earlier copy with different text is never overwritten: the restart refuses and the old copy keeps its words', async () => {
+    const fixture = makeFixture();
+    const copy = join(fixture.dir, 'restart-drafts', 'acme', 'worker.draft');
+    mkdirSync(join(fixture.dir, 'restart-drafts', 'acme'), { recursive: true });
+    writeFileSync(copy, 'older unsent text');
+    const run = makeHarness(fixture, { workerScreen: 'unsent' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toBe(`team restart: worker holds unsent text and a different copy already sits at ${copy}; left as it is\n`);
+    expect(readFileSync(copy, 'utf8')).toBe('older unsent text');
+    expect(run.did.closed).toEqual([]);
+  });
+
+  test('a paste the new pane never draws back is named, and its copy stays', async () => {
+    const fixture = makeFixture();
+    const run = makeHarness(fixture, { workerScreen: 'unsent', pasteDrops: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const copy = join(fixture.dir, 'restart-drafts', 'acme', 'worker.draft');
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(existsSync(copy)).toBe(true);
+    expect(readFileSync(copy, 'utf8')).toBe('draft');
+    expect(io.out).toContain(`worker: the unsent text could not be pasted back (the pasted text did not read back as its rows); its copy is at ${copy}\n`);
+    expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+  });
+
+  test('refuses a busy seat without --abandon, and refuses when preflight fails before stopping the seat', async () => {
+    const fixture = makeFixture();
+    const busyRun = makeHarness(fixture, { workerScreen: 'permission', workerStatus: 'blocked' });
+    const ioBusy = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], ioBusy, busyRun.sources)).toBe(1);
-    expect(ioBusy.err).toBe('team restart: worker holds unsent text in its input box; left as it is\n');
+    expect(ioBusy.err).toBe('team restart: worker is blocked at a prompt, which team never answers; left as it is\n');
     expect(busyRun.did.closed).toEqual([]);
 
     // Preflight doctor failure leaves the running seat untouched

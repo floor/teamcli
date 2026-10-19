@@ -12,7 +12,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
@@ -126,6 +126,9 @@ export type WatchSources = {
   processes?(pane: string, session: string): PaneProcesses | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
+  /** One key, spelled as herdr spells it: a delivery that meets unsent text clears the box with
+   *  the profile's measured keys and pastes the text back. Absent, such a delivery holds. */
+  sendKey?(pane: string, key: string, session: string): boolean;
   // Sleeps between the typing of the nudge and the read-back that decides the Enter — the
   // bounded draw wait the exit typing and delivery make (settleScreen). Required: a watch whose
   // delivery reads back the instant it typed, with nothing to wait on, is the fault itself.
@@ -191,6 +194,7 @@ export const realWatchSources: WatchSources = {
   processes: (pane, session) => paneProcesses(pane, session),
   typeText,
   pressEnter,
+  sendKey: (pane, key, session) => herdrSendKey(pane, key, session),
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   notify,
   now: () => new Date(),
