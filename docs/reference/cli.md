@@ -128,7 +128,7 @@ Hidden: no
 
 Usage:
 
-    team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+    team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
 
 ### Who may run it
 
@@ -151,7 +151,7 @@ Hidden: no
 
 Usage:
 
-    team brief rollout [--apply] [--session <session>] [--file <path>] [--json]
+    team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
 
 #### Who may run it
 
@@ -165,6 +165,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -443,6 +444,59 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `session/pane` | no | no |
+
+## `development-mode`
+
+Hidden: no
+
+Usage:
+
+    team development-mode [--json]
+    team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+
+### Who may run it
+
+`any-caller` — it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `set`
+
+Hidden: no
+
+Usage:
+
+    team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--show` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `local-fast\|pr-per-change\|off` | no | no |
 
 ## `doctor`
 

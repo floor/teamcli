@@ -21,9 +21,17 @@
 // guards, the public-action refusals and every other owner gate are untouched; with dev mode
 // `off` every one of these gates refuses exactly as before.
 //
+// The machine-scoped `development-mode` record stands above all
+// of this. While a record is present and verified, it governs both halves: `local-fast` lifts
+// the caller gate and the owner-gate admission exactly as the variable does, `pr-per-change`
+// lifts neither caller gate, `off` lifts nothing, and the legacy variable and every per-team
+// word are ignored. An absent record leaves the chain-and-variable behaviour below untouched;
+// a record that cannot be verified is refused and lifts nothing.
+//
 // The environment variable `TEAMCLI_DEV_MODE=1` stays for compatibility and is honoured only
-// while no `dev-mode` value is set anywhere in the chain (`devModeGoverned` false): the
-// migration trigger. Once a value governs, the variable is ignored entirely — once a command
+// while no `dev-mode` value is set anywhere in the chain (`devModeGoverned` false) and no
+// machine record is present: the migration trigger. Once a value governs, the variable is
+// ignored entirely — once a command
 // says so in the log — and the effective policy alone decides. An expired declaration still
 // counts as a declaration here (`resolvePolicyChain`'s `devModeGoverned`, read as exported), so
 // an expiry reverts the gate to `off` and the variable stays ignored; the first command refused
@@ -46,6 +54,11 @@ import {
   type PolicyLevel,
   type PolicyLoadRefusal,
 } from './policy/index.ts';
+import {
+  readDevelopmentMode,
+  type DevelopmentMode,
+  type DevelopmentModeRead,
+} from './development_mode.ts';
 import { byName, ofTeam, projectIdOf } from './registry/projects.ts';
 import { readTeams, teamIdOf } from './registry/teams.ts';
 
@@ -85,13 +98,16 @@ export type DevModeExpiry = { at: string; level: PolicyLevel };
 
 /** What the chain says about dev mode for one command, before any gate is asked. */
 export type DevModeRun = {
-  /** The caller gate is lifted: the effective policy is `on`, or the variable is in effect before any policy. */
+  /** The caller gate is lifted: the machine setting is `local-fast`, the effective policy is
+   *  `on`, or the variable is in effect before any policy. */
   on: boolean;
-  /** What turned it on: the policy level that set `on`, or the variable before any policy governs. */
-  by: 'env' | PolicyLevel | null;
-  /** A `dev-mode` value is set anywhere in the chain, so `TEAMCLI_DEV_MODE` is ignored. */
+  /** What turned it on: the machine record, the policy level that set `on`, or the variable
+   *  before any policy governs. */
+  by: 'env' | 'machine' | PolicyLevel | null;
+  /** A `development-mode` machine record, or a `dev-mode` value in the chain, governs, so
+   *  `TEAMCLI_DEV_MODE` is ignored. */
   governed: boolean;
-  /** The variable is set to `1` and the governing policy is `off`: the ignoring to log once. */
+  /** The variable is set to `1` and the governing setting lifts no gate: the ignoring to log once. */
   ignored: boolean;
   /** The nearest declaration the expiry left with no effective value: an expired `dev-mode`
    *  is what makes the gate quiet, so the first refusal after it says so, and each command
@@ -99,6 +115,10 @@ export type DevModeRun = {
   expired: DevModeExpiry | null;
   /** Policy sources that cannot be read, verified or ordered: dev mode is not applied on them. */
   refusals: PolicyLoadRefusal[];
+  /** The verified machine record that governed this run, when one did. */
+  machine?: { mode: DevelopmentMode; since: string; generation: number };
+  /** Why a machine record was present and could not be used: dev mode is not applied on it. */
+  machineRefusal?: string;
 };
 
 /** The project a team belongs to, read the way `team check`'s policy pass reads it. The
@@ -121,6 +141,49 @@ function variableOnly(envSet: boolean): DevModeRun {
   return { on: envSet, by: envSet ? 'env' : null, governed: false, ignored: false, expired: null, refusals: [] };
 }
 
+/**
+ * The machine record's answer, when there is one: `null` means no record is present, and the
+ * chain-and-variable behaviour stands. A record that cannot be verified lifts nothing — the
+ * fail-closed answer — with `machineRefusal` naming why. `command` is the operation whose
+ * caller gate is asked, or `null` for dev mode itself (`devModeState`), which the operation
+ * list does not narrow.
+ */
+function machineRun(
+  read: DevelopmentModeRead,
+  command: DevModeCommand | null,
+  envSet: boolean,
+): DevModeRun | null {
+  if (read.kind === 'absent') return null;
+  if (read.kind === 'refused') {
+    return {
+      on: false,
+      by: null,
+      governed: true,
+      ignored: envSet,
+      expired: null,
+      refusals: [],
+      machineRefusal: read.why,
+    };
+  }
+  // `pr-per-change` keeps the process half only and `off` is explicit; neither lifts a caller
+  // gate. Only `local-fast` lifts, and only for the operations the one list names.
+  const lift = read.record.mode === 'local-fast';
+  const on = lift && (command === null || DEV_MODE_OPERATIONS.includes(command));
+  return {
+    on,
+    by: on ? 'machine' : null,
+    governed: true,
+    ignored: envSet && !lift,
+    expired: null,
+    refusals: [],
+    machine: {
+      mode: read.record.mode,
+      since: read.record.since,
+      generation: read.record.generation,
+    },
+  };
+}
+
 /** The nearest expired `dev-mode` declaration — the level `resolvePolicy` would have taken had
  *  it not expired (team over project over entity; dev mode is never a seat's). */
 function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; expiry?: string | null }[]): DevModeExpiry | null {
@@ -136,6 +199,7 @@ function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; exp
  * Resolves dev mode for one command from the caller's place.
  *
  * - No `home`: no policy source can be read, so the variable alone applies (today's behaviour).
+ * - A verified machine record: it governs; the variable and the chain are ignored.
  * - A chain that will not load: nothing is applied — the policy cannot be trusted, and the
  *   variable is not consulted, since a governing value may be among what could not be read.
  * - `devModeGoverned`: the variable is ignored; `on` iff the effective `dev-mode` is `on`.
@@ -144,6 +208,8 @@ function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; exp
 export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
+  const machine = machineRun(readDevelopmentMode(context.home), command, envSet);
+  if (machine !== null) return machine;
   const chain = chainFor({ ...context, home: context.home });
   if (!chain.ok) {
     // Nothing is lifted on a policy the tool could not read or order (amendment §2.5): the
@@ -171,6 +237,8 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
 export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
+  const machine = machineRun(readDevelopmentMode(context.home), null, envSet);
+  if (machine !== null) return machine;
   const chain = chainFor({ ...context, home: context.home });
   if (!chain.ok) {
     return { on: false, by: null, governed: chain.devModeGoverned, ignored: false, expired: null, refusals: chain.refusals };
@@ -371,6 +439,10 @@ export function devModeOwnerLiftAtCwd(
 export function devModeActive(io: Pick<Io, 'env'>, context: DevModeContext = {}): boolean {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return envSet;
+  const machine = readDevelopmentMode(context.home);
+  // A record the tool cannot verify quiets nothing, on the same rule the chain's refusals use.
+  if (machine.kind === 'refused') return false;
+  if (machine.kind === 'set') return machine.record.mode === 'local-fast';
   const chain = chainFor({ ...context, home: context.home });
   if (!chain.ok) return false;
   if (chain.devModeGoverned) return chain.policies['dev-mode']?.value === 'on';
@@ -378,10 +450,12 @@ export function devModeActive(io: Pick<Io, 'env'>, context: DevModeContext = {})
 }
 
 /**
- * The level a governing policy set dev mode at, for the warning that records an use: empty
+ * The level a governing setting set dev mode at, for the warning that records an use: empty
  * while the variable is what set it (or while nothing governs), so pre-policy bytes stay exact.
+ * The machine record names itself the same way a policy level does.
  */
 export function devModeLevelNote(run: DevModeRun): string {
+  if (run.by === 'machine') return ' (dev-mode on at machine level)';
   return run.by === 'env' || run.by === null ? '' : ` (dev-mode on at ${run.by} level)`;
 }
 
@@ -434,7 +508,16 @@ export function logDevMode(dir: string, command: DevModeCommand, caller: string,
  */
 export function logDevModeState(dir: string, command: DevModeCommand, caller: string, run: DevModeRun, now?: Date): void {
   if (run.ignored) {
-    logLine(dir, command, caller, 'dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off', now);
+    const because =
+      run.machineRefusal !== undefined
+        ? 'the machine setting cannot be read'
+        : run.machine !== undefined
+          ? `development-mode is ${run.machine.mode} at machine level`
+          : 'dev-mode policy is off';
+    logLine(dir, command, caller, `dev-mode: TEAMCLI_DEV_MODE=1 ignored because ${because}`, now);
+  }
+  if (run.machineRefusal !== undefined) {
+    logLine(dir, command, caller, `development-mode: ${run.machineRefusal}; dev mode is not applied`, now);
   }
   if (run.expired !== null) {
     logLine(dir, command, caller, `dev-mode: expired at ${run.expired.at} for ${run.expired.level}; it is off since`, now);

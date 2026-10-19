@@ -252,6 +252,12 @@
             },
             {
               "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--session",
               "repeatable": false,
               "takesValue": true
@@ -268,7 +274,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+            "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
           ],
           "who": {
             "gate": "team-read",
@@ -277,7 +283,7 @@
         }
       ],
       "usage": [
-        "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+        "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
       ],
       "who": {
         "gate": "team-read",
@@ -682,6 +688,92 @@
       "who": {
         "gate": "owner-only",
         "why": "a standing grant with a command list, written against this map: the owner's"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "development-mode",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--show",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "local-fast|pr-per-change|off",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged"
+          }
+        }
+      ],
+      "usage": [
+        "team development-mode [--json]",
+        "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal"
       }
     },
     {

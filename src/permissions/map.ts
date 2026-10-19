@@ -184,6 +184,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'the listing is the command\'s only verb and reads the registry only: no team file, seat or terminal is read',
     },
+    'development-mode': {
+      kind: 'any-caller',
+      why: 'it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal',
+    },
+    'development-mode:set': {
+      kind: 'owner-only',
+      why: 'the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged',
+    },
     doctor: {
       kind: 'any-caller',
       why: 'the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them',
