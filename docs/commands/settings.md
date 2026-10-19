@@ -198,8 +198,8 @@ $ team settings claude-keeper --json ; echo "exit $?"
       "key": "delivery_order",
       "value": [
         "mcp-inbox",
-        "drop",
-        "typed"
+        "typed",
+        "drop"
       ],
       "source": "default",
       "applies": "at-once"

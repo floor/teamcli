@@ -567,15 +567,17 @@ seats:
     launch: claude --model claude-opus-5-5
 ```
 
-A plain send walks the default order — the seat's own inbox, then its drop folder, then the
-typed trigger. No server serves this seat's inbox, so the record lands in its drop folder and
-nothing is typed; the seat's own turn-start read hands it the message and writes its receipt,
-which a running watch records as one `delivered (read)` history line.
+A plain send walks the default order — the seat's own inbox, then the typed trigger, then its
+drop folder. No server serves this seat's inbox, and its pane is free, so the signed record
+lands in its drop folder and the trigger is typed over it; the seat's own read hands it the
+message and writes its receipt, which a running watch records as one `delivered (read)` history
+line. Until that receipt comes back the line is `sent (unconfirmed)` with `trigger taken, no
+read receipt yet`.
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (drop, 0 ms)
+claude-keeper: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
 exit 0
 ```
 
@@ -586,7 +588,7 @@ like any other:
 ```console caller=operator-a
 $ team send operator-b "the handover is ready" ; echo "exit $?"
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (drop, 0 ms)
+operator-b: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
 exit 0
 ```
 
@@ -639,7 +641,7 @@ A dry run of the same send names the walk and writes nothing:
 ```console
 $ team send claude-keeper "is the gate green?" --wait --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane, then a 0600 drop file and one trigger line; nothing was written
+claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written
 exit 0
 ```
 
@@ -752,14 +754,15 @@ team send: refused: nobody: it is not a declared seat; the file's seats are clau
 exit 1
 ```
 
-A native-CLI seat whose inbox no server serves takes the send in its drop folder: one signed
-record, `sent (unconfirmed)`, nothing typed. Its own turn-start read hands it the message, and
+A native-CLI seat whose inbox no server serves and whose pane is free takes the send in the
+typed leg: the signed record lands in its drop folder and the trigger is typed over it, `sent
+(unconfirmed)` with `trigger taken, no read receipt yet`. Its own read hands it the message, and
 the receipt it writes is what the watch promotes:
 
 ```console
 $ team send gpt-reviewer "hello" ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms)
+gpt-reviewer: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
 exit 0
 ```
 
@@ -777,6 +780,6 @@ exit 1
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: dry-run: codex via the seat's own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane, then a 0600 drop file and one trigger line; nothing was written
+gpt-reviewer: dry-run: codex via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written
 exit 0
 ```

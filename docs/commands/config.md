@@ -117,8 +117,8 @@ $ team config keys seat --json ; echo "exit $?"
       "allowed": "delivery legs, tighten only",
       "default": [
         "mcp-inbox",
-        "drop",
-        "typed"
+        "typed",
+        "drop"
       ],
       "governed_by": "delivery-order",
       "applies": "at-once"

@@ -165,25 +165,26 @@ exit 0
 ```
 
 After a send, `team feed` prints the exchange with its timestamp, sender, recipient, outcome and
-body. No server serves this seat's inbox, so the send walks to its drop folder — `via drop` —
-and reads `sent (unconfirmed)` until the seat's own turn-start read writes the signed receipt,
-which a running watch records as one more line, `delivered (read)`:
+body. No server serves this seat's inbox, and its pane is free, so the send walks to the typed
+leg — `via typed`: the trigger is typed over the signed drop file, the line reads
+`sent (unconfirmed)` with `trigger taken, no read receipt yet`, and the seat's own read writes
+the signed receipt a running watch records as one more line, `delivered (read)`:
 
 ```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms)
+gpt-reviewer: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
 exit 0
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                   SEAT                   DETAIL
-  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                    SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                   SEAT                   DETAIL
-  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                    SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 ```
