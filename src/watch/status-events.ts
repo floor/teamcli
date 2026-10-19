@@ -40,6 +40,7 @@ import type { BusPublishOutcome } from '../bus/server.ts';
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { RECEIPT_STATUSES } from '../send/record.ts';
 import { readState } from '../state.ts';
 import { minutes } from './check.ts';
 import { notify as defaultNotify } from './notify.ts';
@@ -413,7 +414,9 @@ export type SeatStatusEngine = {
  *  1. Active lease in `.agents/leases/<id>.json` (`lease.seat === seatName && Date.parse(lease.until) > atMs`)
  *  2. Assigned worktree (`worktrees[task].seat === seatName`) or temporary seat task in `.agents/state.json`
  *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding the startup brief — its
- *     current id and the superseded ids its claim replaced — `work-*`, and sidecars)
+ *     current id and the superseded ids its claim replaced — `work-*`, and sidecars: dot files, the
+ *     `.pending`/`.delivered`/`.closed.json` markers and the signed `<id>.<status>.json` receipts,
+ *     which are metadata beside a delivery and never work of their own)
  *  4. Open `work.claimed` event for `seatName` in `.agents/events.jsonl` not yet closed by `work.done` or `work.released`. */
 export function seatHasAssignedWorkOnDisk(
   root: string,
@@ -474,6 +477,7 @@ export function seatHasAssignedWorkOnDisk(
           || name.endsWith('.pending')
           || name.endsWith('.delivered')
           || name.endsWith('.closed.json')
+          || RECEIPT_STATUSES.some((status) => name.endsWith(`.${status}.json`))
           || (briefId !== undefined && name === briefId)
           || supersededBriefs.has(name)
         ) {

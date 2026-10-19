@@ -964,6 +964,11 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       };
     });
     expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(false);
+    // The delivery and the claim-bound read receipt the seat's reader writes beside it: the
+    // receipt is metadata about the read, not a second piece of work.
+    writeFileSync(join(dropsDir, '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d'), '{"kind":"message"}\n');
+    writeFileSync(join(dropsDir, '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d.read.json'), '{"kind":"receipt"}\n');
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(false);
     writeFileSync(join(dropsDir, '1b6c8d2e-9f30-4b7c-8d4e-2f3a4b5c6d7e'), 'a message from a seat\n');
     expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(true);
   });
