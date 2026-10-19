@@ -591,7 +591,7 @@ scene('add.reserved-name', async (place) => {
   return show(await added(place, ['lead'], owner, addSources(place)), '"lead" is reserved');
 });
 scene('add.temporary-unexpected', async (place) => show(await added(place, ['extra', '--temporary'], owner, addSources(place)), 'unexpected'));
-scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--like', 'lead'], owner, addSources(place)), '--like, --until and --worktree'));
+scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--until', 'result:out.md'], owner, addSources(place)), '--until and --worktree'));
 scene('add.not-a-repo', async (place) => show(await added(place, ['worker'], owner, addSources(place)), 'not inside a git repository'), false);
 scene('add.file', async (place) => show(await added(place, ['worker', '--file', 'missing.yaml'], owner, addSources(place)), 'no team file'));
 scene('add.file-invalid', async (place) => {
@@ -648,6 +648,10 @@ scene('add.human', async (place) => {
 scene('add.no-like', async (place) => {
   approve(place, TWO);
   return show(await added(place, ['--temporary', '--like', 'missing', '--until', 'result:out.md', '--file', place.file], owner, addSources(place)), 'no seat "missing"');
+});
+scene('add.like-exists', async (place) => {
+  approve(place, TWO);
+  return show(await added(place, ['worker', '--like', 'lead', '--file', place.file], owner, addSources(place)), 'already declares "worker"');
 });
 scene('add.until', async (place) => {
   approve(place, TWO);
