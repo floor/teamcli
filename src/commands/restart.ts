@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
@@ -65,6 +65,8 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
+import { dropMessage } from '../send/native.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
@@ -354,6 +356,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const advice = inspected.unrecognised === undefined
       ? ''
       : `${unreadAdvice(name, inspected.unrecognised)}\n`;
+    // An unsent box the run would move: the dry answer names where its text waits and when it
+    // goes back, so the plan never reads as a close that drops it.
+    const draftStep = inspected.draftScreen === undefined
+      ? ''
+      : `${plainLine(name)}: input box: holds unsent text; it is copied to ${restartDraftPath(dir, session, name)} before the close and pasted back once the new pane is ready\n`;
     const preview = upPlan({
       root,
       session,
@@ -368,7 +375,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const stopPlan: PlanStep[] = inspected.agent
       ? [{ step: 'stop', seat: name, detail: `stop ${name} in ${inspected.agent.pane} (${inspected.where})`, prefix: '+' }]
       : [{ step: 'stop', seat: name, detail: 'not currently running', prefix: 'skip' }];
-    return dryRunExit(out, json, `${stopStep}${advice}${plainText(formatPlan(preview))}`, {
+    return dryRunExit(out, json, `${stopStep}${draftStep}${advice}${plainText(formatPlan(preview))}`, {
       project: team.project,
       session,
       seat: name,
@@ -391,6 +398,24 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     if (rechecked.kind === 'abandon-working') return abandonWorkingRefused(out, json, name);
     if (rechecked.kind === 'busy') return busyRefused(out, json, rechecked.message);
 
+    // The unsent text, copied under the run lock before the pane is closed, so neither a failed
+    // launch nor this process ending loses it. The copy stays until the text is read back in
+    // the new box; where that fails, its path is named in what the run prints.
+    let draftText: string | undefined;
+    let draftCopy: string | undefined;
+    if (rechecked.draftScreen !== undefined && rechecked.agent) {
+      const capture = captureDraft(declared.cli, rechecked.draftScreen);
+      if (!('text' in capture)) {
+        return busyRefused(out, json, `${name} holds unsent text in its input box ${capture.why}; left as it is`);
+      }
+      const kept = keepRestartDraft(dir, session, name, capture.text);
+      if ('why' in kept) {
+        return busyRefused(out, json, `${name} holds unsent text and ${kept.why}; left as it is`);
+      }
+      draftText = capture.text;
+      draftCopy = kept.path;
+    }
+
     const who = describeCaller(caller);
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
 
@@ -400,7 +425,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       // read is not claimed empty: its input box was not read.
       const box = rechecked.unrecognised !== undefined
         ? 'not read (the screen is not recognised)'
-        : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
+        : draftCopy !== undefined
+          ? `holds unsent text, copied to ${draftCopy} and pasted back once the new pane is ready`
+          : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
       noteIo.stdout(`${plainLine(name)}: input box: ${box}\n`);
       noteIo.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
       noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(declared.launch)}" in a new workspace without passing the old transcript\n`);
@@ -427,15 +454,17 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         keep: false,
         // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
         // says "close without typing" here, and the owner's own `--abandon` stays what it was.
-        abandon: (abandon || rechecked.unrecognised !== undefined) && rechecked.where !== 'free',
+        // A box whose text was copied is closed the same way: the close would otherwise type
+        // the exit into the text, and the copied text is what waits for the new pane.
+        abandon: (abandon || rechecked.unrecognised !== undefined || draftCopy !== undefined) && rechecked.where !== 'free',
         closeUnasked: abandon,
         unasked: `team restart ${name} --abandon closes it`,
       });
       if (!stopped) {
-        return busyRefused(out, json, `${name} could not be stopped; left as it is`);
+        return busyRefused(out, json, `${name} could not be stopped; left as it is${keptAt(draftCopy)}`);
       }
       if (sources.upLaunch.agentPanes(session)?.includes(rechecked.agent.pane)) {
-        return busyRefused(out, json, `${name} did not close its old pane; left as it is`);
+        return busyRefused(out, json, `${name} did not close its old pane; left as it is${keptAt(draftCopy)}`);
       }
       let priorPane = freshRecorded?.pane;
       updateState(dir, (file) => {
@@ -533,8 +562,24 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
     if (!launchedOk || !afterwards?.pane) {
-      logLine(dir, 'restart', who, `${name}: launch did not reach ready`, sources.now());
-      return notReadyRefused(out, json, `${name} did not reach a ready prompt`);
+      logLine(dir, 'restart', who, `${name}: launch did not reach ready${draftCopy === undefined ? '' : `; its unsent text is copied at ${draftCopy}`}`, sources.now());
+      return notReadyRefused(out, json, `${name} did not reach a ready prompt${keptAt(draftCopy)}`);
+    }
+    // The unsent text goes back into the new pane's own box, its rows verified. On success the
+    // copy is removed; where the paste did not read back, the copy stays and this run names it.
+    if (draftText !== undefined && draftCopy !== undefined) {
+      const restored = await restoreRestartDraft(sources.upLaunch, session, afterwards.pane, declared.cli, draftText);
+      if (restored.ok) {
+        removeRestartDraft(draftCopy);
+        const said = `${name}: unsent text pasted back${restored.note === undefined ? '' : ` (${restored.note})`}`;
+        noteIo.stdout(`${plainLine(said)}\n`);
+        logLine(dir, 'restart', who, said, sources.now());
+      } else {
+        const why = restored.note ?? 'the paste did not read back as its rows';
+        const said = `${name}: the unsent text could not be pasted back (${why}); its copy is at ${draftCopy}`;
+        noteIo.stdout(`${plainLine(said)}\n`);
+        logLine(dir, 'restart', who, said, sources.now());
+      }
     }
     return readyExit(out, json, dir, who, name, oldPane, afterwards.pane, sources.now(), team.project, session, notes);
   } finally {
@@ -552,6 +597,9 @@ type InspectedSeat =
       where: DownSeat['state'];
       exitInBox: boolean;
       atExitQuestion: boolean;
+      /** The raw screen the unsent box was read from, when its text can be copied and pasted
+       *  back: the restart moves it out of the old pane and into the new one. */
+      draftScreen?: string;
       /** herdr's own status, when the screen is not recognised but herdr says idle or done. */
       unrecognised?: string;
     };
@@ -626,6 +674,34 @@ function inspectSeat(
       unrecognised: agent.status,
     };
   }
+  // Unsent text is not a block: the box is read now, the text is copied under the run lock
+  // before the close, and pasted back once the relaunched seat is ready. What keeps the old
+  // refusal is a text no measured surface can copy faithfully, and a seat herdr reports
+  // mid-turn — its turn is not this command's to end. The CLI's own exit text in the box is
+  // never pasted into the new pane; it stays the clearable case above.
+  if (where === 'unsent' && !abandon && !clearable && !holdsExit) {
+    if (profile !== null && profile.input !== null && (agent.status === 'idle' || agent.status === 'done')) {
+      const raw = sources.screenText(session, agent.pane, declared.cli);
+      const capture = raw === undefined ? { why: 'but its screen could not be read' } : captureDraft(declared.cli, raw);
+      if ('text' in capture) {
+        return {
+          kind: 'ok',
+          agent,
+          where,
+          exitInBox: false,
+          atExitQuestion: false,
+          draftScreen: raw ?? '',
+        };
+      }
+      return {
+        kind: 'busy',
+        message: `${name} holds unsent text in its input box ${capture.why}; left as it is (the owner clears it in its pane, or team restart ${name} --abandon closes it)`,
+      };
+    }
+    // No measured clear-and-paste surface for this CLI, or a seat herdr reports mid-turn: the
+    // old word stands below.
+  }
+
   if (where !== 'free' && where !== 'exited' && !abandon && !clearable) {
     const way = where !== 'unknown'
       ? ''
@@ -939,6 +1015,80 @@ function hostOf(input: {
     },
     log: (who, what) => logLine(dir, 'restart', input.caller, `${who}: ${what}`, input.now()),
   };
+}
+
+/** Where a restart keeps the text it moves out of an unsent box: under the state folder, away
+ *  from the drop scans, one file per seat and session. */
+export function restartDraftPath(dir: string, session: string, name: string): string {
+  return join(dir, 'restart-drafts', session, `${name}.draft`);
+}
+
+/** The clause a refusal carries while a copy exists: the text is safe there, never lost with
+ *  the pane. */
+function keptAt(copy: string | undefined): string {
+  return copy === undefined ? '' : `; its unsent text is copied at ${copy}`;
+}
+
+/** Writes the copy before the pane is closed: 0600 in a 0700 folder, the same write a drop
+ *  file makes. An identical copy is reused; one holding different text is an earlier restart's
+ *  and is never overwritten — the box is left as it is and the old copy keeps its words. */
+function keepRestartDraft(
+  dir: string,
+  session: string,
+  name: string,
+  text: string,
+): { path: string } | { why: string } {
+  const path = restartDraftPath(dir, session, name);
+  try {
+    if (readFileSync(path, 'utf8') === text) return { path };
+    return { why: `a different copy already sits at ${path}` };
+  } catch {
+    // Absent, or unreadable: the write below is the one that says which.
+  }
+  try {
+    const store = dirname(path);
+    mkdirSync(store, { recursive: true });
+    chmodSync(join(dir, 'restart-drafts'), 0o700);
+    chmodSync(store, 0o700);
+    dropMessage(store, `${name}.draft`, text);
+    return { path };
+  } catch (error) {
+    return { why: `its text could not be copied (${error instanceof Error ? error.message : String(error)})` };
+  }
+}
+
+/** Removes the copy once the text is verified back in the new box. One that will not unlink is
+ *  left: the safe side is a copy too many, never one too few. */
+function removeRestartDraft(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Left in place; nothing reads it as a drop.
+  }
+}
+
+/** Pastes the captured text into the relaunched seat's own box and reads it back as its rows —
+ *  the same bracketed paste and verification a delivery's restore makes. The paste only goes
+ *  to a pane herdr reports idle or done: anything else keeps the text in its copy. */
+async function restoreRestartDraft(
+  launch: Launch,
+  session: string,
+  pane: string,
+  cli: string,
+  text: string,
+): Promise<{ ok: boolean; note?: string }> {
+  const status = launch.agentStatus?.(session, pane) ?? null;
+  if (status !== 'idle' && status !== 'done') {
+    return { ok: false, note: status === null ? 'the pane status could not be read' : `the pane reads ${status}` };
+  }
+  const host: DeliverHost = {
+    typeText: (id, value) => launch.typeText?.(session, id, value) ?? false,
+    pressEnter: (id) => launch.pressEnter?.(session, id) ?? false,
+    status: (id) => launch.agentStatus?.(session, id) ?? null,
+    wait: launch.sleep,
+    readAnsi: (id) => launch.paneText(session, id),
+  };
+  return pasteDraftBack(host, pane, cli, text);
 }
 
 function where(problem: Problem): string {
