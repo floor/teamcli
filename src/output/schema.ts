@@ -213,6 +213,51 @@ export const ERROR_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** The idle-with-work reading as the producer writes it (`src/idle_work.ts`), shared by the two
+ *  commands that print it: a field added there without its schema fails the smoke check. */
+const IDLE_WORK_SCHEMA_FRAGMENT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['format', 'at', 'threshold_seconds', 'takeable', 'idle'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    at: { type: 'string', minLength: 1 },
+    threshold_seconds: { type: 'integer', minimum: 0 },
+    threshold_unknown: { type: 'string', minLength: 1 },
+    takeable: { type: ['integer', 'null'], minimum: 0 },
+    refused: { type: 'string', minLength: 1 },
+    idle: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seat'],
+        properties: {
+          seat: { type: 'string', minLength: 1 },
+          since: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+} as const;
+
+/** The green journal's ready-but-uninstalled metadata, as `status` and `check` print it. */
+const GREEN_SLICES_SCHEMA_FRAGMENT = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['task', 'seat', 'commit', 'version', 'readyAt'],
+    properties: {
+      task: { type: 'string', minLength: 1 },
+      seat: { type: 'string', minLength: 1 },
+      commit: { type: 'string', minLength: 1 },
+      version: { type: 'string', minLength: 1 },
+      readyAt: { type: 'string', minLength: 1 },
+    },
+  },
+} as const;
+
 /** Published `--json` output schema for the pilot `team status` command (`schema/status.schema.json`). */
 export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.status',
@@ -288,6 +333,11 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           type: 'array',
           items: { type: 'object' },
         },
+        // The idle-with-work reading and the green journal, read by the status slice: each is
+        // absent when the command did not read it.
+        idle_work: IDLE_WORK_SCHEMA_FRAGMENT,
+        green_slices: GREEN_SLICES_SCHEMA_FRAGMENT,
+        green_notice: { type: 'string' },
       },
     },
     {
@@ -518,6 +568,11 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: DIFFERENCE_SCHEMA_FRAGMENT,
     },
     summary: SUMMARY_SCHEMA_FRAGMENT,
+    // The same two readings `status` carries, and the rollout hint a stale brief leaves.
+    idle_work: IDLE_WORK_SCHEMA_FRAGMENT,
+    green_slices: GREEN_SLICES_SCHEMA_FRAGMENT,
+    green_notice: { type: 'string' },
+    hint: { type: 'string', minLength: 1 },
   },
 };
 /** Published `--json` output schema for `team client keygen` (`schema/client.schema.json`). */

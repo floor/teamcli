@@ -112,7 +112,8 @@
                 "native",
                 "mcp-inbox",
                 "typed",
-                "drop"
+                "drop",
+                "headless-resume"
               ]
             }
           },
