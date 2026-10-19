@@ -90,6 +90,8 @@ export type Agent = {
   seat_handle?: string | null;
   /** Owner-signed seat-level policy declarations (Kernel amendment 02 §2.12), when present. */
   policies?: Record<string, YamlValue>;
+  /** Owner-signed seat-level settings (OD-20261018-08), one signed entry per key, when present. */
+  settings?: Record<string, YamlValue>;
 };
 
 export type AgentInit = Omit<Agent, 'id' | 'provenance'> & {
@@ -213,6 +215,9 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
     };
     if (next.policies !== undefined && Object.keys(next.policies).length === 0) {
       delete next.policies;
+    }
+    if (next.settings !== undefined && Object.keys(next.settings).length === 0) {
+      delete next.settings;
     }
     const problem = invalid(next);
     if (problem) throw new Error(`cannot update ${id}: ${problem}`);
@@ -414,6 +419,9 @@ function fromValue(value: YamlValue): Agent | null {
   if (isObj(value.policies) && Object.keys(value.policies).length > 0) {
     agent.policies = value.policies;
   }
+  if (isObj(value.settings) && Object.keys(value.settings).length > 0) {
+    agent.settings = value.settings;
+  }
   return agent;
 }
 
@@ -428,6 +436,7 @@ function invalid(agent: Agent): string | null {
   if (!agent.reach.team.trim() || !agent.reach.seat.trim()) return 'reach.team and reach.seat are required';
   if (!(LIFECYCLES as readonly string[]).includes(agent.lifecycle)) return `"${agent.lifecycle}" is not a lifecycle state`;
   if (agent.seat_handle != null && !isSeatId(agent.seat_handle)) return 'seat_handle is not seat_ plus 12 hex';
+  if (agent.settings !== undefined && !isObj(agent.settings)) return '"settings" must be a map';
   return null;
 }
 
@@ -461,6 +470,24 @@ function emitPolicies(policies: Record<string, YamlValue>): string[] {
   const lines = ['policies:'];
   for (const name of keys) {
     const entry = policies[name];
+    if (isObj(entry)) {
+      lines.push(`  ${quote(name)}:`);
+      for (const [k, v] of Object.entries(entry)) {
+        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+      }
+    } else {
+      lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
+    }
+  }
+  return lines;
+}
+
+function emitSettings(settings: Record<string, YamlValue>): string[] {
+  const keys = Object.keys(settings).sort();
+  if (keys.length === 0) return [];
+  const lines = ['settings:'];
+  for (const name of keys) {
+    const entry = settings[name];
     if (isObj(entry)) {
       lines.push(`  ${quote(name)}:`);
       for (const [k, v] of Object.entries(entry)) {
@@ -518,6 +545,9 @@ function emit(agent: Agent): string {
   if (agent.seat_handle != null) lines.push(`seat_handle: ${quote(agent.seat_handle)}`);
   if (agent.policies && Object.keys(agent.policies).length > 0) {
     lines.push(...emitPolicies(agent.policies));
+  }
+  if (agent.settings && Object.keys(agent.settings).length > 0) {
+    lines.push(...emitSettings(agent.settings));
   }
   return `${lines.join('\n')}\n`;
 }
