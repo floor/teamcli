@@ -1,12 +1,13 @@
-// The direct-only send seam: the watch's idle dispatch runs the ordinary send command with the
-// typed and native legs left out, hands in the pane and CLI its own pass saw, and reads back the
-// route that ended the walk rather than an exit code. Nothing here types, and a send the caller
-// did not see is refused before any route is attempted.
+// The direct-only send seam: the watch's idle dispatch runs the ordinary send command with only
+// the wake routes left in the walk, hands in the pane and CLI its own pass saw, and reads back the
+// route that ended the walk rather than an exit code. Nothing here types, no stored copy counts as
+// a delivery, and a send the caller did not see is refused before any route is attempted.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
-import { sendDirect } from '../src/commands/send.ts';
+import { sendDirect, type DirectSendResult } from '../src/commands/send.ts';
+import { workPushResultOf } from '../src/commands/watch.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { MESSAGE_ID } from '../src/mcp/inbox.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -103,6 +104,42 @@ test('a direct-only send whose order holds no direct route attempts nothing and 
   expect(pane.typed).toEqual([]);
   // A refusal or a passed-over order is not an attempt: no signed record was staged.
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
+test('a direct-only send never counts an inbox record or a drop copy as a wake', async () => {
+  const made = world(['mcp-inbox', 'drop']);
+  cleanup = made.cleanup;
+  const pane = scripted(['idle'], null);
+  const host = fake(made, { native: pane });
+
+  const run = await sendDirect(owner(made.root), host, {
+    seat: 'lead',
+    pane: 'w1:p1',
+    cli: 'claude-code',
+    body: 'a note',
+  });
+
+  // Neither leg reaches a live receiver: the inbox leg stores the record in the seat's folder and
+  // the drop leg writes the same file, so neither is attempted by a wake path and nothing is left.
+  expect(run.result).toBeNull();
+  expect(pane.typed).toEqual([]);
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
+test('the dispatcher reads only a delivered route as a wake', () => {
+  const delivered: DirectSendResult = { outcome: 'delivered', route: 'socket', id: 'i', record: '/r' };
+  expect(workPushResultOf(delivered, '')).toEqual({ ok: true, outcome: 'socket: delivered' });
+  const held: DirectSendResult = { ...delivered, outcome: 'held', reason: 'the box held it' };
+  expect(workPushResultOf(held, '')).toEqual({ ok: false, refused: 'socket: held: the box held it' });
+  const unreachable: DirectSendResult = { ...delivered, outcome: 'unreachable' };
+  expect(workPushResultOf(unreachable, '')).toEqual({ ok: false, refused: 'socket: unreachable' });
+  // A stored copy is never a wake, even though the send command exits 0 for it.
+  const copied: DirectSendResult = { ...delivered, route: 'drop', outcome: 'held', reason: 'the record is stored; no seat was woken' };
+  expect(workPushResultOf(copied, '')).toEqual({ ok: false, refused: 'drop: held: the record is stored; no seat was woken' });
+  expect(workPushResultOf(null, 'team send: refused: no live agent\n'))
+    .toEqual({ ok: false, refused: 'team send: refused: no live agent' });
+  expect(workPushResultOf(null, ''))
+    .toEqual({ ok: false, refused: 'the send ended before any direct route was attempted' });
 });
 
 test('a direct-only send refuses a pane the pass did not see, before any route is attempted', async () => {

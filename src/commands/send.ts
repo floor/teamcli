@@ -222,10 +222,11 @@ export type DirectSendResult = {
 };
 
 /**
- * The watch's idle dispatch uses this hook. With it set, the send walks only the routes that ask
- * nothing of a pane — the typed and native legs are left out, so no keystroke leaves this process
- * — and the walk's ending is handed back as a result instead of only an exit code. Admission, the
- * delivery order and every route's own rules are the same ones an ordinary send runs.
+ * The watch's idle dispatch uses this hook. With it set, the send walks only routes that reach a
+ * live receiver without a keystroke — the typed and native legs type, and the drop and mcp-inbox
+ * legs are stored copies rather than wakes, so none of the four is attempted. The walk's ending is
+ * handed back as a result instead of only an exit code. Admission, the delivery order and every
+ * remaining route's rules are the same ones an ordinary send runs.
  */
 export type DirectSendHook = {
   /** The pane and CLI the caller's own pass saw for this seat: the send is bound to them, and a
@@ -822,11 +823,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // back.
   const human = overrides.human ?? (declared?.human === true);
   const chosen: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
-  // A direct-only walk (the watch's idle dispatch) never types: the typed leg and the native
-  // leg, whose trigger line is typed too, are left out of the order, so no keystroke can leave
-  // this process. Every remaining leg keeps its own rules, and the order's own words decide which
-  // of them the receiver offers.
-  const walk: readonly DeliveryLeg[] = host.direct ? chosen.filter((leg) => leg !== 'typed' && leg !== 'native') : chosen;
+  // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
+  // reaches a live receiver without a keystroke stays. The typed and native legs type, the drop
+  // leg is a stored copy and the mcp-inbox leg is the seat's own storage — none of them is a
+  // wake, so none is attempted. A functional headless route would stay if this build carried
+  // one. Every remaining leg keeps its own rules, and the order's own words decide whether the
+  // receiver offers it.
+  const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
+  const walk: readonly DeliveryLeg[] = host.direct ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
 
   // One signed record is written into the recipient's folder — the whole body, its thread, the
   // address it resolved to and the rule that admitted it — and the leg that takes the send
@@ -1202,10 +1206,11 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
 export type DirectSendRun = { code: number; result: DirectSendResult | null };
 
 /**
- * Sends `body` to `seat` over direct routes only, through the same command an ordinary send
- * runs: the same admission, the same delivery order, the same route rules. The typed and native
- * legs are left out, so nothing is typed into any pane, and the send is bound to the pane and CLI
- * the caller's pass saw. The watch's idle dispatch calls this.
+ * Sends `body` to `seat` over wake routes only, through the same command an ordinary send runs:
+ * the same admission, the same delivery order, the same route rules. Only a route that reaches a
+ * live receiver without a keystroke is walked, so nothing is typed and no stored copy counts as a
+ * delivery, and the send is bound to the pane and CLI the caller's pass saw. The watch's idle
+ * dispatch calls this.
  */
 export async function sendDirect(
   io: Io,
