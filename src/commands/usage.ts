@@ -192,7 +192,8 @@ function mineNotesOf(loaded: LoadResult | null, error: unknown, restricted: bool
   return notesOf(path, loaded.errors, restricted, home);
 }
 
-/** One note for a file that exists and does not load. The owner reads the loader's own message:
+/** One note for a file that exists and does not load, or that cannot be read at all. The owner
+ *  reads the loader's own message:
  *  the path, the line when it has one, and the problem — never the bare `no team file here` text,
  *  which is a different case's sentence. A caller who is not the owner reads a fixed sentence
  *  instead — this project's own path relative to the root, the line, and the owner as the
@@ -202,6 +203,12 @@ function mineNotesOf(loaded: LoadResult | null, error: unknown, restricted: bool
  *  sentence and no reason, so this note names the owner, the same way a file that cannot be read
  *  does. */
 function noticeOf(path: string, problem: Problem, restricted: boolean, home: string): string {
+  // The read itself failed: the file was never text, so this is the "cannot be read" case and
+  // not a load problem. The loader's refusal already names the file, so it prints once for the
+  // owner; anyone else reads the same fixed sentence a thrown read error prints (`errorNote`).
+  if (problem.unreadable === true) {
+    return restricted ? `${TEAM_FILE} cannot be read: the owner reads the reason` : tildify(problem.message, home);
+  }
   if (restricted) return `${TEAM_FILE} does not load${problem.line ? ` (line ${problem.line})` : ''}: the owner reads the reason`;
   return `${tildify(path, home)}${problem.line ? ` line ${problem.line}` : ''}: ${tildify(problem.message, home)}`;
 }
