@@ -1,12 +1,13 @@
 // The runtime reading of a seat's at-once settings: the signed chain's nickname,
-// delivery_order and human, nearest level first. A chain that does not verify declares nothing
-// here — routing decides how a message travels, never whether it may, so a send must not fail on
-// a broken record; the read commands and `team check` are where it is reported.
+// delivery_order and human, nearest level first. An acting caller takes `resolveSeatOverrides`,
+// which hands back the reasons a source did not verify; the display reading (`seatOverridesOf`)
+// declares nothing for a broken record. The read commands and `team check` are where damage is
+// reported loudly.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { seatOverridesOf } from '../src/config/apply.ts';
+import { resolveSeatOverrides, seatOverridesOf } from '../src/config/apply.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import type { ConfigKey, ConfigValue } from '../src/config/registry.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
@@ -73,7 +74,7 @@ describe('seatOverridesOf', () => {
     });
   });
 
-  test('a record that does not verify declares nothing, and the send still routes', () => {
+  test('the display reading declares nothing for a record that does not verify', () => {
     const agentId = registered();
     sign(agentId, [{ key: 'nickname', value: 'wren' }]);
     const doc = join(agentsDir(home), `${agentId}.yaml`);
@@ -81,9 +82,25 @@ describe('seatOverridesOf', () => {
     expect(seatOverridesOf({ home, root, seat: SEAT })).toEqual({});
   });
 
+  test('an acting caller is refused by a record that does not verify, and told which file', () => {
+    const agentId = registered();
+    sign(agentId, [{ key: 'nickname', value: 'wren' }]);
+    const doc = join(agentsDir(home), `${agentId}.yaml`);
+    writeFileSync(doc, readFileSync(doc, 'utf8').replace('wren', 'crow'));
+
+    const read = resolveSeatOverrides({ home, root, seat: SEAT });
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.why).toContain(doc);
+    expect(read.why).toContain('signature verification failed');
+  });
+
   test('no home, and a seat with no agent record, declare nothing', () => {
     registered();
     expect(seatOverridesOf({ home: null, root, seat: SEAT })).toEqual({});
+    expect(resolveSeatOverrides({ home: null, root, seat: SEAT })).toEqual({ ok: true, overrides: {} });
+    // A seat declared but never launched has no record to sign a word; the declaration stands.
     expect(seatOverridesOf({ home, root, seat: 'someone-else' })).toEqual({});
+    expect(resolveSeatOverrides({ home, root, seat: 'someone-else' })).toEqual({ ok: true, overrides: {} });
   });
 });
