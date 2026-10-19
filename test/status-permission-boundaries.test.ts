@@ -1,9 +1,10 @@
-// The permission-prompt difference at its boundaries. The difference moved: `compare()` emits it
-// now, for seats the file knows and temporary seats alike, and the watch-side `viewOf` no longer
-// carries a copy — a copy there would print the same line twice through `team check`. These pins
-// hold the edges: exactly one line through check, the same words from status and check, a seat
-// herdr calls working is still reported, a temporary seat is reported, and the internal page's
-// repair row is the sentence the binary prints.
+// The permission-prompt difference at its boundaries. `compare()` emits the row `status` prints,
+// for seats the file knows and temporary seats alike; `team check` replaces it for the same seat
+// with its own stuck-prompt line (the prompt's kind, the state's last-active age, the command the
+// screen shows), dropping `compare()`'s row through its `promptSeat` mark. These pins hold the
+// edges: exactly one line through check, a seat herdr calls working is still reported, a
+// temporary seat is reported through status, and the internal page's repair row is the sentence
+// the binary prints.
 import { beforeEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -83,12 +84,24 @@ function check() {
   return { code, out: io.out, err: io.err };
 }
 
-test('through team check the permission difference appears exactly once', () => {
+// The check reads only a pane the state records for the seat, so the scene records one — with
+// the clock the stuck-prompt line dates the seat by.
+function recordSeat(name: string, pane: string, workspace: string, cli: string, lastActive?: string): void {
+  updateState(join(dir, '.agents'), (state) => {
+    const session = (state.sessions['acme-web'] ??= emptySession());
+    session.seats[name] = { stage: 'ready', pane, workspace, cli, ...(lastActive ? { last_active: lastActive } : {}) };
+  });
+}
+
+test('through team check the held seat appears exactly once, in the check\'s own words', () => {
   live = { ...built(), screens: { ...built().screens, 'w2:p1': PERMISSION } };
+  recordSeat('codex-acme', 'w2:p1', 'w2', 'codex', '2026-10-03T14:06:00Z');
   const { out, code } = check();
-  const lines = out.split(`${DIFFERENCE}`).length - 1;
-  expect(lines, 'check printed the permission difference more than once').toBe(1);
-  expect(out).toContain(`difference: codex-acme ${DIFFERENCE}\n  repair: ${REPAIR}\n`);
+  const lines = out.split('stuck at a permission prompt').length - 1;
+  expect(lines, 'check named the held seat more than once').toBe(1);
+  expect(out).not.toContain(DIFFERENCE);
+  expect(out).toContain('difference: codex-acme: stuck at a permission prompt (last active 4m ago)\n');
+  expect(out).toContain(`  repair: ${REPAIR}\n`);
   expect(code).toBe(1);
   // The summary counts exactly the lines above it — check may add differences status does not
   // carry (the rules file here), and every one of them must stay counted.
@@ -97,7 +110,7 @@ test('through team check the permission difference appears exactly once', () => 
   expect(summary, 'the summary count parted from the printed lines').toBe(printed);
 });
 
-test('status and check say the same words, for a seat herdr calls working too', async () => {
+test('status keeps its plain row, and check names the same held seat once', async () => {
   // herdr's word is not the gate: a seat held at a prompt may read working or idle, and the
   // difference is the screen's, not the status line's.
   live = {
@@ -105,14 +118,18 @@ test('status and check say the same words, for a seat herdr calls working too', 
     agents: built().agents.map((one) => (one.name === 'codex-acme' ? agent('codex-acme', 'w2', 'working', 'codex') : one)),
     screens: { ...built().screens, 'w2:p1': PERMISSION },
   };
+  recordSeat('codex-acme', 'w2:p1', 'w2', 'codex', '2026-10-03T14:06:00Z');
   const st = await status();
   expect(st.out).toContain(`difference: codex-acme ${DIFFERENCE}\n  repair: ${REPAIR}\n`);
   expect(st.code, 'a permission prompt is a difference, whatever herdr calls the seat').toBe(1);
   expect(st.out).toContain('1 difference\n');
 
+  // The check says the same fact in its own line, and never prints `compare()`'s row beside it.
   const ck = check();
-  const pair = (out: string) => out.split('\n').filter((line) => line.includes(DIFFERENCE) || line.includes(REPAIR));
-  expect(pair(ck.out)).toEqual(pair(st.out));
+  expect(ck.out).not.toContain(DIFFERENCE);
+  expect(ck.out.split('stuck at a permission prompt').length - 1).toBe(1);
+  expect(ck.out).toContain('difference: codex-acme: stuck at a permission prompt (last active 4m ago)\n');
+  expect(ck.code).toBe(1);
 });
 
 test('a temporary seat held at a prompt is a difference too', async () => {
