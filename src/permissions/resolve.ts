@@ -74,6 +74,7 @@ export type PermissionRule =
   | 'seat-only'
   | 'leads-only'
   | 'team-change'
+  | 'team-pause'
   | 'team-read'
   | 'terminal'
   | 'absent'
@@ -235,6 +236,16 @@ export function resolvePermission(
         rule: 'team-change',
         why: `\`${command}\` is decided by \`mayChangeTeamVerdict\` from the caller's placement, not from a registry record: ${gate.why}`,
       };
+    case 'team-pause':
+      // The row is `mayPauseTeamVerdict`'s: the owner, or the team's orchestrator on its own
+      // seat — the operator is not admitted. A registry record alone does not say where the
+      // caller stands, so this resolver neither admits nor refuses it as a copy of that
+      // function's rule — the bridge calls the function itself.
+      return {
+        effect: 'deny',
+        rule: 'team-pause',
+        why: `\`${command}\` is decided by \`mayPauseTeamVerdict\` from the caller's placement, not from a registry record: ${gate.why}`,
+      };
     case 'team-read':
       // The row is the read gate's (`mayReadTeam`): a seat the state places on its recorded
       // pane, or an approved delegate pane. Membership alone admits no one, so a record-only
@@ -392,6 +403,8 @@ function says(gate: Gate, command: string): string {
       return `\`${command}\` admits a seat the team marks \`leads\`, on its recorded pane, and not the owner`;
     case 'team-change':
       return `\`${command}\` is decided by \`mayChangeTeamVerdict\` from the walk and the state's standing`;
+    case 'team-pause':
+      return `\`${command}\` is decided by \`mayPauseTeamVerdict\` from the walk and the state's standing: the owner or the orchestrator's seat, and not the operator`;
     case 'team-read':
       return `\`${command}\` is decided by the read gate (\`mayReadTeam\`) from the caller's placement and the delegate evidence`;
     case 'any-caller':
