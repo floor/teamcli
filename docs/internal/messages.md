@@ -8,8 +8,12 @@ page.
 ## What the run does: the mailbox, the receipt, the key
 
 Shows a message that is already waiting and writes the receipt that says it was shown. Anyone in
-the checkout may run it. It verifies the record, prints the body, and writes the receipt in that
-one step. A record that does not verify prints no body and writes nothing.
+the checkout may run it. It verifies the record, publishes the signed read receipt with the same
+exclusive, no-clobber link the inbox uses, makes it durable, and then prints the body. The receipt
+is the per-id gate every reader shares, so a message another reader already served is skipped, and
+no body is shown without the receipt that proves the exposure. A record that does not verify
+prints no body and writes nothing. The older `.agents/messages` store keeps its own receipt shape
+and its original print-then-write order.
 
 `team send` writes the record: one signed message per send, into the recipient's folder
 `<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The typed
@@ -44,9 +48,20 @@ directory, or bound to another root or session, does not verify.
 
 Writes the signed read receipt beside the record, `<id>.read.json` in the same folder — the older
 store keeps its own receipt shape at `.agents/messages/<seat>/<id>.read.json` — signed with the
-message key under its own domain. The receipt is written only after `io.stdout` has returned the
-body: a write that throws leaves no receipt, and the record stays waiting. A receipt that does
-not verify leaves the message waiting.
+message key under its own domain. For a record in the transport tree the receipt is published
+before the body, through the same `link` the inbox uses, and it is flushed with its folder before
+the body is printed: exactly one reader — this run, `team drops --read` or `inbox_read` — wins
+the id, and a crash after the print leaves the receipt that proves the exposure. A receipt that
+cannot be published prints no body and leaves the id waiting; one that was linked but could not be
+flushed prints no body and spends the id. The older store keeps its original order: the body
+prints first and its receipt is written after `io.stdout` returns.
+
+A valid `read` or `replied` receipt at the name means another reader already served the message:
+the run skips it silently, with no row and no body. An entry at the read or replied receipt name
+that does not verify for this message is not proof the content went unserved — it may hide a read
+that happened, so it is preserved and the record is a `refused` row with no body, and the
+difference tells the caller to inspect the file rather than remove it. A link, a FIFO or a folder
+at either name is refused the same way.
 The second run, once every waiting record has a receipt, prints the zero-message reading: the
 table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
@@ -101,6 +116,20 @@ repair names the file the table already shows:
 
 A file in the older store prints the same differences with `.agents/messages/<seat>/<id>.json` in
 place of the record's path, and its shape refusal reads `the record is not a message`.
+
+A record that verifies can still be refused at its receipt names. The read or replied name may be
+held by a file that does not verify for this message, or by something that is not a file, or the
+receipt may fail to publish or to flush. The body is not printed, the entry is left exactly as it
+is — this read never deletes or rewrites a receipt, because a damaged one may be the only evidence
+that a body was exposed — and the difference names it:
+
+    difference: <seat>/<id> was not shown: the read receipt name is held by a file that does not verify for this message
+      repair: inspect .agents/send-drops/<session>/<seat>/<id>.read.json: it is left as it is, because it may record a read that already happened
+      who: any seat
+
+A receipt that was linked but could not be flushed spends the id: the run prints no body, and the
+difference says the receipt stays and the message stays spent. A message another reader already
+served is not a refusal — it is skipped silently, with no row and no body.
 
 A missing or unreadable message key is a refusal of the whole run, with nothing shown:
 

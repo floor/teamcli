@@ -1,5 +1,8 @@
-// `team messages`: verify a record that is already waiting, print its body, and write the read
-// receipt that makes its status move.
+// `team messages`: verify a record that is already waiting, publish the read receipt that proves
+// it was served, and only then print its body. The signed read receipt is the per-id gate every
+// reader shares — this command, `team drops --read` and `inbox_read` — so the receipt is written
+// with an exclusive link and flushed before the body, and a record another reader already served
+// is skipped. An entry at a receipt name that does not verify is held, never replaced.
 //
 // A send of this version writes a signed record into the recipient's transport tree,
 // `<root>/.agents/send-drops/<session>/<seat>/<id>` (`src/send/record.ts`), and this command reads
@@ -15,6 +18,8 @@ import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientMessages } from '../client/inbox.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
+import { heldAt, type Held } from '../launch/rules-file.ts';
+import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
 import {
   contextLine,
   formatRelativeTime,
@@ -44,15 +49,13 @@ import {
   type Json,
 } from '../store/keys.ts';
 import {
+  isRead,
   receiptFile as recordReceiptFile,
-  receiptHolds,
   recordFile,
   signedRecordOf,
   signReceiptPayload,
   verifyRecord,
-  writeReceipt,
   type ReceiptPayload,
-  type ReceiptStatus,
   type RecordPayload,
   type SignedRecord,
 } from '../send/record.ts';
@@ -250,21 +253,13 @@ function candidates(root: string, session: string): Candidate[] {
   return [...recordCandidates(root, session), ...legacyCandidates(root)];
 }
 
-/** Whether the record at `candidate` already has a verifying read receipt: the one receipt module's
- *  answer, shared with the inbox, `team drops` and the watch. */
+/** Whether the record at `candidate` is already served: a signed `read` or `replied` receipt
+ *  verifies for this message and inbox. A reply counts as the read that came before it, the same
+ *  answer `readMessage`, `team drops` and the watch share, so no reader shows a body again and the
+ *  watch does not ring for a message that was already answered. */
 function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject): boolean {
-  const path = recordReceiptFile(
-    recordDir(root, candidate.session ?? session, candidate.seat),
-    candidate.id,
-    'read' as ReceiptStatus,
-  );
-  return receiptHolds(
-    path,
-    candidate.id,
-    'read',
-    { to: candidate.seat, root, session: candidate.session ?? session },
-    key,
-  );
+  const context = { to: candidate.seat, root, session: candidate.session ?? session };
+  return isRead(recordDir(root, context.session, candidate.seat), candidate.id, context, key);
 }
 
 /**
@@ -402,26 +397,117 @@ function problemOf(candidate: Candidate, root: string, session: string, key: Key
 }
 
 /**
- * Writes the read receipt for a record that was shown. The receipt carries its status
- * (`read`), is signed with the message key, and is write-once; the older store keeps its own
- * receipt shape.
+ * The gate a transport-tree body passes before it is printed. The signed `read` receipt is the
+ * per-id fact every reader races to create, and it is published with `link` — exclusive and
+ * no-clobber — and flushed before the body is shown, so at most one `team messages` read, `team
+ * drops --read` or `inbox_read` returns the content, and the receipt that proves the exposure
+ * survives a crash that follows it. `team messages` used to print first and write the receipt
+ * after, which let a concurrent automatic read return the same body twice, and let a check-then-
+ * rename replace the automatic reader's receipt.
+ *
+ * `served` is another reader's valid `read` or `replied` receipt: the id already went out, and
+ * this run skips it without a row. A file at the read or replied receipt name that does not
+ * verify for this message is uncertainty — it may hide a read that happened — so the run shows no
+ * body, leaves the entry exactly as it is, and reports it as a refused row. The same holds for a
+ * link, a FIFO or a folder at either name. A receipt this reader publishes but cannot make durable
+ * is not proof either: the body is not shown, the id is spent, and the refusal says so.
  */
-function writeReadReceipt(home: string, candidate: Candidate, payload: Verified, root: string, session: string, at: string): void {
-  if (candidate.store === 'record') {
-    const receipt: ReceiptPayload = {
-      kind: 'receipt',
-      status: 'read',
-      id: candidate.id,
-      to: candidate.seat,
-      root,
-      session: candidate.session ?? session,
-      at,
-    };
-    const signed = signReceiptPayload(receipt, home);
-    const written = writeReceipt(recordDir(root, candidate.session ?? session, candidate.seat), signed, home);
-    if (!written.ok) throw new Error('the read receipt could not be written');
-    return;
+type ReadGate =
+  | { kind: 'shown' }
+  | { kind: 'served' }
+  | { kind: 'refused'; what: string; repair: string };
+
+/** The relative path of one record's receipt, as the caller reads it in a repair line. */
+function recordReceiptPath(candidate: Candidate, status: 'read' | 'replied'): string {
+  return `${mailboxPath(candidate)}.${status}.json`;
+}
+
+/** A refused gate outcome for an entry at a receipt name the run will not touch. The entry is
+ *  preserved: it may be the only evidence a body was exposed, so nothing here deletes or repairs
+ *  it, and the repair line sends the caller to look at it, not to remove it blindly. */
+function heldReceipt(candidate: Candidate, status: 'read' | 'replied', entry: Exclude<Held['kind'], 'missing'>): ReadGate {
+  return {
+    kind: 'refused',
+    what: entry === 'file'
+      ? `${candidate.seat}/${candidate.id} was not shown: the ${status} receipt name is held by a file that does not verify for this message`
+      : `${candidate.seat}/${candidate.id} was not shown: the ${status} receipt path is held by something that is not a file`,
+    repair: `inspect ${recordReceiptPath(candidate, status)}: it is left as it is, because it may record a read that already happened`,
+  };
+}
+
+function openRecord(
+  candidate: Candidate,
+  root: string,
+  session: string,
+  home: string,
+  key: KeyObject,
+  at: string,
+): ReadGate {
+  const recordSession = candidate.session ?? session;
+  const dropDir = recordDir(root, recordSession, candidate.seat);
+  const context = { to: candidate.seat, root, session: recordSession };
+  const servedNow = (): boolean => isRead(dropDir, candidate.id, context, key);
+  // The waiting filter already asked `isRead`; this re-check is the race with every other reader.
+  if (servedNow()) return { kind: 'served' };
+  const readName = recordReceiptFile(dropDir, candidate.id, 'read');
+  const atRead = heldAt(readName);
+  if (atRead.kind === 'file') return servedNow() ? { kind: 'served' } : heldReceipt(candidate, 'read', 'file');
+  if (atRead.kind !== 'missing') return heldReceipt(candidate, 'read', atRead.kind);
+  const atReplied = heldAt(recordReceiptFile(dropDir, candidate.id, 'replied'));
+  if (atReplied.kind === 'file') {
+    // A replied receipt is the read that came before the answer: a valid one serves this id, and
+    // one that does not verify may still be evidence of an earlier exposure, so it stays.
+    return servedNow() ? { kind: 'served' } : heldReceipt(candidate, 'replied', 'file');
   }
+  if (atReplied.kind !== 'missing') return heldReceipt(candidate, 'replied', atReplied.kind);
+  const receipt: ReceiptPayload = {
+    kind: 'receipt',
+    status: 'read',
+    id: candidate.id,
+    to: candidate.seat,
+    root,
+    session: recordSession,
+    at,
+  };
+  const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home), null, 2)}\n`);
+  if (published === 'exists') {
+    // A rival won the name between the checks and this link. Its entry is the one serving of this
+    // id: verify it, and leave it exactly as it is either way.
+    if (servedNow()) return { kind: 'served' };
+    const atName = heldAt(readName);
+    if (atName.kind === 'missing') {
+      return {
+        kind: 'refused',
+        what: `${candidate.seat}/${candidate.id} was not shown: the read receipt name changed while it was being published`,
+        repair: 'run team messages again',
+      };
+    }
+    return heldReceipt(candidate, 'read', atName.kind);
+  }
+  if (published === 'failed') {
+    return {
+      kind: 'refused',
+      what: `${candidate.seat}/${candidate.id} was not shown: the read receipt could not be written`,
+      repair: 'run team messages again once the receipt folder can be written',
+    };
+  }
+  // The receipt must survive a crash before the body is shown. A receipt that cannot be flushed is
+  // not proof: the id stays spent, and this run shows nothing.
+  if (!flushReceipt(readName, dropDir)) {
+    return {
+      kind: 'refused',
+      what: `${candidate.seat}/${candidate.id} was not shown: the read receipt could not be made durable`,
+      repair: 'leave the receipt in place: it already records this read, and the message stays spent',
+    };
+  }
+  return { kind: 'shown' };
+}
+
+/**
+ * Writes the read receipt for an older-store message that was shown. That store keeps its own
+ * receipt shape and its print-then-write order; only transport-tree records pass `openRecord`.
+ */
+function writeReadReceipt(home: string, candidate: Candidate, root: string, session: string, at: string): void {
   const receipt: LegacyReceiptPayload = {
     kind: 'receipt',
     id: candidate.id,
@@ -498,11 +584,15 @@ function bodyLines(body: string): string[] {
 }
 
 /**
- * Verifies every unacked record, prints each body that verifies, and writes its receipt in the
- * same step. A record that does not verify prints no body and writes nothing; it is a `refused`
- * row and a difference, and the run exits 1. An empty mailbox is a `0 messages` reading with
- * the note that nothing is waiting, and creates no key. Anyone in the checkout may run it: the
- * ring asks the recipient's pane, and the receipt records that a process was shown the body.
+ * Verifies every unacked record and prints each body that verifies. For a record in the transport
+ * tree the read receipt is published and flushed first (`openRecord`), so the exposure and its
+ * proof are one ordered act and a receipt that cannot be made durable shows no body. The older
+ * store's body prints first and its receipt is written after `io.stdout` returns, as it always
+ * was. A record that does not verify prints no body and writes nothing; it is a `refused` row and
+ * a difference, and the run exits 1. A record another reader already served is skipped silently.
+ * An empty mailbox is a `0 messages` reading with the note that nothing is waiting, and creates
+ * no key. Anyone in the checkout may run it: the ring asks the recipient's pane, and the receipt
+ * records that a process was shown the body.
  */
 export async function runMessages(argv: string[], io: Io, sources: MessagesSources = realSources): Promise<number> {
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
@@ -604,12 +694,14 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   }
   const now = sources.now();
   const rows: MailboxRow[] = [];
-  /** The body of each record that verified, by `<store>/<seat>/<id>`: the table's key, so the
-   *  body the run prints and the body its `--json` row carries are one value. */
-  const bodies = new Map<string, string>();
-  const verified: { candidate: Candidate; payload: Verified }[] = [];
+  /** The body each shown row carries, keyed by the row itself: a refused or served candidate
+   *  never shifts a body onto another row. */
+  const bodyOf = new Map<MailboxRow, string>();
+  /** The bodies in print order, for the text reading. */
+  const shownBodies: { candidate: Candidate; body: string }[] = [];
+  /** Older-store messages, whose body prints first and whose receipt is written after stdout. */
+  const legacyShown: Candidate[] = [];
   const differences: OutputDifference[] = [];
-  const rowKey = (candidate: Candidate): string => `${candidate.store}/${candidate.seat}/${candidate.id}`;
   for (const candidate of waiting) {
     const result = problemOf(candidate, root, session, state.key);
     const parsedLike = candidate.store === 'record'
@@ -641,7 +733,27 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       });
       continue;
     }
-    rows.push({
+    if (candidate.store === 'record') {
+      // The receipt is published and flushed before the body: one reader wins the id, and the
+      // proof of exposure survives a crash that follows it.
+      const gate = openRecord(candidate, root, session, sources.home, state.key, sources.now().toISOString());
+      if (gate.kind === 'served') continue; // another reader already spent this id: no row, no body
+      if (gate.kind === 'refused') {
+        rows.push({
+          id: candidate.id,
+          seat: candidate.seat,
+          from: result.from,
+          from_id: result.from_id,
+          to: result.to,
+          sent: result.at,
+          sent_display: formatRelativeTime(result.at, now),
+          status: 'refused',
+        });
+        differences.push({ what: gate.what, repair: gate.repair, who: 'any seat' });
+        continue;
+      }
+    }
+    const row: MailboxRow = {
       id: candidate.id,
       seat: candidate.seat,
       from: result.from,
@@ -650,18 +762,19 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       sent: result.at,
       sent_display: formatRelativeTime(result.at, now),
       status: 'shown',
-    });
-    bodies.set(rowKey(candidate), result.body);
-    verified.push({ candidate, payload: result });
+    };
+    rows.push(row);
+    bodyOf.set(row, result.body);
+    shownBodies.push({ candidate, body: result.body });
+    if (candidate.store === 'legacy') legacyShown.push(candidate);
   }
   if (json) {
     writeJson(io, 'team.messages', {
       format: 1 as const,
       project: loaded.team.project,
       session,
-      rows: rows.map((row, index) => {
-        const candidate = waiting[index];
-        const body = candidate === undefined ? undefined : bodies.get(rowKey(candidate));
+      rows: rows.map((row) => {
+        const body = bodyOf.get(row);
         return {
           id: row.id,
           from: row.from,
@@ -679,17 +792,17 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       summary: summaryCounts(differences),
       counts: {
         messages: rows.length,
-        shown: verified.length,
+        shown: shownBodies.length,
         refused: differences.length,
       },
     });
   } else {
-    io.stdout(renderMailbox(loaded.team.project, session, rows, verified.map((one) => ({ candidate: one.candidate, body: one.payload.body })), differences, [], ttyStyle(io), naming));
+    io.stdout(renderMailbox(loaded.team.project, session, rows, shownBodies, differences, [], ttyStyle(io), naming));
   }
-  // The receipt means the body was shown. `io.stdout` returning is that boundary: a throw leaves
-  // no receipt, and the record stays unacked.
-  for (const one of verified) {
-    writeReadReceipt(sources.home, one.candidate, one.payload, root, session, sources.now().toISOString());
+  // The older store keeps its original order: its body printed first, so its receipt is written
+  // after stdout returns. Transport-tree records published and flushed theirs before the body.
+  for (const candidate of legacyShown) {
+    writeReadReceipt(sources.home, candidate, root, session, sources.now().toISOString());
   }
   if (differences.length > 0) {
     // exit: messages.shape
