@@ -251,6 +251,55 @@ Usage:
 | --- | --- | --- |
 | `ref` | no | no |
 
+## `config`
+
+Hidden: no
+
+Usage:
+
+    team config keys [<level>] [--json]
+
+### Who may run it
+
+`any-caller` — it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `keys`
+
+Hidden: no
+
+Usage:
+
+    team config keys [<level>] [--json]
+
+#### Who may run it
+
+`any-caller` — the listing is the command's only verb and reads the registry only: no team file, seat or terminal is read
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `level` | yes | no |
+
 ## `conformance-adapter`
 
 Hidden: yes
@@ -1472,6 +1521,151 @@ Usage:
 | --- | --- | --- |
 | `seat` | no | no |
 
+## `seat`
+
+Hidden: no
+
+Usage:
+
+    team seat <seat> [--session <name>] [--file <path>] [--json]
+    team seat add <seat> [--session <name>] [--file <path>] [--json]
+    team seat remove <seat> [--session <name>] [--file <path>] [--json]
+    team seat restart <seat> [--session <name>] [--file <path>] [--json]
+    team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`team-read` — one seat as an object — its settings, its status row and its newest session: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` and `--session` are the owner's alone, and the lifecycle verbs gate as the commands they run (their rows below)
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `add`
+
+Hidden: no
+
+Usage:
+
+    team seat add <seat> [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`owner-only` — the `add` row for a seat: adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `remove`
+
+Hidden: no
+
+Usage:
+
+    team seat remove <seat> [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — the `remove` row for a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `rename`
+
+Hidden: no
+
+Usage:
+
+    team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — the `rename` row for a seat: the owner or `leads` for its own team
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+| `name` | no | no |
+
+### `restart`
+
+Hidden: no
+
+Usage:
+
+    team seat restart <seat> [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — the `restart` row for a seat: as `start`, the owner or `leads` for its own team
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `seats`
 
 Hidden: no
@@ -1567,6 +1761,97 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | yes | no |
+
+## `settings`
+
+Hidden: no
+
+Usage:
+
+    team settings <seat> [--file <path>] [--json]
+    team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]
+    team settings set <seat> <key=value> [--dry-run] [--json]
+    team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]
+
+### Who may run it
+
+`team-read` — one seat's settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner's alone, and set and unset are the owner's outright (their rows below)
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `set`
+
+Hidden: no
+
+Usage:
+
+    team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]
+    team settings set <seat> <key=value> [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — recording a seat's setting is the owner's: a lead's write within its role policy waits for the role policy the approved minimum leaves out, and this build refuses rather than admit a write no policy authorized
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+| `key` | yes | no |
+| `value` | yes | no |
+| `key=value` | yes | no |
+
+### `unset`
+
+Hidden: no
+
+Usage:
+
+    team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — removing a seat's setting is the owner's by the same gate as set: a lead's write within its role policy is not shipped yet, and this build refuses rather than admit one
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+| `key` | no | no |
 
 ## `status`
 

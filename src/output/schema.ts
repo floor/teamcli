@@ -1,8 +1,22 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
+import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';
 import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
+
+/** The `source` words a settings row prints: a signed record's level, the team file's entry,
+ *  its team order, the release default, or no value at all. */
+const CONFIG_SOURCE_WORDS = [
+  'entity record',
+  'project record',
+  'team record',
+  'seat record',
+  'team file',
+  'team default',
+  'default',
+  'none',
+];
 
 export interface CommandSchemaSpec {
   /** Schema identifier, e.g. `'team.status'` or `'team.error'`. */
@@ -1912,6 +1926,206 @@ export const USAGE_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+
+/** Published `--json` output schema for `team settings <seat>` (`schema/settings.schema.json`):
+ *  one row per registered setting, each with the value and the level it came from. */
+export const SETTINGS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.settings',
+  fileName: 'settings.schema.json',
+  title: 'team settings <seat> --json output',
+  required: ['format', 'project', 'seat', 'settings'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    settings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'value', 'source', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          value: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+          source_file: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team settings set|unset` (`schema/settings-change.schema.json`):
+ *  the setting a write records or removes, at the seat it lands on. */
+export const SETTINGS_CHANGE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.settings-change',
+  fileName: 'settings-change.schema.json',
+  title: 'team settings set|unset --json output',
+  statuses: ['dry-run', 'updated', 'unset'],
+  required: ['level', 'target', 'seat', 'settings'],
+  properties: {
+    level: { type: 'string', enum: [...CONFIG_LEVELS] },
+    target: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    settings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'value', 'old', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          value: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          old: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+        },
+      },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team config keys` (`schema/config-keys.schema.json`):
+ *  the registry as the command lists it, one entry per key. */
+export const CONFIG_KEYS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.config-keys',
+  fileName: 'config-keys.schema.json',
+  title: 'team config keys --json output',
+  required: ['format', 'level', 'keys'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    level: { type: ['string', 'null'], enum: [...CONFIG_LEVELS, null] },
+    keys: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'levels', 'type', 'allowed', 'default', 'governed_by', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          levels: { type: 'array', items: { type: 'string', enum: [...CONFIG_LEVELS] } },
+          type: { type: 'string', enum: ['model', 'effort', 'nickname', 'order', 'boolean'] },
+          allowed: { type: 'string', minLength: 1 },
+          default: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          governed_by: { type: ['string', 'null'] },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+        },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team seat <seat>` (`schema/seat.schema.json`): the seat's
+ *  settings, the row `team seats` reads for it, its last turn and its newest session. */
+export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.seat',
+  fileName: 'seat.schema.json',
+  title: 'team seat <seat> --json output',
+  required: ['format', 'project', 'session', 'seat', 'settings', 'status', 'turn', 'conversation'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    settings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'value', 'source', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          value: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+          source_file: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    status: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'nickname', 'id', 'role', 'cli', 'model', 'effort', 'status', 'state', 'state_source', 'last_active', 'pane', 'launch_line'],
+      properties: {
+        name: { type: 'string', minLength: 1 },
+        nickname: { type: ['string', 'null'] },
+        id: { type: ['string', 'null'] },
+        role: { type: 'string', minLength: 1 },
+        cli: { type: 'string', minLength: 1 },
+        model: { type: ['string', 'null'] },
+        effort: { type: ['string', 'null'] },
+        status: { type: 'string', minLength: 1 },
+        state: { type: 'string', minLength: 1 },
+        state_source: { type: 'string', minLength: 1 },
+        blind: { type: 'boolean', const: true },
+        last_active: { type: ['string', 'null'] },
+        pane: { type: ['string', 'null'] },
+        launch_line: { type: ['string', 'null'] },
+      },
+    },
+    turn: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['state', 'since'],
+      properties: {
+        state: { type: 'string', enum: ['working', 'idle'] },
+        since: { type: 'string', minLength: 1 },
+      },
+    },
+    conversation: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['id', 'started', 'ended', 'reason'],
+      properties: {
+        id: { type: 'string', minLength: 1 },
+        cli_session: { type: 'string', minLength: 1 },
+        resumable: { type: 'boolean' },
+        resume_until: { type: 'string', minLength: 1 },
+        handover: { type: 'string', minLength: 1 },
+        previous: { type: 'string', minLength: 1 },
+        started: { type: 'string', minLength: 1 },
+        ended: { type: ['string', 'null'] },
+        reason: { type: ['string', 'null'] },
+      },
+    },
+    cost: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['amount', 'currency', 'source'],
+      properties: {
+        amount: { type: 'number', minimum: 0 },
+        currency: { type: 'string', minLength: 1 },
+        source: { type: 'string', enum: ['measured', 'estimated'] },
+      },
+    },
+    tokens: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['in', 'out', 'source'],
+      properties: {
+        in: { type: 'integer', minimum: 0 },
+        out: { type: 'integer', minimum: 0 },
+        source: { type: 'string', enum: ['measured', 'estimated'] },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -1960,6 +2174,10 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   COMMITS_OUTPUT_SCHEMA,
   PR_OUTPUT_SCHEMA,
   USAGE_OUTPUT_SCHEMA,
+  SETTINGS_OUTPUT_SCHEMA,
+  SETTINGS_CHANGE_OUTPUT_SCHEMA,
+  CONFIG_KEYS_OUTPUT_SCHEMA,
+  SEAT_OUTPUT_SCHEMA,
 ];
 
 

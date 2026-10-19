@@ -49,6 +49,8 @@ export type ProjectRecord = {
   senderName?: SenderNameMode;
   /** Owner-signed project-level policy declarations (Kernel amendment 02 §2.12), when present. */
   policies?: Record<string, YamlValue>;
+  /** Owner-signed project-level settings (OD-20261018-08), one signed entry per key, when present. */
+  settings?: Record<string, YamlValue>;
   provenance: ProjectProvenance;
 };
 
@@ -157,7 +159,13 @@ export function projectIdOf(name: string): string {
 
 /** What `upsertProject` takes: any of the record's fields, and who is writing and when. A project
  *  not yet registered needs `name` at least. The id and the provenance are the writer's own. */
-export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & { by?: string; at?: string };
+export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & {
+  by?: string;
+  at?: string;
+  /** Entries to set, or to remove with `null`, inside the record's settings map. Applied to the
+   *  record the writer reads under the registry lock, so two writes of different keys both land. */
+  settingsDelta?: Record<string, YamlValue | null>;
+};
 
 /** Creates the project's record, or changes the fields the patch names and nothing else. The id
  *  is the key and never moves: a rename writes `name` and keeps `byName` answering for the new
@@ -170,7 +178,7 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
     const projects = readProjects(home);
     const at = patch.at ?? new Date().toISOString();
     const prior = projects[id];
-    const { by, at: _at, ...fields } = patch;
+    const { by, at: _at, settingsDelta, ...fields } = patch;
     let record: ProjectRecord;
     if (prior) {
       record = { ...prior, ...definedOnly(fields), provenance: { ...prior.provenance, updated_at: at } };
@@ -185,12 +193,25 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         ...(fields.liveness !== undefined ? { liveness: fields.liveness } : {}),
         ...(fields.senderName !== undefined ? { senderName: fields.senderName } : {}),
         ...(fields.policies !== undefined ? { policies: fields.policies } : {}),
+        ...(fields.settings !== undefined ? { settings: fields.settings } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
+    }
+    if (settingsDelta !== undefined) {
+      const settings: Record<string, YamlValue> = { ...(record.settings ?? {}) };
+      for (const [key, entry] of Object.entries(settingsDelta)) {
+        if (entry === null) delete settings[key];
+        else settings[key] = entry;
+      }
+      record.settings = settings;
     }
     if (record.policies !== undefined && Object.keys(record.policies).length === 0) {
       delete record.policies;
     }
+    if (record.settings !== undefined && Object.keys(record.settings).length === 0) {
+      delete record.settings;
+    }
+    if (record.settings !== undefined && !isMap(record.settings)) throw new ProjectsError('"settings" must be a map');
     if (typeof record.name !== 'string' || !record.name) throw new ProjectsError('a project needs a name');
     if (record.entity !== null && typeof record.entity !== 'string') throw new ProjectsError('"entity" must be text or null');
     if (record.lead !== null && typeof record.lead !== 'string') throw new ProjectsError('"lead" must be an agent ID or null');
@@ -315,6 +336,24 @@ function emitPolicies(indent: string, policies: Record<string, YamlValue>): stri
   return lines;
 }
 
+function emitSettings(indent: string, settings: Record<string, YamlValue>): string[] {
+  const keys = Object.keys(settings).sort();
+  if (keys.length === 0) return [];
+  const lines = [`${indent}settings:`];
+  for (const name of keys) {
+    const entry = settings[name];
+    if (isMap(entry)) {
+      lines.push(`${indent}  ${scalar(name)}:`);
+      for (const [k, v] of Object.entries(entry)) {
+        lines.push(`${indent}    ${scalar(k)}: ${emitPolicyValue(v ?? null)}`);
+      }
+    } else {
+      lines.push(`${indent}  ${scalar(name)}: ${emitPolicyValue(entry ?? null)}`);
+    }
+  }
+  return lines;
+}
+
 function emit(projects: Record<string, ProjectRecord>): string {
   const ids = Object.keys(projects).sort();
   if (!ids.length) return 'projects: {}\n';
@@ -338,6 +377,9 @@ function emit(projects: Record<string, ProjectRecord>): string {
     }
     if (project.policies && Object.keys(project.policies).length > 0) {
       lines.push(...emitPolicies('    ', project.policies));
+    }
+    if (project.settings && Object.keys(project.settings).length > 0) {
+      lines.push(...emitSettings('    ', project.settings));
     }
     const p = project.provenance;
     lines.push(`    provenance: { registered_by: ${scalar(p.registered_by)}, registered_at: ${scalar(p.registered_at)}, updated_at: ${scalar(p.updated_at)} }`);
@@ -397,6 +439,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     bad(`"sender_name" must be one of: ${SENDER_NAME_MODES.join(', ')}`);
   }
   const policies = isMap(raw.policies) && Object.keys(raw.policies).length > 0 ? raw.policies : undefined;
+  const settings = isMap(raw.settings) && Object.keys(raw.settings).length > 0 ? raw.settings : undefined;
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
   for (const key of ['registered_by', 'registered_at', 'updated_at']) {
@@ -412,6 +455,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     ...(liveness !== undefined ? { liveness } : {}),
     ...(senderNameWord !== undefined ? { senderName: senderNameWord as SenderNameMode } : {}),
     ...(policies !== undefined ? { policies } : {}),
+    ...(settings !== undefined ? { settings } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };
 }

@@ -913,6 +913,20 @@
     },
     {
       "code": 0,
+      "command": "config",
+      "id": "config.shown",
+      "meaning": "the settings registry is printed",
+      "trigger": "team config keys"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.invocation",
+      "meaning": "the invocation is not one of the command's forms",
+      "trigger": "team config"
+    },
+    {
+      "code": 0,
       "command": "conformance-adapter",
       "id": "conformance-adapter.finished",
       "meaning": "the protocol finished",
@@ -3160,6 +3174,90 @@
     },
     {
       "code": 0,
+      "command": "seat",
+      "id": "seat.shown",
+      "meaning": "the seat is printed",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team seat lead --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.no-seat",
+      "meaning": "the team file declares no seat of that name",
+      "trigger": "team seat ghost"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.session-owner",
+      "meaning": "--session is the owner's",
+      "trigger": "team seat lead --session team"
+    },
+    {
+      "code": 1,
+      "command": "seat",
+      "id": "seat.sessions",
+      "meaning": "the session registry can't be read",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.file",
+      "meaning": "the team file can't be found or read",
+      "trigger": "team seat lead --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.file-invalid",
+      "meaning": "the team file does not parse or does not validate",
+      "trigger": "team seat lead --file team.yaml"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.herdr",
+      "meaning": "herdr doesn't answer",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.invocation",
+      "meaning": "the invocation is not one of the command's forms",
+      "trigger": "team seat"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.not-a-repo",
+      "meaning": "the directory is not inside a git repository",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.not-yours",
+      "meaning": "the team is not the caller's to read",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 2,
+      "command": "seat",
+      "id": "seat.source",
+      "meaning": "a signed settings record can't be read or does not verify",
+      "trigger": "team seat lead"
+    },
+    {
+      "code": 0,
       "command": "seats",
       "id": "seats.shown",
       "meaning": "the seats table was printed",
@@ -3374,6 +3472,139 @@
       "id": "sessions.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team sessions --by nothing"
+    },
+    {
+      "code": 0,
+      "command": "settings",
+      "id": "settings.dry-run",
+      "meaning": "the change a write would make is printed and nothing is written",
+      "trigger": "team settings set lead nickname=Atlas --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "settings",
+      "id": "settings.set",
+      "meaning": "the setting is signed into the seat's record and logged",
+      "trigger": "team settings set lead nickname=Atlas"
+    },
+    {
+      "code": 0,
+      "command": "settings",
+      "id": "settings.shown",
+      "meaning": "the seat's settings are printed",
+      "trigger": "team settings lead"
+    },
+    {
+      "code": 0,
+      "command": "settings",
+      "id": "settings.unset",
+      "meaning": "the setting is removed from the seat's record and logged",
+      "trigger": "team settings unset lead nickname"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team settings lead --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.no-agent",
+      "meaning": "the seat has no registered agent record and one could not be created to hold its settings",
+      "trigger": "team settings set lead nickname=Atlas"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.no-seat",
+      "meaning": "the team file declares no seat of that name",
+      "trigger": "team settings ghost"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.not-owner",
+      "meaning": "only the owner sets a seat's settings",
+      "trigger": "team settings set lead nickname=Atlas"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.not-set",
+      "meaning": "an unset names a setting that is not set on the seat",
+      "trigger": "team settings unset lead model"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.policy",
+      "meaning": "a policy in force over the seat does not admit the value",
+      "trigger": "team settings set lead delivery_order=typed"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.file",
+      "meaning": "the team file can't be found or read",
+      "trigger": "team settings lead --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.file-invalid",
+      "meaning": "the team file does not parse or does not validate",
+      "trigger": "team settings lead --file team.yaml"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.invocation",
+      "meaning": "the invocation is not one of the command's forms",
+      "trigger": "team settings"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.key",
+      "meaning": "a setting key is unknown or is not one a seat holds",
+      "trigger": "team settings set lead nope=1"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.not-a-repo",
+      "meaning": "the directory is not inside a git repository",
+      "trigger": "team settings lead"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.not-yours",
+      "meaning": "the team is not the caller's to read",
+      "trigger": "team settings lead"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.source",
+      "meaning": "a signed settings record can't be read or does not verify",
+      "trigger": "team settings lead"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.value",
+      "meaning": "a value is outside what the seat's profile or the key's shape accepts",
+      "trigger": "team settings set lead model=nope"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.write",
+      "meaning": "the seat's record can't be replaced",
+      "trigger": "team settings set lead nickname=Atlas"
     },
     {
       "code": 0,

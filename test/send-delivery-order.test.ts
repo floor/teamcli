@@ -26,12 +26,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import type { ProjectSources } from '../src/commands/projects.ts';
+import type { ConfigKey, ConfigValue } from '../src/config/registry.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { ProjectRecord } from '../src/registry/projects.ts';
+import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { deliveryChainOf } from '../src/send/delivery.ts';
@@ -40,7 +43,7 @@ import { readPending } from '../src/send/pending.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
 import { storePath } from '../src/store/store.ts';
-import { messageKeyState } from '../src/store/keys.ts';
+import { installKey, messageKeyState } from '../src/store/keys.ts';
 import { isRead, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { recordBody, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
@@ -1085,5 +1088,89 @@ describe('the walk’s failures ride the daemon’s write', () => {
     const storeDrops = join(storePath('acme', w.root, w.home), 'drops', 'acme', 'lead');
     const storeDrop = join(storeDrops, readdirSync(storeDrops).sort()[0] as string);
     expect(readFileSync(storeDrop, 'utf8')).toBe(`${HEADER}hello`);
+  });
+});
+
+/** The lead as `up` would register it, with the owner key installed: the seat a signed setting
+ *  can live on. No team record is written, so the fixture keeps the pre-registry addressing. */
+function registeredLead(w: { root: string; home: string }): string {
+  installKey(w.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  return registerAgent(w.home, {
+    name: 'Lead',
+    signing: { model: 'Test', version: '1', role: 'coordinator' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(w.root), seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  }).id;
+}
+
+/** One signed seat setting, written through the store's own plan and write. */
+function signSeat(w: { home: string }, agentId: string, settings: { key: ConfigKey; value: ConfigValue }[]): void {
+  const plan = planConfigSet(w.home, { level: 'seat', target: agentId, settings });
+  if (!plan.ok) throw new Error(`the plan was refused: ${plan.why}`);
+  const written = writeConfigSet(w.home, plan, { now: NOW });
+  if (!written.ok) throw new Error(`the write was refused: ${written.why}`);
+}
+
+describe('a signed seat setting is what the next send walks', () => {
+  test('a signed delivery_order stands in the file’s place', async () => {
+    // The file gives the seat `drop`; the signed record gives it `typed`, and the signed word is
+    // the seat's own.
+    const w = world({ lead: '    delivery_order: [drop]\n' });
+    const agentId = registeredLead(w);
+    signSeat(w, agentId, [{ key: 'delivery_order', value: ['typed'] }]);
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('typed');
+    expect('failed' in entry).toBe(false);
+    expect(host.typed[0]?.pane).toBe('pane-lead');
+  });
+
+  test('a signed human walks the drop file alone over the file’s order', async () => {
+    // The team's order would type; the seat's signed record says its pane is a human's, and a
+    // human's walk is the drop file alone, with every leg it spared recorded.
+    const w = world({ top: 'delivery_order: [mcp-inbox, typed]\n' });
+    const agentId = registeredLead(w);
+    signSeat(w, agentId, [{ key: 'human', value: true }]);
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(entry.failed).toEqual([
+      "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
+      "typed: the pane is a human's, and nothing is typed into it",
+    ]);
+    expect(host.typed).toEqual([]);
+  });
+
+  test('a record that does not verify refuses the send before any leg walks', async () => {
+    // A `human: true` the record disowns must not be read as absent: falling back to the file's
+    // order would type into a pane the tampered record claimed was a human's, so nothing walks.
+    const w = world({ lead: '    delivery_order: [drop]\n' });
+    const agentId = registeredLead(w);
+    signSeat(w, agentId, [{ key: 'human', value: true }]);
+    const path = join(agentsDir(w.home), `${agentId}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('value: true', 'value: false'));
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(2);
+    expect(io.err).toContain(path);
+    expect(io.err).toContain('signature verification failed');
+    expect(host.typed).toEqual([]);
+    expect(host.frames).toEqual([]);
   });
 });

@@ -9,7 +9,9 @@ import { loadTeamFile } from '../file/load.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
-import { findTeam, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeam, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
+import { resolveSeatSettings } from '../config/apply.ts';
+import { agentIdOf } from '../config/read.ts';
 
 /** What a spec resolves to: the owning team record, the agent, and the pane to type into. */
 export type Target = { team: TeamRecord; agent: Agent; pane: string };
@@ -17,9 +19,10 @@ export type Target = { team: TeamRecord; agent: Agent; pane: string };
 /**
  * A spec the resolver refuses. `kind` labels the refusals a caller must act on before any
  * fallback: an ambiguous spec names two seats (or two leads for `lead@<team>`), and no
- * declared-seat path may pick one of them by accident.
+ * declared-seat path may pick one of them by accident; `configuration` names a settings record
+ * that exists and does not verify, which an actual send refuses rather than routing around.
  */
-export type ResolveProblem = { error: string; kind?: 'ambiguous' };
+export type ResolveProblem = { error: string; kind?: 'ambiguous' | 'configuration' };
 
 /** One live agent as the herdr read returns it: a name and a pane. */
 export type LiveAgent = { name?: string | null; pane: string };
@@ -131,13 +134,44 @@ function fromId(home: string, id: string, live: LiveRead): Target | ResolveProbl
 
 type NicknameSeat = { team: TeamRecord; seat: string };
 
+/** One roster line's effective nickname, or the reason its record could not be read. */
+type NicknameAnswer = { nickname: string | undefined } | { error: string };
+
+/** The nickname a roster line answers to: the seat's signed setting where one is set, the
+ *  roster's projection of the file's word otherwise. A signed word stands in the file's place,
+ *  as it does in the headline a send prints, and the file's old word stops addressing the seat.
+ *  A record that exists but does not verify is a refusal, never a fallback: an address decision
+ *  cannot stand on a word the record disowns. */
+function nicknameOfLine(home: string, team: TeamRecord, line: RosterEntry): NicknameAnswer {
+  // A roster line is not the whole context: the team record can carry one and still name no
+  // project or entity, and the project registry is then the declaration the signed chain reads.
+  // Resolving the context around the line keeps a project record from being skipped here, where
+  // an address decision must not stand on a record the resolver never asked for.
+  const context = agentIdOf(home, team.root, line.seat);
+  const read = resolveSeatSettings({
+    home,
+    root: team.root,
+    agentId: line.agent,
+    seat: line.seat,
+    teamId: team.id,
+    entity: context.entity,
+    projectId: context.projectId,
+  });
+  if (!read.ok) return { error: `the settings record of the seat "${line.seat}" cannot be read: ${read.why}` };
+  return { nickname: read.overrides.nickname ?? line.nickname };
+}
+
 /** The roster lines one nickname answers in one team. The file makes a nickname unique in its
  *  team; a registry written elsewhere may hold the collision, and no address in it may pick a
- *  seat by accident. */
-function nicknameSeatsOf(team: TeamRecord, nickname: string): NicknameSeat[] {
-  return team.roster
-    .filter((entry) => entry.nickname === nickname)
-    .map((entry) => ({ team, seat: entry.seat }));
+ *  seat by accident. One unreadable record refuses the scan: the full set is unknown. */
+function nicknameSeatsOf(home: string, team: TeamRecord, nickname: string): { seats: NicknameSeat[] } | { error: string } {
+  const seats: NicknameSeat[] = [];
+  for (const entry of team.roster) {
+    const answer = nicknameOfLine(home, team, entry);
+    if ('error' in answer) return answer;
+    if (answer.nickname === nickname) seats.push({ team, seat: entry.seat });
+  }
+  return { seats };
 }
 
 /**
@@ -166,13 +200,14 @@ function fromNickname(
     entity = self?.entity ?? loaded.team.entity ?? null;
   }
   if (self !== null) {
-    const own = nicknameSeatsOf(self, nickname);
-    if (own.length > 1) {
-      const named = own.map((one) => `the seat "${one.seat}"`);
+    const own = nicknameSeatsOf(home, self, nickname);
+    if ('error' in own) return { error: `${spec}: ${own.error}; nothing was sent`, kind: 'configuration' };
+    if (own.seats.length > 1) {
+      const named = own.seats.map((one) => `the seat "${one.seat}"`);
       return { error: `${spec}: the nickname "${nickname}" names more than one seat of this team — ${named.join(' and ')}; nothing was sent`, kind: 'ambiguous' };
     }
-    if (own.length === 1) {
-      const one = own[0] as NicknameSeat;
+    if (own.seats.length === 1) {
+      const one = own.seats[0] as NicknameSeat;
       return targetOfSeat(home, spec, self, one.seat, `the seat "${one.seat}" (the nickname "${nickname}")`, live);
     }
   }
@@ -183,7 +218,12 @@ function fromNickname(
     self === null
       ? teams
       : teams.filter((team) => team.id !== self.id && entity !== null && team.entity === entity);
-  const found = scope.flatMap((team) => nicknameSeatsOf(team, nickname));
+  const found: NicknameSeat[] = [];
+  for (const team of scope) {
+    const answer = nicknameSeatsOf(home, team, nickname);
+    if ('error' in answer) return { error: `${spec}: ${answer.error}; nothing was sent`, kind: 'configuration' };
+    found.push(...answer.seats);
+  }
   if (found.length === 0) {
     return { error: `${spec}: no seat carries the nickname "${nickname}"; \`team send --list\` shows the addresses` };
   }
@@ -214,7 +254,7 @@ function lookupInTeam(
   live: LiveRead,
   leadAddress: boolean,
 ): Target | ResolveProblem {
-  const chosen = seatOfTarget(team, spec, target, leadAddress, leadAddress && target === LEAD ? fileLeadOf(home, team) : null);
+  const chosen = seatOfTarget(home, team, spec, target, leadAddress, leadAddress && target === LEAD ? fileLeadOf(home, team) : null);
   if (chosen !== null && 'error' in chosen) return chosen;
   const seat = chosen === null ? target : chosen.seat;
   const wanted =
@@ -264,6 +304,7 @@ function targetOfSeat(
  * accident. `null` leaves the target to the agent-record lookup in `targetOfSeat`.
  */
 function seatOfTarget(
+  home: string,
   team: TeamRecord,
   spec: string,
   target: string,
@@ -284,9 +325,13 @@ function seatOfTarget(
     return { seat: lead.seat, via: 'lead' };
   }
   const seatNames = team.roster.filter((entry) => entry.seat === target).map((entry) => entry.seat);
-  const nicknameSeats = team.roster
-    .filter((entry) => entry.nickname === target && entry.seat !== target)
-    .map((entry) => entry.seat);
+  const nicknameSeats: string[] = [];
+  for (const entry of team.roster) {
+    if (entry.seat === target) continue;
+    const answer = nicknameOfLine(home, team, entry);
+    if ('error' in answer) return { error: `${spec}: ${answer.error}; nothing was sent`, kind: 'configuration' };
+    if (answer.nickname === target) nicknameSeats.push(entry.seat);
+  }
   const answers = [...new Set([...seatNames, ...nicknameSeats])];
   if (answers.length > 1) {
     const named = [

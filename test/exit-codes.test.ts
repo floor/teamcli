@@ -55,7 +55,10 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
+import { runSeat } from '../src/commands/seat.ts';
 import { runSessions } from '../src/commands/sessions.ts';
+import { runConfig } from '../src/commands/config.ts';
+import { runSettings, type SettingsCommandOptions } from '../src/commands/settings.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -63,6 +66,7 @@ import { runUsage } from '../src/commands/usage.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { runWorktree, type WorktreeSources } from '../src/commands/worktree.ts';
 import { main, reportFailure, version } from '../src/cli.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
@@ -76,12 +80,12 @@ import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { writeGrant } from '../src/permissions/grants.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
+import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { analyze, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
@@ -1813,6 +1817,227 @@ scene('seats.not-yours', async (place) => {
   expect(ran.out).toBe('');
   return ran;
 });
+
+{
+  async function configRun(place: Place, argv: readonly string[]): Promise<Ran> {
+    const io = testIo(place.root, owner);
+    return { code: await runConfig([...argv], io), out: io.out, err: io.err };
+  }
+  scene('config.invocation', async (place) => show(await configRun(place, []), 'a subcommand is required'));
+  scene('config.shown', async (place) => show(await configRun(place, ['keys']), 'delivery_order'));
+}
+
+/** A home whose registry holds the owner's key and one registered `lead` agent in the roster,
+ *  so a settings write has a record to land in. */
+function registeredSeat(place: Place): string {
+  installKey(place.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const agentId = registerAgent(place.home, {
+    name: 'Lead One',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  }).id;
+  upsertTeam(place.home, teamIdOf(place.root), {
+    project: 'acme',
+    session: 'acme',
+    root: place.root,
+    lobby: '',
+    roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
+  });
+  return agentId;
+}
+
+/** A home whose registry holds one signed seat setting for `lead`, tampered so the record no
+ *  longer verifies: the settings reads must refuse it rather than fall back to the file. */
+function tamperedSeatSetting(place: Place): void {
+  const agentId = registeredSeat(place);
+  const plan = planConfigSet(place.home, {
+    level: 'seat',
+    target: agentId,
+    settings: [{ key: 'model', value: 'claude-opus-5-5' }],
+  });
+  if (!plan.ok) throw new Error(`plan refused: ${plan.why}`);
+  const written = writeConfigSet(place.home, plan, { now: NOW });
+  if (!written.ok) throw new Error(`write refused: ${written.why}`);
+  const path = join(agentsDir(place.home), `${agentId}.yaml`);
+  const text = readFileSync(path, 'utf8');
+  // The fixture's launch line carries the same model name, so the tamper targets the settings
+  // entry's own `value:` line; the first match would land on `launch` and leave the record
+  // verifying.
+  const tampered = text.replace('value: "claude-opus-5-5"', 'value: "claude-haiku-5-5"');
+  if (tampered === text) throw new Error('the record has no value to tamper');
+  writeFileSync(path, tampered);
+}
+
+{
+  async function settingsRun(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    over: SettingsCommandOptions = {},
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return {
+      code: await runSettings([...argv], io, { home: place.home, now: NOW, ...over }),
+      out: io.out,
+      err: io.err,
+    };
+  }
+  scene('settings.invocation', async (place) => show(await settingsRun(place, []), 'a seat name is required'));
+  scene('settings.file-owner', async (place) => show(await settingsRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
+  scene('settings.not-a-repo', async (place) => show(await settingsRun(place, ['lead']), 'not inside a git repository'), false);
+  scene('settings.file', async (place) => show(await settingsRun(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+  scene('settings.file-invalid', async (place) => {
+    invalid(place);
+    return show(await settingsRun(place, ['lead', '--file', 'team.yaml']), 'line');
+  });
+  scene('settings.not-yours', async (place) => {
+    write(place, TEAM);
+    return show(
+      await settingsRun(place, ['lead'], other, { gate: { standing: () => ({ kind: 'none' }) } }),
+      'this team is not yours to read',
+    );
+  });
+  scene('settings.no-seat', async (place) => {
+    write(place, TEAM);
+    return show(await settingsRun(place, ['ghost']), 'no seat "ghost" is declared in acme');
+  });
+  scene('settings.shown', async (place) => {
+    write(place, TEAM);
+    return show(await settingsRun(place, ['lead']), 'delivery_order');
+  });
+  scene('settings.source', async (place) => {
+    write(place, TEAM);
+    tamperedSeatSetting(place);
+    return show(await settingsRun(place, ['lead']), 'signature verification failed for setting "model"');
+  });
+  scene('settings.set', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'settings: set nickname=Atlas at seat (lead)');
+  });
+  scene('settings.unset', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    const set = await settingsRun(place, ['set', 'lead', 'nickname=Atlas']);
+    if (set.code !== 0) throw new Error(`the set before the unset failed: ${set.err}`);
+    return show(await settingsRun(place, ['unset', 'lead', 'nickname']), 'settings: unset nickname at seat (lead)');
+  });
+  scene('settings.dry-run', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(
+      await settingsRun(place, ['set', 'lead', 'nickname=Atlas', '--dry-run']),
+      'settings: would set nickname=Atlas at seat (lead)',
+    );
+  });
+  scene('settings.key', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nope=1']), 'unknown setting "nope"');
+  });
+  scene('settings.value', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'model=nope']), 'unknown model "nope" for claude-code');
+  });
+  scene('settings.policy', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(
+      await settingsRun(place, ['set', 'lead', 'delivery_order=drop']),
+      'loosens policy "delivery-order"',
+    );
+  });
+  scene('settings.not-owner', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas'], other), 'only the owner sets a seat');
+  });
+  scene('settings.no-agent', async (place) => {
+    write(place, TEAM);
+    // The seat is declared and never launched, so the first set bootstraps its record; a path
+    // where the agent registry belongs cannot hold it, and the refusal names that instead.
+    mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(place.home, '.config', 'team', 'agents'), 'not a directory');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'has no registered agent record');
+  });
+  scene('settings.not-set', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['unset', 'lead', 'model']), 'is not set at level seat');
+  });
+}
+
+{
+  async function seatRun(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    sources: SeatsSources = statusSources(quiet),
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runSeat([...argv], io, sources), out: io.out, err: io.err };
+  }
+  scene('seat.invocation', async (place) => show(await seatRun(place, []), 'a seat name is required'));
+  scene('seat.file-owner', async (place) => show(await seatRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
+  scene('seat.session-owner', async (place) => show(await seatRun(place, ['lead', '--session', 'acme'], other), "--session is the owner's"));
+  scene('seat.not-a-repo', async (place) => show(await seatRun(place, ['lead']), 'not inside a git repository'), false);
+  scene('seat.file', async (place) => show(await seatRun(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+  scene('seat.file-invalid', async (place) => {
+    invalid(place);
+    return show(await seatRun(place, ['lead', '--file', 'team.yaml']), 'line');
+  });
+  scene('seat.not-yours', async (place) => {
+    write(place, TEAM);
+    return show(
+      await seatRun(place, ['lead'], other, {
+        ...statusSources(quiet),
+        home: place.home,
+        gate: { standing: () => ({ kind: 'none' }) },
+      }),
+      'this team is not yours to read',
+    );
+  });
+  scene('seat.no-seat', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['ghost']), 'no seat "ghost" is declared in acme');
+  });
+  scene('seat.herdr', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['lead'], owner, statusSources(null)), "doesn't answer");
+  });
+  scene('seat.sessions', async (place) => {
+    write(place, TEAM);
+    const log = sessionsRegistry(place);
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(join(place.base, 'real-sessions.jsonl'), '');
+    symlinkSync(join(place.base, 'real-sessions.jsonl'), log);
+    return show(
+      await seatRun(place, ['lead'], owner, { ...statusSources(quiet), home: place.home }),
+      'a symbolic link was found and not followed',
+    );
+  });
+  scene('seat.shown', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['lead']), 'delivery_order');
+  });
+  scene('seat.source', async (place) => {
+    write(place, TEAM);
+    tamperedSeatSetting(place);
+    return show(
+      await seatRun(place, ['lead'], owner, { ...statusSources(quiet), home: place.home }),
+      'signature verification failed for setting "model"',
+    );
+  });
+}
 
 async function up(place: Place, argv: string[], caller: Caller, sources: UpSources): Promise<Ran> {
   const io = testIo(place.root, caller);
@@ -4495,7 +4720,7 @@ for (const [name, command, args, invalidArgs] of [
   scene('reply.usage', async (place) => show(await replied(place, []), '<id> is required'));
 }
 
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
+const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
 
 const contract = loadContract();
 if (wanted !== null) {

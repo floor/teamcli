@@ -7,6 +7,20 @@
 // that crashed between writing its record and publishing to the bus loses time, never the event.
 import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  configChangedRecordId,
+  appendConfigChanged,
+  type ConfigChange,
+} from '../config/events.ts';
+import {
+  readEntityConfigSource,
+  readProjectConfigSource,
+  readSeatConfigSource,
+  readTeamConfigSource,
+  type ConfigSourceRead,
+} from '../config/sources.ts';
+import { getTeam, teamIdOf } from '../registry/teams.ts';
+import { markOrphanedSeats } from '../registry/sync.ts';
 import { readHistory } from '../send/history.ts';
 import { readPending } from '../send/pending.ts';
 import { readState } from '../state.ts';
@@ -116,9 +130,22 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
   const existing = readEvents(project, root, home, { kept: options.kept });
   if (!existing.ok) return existing;
 
+  // A seat whose declaration is gone keeps its record and every signed setting: the bootstrap
+  // ruling asks for an observable mark instead of a delete, and this pass is where the removal
+  // is first seen. A team file that does not load marks nothing.
+  try {
+    markOrphanedSeats(home, root, nowDate);
+  } catch {
+    // The next pass retries; a registry this pass cannot write does not fail the reconcile.
+  }
+
   const seen = new Set<string>();
+  // A settings change is machine-wide: the signed generation it names is the same in every
+  // session, so its record ids are collected from the whole retained log, not this session's.
+  const configSeen = new Set<string>();
   const lastSeatEventTs = new Map<string, string>();
   for (const entry of existing.events) {
+    if (entry.payload.kind === 'config.changed') configSeen.add(entry.payload.record_id);
     if (entry.payload.session !== session) continue;
     seen.add(`${entry.payload.kind}\0${entry.payload.record_id}`);
     if (entry.payload.seat !== undefined) {
@@ -478,6 +505,58 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
         subject: seatName,
       });
       lastSeatEventTs.set(seatName, activeTs);
+    }
+  }
+
+  // 5. Scan the four signed settings records for a signed generation with no `config.changed`
+  //    event (OD-20261018-08). A write that crashed between replacing its record and appending
+  //    its event loses time, not the event: the pass appends one marked reconciled, once.
+  {
+    const teamId = teamIdOf(root);
+    let teamRecord: ReturnType<typeof getTeam> = null;
+    try {
+      teamRecord = getTeam(home, teamId);
+    } catch {
+      teamRecord = null;
+    }
+    if (teamRecord !== null) {
+      const sources: { read: ConfigSourceRead; seat?: string }[] = [];
+      if (teamRecord.entity) sources.push({ read: readEntityConfigSource(home, teamRecord.entity) });
+      if (teamRecord.projectId) sources.push({ read: readProjectConfigSource(home, teamRecord.projectId) });
+      sources.push({ read: readTeamConfigSource(home, teamId) });
+      for (const line of teamRecord.roster) {
+        sources.push({ read: readSeatConfigSource(home, line.agent, line.seat), seat: line.seat });
+      }
+      for (const source of sources) {
+        // A record that does not verify raises nothing: a pass that cannot read a signed value
+        // does not invent an event for it.
+        if (!source.read.ok) continue;
+        for (const setting of source.read.settings) {
+          const recordId = configChangedRecordId(setting);
+          if (configSeen.has(recordId)) continue;
+          const change: ConfigChange = {
+            ts: setting.date,
+            session,
+            level: setting.level,
+            target: setting.target,
+            key: setting.key,
+            // The record keeps the value, not the value it replaced.
+            old: null,
+            value: setting.value,
+            generation: setting.generation,
+            from: 'owner',
+            ...(source.seat !== undefined ? { seat: source.seat, subject: source.seat } : {}),
+            reconciled: true,
+          };
+          const res = appendConfigChanged(project, root, home, change);
+          if (!res.ok) continue;
+          configSeen.add(recordId);
+          if (!res.duplicate) {
+            raised.push(res.record);
+            options.onEvent?.(res.record);
+          }
+        }
+      }
     }
   }
 

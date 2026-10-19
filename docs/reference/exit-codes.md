@@ -136,6 +136,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.range` | `commits` | 2 | the range can't be resolved | `team commits check missing..also` |
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
+| `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
+| `config.invocation` | `config` | 2 | the invocation is not one of the command's forms | `team config` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
 | `delegate.done` | `delegate` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team delegate <session/pane> --commands up,down` |
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
@@ -457,6 +459,18 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `route.unrecorded` | `route` | 1 | the pair is admitted and the route record could not be written | `team route builder-2` |
 | `route.configuration` | `route` | 2 | the team file cannot be read | `team route builder-2` |
 | `route.usage` | `route` | 2 | the invocation cannot be read | `team route` |
+| `seat.shown` | `seat` | 0 | the seat is printed | `team seat lead` |
+| `seat.file-owner` | `seat` | 1 | --file is the owner's | `team seat lead --file .agents/team.yaml` |
+| `seat.no-seat` | `seat` | 1 | the team file declares no seat of that name | `team seat ghost` |
+| `seat.session-owner` | `seat` | 1 | --session is the owner's | `team seat lead --session team` |
+| `seat.sessions` | `seat` | 1 | the session registry can't be read | `team seat lead` |
+| `seat.file` | `seat` | 2 | the team file can't be found or read | `team seat lead --file missing.yaml` |
+| `seat.file-invalid` | `seat` | 2 | the team file does not parse or does not validate | `team seat lead --file team.yaml` |
+| `seat.herdr` | `seat` | 2 | herdr doesn't answer | `team seat lead` |
+| `seat.invocation` | `seat` | 2 | the invocation is not one of the command's forms | `team seat` |
+| `seat.not-a-repo` | `seat` | 2 | the directory is not inside a git repository | `team seat lead` |
+| `seat.not-yours` | `seat` | 2 | the team is not the caller's to read | `team seat lead` |
+| `seat.source` | `seat` | 2 | a signed settings record can't be read or does not verify | `team seat lead` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
@@ -488,6 +502,25 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `sessions.shown` | `sessions` | 0 | the session records were listed | `team sessions` |
 | `sessions.read` | `sessions` | 1 | a session registry can't be read | `team sessions` |
 | `sessions.invocation` | `sessions` | 2 | the invocation can't be read | `team sessions --by nothing` |
+| `settings.dry-run` | `settings` | 0 | the change a write would make is printed and nothing is written | `team settings set lead nickname=Atlas --dry-run` |
+| `settings.set` | `settings` | 0 | the setting is signed into the seat's record and logged | `team settings set lead nickname=Atlas` |
+| `settings.shown` | `settings` | 0 | the seat's settings are printed | `team settings lead` |
+| `settings.unset` | `settings` | 0 | the setting is removed from the seat's record and logged | `team settings unset lead nickname` |
+| `settings.file-owner` | `settings` | 1 | --file is the owner's | `team settings lead --file .agents/team.yaml` |
+| `settings.no-agent` | `settings` | 1 | the seat has no registered agent record and one could not be created to hold its settings | `team settings set lead nickname=Atlas` |
+| `settings.no-seat` | `settings` | 1 | the team file declares no seat of that name | `team settings ghost` |
+| `settings.not-owner` | `settings` | 1 | only the owner sets a seat's settings | `team settings set lead nickname=Atlas` |
+| `settings.not-set` | `settings` | 1 | an unset names a setting that is not set on the seat | `team settings unset lead model` |
+| `settings.policy` | `settings` | 1 | a policy in force over the seat does not admit the value | `team settings set lead delivery_order=typed` |
+| `settings.file` | `settings` | 2 | the team file can't be found or read | `team settings lead --file missing.yaml` |
+| `settings.file-invalid` | `settings` | 2 | the team file does not parse or does not validate | `team settings lead --file team.yaml` |
+| `settings.invocation` | `settings` | 2 | the invocation is not one of the command's forms | `team settings` |
+| `settings.key` | `settings` | 2 | a setting key is unknown or is not one a seat holds | `team settings set lead nope=1` |
+| `settings.not-a-repo` | `settings` | 2 | the directory is not inside a git repository | `team settings lead` |
+| `settings.not-yours` | `settings` | 2 | the team is not the caller's to read | `team settings lead` |
+| `settings.source` | `settings` | 2 | a signed settings record can't be read or does not verify | `team settings lead` |
+| `settings.value` | `settings` | 2 | a value is outside what the seat's profile or the key's shape accepts | `team settings set lead model=nope` |
+| `settings.write` | `settings` | 2 | the seat's record can't be replaced | `team settings set lead nickname=Atlas` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |

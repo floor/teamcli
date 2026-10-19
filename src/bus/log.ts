@@ -71,6 +71,17 @@ export type EventPayload = {
   reason?: string;
   prompt?: string;
   rule?: string;
+  /** On `config.changed`: the key and the level the signed record was written at. */
+  config_key?: string;
+  config_level?: string;
+  /** The value before and after, in words (an order as its legs). An unset carries the old value
+   *  only; a change the reconcile pass appends carries the new one only, because the record holds
+   *  no history. */
+  config_old?: string;
+  config_new?: string;
+  /** On a `config.changed` the reconcile pass appended for a signed record it found without one:
+   *  `true`, so a reader can tell an event raised at write time from one raised after a crash. */
+  reconciled?: string;
   /** On `team.event-log-dropped`: the oldest sequence retention has dropped (carried forward
    *  across declarations) and the newest sequence the declaring pass dropped. */
   dropped_oldest_seq?: number;
@@ -449,6 +460,11 @@ const OPTIONAL_STRING_FIELDS = [
   'reason',
   'prompt',
   'rule',
+  'config_key',
+  'config_level',
+  'config_old',
+  'config_new',
+  'reconciled',
 ] as const;
 
 const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq'] as const;

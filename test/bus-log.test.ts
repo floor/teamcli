@@ -74,7 +74,8 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBe(32);
+    expect(EVENT_KINDS.length).toBe(33);
+    expect(isEventKind('config.changed')).toBe(true);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
     expect(isEventKind('record.invalid')).toBe(true);
@@ -98,6 +99,9 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
     expect(isPrivilegedKind('security.refused')).toBe(true);
     expect(isPrivilegedKind('message.arrived')).toBe(false);
     expect(isPrivilegedKind('message.arrived', ['message.arrived'])).toBe(true);
+    // A setting is a value, not a limit: the change is routed, never privileged, never at once.
+    expect(isPrivilegedKind('config.changed')).toBe(false);
+    expect(DEFAULT_OWNER_AT_ONCE_KINDS).not.toContain('config.changed');
 
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('seat.at-prompt');
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('team.policy-refused');

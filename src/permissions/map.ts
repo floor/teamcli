@@ -160,6 +160,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'the hidden port answers classify and yaml requests on stdin: it reads no team file and asks for no caller',
     },
+    config: {
+      kind: 'any-caller',
+      why: 'it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read',
+    },
+    'config:keys': {
+      kind: 'any-caller',
+      why: 'the listing is the command\'s only verb and reads the registry only: no team file, seat or terminal is read',
+    },
     doctor: {
       kind: 'any-caller',
       why: 'the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them',
@@ -235,6 +243,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'admission',
       why: 'a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused',
     },
+    seat: {
+      kind: 'team-read',
+      why: 'one seat as an object — its settings, its status row and its newest session: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` and `--session` are the owner\'s alone, and the lifecycle verbs gate as the commands they run (their rows below)',
+    },
     seats: {
       kind: 'team-read',
       why: 'the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner\'s alone',
@@ -242,6 +254,10 @@ function buildGates(): Record<string, Gate> {
     sessions: {
       kind: 'any-caller',
       why: 'it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read',
+    },
+    settings: {
+      kind: 'team-read',
+      why: 'one seat\'s settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner\'s alone, and set and unset are the owner\'s outright (their rows below)',
     },
     tempo: {
       kind: 'owner-only',
@@ -317,6 +333,30 @@ function buildGates(): Record<string, Gate> {
     'revoke:grant': {
       kind: 'owner-only',
       why: 'removing a standing grant is the owner\'s edit, and the revocation channel of 0.5.0 is the owner at a terminal',
+    },
+    'seat:add': {
+      kind: 'owner-only',
+      why: 'the `add` row for a seat: adding a seat is the owner\'s in 0.5.0, where no `agree` or `grant` holders stand',
+    },
+    'seat:remove': {
+      kind: 'owner-or-leads',
+      why: 'the `remove` row for a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner',
+    },
+    'seat:rename': {
+      kind: 'owner-or-leads',
+      why: 'the `rename` row for a seat: the owner or `leads` for its own team',
+    },
+    'seat:restart': {
+      kind: 'owner-or-leads',
+      why: 'the `restart` row for a seat: as `start`, the owner or `leads` for its own team',
+    },
+    'settings:set': {
+      kind: 'owner-only',
+      why: 'recording a seat\'s setting is the owner\'s: a lead\'s write within its role policy waits for the role policy the approved minimum leaves out, and this build refuses rather than admit a write no policy authorized',
+    },
+    'settings:unset': {
+      kind: 'owner-only',
+      why: 'removing a seat\'s setting is the owner\'s by the same gate as set: a lead\'s write within its role policy is not shipped yet, and this build refuses rather than admit one',
     },
     'worktree:list': {
       kind: 'team-change',

@@ -5,8 +5,9 @@ import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -376,6 +377,9 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   const who = logTag(caller);
   const from = caller.kind === 'seat' ? caller.name : 'owner';
   const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  // A settings record that exists and does not verify refuses the send: the address it may
+  // stand for cannot be decided from a record the store disowns.
+  if ('error' in resolved && resolved.kind === 'configuration') return { ended: 'configuration', message: resolved.error };
   // An ambiguous spec is refused wherever it is written, not only when it looks like a registry
   // spec: the declared-seat path below must never pick one of the two seats the registry named.
   if ('error' in resolved && (resolved.kind === 'ambiguous' || isRegistrySpec(seatName))) {
@@ -398,7 +402,10 @@ function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
     return { ended: 'refused', dir: null, who: describeCaller(caller), reason: 'a send from outside a team\'s folder is the owner\'s; run it inside a team\'s folder' };
   }
   const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
-  if ('error' in resolved) return { ended: 'refused', dir: null, who: 'owner', reason: resolved.error };
+  if ('error' in resolved) {
+    if (resolved.kind === 'configuration') return { ended: 'configuration', message: resolved.error };
+    return { ended: 'refused', dir: null, who: 'owner', reason: resolved.error };
+  }
   const loaded = loadTeamFile(resolved.team.root, { home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
@@ -421,6 +428,28 @@ function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
     standing: standingOf(dir, judged.session, judged.caller),
     hit: resolved,
   };
+}
+
+/**
+ * The declared seat a bare name names: the seat whose own name it is, or the one whose effective
+ * signed nickname it is. A settings record that exists and does not verify refuses the lookup —
+ * the name cannot be mapped truthfully while the word it may stand for is unknown. Resolved
+ * before admission, so no guard judges a seat the caller did not name.
+ */
+function declaredSeatNamed(
+  home: string,
+  root: string,
+  team: TeamFile,
+  seatName: string,
+): { seat?: Seat; error?: string } {
+  const named = team.seats.find((seat) => seat.name === seatName);
+  if (named !== undefined) return { seat: named };
+  for (const seat of team.seats) {
+    const read = resolveSeatOverrides({ home, root, seat: seat.name });
+    if (!read.ok) return { error: read.why };
+    if ((read.overrides.nickname ?? seat.nickname) === seatName) return { seat };
+  }
+  return {};
 }
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
@@ -505,11 +534,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'placement', seatName, host.now());
       return refuse(io, dir, who, placement, host, report);
     }
-    // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
-    // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
-    const configured =
-      team.seats.find((seat) => seat.name === seatName) ??
-      team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
+    // A bare nickname the registry cannot answer is still a declared seat's nickname: the word
+    // its signed record sets, or the file's where it sets none, maps it, and the rules judge the
+    // seat it names, never the human name the caller wrote.
+    const named = declaredSeatNamed(host.home, root, team, seatName);
+    if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
+    const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
     admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) {
@@ -603,8 +633,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
   // walks; nothing declared leaves mcp-inbox, drop, typed. The words are the receiving team
-  // file's (its own key and the seat's) and the registry project's, read here; a host that hands
-  // in a chain decides instead, which is how a test picks an order without a file to write.
+  // file's (its own key and the seat's) and the registry project's, read here, and the seat's
+  // signed settings say `delivery_order` and `human` in the file's place; a host that hands in a
+  // chain decides instead, which is how a test picks an order without a file to write. A record
+  // that exists and does not verify refuses the send: neither the order nor the human guard can
+  // be decided from a record the store disowns, and routing on the declaration would let a
+  // tampered `human` preference fall back to a typed pane.
+  let overrides: SeatOverrides = {};
+  if (!host.delivery) {
+    const read = resolveSeatOverrides({ home: host.home, root: to.root, seat: to.seat });
+    if (!read.ok) {
+      return configuration(io, `the receiving seat's settings record cannot be read: ${read.why}`, report);
+    }
+    overrides = read.overrides;
+  }
   const rawChain = host.delivery ?? deliveryChainOf({
     root: to.root,
     seat: to.seat,
@@ -613,6 +655,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // from its root, and one that cannot be read declares nothing.
     ...(to.cross ? {} : { file: team }),
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+    overrides,
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
@@ -620,7 +663,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // order names is kept out, and each one's human reason is recorded on the history line, so a
   // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
   // back.
-  const human = declared?.human === true;
+  const human = overrides.human ?? (declared?.human === true);
   const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
 
   // One signed record is written into the recipient's folder — the whole body, its thread, the
@@ -1047,11 +1090,12 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'placement', seatName, host.now());
       return refuse(io, dir, who, placement, host, report);
     }
-    // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
-    // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
-    const configured =
-      team.seats.find((seat) => seat.name === seatName) ??
-      team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
+    // A bare nickname the registry cannot answer is still a declared seat's nickname: the word
+    // its signed record sets, or the file's where it sets none, maps it, and the rules judge the
+    // seat it names, never the human name the caller wrote.
+    const named = declaredSeatNamed(host.home, root, team, seatName);
+    if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
+    const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
     admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) {
@@ -1947,17 +1991,22 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   // The reach a send would take, judged from the declared CLI alone: a Claude Code seat carries
   // the cross-session channel, every other CLI the typed trigger. `--list` reads no pane and
   // dials nothing, so it claims no live address; a stopped seat renders `stopped` in its place.
-  const seats: SeatRow[] = loaded.team.seats.map((seat) => ({
-    name: seat.name,
-    // The `@<nickname>` form: every row the listing prints is a spec the resolver takes as it
-    // stands, and a bare nickname would not be one outside the caller's team.
-    nickname: seat.nickname === undefined ? null : `@${seat.nickname}`,
-    cli: seat.cli,
-    role: seat.role,
-    project,
-    reach: seat.cli === 'claude-code' ? 'socket' : 'typed',
-    stopped: seat.stopped === true,
-  }));
+  const seats: SeatRow[] = loaded.team.seats.map((seat) => {
+    // The signed seat setting stands where the file word did, so the row prints the address the
+    // resolver takes: every row the listing prints is a spec the resolver answers.
+    const nickname = addressedNickname(host.home, loaded.root, seat);
+    return {
+      name: seat.name,
+      // The `@<nickname>` form: every row the listing prints is a spec the resolver takes as it
+      // stands, and a bare nickname would not be one outside the caller's team.
+      nickname: nickname === undefined ? null : `@${nickname}`,
+      cli: seat.cli,
+      role: seat.role,
+      project,
+      reach: seat.cli === 'claude-code' ? 'socket' : 'typed',
+      stopped: seat.stopped === true,
+    };
+  });
   // The caller's entity reaches past its own file: the machine's team registry holds every other
   // team of the same entity, and each of their seats is addressable as `<seat>@<team>` — the
   // team's own project name is the scope. A registry the home cannot read is reported as the
@@ -2008,9 +2057,17 @@ function crossTeamRows(host: SendHost, teams: Record<string, TeamRecord>, ownId:
     for (const entry of record.roster) {
       const agent = agents.get(entry.agent);
       if (!agent || agent.lifecycle === 'retired') continue;
+      const nickname = seatSettingsOf({
+        home: host.home,
+        root: record.root,
+        agentId: entry.agent,
+        seat: entry.seat,
+        teamId: id,
+        entity: record.entity,
+      }).nickname ?? entry.nickname;
       rows.push({
         name: `${entry.seat}@${record.project}`,
-        nickname: entry.nickname === undefined ? null : `${entry.nickname}@${record.project}`,
+        nickname: nickname === undefined ? null : `${nickname}@${record.project}`,
         cli: agent.cli,
         role: entry.role,
         stopped: agent.lifecycle === 'stopped' || record.lifecycle === 'stopped' || record.lifecycle === 'archived',
@@ -2466,6 +2523,13 @@ function overlayTeam(home: string, records: AdmitTeams, team: TeamFile, teamId: 
     operator: team.operator,
     roster,
   };
+}
+
+/** The nickname a declared seat answers to: the one its signed record sets, standing where the
+ *  file's word did, and the file's own when no record signs one. A record that does not verify
+ *  signs nothing, so a broken record never takes the file's word away. */
+function addressedNickname(home: string | null, root: string, seat: Seat): string | undefined {
+  return seatOverridesOf({ home, root, seat: seat.name }).nickname ?? seat.nickname;
 }
 
 function seatList(team: TeamFile): string {

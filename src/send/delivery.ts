@@ -4,8 +4,10 @@
 // project's is the registry record's `delivery_order`; no record in this build carries an
 // entity's word, so that level is always silent here. A seat that declares no word of its own
 // takes the one its shape implies: a human's pane walks the drop file alone, and a CLI whose
-// launch installs no watcher never walks the drop leg at all. runSend resolves `host.delivery`
-// when a caller hands a chain in — tests do — and this reading otherwise.
+// launch installs no watcher never walks the drop leg at all. A seat's signed settings, when the
+// caller has read them, say `delivery_order` and `human` in the file's place. runSend resolves
+// `host.delivery` when a caller hands a chain in — tests do — and this reading otherwise.
+import type { SeatOverrides } from '../config/apply.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cliWatcher } from '../launch/cli-hook.ts';
@@ -40,6 +42,10 @@ export function deliveryChainOf(input: {
   file?: TeamFile;
   /** The registry's answer for the project a team sits in, or null. */
   projectOfTeam: (teamId: string) => ProjectRecord | null;
+  /** The seat's signed settings, when the caller already read them. A signed `delivery_order`
+   *  is the seat's word in place of the file's, and a signed `human` is the caller's walk rule;
+   *  the file's own words still fill what the records do not set. */
+  overrides?: SeatOverrides;
 }): DeliveryChain {
   let file = input.file;
   if (!file) {
@@ -57,7 +63,7 @@ export function deliveryChainOf(input: {
     project = undefined;
   }
   const found: Seat | undefined = file?.seats.find((one) => one.name === input.seat);
-  const seat = found?.deliveryOrder ?? seatDefault(found);
+  const seat = input.overrides?.deliveryOrder ?? found?.deliveryOrder ?? seatDefault(found);
   return {
     ...(project !== undefined ? { project } : {}),
     ...(file?.deliveryOrder ? { team: file.deliveryOrder } : {}),

@@ -36,6 +36,9 @@ import { deliverGeneralBrief } from '../../src/launch/general-brief.ts';
 import { signRecord } from '../../src/send/record.ts';
 import { runList } from '../../src/commands/list.ts';
 import { runSeats } from '../../src/commands/seats.ts';
+import { runSeat } from '../../src/commands/seat.ts';
+import { runSettings } from '../../src/commands/settings.ts';
+import { runConfig } from '../../src/commands/config.ts';
 import { runSessions } from '../../src/commands/sessions.ts';
 import { runStatus } from '../../src/commands/status.ts';
 import { runUp } from '../../src/commands/up.ts';
@@ -382,6 +385,12 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRelease(rest, io, world.releaseFetch(), world.releaseKeyReader());
     case 'seats':
       return runSeats(rest, io, { ...world.statusSources(), wait: async () => false });
+    case 'seat':
+      return runSeat(rest, io, { ...world.statusSources(), wait: async () => false });
+    case 'settings':
+      return runSettings(rest, io, { home: fixture.home, now: new Date(spec.now) });
+    case 'config':
+      return runConfig(rest, io);
     case 'sessions':
       return runSessions(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'status':

@@ -90,6 +90,23 @@ describe('the agent store', () => {
     expect(readFileSync(join(agentsDir(home), `${without.id}.yaml`), 'utf8')).not.toContain('seat_handle');
   });
 
+  test('the orphan mark is kept when set, absent when not, and a word that is not a timestamp is refused', () => {
+    const agent = registerAgent(home, init());
+    expect(getAgent(home, agent.id)?.orphaned_at).toBeUndefined();
+    expect(readFileSync(join(agentsDir(home), `${agent.id}.yaml`), 'utf8')).not.toContain('orphaned_at');
+
+    updateAgent(home, agent.id, { orphaned_at: '2026-10-19T12:00:00.000Z' });
+    expect(getAgent(home, agent.id)?.orphaned_at).toBe('2026-10-19T12:00:00.000Z');
+    expect(readFileSync(join(agentsDir(home), `${agent.id}.yaml`), 'utf8')).toContain('orphaned_at: "2026-10-19T12:00:00.000Z"');
+
+    expect(() => updateAgent(home, agent.id, { orphaned_at: 'yesterday' })).toThrow(/orphaned_at/);
+
+    // `null` takes the current mark off the record: the field is absent again, not null on disk.
+    updateAgent(home, agent.id, { orphaned_at: null });
+    expect(getAgent(home, agent.id)?.orphaned_at).toBeUndefined();
+    expect(readFileSync(join(agentsDir(home), `${agent.id}.yaml`), 'utf8')).not.toContain('orphaned_at');
+  });
+
   test('a malformed seat handle or an incomplete record is refused, and nothing is written', () => {
     expect(() => registerAgent(home, init({ seat_handle: 'seat_nope' }))).toThrow(/seat_handle/);
     expect(() => registerAgent(home, init({ name: '  ' }))).toThrow(/name/);

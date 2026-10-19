@@ -409,6 +409,73 @@
       }
     },
     {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "config",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "keys",
+          "positionals": [
+            {
+              "name": "level",
+              "optional": true,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team config keys [<level>] [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the listing is the command's only verb and reads the registry only: no team file, seat or terminal is read"
+          }
+        }
+      ],
+      "usage": [
+        "team config keys [<level>] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read"
+      }
+    },
+    {
       "flags": [],
       "hidden": true,
       "name": "conformance-adapter",
@@ -2525,6 +2592,271 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "seat",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "add",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat add <seat> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the `add` row for a seat: adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "remove",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat remove <seat> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the `remove` row for a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "rename",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "name",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the `rename` row for a seat: the owner or `leads` for its own team"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "restart",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat restart <seat> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the `restart` row for a seat: as `start`, the owner or `leads` for its own team"
+          }
+        }
+      ],
+      "usage": [
+        "team seat <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat add <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat remove <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat restart <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "one seat as an object — its settings, its status row and its newest session: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` and `--session` are the owner's alone, and the lifecycle verbs gate as the commands they run (their rows below)"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--all",
           "repeatable": false,
           "takesValue": false
@@ -2724,6 +3056,178 @@
       "who": {
         "gate": "any-caller",
         "why": "it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "settings",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "key",
+              "optional": true,
+              "repeatable": false
+            },
+            {
+              "name": "value",
+              "optional": true,
+              "repeatable": false
+            },
+            {
+              "name": "key=value",
+              "optional": true,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]",
+            "team settings set <seat> <key=value> [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "recording a seat's setting is the owner's: a lead's write within its role policy waits for the role policy the approved minimum leaves out, and this build refuses rather than admit a write no policy authorized"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "unset",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "key",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing a seat's setting is the owner's by the same gate as set: a lead's write within its role policy is not shipped yet, and this build refuses rather than admit one"
+          }
+        }
+      ],
+      "usage": [
+        "team settings <seat> [--file <path>] [--json]",
+        "team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]",
+        "team settings set <seat> <key=value> [--dry-run] [--json]",
+        "team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "one seat's settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner's alone, and set and unset are the owner's outright (their rows below)"
       }
     },
     {
