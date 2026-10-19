@@ -1917,11 +1917,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         // the gate's pane as actor, the one command `up` — never the pane as signer.
         ...(delegated === null ? {} : { delegated: { actor: delegated, command: 'up' as const } }),
       },
-      team.seats.map((seat) => ({
-        seat,
-        pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,
-        ...(afterwards[seat.name]?.id ? { handle: afterwards[seat.name]?.id } : {}),
-      })),
+      team.seats.map((seat) => {
+        const held = afterwards[seat.name];
+        return {
+          seat,
+          pane: held?.stage === 'ready' ? (held.pane ?? null) : null,
+          ...(held?.id ? { handle: held.id } : {}),
+          // The same measured id the launch wrote into the seat's record: the registry keeps it
+          // beside the pane, and a seat with no reading leaves the record's own id in place.
+          ...(held?.agent_session ? { agent_session: held.agent_session } : {}),
+        };
+      }),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
     // The address: a claude-code seat this run left ready records the socket its session answers
     // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves

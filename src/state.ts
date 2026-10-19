@@ -96,7 +96,8 @@ export type SeatState = {
   /**
    * The agent session herdr reported for this seat when its idle prompt appeared, beside the
    * process ids. A later pane whose pids differ and whose live session equals this one is the
-   * seat (`replacedSeat`). Absent when the launch's reading had none.
+   * seat (`replacedSeat`). The same id is written to the agent registry's `reach.agent_session`
+   * by the register and launch paths. Absent when the launch's reading had none.
    */
   agent_session?: string;
   /**
@@ -528,6 +529,12 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       if (seat.effort !== undefined && typeof seat.effort !== 'string') delete seat.effort;
       if (seat.launch_line !== undefined && typeof seat.launch_line !== 'string') delete seat.launch_line;
       if (seat.last_active !== undefined && typeof seat.last_active !== 'string') delete seat.last_active;
+      // A session id is the measured string herdr reported, never an object handed to this build
+      // by a hand-edited file: anything else is not an id and is dropped the way a malformed
+      // model or launch line is.
+      if (seat.agent_session !== undefined && (typeof seat.agent_session !== 'string' || seat.agent_session === '')) {
+        delete seat.agent_session;
+      }
       if (seat.waiting && typeof seat.waiting === 'object') {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);
       }

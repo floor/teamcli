@@ -1416,11 +1416,15 @@ function hostOf(input: {
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
         // The registry: a relaunch keeps the seat's agent and re-points it to the new pane.
         if (name === seat.name) {
+          // The state this run just wrote is the registry's reading too: the same seat id and
+          // the same agent session, never a second derivation of either.
+          const kept = readState(dir).sessions[session]?.seats[name];
           const made = registerLaunch(
             { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
             seat,
             patch.pane,
-            readState(dir).sessions[session]?.seats[name]?.id,
+            kept?.id,
+            kept?.agent_session,
           );
           if ('note' in made) logLine(dir, input.command, input.caller, made.note, input.now());
           else {

@@ -1500,6 +1500,9 @@ function hostOf(input: {
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
         // The registry: the seat's agent is registered at its first launch, re-pointed after.
         if (name === seat.name) {
+          // The state this run just wrote is the registry's reading too: the same seat id and
+          // the same agent session, never a second derivation of either.
+          const kept = readState(dir).sessions[session]?.seats[name];
           const made = registerLaunch(
             {
               home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner,
@@ -1507,7 +1510,8 @@ function hostOf(input: {
             },
             seat,
             patch.pane,
-            readState(dir).sessions[session]?.seats[name]?.id,
+            kept?.id,
+            kept?.agent_session,
           );
           if ('note' in made) logLine(dir, 'add', input.caller, made.note, input.now());
           else {

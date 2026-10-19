@@ -12,7 +12,10 @@ export type HerdrAgent = {
   workspace: string;
   status: string;
   cwd: string | null;
-  /** Herdr's `agent_session`, when the integration reported one. Absent when it did not. */
+  /** Herdr's `agent_session`, when the integration reported one. Absent when it did not: an
+   *  older build sent the id string, and 0.7.1 sends `{agent, kind, source, value}` with
+   *  `kind: 'id'`, whose `value` is that same id. Either shape is read to the id; any other
+   *  shape is left unread. */
   session?: string;
   /**
    * Sidebar line 2 as herdr holds it, when it holds one: the text `reportDisplayAgent` wrote
@@ -35,12 +38,26 @@ function run(args: string[], session?: string): unknown {
   return (JSON.parse(out) as { result?: unknown }).result;
 }
 
+// The agent session herdr reported, as the id alone. Herdr 0.7.1 sends an object —
+// `{agent, kind, source, value}` with `kind: 'id'` — where older builds sent the id string.
+// Only a non-empty string, or that object's non-empty string `value` under `kind: 'id'`, is a
+// session id: another kind names something else entirely (a pid, a ticket), and an object of
+// any other shape is not one either, so neither is coerced into an id. An unreadable shape
+// leaves the session unknown, the same reading a herdr that reported none gives.
+function agentSessionOf(value: unknown): string | undefined {
+  if (typeof value === 'string') return value === '' ? undefined : value;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const reported = value as Record<string, unknown>;
+  if (reported.kind !== 'id') return undefined;
+  return typeof reported.value === 'string' && reported.value !== '' ? reported.value : undefined;
+}
+
 // The agents herdr lists, or null when herdr can't be reached.
 export function agentList(session?: string): HerdrAgent[] | null {
   try {
     const result = run(['agent', 'list'], session) as { agents?: Record<string, unknown>[] };
     return (result.agents ?? []).map((agent) => {
-      const session = typeof agent.agent_session === 'string' && agent.agent_session ? agent.agent_session : undefined;
+      const session = agentSessionOf(agent.agent_session);
       const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
       return {
         name: typeof agent.name === 'string' && agent.name ? agent.name : null,

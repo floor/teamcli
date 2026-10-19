@@ -615,9 +615,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // it left: the seat id (`team seats`' `-`, and the registry agent's missing `seat_handle`)
       // and the process identity (`team doctor`'s "launched before team recorded its process").
       // The same id chain and the same identity read the launch path below writes; a record that
-      // holds both is left byte for byte as it is.
+      // holds both is left byte for byte as it is — unless herdr reports a session id the record
+      // does not hold. That reading is measured now, and the registry write below keeps the same
+      // id, so the record takes it too rather than keeping a reading the registry no longer has.
       const seatId = held.id ?? recorded.retained_seats?.[name]?.id ?? mintSeatId();
-      if (held.id === undefined || held.launched === undefined) {
+      const liveSession = listed?.session;
+      const sessionMoved = liveSession !== undefined && held.agent_session !== liveSession;
+      if (held.id === undefined || held.launched === undefined || sessionMoved) {
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
           if (current.retained_seats?.[name]) delete current.retained_seats[name];
@@ -626,6 +630,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
             ...carried,
             id: seatId,
             ...(carried.launched === undefined ? { launched: identity } : {}),
+            ...(sessionMoved ? { agent_session: liveSession } : {}),
           };
         });
       }
@@ -637,7 +642,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // The record names the caller the run admitted, not the process the walk saw: a seat under
       // a pane override walks as unplaced and is judged as the seat its pane proves it is, and
       // `registered_by` must say the seat.
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId);
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId, listed?.session);
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -850,7 +855,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
 
   // The judged caller, as above: `registered_by` is the seat the admission found, never the
   // unplaced process the walk saw under a pane override.
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, id);
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, id, listed?.session);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a

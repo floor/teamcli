@@ -696,11 +696,15 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         // The registry: the relaunched seat keeps its agent, re-pointed to the new pane with the
         // model and effort the file now declares.
         if (patch.pane && next === seat.name && sources.home) {
+          // The state this run just wrote is the registry's reading too: the same seat id and
+          // the same agent session, never a second derivation of either.
+          const kept = readState(dir).sessions[session]?.seats[next];
           const made = registerLaunch(
             { home: sources.home, team, root, by: describeCaller(caller), session, owner },
             seat,
             patch.pane,
-            readState(dir).sessions[session]?.seats[next]?.id,
+            kept?.id,
+            kept?.agent_session,
           );
           if ('note' in made) logLine(dir, 'reload', describeCaller(caller), made.note, now());
           else {

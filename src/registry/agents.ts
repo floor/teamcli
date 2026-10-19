@@ -30,6 +30,10 @@ export type AgentReach = {
   team: string;
   seat: string;
   session: string;
+  /** The agent session herdr reported for the seat's live CLI — the CLI's own id, read from the
+   *  same `agent list` reading the launch records in the seat state, never derived or invented.
+   *  A launch re-points it beside the pane; a record written before it was kept reads null. */
+  agent_session?: string | null;
   /** The current herdr pane; re-pointed on relaunch. */
   pane: string | null;
   /** A cross-session address if the agent has one, else null. */
@@ -254,6 +258,13 @@ export function recordAgentAddress(home: string, id: string, address: string | n
   return updateAgent(home, id, { reach: { address } });
 }
 
+/** Records the agent session herdr reported for the seat's live CLI — the id the launch also
+ *  keeps in the seat state — or clears it with null. The caller hands in the measured reading;
+ *  nothing here reads herdr, and nothing here derives an id from a pane, a pid or a name. */
+export function recordAgentSession(home: string, id: string, agentSession: string | null): Agent {
+  return updateAgent(home, id, { reach: { agent_session: agentSession } });
+}
+
 /** The agent that holds a seat of a team. A retired agent no longer holds it; if more than one
  *  does, the most recently updated wins. When `(team, seat)` finds none, an optional
  *  `seatHandle` match in the same team keeps the same agent id across a seat rename. */
@@ -380,6 +391,8 @@ function fromValue(value: YamlValue): Agent | null {
   const launcher = strOrNull(value.launcher);
   const pane = strOrNull(reach.pane);
   const address = strOrNull(reach.address);
+  // Optional: a record written before the id was kept has no field at all, which reads null.
+  const agentSession = strOrNull(reach.agent_session);
   const handle = strOrNull(value.seat_handle);
   const orphanedAt = strOrNull(value.orphaned_at);
   const id = str(value.id);
@@ -403,11 +416,15 @@ function fromValue(value: YamlValue): Agent | null {
     lab === null || cli === null || launch === null || team === null || seat === null ||
     session === null || registeredBy === null || registeredAt === null || updatedAt === null ||
     mcp === null || skills === null || launcher === undefined || pane === undefined ||
-    address === undefined || handle === undefined || orphanedAt === undefined
+    address === undefined || agentSession === undefined || handle === undefined || orphanedAt === undefined
   ) {
     return null;
   }
   if (typeof lifecycle !== 'string' || !(LIFECYCLES as readonly string[]).includes(lifecycle)) return null;
+  // `null` and an absent field both read as "no measured id", so a record written before the
+  // field existed parses to the same reach it always did; only a measured id is kept.
+  const readReach: AgentReach = { team, seat, session, pane, address };
+  if (agentSession !== null) readReach.agent_session = agentSession;
   const agent: Agent = {
     id,
     name,
@@ -416,7 +433,7 @@ function fromValue(value: YamlValue): Agent | null {
     cli,
     launcher,
     launch,
-    reach: { team, seat, session, pane, address },
+    reach: readReach,
     mcp,
     skills,
     lifecycle: lifecycle as AgentLifecycle,
@@ -456,6 +473,7 @@ function invalid(agent: Agent): string | null {
     return 'the signing triple (model, version, role) is incomplete';
   }
   if (!agent.reach.team.trim() || !agent.reach.seat.trim()) return 'reach.team and reach.seat are required';
+  if (agent.reach.agent_session != null && !agent.reach.agent_session.trim()) return 'reach.agent_session is empty';
   if (!(LIFECYCLES as readonly string[]).includes(agent.lifecycle)) return `"${agent.lifecycle}" is not a lifecycle state`;
   if (agent.seat_handle != null && !isSeatId(agent.seat_handle)) return 'seat_handle is not seat_ plus 12 hex';
   if (agent.orphaned_at != null && !Number.isFinite(Date.parse(agent.orphaned_at))) {
@@ -541,6 +559,7 @@ function emit(agent: Agent): string {
     `  team: ${quote(agent.reach.team)}`,
     `  seat: ${quote(agent.reach.seat)}`,
     `  session: ${quote(agent.reach.session)}`,
+    `  agent_session: ${scalarOrNull(agent.reach.agent_session)}`,
     `  pane: ${scalarOrNull(agent.reach.pane)}`,
     `  address: ${scalarOrNull(agent.reach.address)}`,
     `mcp: ${list(agent.mcp)}`,
