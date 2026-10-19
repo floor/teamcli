@@ -26,6 +26,7 @@ import {
   describeCaller,
   detachedRefusal,
   mayChangeTeamVerdict,
+  mayPauseTeamVerdict,
   noPaneRefusal,
   type Caller,
   type CallerVerdict,
@@ -134,10 +135,12 @@ export function callerRecordOf(
  *  admits must then be placed on its recorded pane, in the session judged, and ready — a
  *  refusal lands as `unplaced` (or `unreadable`) and never as an allow.
  *
- *  Two kinds are decided by the module's own function before the records are read, because a
+ *  Three kinds are decided by the module's own function before the records are read, because a
  *  record cannot see what the function judges: a row carrying `terminal` asks `detachedRefusal`
- *  with the row's route, and a `team-change` row asks `mayChangeTeamVerdict` with the walked
- *  caller and the standing. A `team-read` row is the read gate's (`mayReadTeam`), which needs
+ *  with the row's route, a `team-change` row asks `mayChangeTeamVerdict` with the walked
+ *  caller and the standing, and a `team-pause` row asks `mayPauseTeamVerdict` — the owner or
+ *  the orchestrator's seat, never the operator. A `team-read` row is the read gate's
+ *  (`mayReadTeam`), which needs
  *  the loaded team and the delegate evidence this record-only path does not hold: the resolver
  *  refuses it closed under `team-read`, and only the command's own read gate admits. */
 export function resolveCaller(
@@ -162,6 +165,11 @@ export function resolveCaller(
   // the walked caller; a registry record alone cannot say where the caller stands.
   if (gate !== undefined && gate.kind === 'team-change') {
     return changeDecision(caller, command, gate, mayChangeTeamVerdict(caller, team, at));
+  }
+  // A `team-pause` row is `mayPauseTeamVerdict`'s: the owner, or the team's orchestrator on its
+  // own seat. Called itself, as `pause` and `resume` call it.
+  if (gate !== undefined && gate.kind === 'team-pause') {
+    return pauseDecision(caller, command, gate, mayPauseTeamVerdict(caller, team, at));
   }
   const roster = rosterOf(home, root);
   if (roster.kind === 'unreadable' && caller.kind === 'seat') {
@@ -229,6 +237,30 @@ function changeDecision(caller: Caller, command: string, gate: Gate, verdict: Ca
 }
 
 /**
+ * A `mayPauseTeamVerdict` answer read as the resolver's decision: `ok` allows under
+ * `team-pause`, and each refusal keeps the verdict's own words — the lost pane's repair, or the
+ * rule's sentence naming the two callers it admits (the operator is not one of them).
+ */
+function pauseDecision(caller: Caller, command: string, gate: Gate, verdict: CallerVerdict): PermissionDecision {
+  if (verdict.kind === 'ok') {
+    return {
+      effect: 'allow',
+      rule: 'team-pause',
+      why: `${describeCaller(caller)} may pause or resume the team on \`${command}\`: ${gate.why}`,
+    };
+  }
+  if (verdict.kind === 'no-pane') return { effect: 'deny', rule: 'unplaced', why: noPaneRefusal(verdict.name) };
+  if (verdict.kind === 'another-pane') {
+    return { effect: 'deny', rule: 'unplaced', why: anotherPaneRefusal(verdict.name, verdict.recordedPane) };
+  }
+  return {
+    effect: 'deny',
+    rule: 'team-pause',
+    why: `\`${command}\` is decided by \`mayPauseTeamVerdict\`: ${describeCaller(caller)} is neither the owner nor the orchestrator's seat — ${gate.why}`,
+  };
+}
+
+/**
  * The same decision, in the shape the commands that change a team already branch on
  * (`CallerVerdict`): `ok` where the map admits the caller, `refused` where it does not, and —
  * for a seat the map admits — the standing's own verdict, so a lead on a pane the state does
@@ -240,9 +272,9 @@ function changeDecision(caller: Caller, command: string, gate: Gate, verdict: Ca
  * `now` is read only where the row reads grants: a gate row (owner-only, owner-or-leads,
  * owner-or-own-team, seat-record, team-change) decides from the record alone or from the walk,
  * so it opens no grant folder and takes no clock reading it never uses — a command's other
- * readings stay where they were. A `team-change` row never reaches the records at all: the
- * verdict function itself is the answer, with the standing judged. A row carrying `terminal`
- * refuses a no-terminal run through `detachedRefusal` before anything else.
+ * readings stay where they were. A `team-change` or `team-pause` row never reaches the
+ * records at all: the verdict function itself is the answer, with the standing judged. A row
+ * carrying `terminal` refuses a no-terminal run through `detachedRefusal` before anything else.
  *
  * The placement is mandatory: `at` carries the session judged and the seat's record there, and
  * an admitted seat that is not on its recorded pane in that session is refused before any
@@ -267,6 +299,9 @@ export function gateVerdict(
   // A `team-change` row is the verdict function itself, called with the walked caller and the
   // standing judged: the owner, the orchestrator's seat or the operator's seat.
   if (gate !== undefined && gate.kind === 'team-change') return mayChangeTeamVerdict(caller, team, at);
+  // A `team-pause` row is the pause verdict itself: the owner, or the team's orchestrator on its
+  // own seat; the operator is refused by the function, not by a copy of its rule.
+  if (gate !== undefined && gate.kind === 'team-pause') return mayPauseTeamVerdict(caller, team, at);
   const bridge: BridgeTeam = { id: teamIdOf(root), orchestrator: team.orchestrator, operator: team.operator, seats: team.seats };
   const roster = rosterOf(home, root);
   if (roster.kind === 'unreadable' && caller.kind === 'seat') return { kind: 'refused' };

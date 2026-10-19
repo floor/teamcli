@@ -120,6 +120,18 @@ test('every command and subcommand carries who may run it, and the map rows are 
   expect(sub('mcp', 'serve')?.who?.gate).toBe('any-caller');
   expect(sub('proc', 'list')?.who?.gate).toBe('team-read');
   expect(sub('worktree', 'remove')?.who?.gate).toBe('team-change');
+  // `pause` and `resume` are the orchestrator's lever on the team: the owner or the
+  // orchestrator's seat, never the operator, with the route their modules' `detachedRefusal`
+  // prints. `sessions` reads the machine-wide session registry and asks for no caller.
+  for (const word of ['pause', 'resume']) {
+    expect(byName(word)?.who?.gate).toBe('team-pause');
+    expect(byName(word)?.who?.terminal).toEqual({
+      who: 'the owner or the orchestrator',
+      where: 'a terminal outside herdr or its own seat',
+    });
+  }
+  expect(byName('sessions')?.who?.gate).toBe('any-caller');
+  expect(byName('sessions')?.who?.terminal).toBeUndefined();
   // A row whose module refuses a run with no terminal carries the route that refusal prints,
   // beside a kind that reads wider: `watch` is any caller, and only a caller with a terminal or
   // its own pane starts it.
