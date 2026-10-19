@@ -3,14 +3,18 @@
 // declared order is walked as written. No live pane and no real socket: the host's deliver is a
 // fake, and the socket file only has to stand where `socketOf` looks.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettings, cliHookSettingsPath } from '../src/launch/cli-hook.ts';
+import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
+import { upsertProject } from '../src/registry/projects.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { declaredInboundOf } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
-import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
+import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 afterEach(() => {
@@ -31,6 +35,33 @@ function declare(made: World, policy: string | null, fresh = true): string {
   const settingsAt = fresh ? Date.now() - 60_000 : Date.now() + 60_000;
   utimesSync(path, new Date(settingsAt), new Date(settingsAt));
   return path;
+}
+
+/** The team file with an entity, and the entity's own lobby in its trust list: a team that names
+ *  an entity starts in `<home>/.config/team/lobbies/<slug>`, and that is the lobby the file must
+ *  trust. */
+function declareEntity(made: World, entity = 'acme-corp'): void {
+  const path = join(made.dir, 'team.yaml');
+  const lobby = resolveLobby(made.home, { entity });
+  mkdirSync(lobby, { recursive: true });
+  const text = readFileSync(path, 'utf8').replace(lobbyDir(made.home), lobby);
+  writeFileSync(path, `${text}entity: ${entity}\n`);
+}
+
+/** A signed `delivery-order` policy at one level, as the owner writes it. */
+function setOrder(made: World, level: 'entity' | 'project' | 'team', target: string, value: readonly string[]): void {
+  const written = writePolicySet(
+    made.home,
+    {
+      level,
+      target,
+      ...(level === 'team' ? { teamRoot: made.root } : {}),
+      name: 'delivery-order',
+      value: [...value],
+    },
+    { now: NOW },
+  );
+  if (!written.ok) throw new Error(written.why);
 }
 
 test('an accepting Claude seat with no declared order walks the socket first, after the signed record', async () => {
@@ -286,4 +317,59 @@ test('the merged generated file carries the wrapper word, and the walk dials on 
   expect(parsed.crossSessionInbound).toBe('accept');
   const plain = JSON.parse(cliHookSettings(statePath)) as Record<string, unknown>;
   expect('crossSessionInbound' in plain).toBe(false);
+});
+
+test('a signed entity order that places typed before socket keeps the socket out', async () => {
+  // Without the entity's word the accepting receiver would take the implied socket prepend. The
+  // entity declares the order instead, and it is walked as written: typed first, no dial.
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made);
+  setOrder(made, 'entity', 'acme-corp', ['typed', 'socket']);
+  declare(made, 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed.length).toBe(1);
+});
+
+test('a signed project order that places typed before socket keeps the socket out', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  upsertProject(made.home, 'acme-proj', { name: 'Acme', teams: [teamIdOf(made.root)], at: NOW.toISOString() });
+  setOrder(made, 'project', 'acme-proj', ['typed', 'socket']);
+  declare(made, 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed.length).toBe(1);
+});
+
+test('a signed team order shadows the file’s word, and its socket dials for an accepting receiver', async () => {
+  // The file's legacy word would type and never dial; the signed word is the team's own and
+  // puts the socket first.
+  const made = world(['mcp-inbox', 'typed']);
+  cleanup = made.cleanup;
+  setOrder(made, 'team', made.root, ['socket', 'typed']);
+  declare(made, 'accept');
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(frames.length).toBe(1);
 });

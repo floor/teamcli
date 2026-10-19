@@ -669,13 +669,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
-  // walks; nothing declared leaves mcp-inbox, typed, drop. The words are the receiving team
-  // file's (its own key and the seat's) and the registry project's, read here, and the seat's
-  // signed settings say `delivery_order` and `human` in the file's place; a host that hands in a
-  // chain decides instead, which is how a test picks an order without a file to write. A record
-  // that exists and does not verify refuses the send: neither the order nor the human guard can
-  // be decided from a record the store disowns, and routing on the declaration would let a
-  // tampered `human` preference fall back to a typed pane.
+  // walks; nothing declared leaves mcp-inbox, typed, drop. Each level's word is the signed
+  // `delivery-order` policy its record holds, and the receiving team file's own keys, the
+  // seat's and the registry project's legacy words fill in where no signed record is held; the
+  // seat's signed settings say `delivery_order` and `human` in the file's place; a host that
+  // hands in a chain decides instead, which is how a test picks an order without a file to
+  // write. A record that exists and does not verify refuses the send: neither the order nor the
+  // human guard can be decided from a record the store disowns, and routing on the declaration
+  // would let a tampered `human` preference fall back to a typed pane.
   let overrides: SeatOverrides = {};
   if (!host.delivery) {
     const read = resolveSeatOverrides({ home: host.home, root: to.root, seat: to.seat });
@@ -693,6 +694,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     ...(to.cross ? {} : { file: team }),
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
     overrides,
+    now: host.now(),
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
   // A receiving Claude session that itself declares `crossSessionInbound: "accept"` takes the
