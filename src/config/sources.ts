@@ -20,12 +20,13 @@
 import type { KeyObject } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { entitiesPath } from '../entities.ts';
+import { loadTeamFile } from '../file/load.ts';
 import { grantsDir } from '../grant.ts';
 import { agentsDir, getAgent, updateAgent } from '../registry/agents.ts';
 import { get as getProject, projectsFile, upsertProject } from '../registry/projects.ts';
-import { getTeam, teamsFile, upsertTeam } from '../registry/teams.ts';
+import { getTeam, readTeams, teamsFile, upsertTeam } from '../registry/teams.ts';
 import { writeAtomic } from '../state.ts';
 import { bumpGeneration, keyOf, keyState } from '../store/keys.ts';
 import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
@@ -148,6 +149,21 @@ function isMap(value: YamlValue | undefined): value is { [key: string]: YamlValu
 
 const KNOWN_ENTRY_KEYS = ['value', 'setter', 'date', 'target', 'generation', 'signature'] as const;
 
+const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+
+/** The problem a model, effort or nickname word has, if any — the one rule the read and the
+ *  write share, so a record the read accepts is one the write would have written. A model name
+ *  may carry spaces ("Claude Opus"); an effort or nickname is one word. No word carries a
+ *  control character, looks like a credential, or makes a nickname of "lead". The wording is a
+ *  predicate ("must be one word"), so each caller prefixes the key it names. */
+function wordProblem(type: 'model' | 'effort' | 'nickname', word: string): string | null {
+  if (type !== 'model' && /\s/.test(word)) return 'must be one word';
+  if (CONTROL_CHAR.test(word)) return 'must not carry control characters';
+  if (looksLikeCredential(word)) return 'looks like a credential; settings hold no secrets';
+  if (type === 'nickname' && word.toLowerCase() === 'lead') return 'may not be "lead"';
+  return null;
+}
+
 /** Whether a value on disk is one this release's registry can carry for `key`. */
 function settingValueProblem(key: ConfigKey, value: YamlValue | undefined): string | null {
   const spec = getConfigSpec(key);
@@ -155,18 +171,25 @@ function settingValueProblem(key: ConfigKey, value: YamlValue | undefined): stri
   switch (spec.type) {
     case 'model':
     case 'effort':
-    case 'nickname':
-      return typeof value === 'string' && value.trim() !== '' ? null : `"${key}" must be a non-empty word`;
-    case 'order':
-      if (!Array.isArray(value) || value.length === 0) return `"${key}" must be a list of delivery legs`;
+    case 'nickname': {
+      if (typeof value !== 'string' || value.trim() === '') return 'must be a non-empty word';
+      if (CONTROL_CHAR.test(value)) return 'must not carry control characters';
+      return wordProblem(spec.type, value.trim());
+    }
+    case 'order': {
+      if (!Array.isArray(value) || value.length === 0) return 'must be a list of delivery legs';
+      const seen = new Set<string>();
       for (const leg of value) {
         if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
-          return `"${key}" has an unknown delivery leg (expected: ${DELIVERY_LEGS.join(', ')})`;
+          return `has an unknown delivery leg (expected: ${DELIVERY_LEGS.join(', ')})`;
         }
+        if (seen.has(leg)) return `names leg "${leg}" twice`;
+        seen.add(leg);
       }
       return null;
+    }
     case 'boolean':
-      return typeof value === 'boolean' ? null : `"${key}" must be true or false`;
+      return typeof value === 'boolean' ? null : 'must be true or false';
   }
 }
 
@@ -444,7 +467,10 @@ export function readTeamConfigSource(home: string = homedir(), teamId: string | 
   try {
     record = getTeam(home, teamId);
   } catch (error) {
-    return { ok: false, level: 'team', target: teamId, source: path, why: `${path}: ${(error as Error).message}`, settings: [] };
+    // The registry's own message already names the file; a second prefix would name it twice.
+    const message = (error as Error).message;
+    const why = message.startsWith(path) ? message : `${path}: ${message}`;
+    return { ok: false, level: 'team', target: teamId, source: path, why, settings: [] };
   }
   if (record === null) return { ok: true, level: 'team', target: teamId, settings: [] };
   return verifySettingsMap(home, 'team', [teamId], path, record.settings);
@@ -478,8 +504,14 @@ export function readSeatConfigSource(
   if (!isMap(root)) {
     return { ok: false, level: 'seat', target, source: path, why: `${path}: expected a map`, settings: [] };
   }
-  const expectedTargets = seatName ? [agentId, seatName] : [agentId];
-  return verifySettingsMap(home, 'seat', expectedTargets, path, root.settings);
+  // A seat-level record may be signed for the agent id or for the seat name, as a policy one
+  // may. The agent file itself names its seat in `reach`, so a caller that knows only the agent
+  // id (a write plan) accepts the same signed record the seat-named read does.
+  const targets = new Set<string>([agentId]);
+  if (seatName) targets.add(seatName);
+  const reach = root.reach;
+  if (isMap(reach) && typeof reach.seat === 'string' && reach.seat !== '') targets.add(reach.seat);
+  return verifySettingsMap(home, 'seat', [...targets], path, root.settings);
 }
 
 /** Reads all four settings sources for a chain context. */
@@ -558,14 +590,12 @@ function normalizeSetting(
       if (typeof value !== 'string' || value.trim() === '') {
         return { ok: false, kind: 'value', why: `setting "${key}" needs a word` };
       }
+      if (CONTROL_CHAR.test(value)) {
+        return { ok: false, kind: 'value', why: `setting "${key}" must not carry control characters` };
+      }
       const word = value.trim();
-      if (/\s/.test(word)) return { ok: false, kind: 'value', why: `setting "${key}" must be one word` };
-      if (looksLikeCredential(word)) {
-        return { ok: false, kind: 'value', why: `setting "${key}" looks like a credential; settings hold no secrets` };
-      }
-      if (spec.type === 'nickname' && word.toLowerCase() === 'lead') {
-        return { ok: false, kind: 'value', why: 'a nickname may not be "lead"' };
-      }
+      const problem = wordProblem(spec.type, word);
+      if (problem !== null) return { ok: false, kind: 'value', why: `setting "${key}" ${problem}` };
       return { ok: true, key: spec.key, value: word };
     }
     case 'order': {
@@ -604,6 +634,46 @@ function readTargetSource(home: string, level: ConfigLevel, target: string, seat
 }
 
 /**
+ * The seat names a team file declares, read leniently. A file `team check` refuses still names
+ * its seats, and the bootstrap ruling plans against the declaration; a name learned here buys a
+ * read-only plan, while the write still needs the agent record.
+ */
+function declaredSeatNames(root: string): string[] {
+  try {
+    const path = join(root, '.agents', 'team.yaml');
+    if (!existsSync(path)) return [];
+    const value = toValue(parseYaml(readFileSync(path, 'utf8')));
+    if (!isMap(value) || !Array.isArray(value.seats)) return [];
+    return value.seats.flatMap((seat) => (isMap(seat) && typeof seat.name === 'string' ? [seat.name] : []));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Why a seat-level target cannot be planned, or null when it can. The target is an agent record,
+ * or a seat some team's roster declares before it is launched (the bootstrap ruling: such a seat
+ * plans with no previous value). A name neither the agent registry nor any roster knows is
+ * refused here, before a write could reach the store and bump a generation for nothing.
+ */
+function seatTargetProblem(home: string, target: string): string | null {
+  if (getAgent(home, target) !== null) return null;
+  try {
+    for (const record of Object.values(readTeams(home))) {
+      if (record.roster.some((line) => line.agent === target || line.seat === target)) return null;
+      // A seat the team file declares but `team up` never launched has no registry roster line
+      // yet; the declaration itself is what the bootstrap ruling plans against.
+      const loaded = loadTeamFile(record.root, { home });
+      const declared = loaded.ok ? loaded.team.seats.map((seat) => seat.name) : declaredSeatNames(record.root);
+      if (declared.includes(target)) return null;
+    }
+  } catch {
+    // An unreadable team registry declares no roster here; `team check` refuses it.
+  }
+  return `no registered agent "${target}" in ${agentsDir(home)}, and no team roster declares it`;
+}
+
+/**
  * Validates a write without touching any file: every key is in the registry at that level, every
  * value is one the key's type admits, and the level's current record verifies. All settings are
  * validated before any is signed, so a refused second key leaves the first one unwritten.
@@ -624,6 +694,10 @@ export function planConfigSet(home: string, request: ConfigSetRequest): ConfigSe
     const normalized = normalizeSetting(request.level, setting.key, setting.value);
     if (!normalized.ok) return normalized;
     planned.push({ key: normalized.key, value: normalized.value });
+  }
+  if (request.level === 'seat') {
+    const unknown = seatTargetProblem(home, request.target);
+    if (unknown !== null) return { ok: false, kind: 'source', why: unknown };
   }
   const current = readTargetSource(home, request.level, request.target);
   if (!current.ok) {
@@ -848,6 +922,11 @@ function writeSettingsMap(
  */
 export function writeConfigSet(home: string, plan: ConfigSetPlan, options: ConfigWriteOptions = {}): ConfigWriteResult {
   if (!plan.ok) return plan;
+  // The target is checked before the generation is bumped: a write that cannot land must move
+  // nothing, or the next real write would carry the burned number.
+  if (plan.level === 'seat' && getAgent(home, plan.target) === null) {
+    return { ok: false, kind: 'source', why: `no registered agent "${plan.target}" in ${agentsDir(home)}` };
+  }
   const now = options.now ?? new Date();
   const folder = grantsDir(home);
   mkdirSync(folder, { recursive: true, mode: 0o700 });

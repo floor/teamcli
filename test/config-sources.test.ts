@@ -21,10 +21,11 @@ import {
   type ConfigSourceRead,
 } from '../src/config/sources.ts';
 import type { SignedConfigRecord } from '../src/config/record.ts';
+import { signConfigRecord } from '../src/config/record.ts';
 import { agentsDir, getAgent, registerAgent, updateAgent, type AgentInit } from '../src/registry/agents.ts';
 import { get as getProject, upsertProject } from '../src/registry/projects.ts';
 import { getTeam, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
-import { installKey } from '../src/store/keys.ts';
+import { installKey, keyOf } from '../src/store/keys.ts';
 
 let home: string;
 
@@ -60,6 +61,34 @@ function seatAgent(seat = 'builder-1'): string {
 
 function seatFile(agentId: string): string {
   return join(agentsDir(home), `${agentId}.yaml`);
+}
+
+/** Writes one signed seat record straight into the agent file, as an owner with the key could —
+ *  the way a value the write refuses (a duplicate leg, "lead") reaches the read. */
+function injectSeatRecord(agentId: string, entry: { key: SignedConfigRecord['key']; value: SignedConfigRecord['value']; target?: string }): void {
+  const signed = signConfigRecord(
+    {
+      key: entry.key,
+      value: entry.value,
+      level: 'seat',
+      target: entry.target ?? agentId,
+      setter: 'owner',
+      date: '2026-10-19T08:00:00.000Z',
+      generation: 1,
+    },
+    keyOf(home),
+  );
+  const agent = getAgent(home, agentId);
+  const settings = { ...(agent?.settings ?? {}) };
+  settings[entry.key] = {
+    value: Array.isArray(entry.value) ? [...entry.value] : (entry.value as string | boolean),
+    setter: signed.setter,
+    date: signed.date,
+    target: signed.target,
+    generation: signed.generation,
+    signature: signed.signature,
+  };
+  updateAgent(home, agentId, { settings });
 }
 
 function registeredTeam(): string {
@@ -207,18 +236,141 @@ describe('the seat record', () => {
     expect(readFileSync(path, 'utf8')).toBe(before);
   });
 
-  test('a target with no registered agent is refused, and nothing is written', () => {
+  test('a record signed for the seat name is read and planned by agent id', () => {
+    const agentId = seatAgent('worker');
+    injectSeatRecord(agentId, { key: 'nickname', value: 'wren', target: 'worker' });
+
+    const read = readSeatConfigSource(home, agentId, 'worker');
+    expect(read.ok).toBe(true);
+    expect(read.settings[0]?.target).toBe('worker');
+
+    // A write plan knows only the agent id; the agent file's own `reach.seat` supplies the name
+    // the record was signed for, so the same record verifies.
+    const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'nickname', value: 'wren' }] });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.settings[0]?.previous?.target).toBe('worker');
+  });
+
+  test('a seat declared before it is launched plans, from the roster or the team file', () => {
+    const teamId = registeredTeam();
+    const root = join(home, 'repo');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    // A file `team check` would refuse still declares its seats, and the declaration is what
+    // the bootstrap ruling plans against.
+    writeFileSync(join(root, '.agents', 'team.yaml'), [
+      'format: 1',
+      'project: teamcli',
+      'coordinator: lead',
+      'operator: lead',
+      'seats:',
+      '  - role: builder',
+      '    name: runner',
+      '    cli: claude-code',
+      '    vendor: anthropic',
+      '    model: Claude Opus',
+      '    version: "5.5"',
+      '    launch: claude --model claude-opus-5-5',
+      '',
+    ].join('\n'));
+    upsertTeam(home, teamId, {
+      project: 'teamcli',
+      session: 'teamcli',
+      root,
+      lobby: '',
+      roster: [{ agent: 'agt_0000000000ff', seat: 'scout', role: 'builder' }],
+    });
+    for (const name of ['scout', 'runner']) {
+      const plan = planConfigSet(home, { level: 'seat', target: name, settings: [{ key: 'effort', value: 'high' }] });
+      expect(plan.ok).toBe(true);
+      if (plan.ok) expect(plan.settings[0]?.previous).toBeNull();
+    }
+  });
+
+  test('an undeclared target is refused and burns no generation', () => {
+    const agentId = seatAgent();
+    const real = () => planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'effort', value: 'high' }] });
+    const first = writeConfigSet(home, real());
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    // The plan refuses the name; a forged plan handed straight to the writer refuses too, and
+    // neither touches the owner key's generation.
+    const plan = planConfigSet(home, { level: 'seat', target: 'ghost', settings: [{ key: 'effort', value: 'low' }] });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.kind).toBe('source');
+    const forged = writeConfigSet(home, {
+      ok: true,
+      level: 'seat',
+      target: 'ghost',
+      settings: [{ key: 'effort', value: 'low', previous: null }],
+    });
+    expect(forged.ok).toBe(false);
+
+    const second = writeConfigSet(home, real());
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.generation).toBe(first.generation + 1);
+  });
+
+  test('the read refuses the words the write refuses, and accepts a model name with spaces', () => {
+    const agentId = seatAgent('worker');
+    for (const [key, value, needle] of [
+      ['delivery_order', ['typed', 'typed'], 'names leg "typed" twice'],
+      ['nickname', 'lead', 'may not be "lead"'],
+      ['effort', 'sk-live-abc123', 'looks like a credential'],
+    ] as const) {
+      injectSeatRecord(agentId, { key, value });
+      const read = readSeatConfigSource(home, agentId, 'worker');
+      expect(read.ok).toBe(false);
+      if (!read.ok) {
+        expect(read.why).toContain(needle);
+        // The whole source refuses; the key that did not verify is named in the reason.
+        expect(read.why).toContain(`setting "${key}"`);
+      }
+      // Remove the record again so each case reads alone.
+      const agent = getAgent(home, agentId);
+      const settings = { ...(agent?.settings ?? {}) };
+      delete settings[key];
+      updateAgent(home, agentId, { settings });
+    }
+
+    injectSeatRecord(agentId, { key: 'nickname', value: 'wren' });
+    const plain = readSeatConfigSource(home, agentId, 'worker');
+    expect(plain.ok).toBe(true);
+    expect(plain.settings[0]?.value).toBe('wren');
+
+    // A model name carries spaces: the write accepts one, and so does the read.
+    const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'model', value: 'Claude Opus' }] });
+    expect(plan.ok).toBe(true);
+    if (plan.ok) expect(plan.settings[0]?.value).toBe('Claude Opus');
+    const control = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'model', value: 'claude\nopus' }] });
+    expect(control.ok).toBe(false);
+    // The write-side refusals stay.
+    for (const [key, value, needle] of [
+      ['delivery_order', 'typed,typed', 'names leg "typed" twice'],
+      ['nickname', 'lead', 'may not be "lead"'],
+      ['nickname', 'sk-live-abc123', 'looks like a credential'],
+    ] as const) {
+      const refused = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key, value }] });
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.why).toContain(needle);
+    }
+  });
+
+  test('a target with no registered agent is refused by the plan, and nothing is written', () => {
     const plan = planConfigSet(home, {
       level: 'seat',
       target: 'agt_000000000000',
       settings: [{ key: 'model', value: 'claude-opus-5-5' }],
     });
-    // A missing agent file reads as no settings, so the plan holds; the write refuses truthfully.
-    expect(plan.ok).toBe(true);
-    const written = writeConfigSet(home, plan);
-    expect(written.ok).toBe(false);
-    if (written.ok) return;
-    expect(written.why).toContain('no registered agent');
+    // Neither an agent record nor a roster line names the target: the plan refuses before a
+    // write could reach the store.
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.kind).toBe('source');
+    expect(plan.why).toContain('no registered agent');
+    expect(existsSync(join(agentsDir(home), 'agt_000000000000.yaml'))).toBe(false);
   });
 });
 
@@ -264,6 +416,24 @@ describe('the registry records above a seat', () => {
     const wrongLevel = readTeamConfigSource(home, teamId);
     expect(wrongLevel.ok).toBe(false);
     expect(wrongLevel.why).toContain('may not be set at level team');
+  });
+
+  test('a non-map settings in a team record refuses the read, naming the file', () => {
+    const teamId = registeredTeam();
+    const path = teamsFile(home);
+    const text = readFileSync(path, 'utf8');
+    writeFileSync(path, text.replace('    lifecycle: defined\n', '    lifecycle: defined\n    settings: tampered\n'));
+
+    const read = readTeamConfigSource(home, teamId);
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.why).toContain(path);
+    expect(read.why).toContain('"settings" must be a map');
+
+    // The chain refuses at the team level rather than reading the damage as an absent record.
+    const chain = loadAndResolveConfigChain({ home, teamId });
+    expect(chain.ok).toBe(false);
+    if (!chain.ok) expect(chain.refusals.map((one) => one.level)).toEqual(['team']);
   });
 
   test('a project settings map is carried in projects.yaml and round-trips', () => {

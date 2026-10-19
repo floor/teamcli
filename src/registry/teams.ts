@@ -400,6 +400,9 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
     }
   }
   if (lobby) lobbies[session] = lobby;
+  // A settings map that is not a map is refused here, not dropped: a reader that ignored it
+  // would answer as if the team had no settings, and the settings it holds would vanish unseen.
+  if (raw.settings !== undefined && raw.settings !== null && !isMap(raw.settings)) bad('"settings" must be a map');
   const settings = isMap(raw.settings) && Object.keys(raw.settings).length > 0 ? raw.settings : undefined;
   return {
     id,
