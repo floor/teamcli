@@ -54,6 +54,12 @@ A process a seat recorded with `team proc add` shows too: one `note:` line per l
 notes. A record whose process has ended is not printed, and a team that recorded none shows no
 such line. `--json` carries the same reading as a `procs` array, absent when there is none.
 
+A swap the project waits on ([team swap](swap.md)) is one `note:` line of its own, in seat order:
+`swap <seat>: <from> -> <to> (<reason>), queued <instant>, waits for <what>, runs by <instant>` —
+the same line `team swap` prints for the record, so the reading says what each seat waits on
+before the swap runs. `--json` carries the records as a `swaps` array of `{ "seat": …, "swap": … }`,
+absent when nothing waits.
+
 The watch the state records is one `note:` of its own, before the proc notes: `watch: pane <pane>,
 pid <n>, last heartbeat <age>` — where it runs, whose process it is once a pass has recorded one
 (`pid not recorded yet` in the moment between `up` and that first pass, `pane not recorded` for a

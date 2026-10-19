@@ -110,6 +110,8 @@ take proceeds with the notice, never with a silent truncation.
 team next: only a seat of this team pulls a task; this call is owner
 team next: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
 team next: the team file declares no task source
+team next: the team is paused (paused since <instant> by <who>); nothing new is claimed until `team resume`
+team next: <seat> waits on a swap: <the queue's line>; nothing new is claimed until it runs or `team swap cancel <seat>`
 team next: tasks.source must be file
 team next: tasks.path must stay inside the checkout
 team next: the task file is not there
@@ -146,11 +148,12 @@ fences it reads, are also on [the `team next` page](../commands/next.md).
 ```yaml file=.agents/team.yaml
 format: 1
 project: beacon
+entity: lab
 coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobbies/lab
   - ~/Code/beacon
 
 workspace:
@@ -169,6 +172,13 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude --model deepseek-flash
 ```
 
 ```yaml file=.agents/tasks.yaml
@@ -182,4 +192,19 @@ team beacon, session "beacon"
 m1  the task title
 team next: claimed m1
 exit 0
+```
+
+```console
+$ team policy set entity model-rule '*=!anthropic' ; echo "exit $?"
+policy: set model-rule=*=!anthropic at entity (lab)
+exit 0
+$ team swap queue claude-keeper ; echo "exit $?"
+swap queued: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z
+exit 0
+```
+
+```console caller=claude-keeper
+$ team next ; echo "exit $?"
+team next: claude-keeper waits on a swap: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z; nothing new is claimed until it runs or `team swap cancel claude-keeper`
+exit 1
 ```

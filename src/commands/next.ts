@@ -28,7 +28,8 @@ import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
 import { claimLocal, releaseLocal } from '../tasks/lease.ts';
-import { pauseText, readState, type PauseRecord } from '../state.ts';
+import { pauseText, readState, type State } from '../state.ts';
+import { queuedSwap, swapLine } from '../swap/queue.ts';
 import { waitOrStop } from '../wait.ts';
 
 export const USAGE = `Usage: team next [--mine | --release] [--wait] [--json]
@@ -176,16 +177,18 @@ async function pass(
   emit: Emit,
   hold: Hold | undefined,
 ): Promise<number> {
-  // The team's pause stops every claim; `--release` still runs, because unlinking the lease a
-  // seat holds is how a paused seat lets go. A state that can't be read claims nothing either:
-  // the pause is unknown, and an unknown stop is not an absent one.
+  // The team's pause and the seat's queued swap stop every claim; `--release` still runs,
+  // because unlinking the lease a seat holds is how a paused or waiting seat lets go. A state
+  // that can't be read claims nothing either: the pause is unknown, and an unknown stop is not
+  // an absent one.
+  let state: State | undefined;
   if (!release) {
-    let standing: PauseRecord | undefined;
     try {
-      standing = readState(dirname(loaded.path)).pause;
+      state = readState(dirname(loaded.path));
     } catch (error) {
       return file(io, plainText(error instanceof Error ? error.message : String(error)), emit.json);
     }
+    const standing = state.pause;
     if (standing !== undefined) {
       const message = `the team is paused (${pauseText(standing)}); nothing new is claimed until \`team resume\``;
       if (emit.json) writeJsonError(io, 'next.paused', message, 'team resume');
@@ -194,12 +197,24 @@ async function pass(
       return 1;
     }
   }
-  if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold);
+  // The seat gate runs before either source, and so does the queue: a seat that waits on a swap
+  // takes no new task until the swap runs or is cancelled, and the line is the one `team swap`
+  // and `team status` print for the record.
+  const placed = place(loaded.team, loaded.root, io);
+  if (placed.kind === 'refused') return callerRefuse(io, placed.message, emit.json);
+  const waiting = state === undefined ? null : queuedSwap(state, placed.seat);
+  if (waiting !== null) {
+    const now = (sources.now ?? Date.now)();
+    const message = `${placed.seat} waits on a swap: ${swapLine(placed.seat, waiting, new Date(now))}; nothing new is claimed until it runs or \`team swap cancel ${placed.seat}\``;
+    if (emit.json) writeJsonError(io, 'next.swap', message, `team swap cancel ${placed.seat}`);
+    else io.stderr(`team next: ${message}\n`);
+    // exit: next.swap
+    return 1;
+  }
+  if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold, placed);
   const registry = sources.registry ?? fileRegistry;
   const adapter = registry[tasks.source];
   if (!adapter) return file(io, 'tasks.source must be file', emit.json);
-  const placed = place(loaded.team, loaded.root, io);
-  if (placed.kind === 'refused') return callerRefuse(io, placed.message, emit.json);
   const now = sources.now ?? Date.now;
   const at = now();
   if (release) {
@@ -241,9 +256,8 @@ async function nextFromBroker(
   speak: boolean,
   emit: Emit,
   hold: Hold | undefined,
+  placed: { seat: string; pane: string },
 ): Promise<number> {
-  const placed = place(loaded.team, loaded.root, io);
-  if (placed.kind === 'refused') return callerRefuse(io, placed.message, emit.json);
   const now = sources.now ?? Date.now;
   const at = now();
   if (release) {

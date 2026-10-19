@@ -3226,6 +3226,23 @@ scene('next.paused', async (place) => {
   });
   return show(await nexted(place), 'nothing new is claimed until `team resume`');
 });
+scene('next.swap', async (place) => {
+  write(place, TASKS);
+  recordLead(place);
+  updateState(join(place.root, '.agents'), (state) => {
+    state.swaps = {
+      lead: {
+        from: { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' },
+        to: { cli: 'claude-code', vendor: 'deepseek', model: 'DeepSeek Flash', version: '4.0', display: 'DeepSeek Flash 4.0', launch: 'claude --model deepseek-flash' },
+        reason: 'owner',
+        queuedAt: NOW.toISOString(),
+        deadline: new Date(NOW.getTime() + 1800 * 1000).toISOString(),
+        waitFor: "the seat's boundary (quiet, no turn, no dialog, no lease, no work drop)",
+      },
+    };
+  });
+  return show(await nexted(place), 'nothing new is claimed until it runs or `team swap cancel lead`');
+});
 
 // The broker's own rows. One credential read is stood in everywhere: the shipped wiring reads
 // the owner's Keychain, which no scene may ever run. The socket is real — unix sockets under a

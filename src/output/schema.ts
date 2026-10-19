@@ -265,6 +265,13 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           type: 'array',
           items: { type: 'object' },
         },
+        // A loose item here, like `hold`, `pause` and `procs`: the queued-swap fragments are
+        // declared below this document, and a reference to them from here is a use before
+        // initialization at module load.
+        swaps: {
+          type: 'array',
+          items: { type: 'object' },
+        },
       },
     },
     {

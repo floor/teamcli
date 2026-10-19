@@ -16,7 +16,7 @@ import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type SessionState } from '../state.ts';
+import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type QueuedSwap, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -49,6 +49,7 @@ import { realSources as realProjectSources, type ProjectSources } from './projec
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
+import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 
@@ -193,6 +194,11 @@ export interface StatusJson {
     at: string;
     pid?: number;
     note?: string;
+  }>;
+  /** The swaps the project waits on (`team swap`), one entry per seat, in seat order. */
+  swaps?: Array<{
+    seat: string;
+    swap: QueuedSwap;
   }>;
 }
 
@@ -351,6 +357,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The pause stands above both: it is the one note that says why no seat takes work.
   const pause = whole.pause;
   if (pause) comparison.notes.unshift(pauseText(pause));
+  // The swaps this project waits on, in seat order: the same line `team swap` prints, so the
+  // reading says what each one waits for before the proc records below.
+  const swaps = queuedSwaps(whole);
+  for (const [seat, held] of swaps) comparison.notes.push(`swap ${swapLine(seat, held, now)}`);
   // What the seats recorded with `team proc add`: one note per live process, read the same way
   // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
   // write to clear. The reading is the note and the document, one derivation for both.
@@ -432,6 +442,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       ...(hold ? { hold } : {}),
       ...(pause ? { pause } : {}),
       ...(procs.length ? { procs } : {}),
+      ...(swaps.length ? { swaps: swaps.map(([seat, swap]) => ({ seat, swap })) } : {}),
     });
   } else {
     const style = ttyStyle(io);

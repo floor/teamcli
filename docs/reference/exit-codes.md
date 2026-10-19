@@ -262,6 +262,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.policy` | `next` | 1 | a task policy the validator refuses | `team next` |
 | `next.read` | `next` | 1 | the broker failed the read | `team next` |
 | `next.shape` | `next` | 1 | nothing was taken, and a record is not a task or the task file is not a list | `team next` |
+| `next.swap` | `next` | 1 | the seat waits on a queued model swap, so nothing was claimed | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
 | `pause.placed` | `pause` | 0 | the team was paused | `team pause` |

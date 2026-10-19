@@ -1794,6 +1794,13 @@
       "trigger": "team next"
     },
     {
+      "code": 1,
+      "command": "next",
+      "id": "next.swap",
+      "meaning": "the seat waits on a queued model swap, so nothing was claimed",
+      "trigger": "team next"
+    },
+    {
       "code": 2,
       "command": "next",
       "id": "next.invocation",

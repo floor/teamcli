@@ -12,7 +12,8 @@ working seat: it runs at the seat's boundary — quiet, no turn, no dialog, no l
 — or, once the wait has passed, at the next pause between two turns. A broken seat, and a swap the
 owner forced, runs at once. `team swap` shows the queue; `--rule` lists every breach of the rule
 in the entity's teams with the donor each recipe came from; `queue` puts a swap in the queue;
-`now` is the owner's force; `cancel` takes a swap out of the queue.
+`now` is the owner's force; `cancel` takes a swap out of the queue. `team status` prints each
+queued swap as a `note:` line, and `team next` refuses a claim for the seat a swap waits on.
 
 ## Synopsis
 
