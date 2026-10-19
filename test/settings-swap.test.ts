@@ -18,7 +18,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readState } from '../src/state.ts';
 import { installKey } from '../src/store/keys.ts';
 import { WAIT_FOR } from '../src/swap/auto.ts';
-import { enqueueSwap } from '../src/swap/queue.ts';
+import { cancelSwap, enqueueSwap } from '../src/swap/queue.ts';
 import { testIo } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -392,5 +392,301 @@ describe('the signed record a queued write leaves', () => {
     const text = readFileSync(join(agentsDir(home), `${agentId}.yaml`), 'utf8');
     expect(text).toContain('value: "claude-haiku-5-5"');
     expect(queue()['lead']).toBeDefined();
+  });
+});
+
+/** The words the lead's file declares: what every queued record's `from` carries. */
+function declaration(): { cli: string; vendor: string; model: string; version: string; display: string } {
+  return { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' };
+}
+
+/** Holds the state lock path a command's state write would take: a directory where the atomic
+ *  writer wants its temporary file makes the write fail after the signed setting already stands. */
+function blockStateWrites(): string {
+  const blocker = join(stateDir(), `team.state.json.${process.pid}.tmp`);
+  mkdirSync(blocker);
+  return blocker;
+}
+
+describe('a change derives the target from the remaining signed words', () => {
+  test('unsetting effort keeps the queued model change and takes the file effort back', async () => {
+    registerLead();
+    const later = new Date('2026-10-19T10:10:00Z');
+    expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+
+    const unset = await run(['unset', 'lead', 'effort'], later);
+    expect(unset.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      reason: 'config',
+      to: {
+        model: 'Claude Haiku',
+        effort: 'high',
+        launch: 'claude --model claude-haiku-5-5 --effort high',
+      },
+      queuedAt: later.toISOString(),
+    });
+  });
+
+  test('unsetting model keeps the signed effort intent instead of taking the queue back', async () => {
+    registerLead();
+    const later = new Date('2026-10-19T10:10:00Z');
+    expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+
+    const unset = await run(['unset', 'lead', 'model'], later);
+    expect(unset.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      reason: 'config',
+      to: {
+        model: 'Claude Opus',
+        effort: 'low',
+        launch: 'claude --model claude-opus-5-5 --effort low',
+      },
+      queuedAt: later.toISOString(),
+    });
+  });
+
+  test('one command that sets both keys queues one target carrying both', async () => {
+    registerLead();
+
+    const set = await run(['set', 'lead', 'model=claude-haiku-5-5', 'effort=low']);
+    expect(set.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      from: declaration(),
+      to: {
+        cli: 'claude-code',
+        vendor: 'anthropic',
+        model: 'Claude Haiku',
+        version: '5.5',
+        display: 'claude haiku 5.5',
+        launch: 'claude --model claude-haiku-5-5 --effort low',
+        effort: 'low',
+      },
+      reason: 'config',
+      queuedAt: NOW.toISOString(),
+      deadline: DEADLINE,
+      waitFor: WAIT_FOR,
+    });
+  });
+
+  test('a model understood before it is set joins the effort already signed', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
+
+    const set = await run(['set', 'lead', 'model=claude-haiku-5-5']);
+    expect(set.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      to: { model: 'Claude Haiku', effort: 'low', launch: 'claude --model claude-haiku-5-5 --effort low' },
+    });
+  });
+
+  test('unsetting effort with no other signed word takes the config record back', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
+    expect(queue()['lead']).toBeDefined();
+
+    const unset = await run(['unset', 'lead', 'effort'], new Date('2026-10-19T10:10:00Z'));
+    expect(unset.code).toBe(0);
+    expect(queue()).toEqual({});
+  });
+
+  test('an unset that still leaves a change reports a competing request instead of replacing it', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    enqueueSwap(stateDir(), {
+      seat: 'lead',
+      from: declaration(),
+      to: {
+        cli: 'claude-code',
+        vendor: 'anthropic',
+        model: 'Claude Fable',
+        version: '5.5',
+        display: 'claude fable 5.5',
+        launch: 'claude --model claude-fable-5-5',
+      },
+      reason: 'owner',
+      waitSeconds: 1800,
+      waitFor: WAIT_FOR,
+      now: NOW,
+    });
+
+    const unset = await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'));
+    expect(unset.code).toBe(2);
+    expect(unset.err).toContain('the setting was unset');
+    expect(unset.err).toContain('holds a request queued by owner');
+    expect(queue()['lead']).toMatchObject({ reason: 'owner', to: { model: 'Claude Fable' } });
+  });
+});
+
+describe('a retry repairs the queue', () => {
+  test('a stale config record is taken back when the value set is the one already in force', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    expect(queue()['lead']).toBeDefined();
+
+    const set = await run(['set', 'lead', 'model=claude-opus-5-5'], new Date('2026-10-19T10:10:00Z'));
+    expect(set.code).toBe(0);
+    expect(queue()).toEqual({});
+  });
+
+  test('a missing config record is queued again for the setting already in force', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    cancelSwap(stateDir(), 'lead');
+
+    const later = new Date('2026-10-19T10:10:00Z');
+    const retry = await run(['set', 'lead', 'model=claude-haiku-5-5'], later);
+    expect(retry.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      reason: 'config',
+      to: { model: 'Claude Haiku' },
+      queuedAt: later.toISOString(),
+      deadline: '2026-10-19T10:40:00.000Z',
+    });
+  });
+
+  test('a stale config record is replaced with the target the signed words ask for', async () => {
+    registerLead();
+    enqueueSwap(stateDir(), {
+      seat: 'lead',
+      from: declaration(),
+      to: {
+        cli: 'claude-code',
+        vendor: 'anthropic',
+        model: 'Claude Fable',
+        version: '5.5',
+        display: 'claude fable 5.5',
+        launch: 'claude --model claude-fable-5-5',
+      },
+      reason: 'config',
+      waitSeconds: 1800,
+      waitFor: WAIT_FOR,
+      now: NOW,
+    });
+
+    const later = new Date('2026-10-19T10:10:00Z');
+    const retry = await run(['set', 'lead', 'model=claude-haiku-5-5'], later);
+    expect(retry.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      reason: 'config',
+      to: { model: 'Claude Haiku' },
+      queuedAt: later.toISOString(),
+    });
+  });
+});
+
+describe('a queue write that fails after the signing is a partial', () => {
+  test('a set reports it, keeps the signed record and repairs on the next attempt', async () => {
+    const agentId = registerLead();
+    const blocker = blockStateWrites();
+    try {
+      const set = await run(['set', 'lead', 'model=claude-haiku-5-5', '--json']);
+      expect(set.code).toBe(2);
+      const doc = JSON.parse(set.out) as { error: { id: string; message: string } };
+      expect(doc.error.id).toBe('settings.write');
+      expect(doc.error.message).toContain('the setting was written');
+      expect(doc.error.message).toContain('could not be queued');
+      expect(doc.error.message).toContain('retrying the same setting repairs the queue');
+      const text = readFileSync(join(agentsDir(home), `${agentId}.yaml`), 'utf8');
+      expect(text).toContain('value: "claude-haiku-5-5"');
+      expect(queue()['lead']).toBeUndefined();
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+
+    const retry = await run(['set', 'lead', 'model=claude-haiku-5-5'], new Date('2026-10-19T10:10:00Z'));
+    expect(retry.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({ reason: 'config', to: { model: 'Claude Haiku' } });
+  });
+
+  test('an unset whose cancel fails reports it and leaves the removal signed', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    const blocker = blockStateWrites();
+    try {
+      const unset = await run(['unset', 'lead', 'model', '--json'], new Date('2026-10-19T10:10:00Z'));
+      expect(unset.code).toBe(2);
+      const doc = JSON.parse(unset.out) as { error: { id: string; message: string } };
+      expect(doc.error.id).toBe('settings.write');
+      expect(doc.error.message).toContain('the setting was unset');
+      expect(doc.error.message).toContain('could not be cancelled');
+      expect(queue()['lead']).toMatchObject({ reason: 'config' });
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+
+    const read = await run(['lead', '--json']);
+    const doc = JSON.parse(read.out) as { settings: { key: string; value: unknown; source: string }[] };
+    expect(doc.settings.find((entry) => entry.key === 'model')).toMatchObject({ source: 'team file' });
+  });
+});
+
+describe('a config write never replaces another command request', () => {
+  test('an owner request is preserved and the conflict is reported', async () => {
+    registerLead();
+    enqueueSwap(stateDir(), {
+      seat: 'lead',
+      from: declaration(),
+      to: {
+        cli: 'claude-code',
+        vendor: 'anthropic',
+        model: 'Claude Fable',
+        version: '5.5',
+        display: 'claude fable 5.5',
+        launch: 'claude --model claude-fable-5-5',
+      },
+      reason: 'owner',
+      waitSeconds: 1800,
+      waitFor: WAIT_FOR,
+      now: NOW,
+    });
+
+    const set = await run(['set', 'lead', 'model=claude-haiku-5-5']);
+    expect(set.code).toBe(2);
+    expect(set.out).toBe('settings: set model=claude-haiku-5-5 at seat (lead)\n');
+    expect(set.err).toContain('the setting was written');
+    expect(set.err).toContain('holds a request queued by owner');
+    expect(queue()['lead']).toMatchObject({
+      reason: 'owner',
+      to: { model: 'Claude Fable' },
+      queuedAt: NOW.toISOString(),
+    });
+
+    // Once the competing request is gone, the same setting repairs the queue.
+    cancelSwap(stateDir(), 'lead');
+    const retry = await run(['set', 'lead', 'model=claude-haiku-5-5'], new Date('2026-10-19T10:10:00Z'));
+    expect(retry.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({ reason: 'config', to: { model: 'Claude Haiku' } });
+  });
+
+  test('a rule request already asking for the same target is left alone', async () => {
+    registerLead();
+    enqueueSwap(stateDir(), {
+      seat: 'lead',
+      from: declaration(),
+      to: {
+        cli: 'claude-code',
+        vendor: 'anthropic',
+        model: 'Claude Haiku',
+        version: '5.5',
+        display: 'claude haiku 5.5',
+        launch: 'claude --model claude-haiku-5-5 --effort high',
+        effort: 'high',
+      },
+      reason: 'model-rule',
+      waitSeconds: 1800,
+      waitFor: WAIT_FOR,
+      now: NOW,
+    });
+
+    const set = await run(['set', 'lead', 'model=claude-haiku-5-5'], new Date('2026-10-19T10:10:00Z'));
+    expect(set.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      reason: 'model-rule',
+      to: { model: 'Claude Haiku' },
+      queuedAt: NOW.toISOString(),
+    });
   });
 });
