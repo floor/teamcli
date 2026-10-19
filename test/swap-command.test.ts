@@ -119,6 +119,8 @@ function fakeHerdr(
     unreadable?: boolean;
     newScreen?: string;
     slowHandover?: boolean;
+    /** False for a conversation that never writes the handover its request named. */
+    handoverWritten?: boolean;
   } = {},
 ): FakeHerdr {
   const did = { typed: [] as string[], closed: [] as string[], runs: [] as string[] };
@@ -246,7 +248,7 @@ function fakeHerdr(
       did.typed.push(text);
       const at = / to (\S+):/.exec(text);
       if (at) {
-        writeFileSync(at[1]!, '# handover\n\nwhat is left\n');
+        if (opts.handoverWritten !== false) writeFileSync(at[1]!, '# handover\n\nwhat is left\n');
         if (opts.slowHandover && pane === 'pane-old') {
           handoverTurn = true;
           if (led[0]) led[0].status = 'working';
@@ -678,7 +680,12 @@ describe('team swap now and --run', () => {
       const at = late ? new Date(NOW.getTime() + 3_600_000) : NOW;
       const ran = await swap(['--run'], OWNER, { sources: world.sources, now: () => at });
       expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
-      expect(ran.out).toContain('lead: stays queued (not due yet)');
+      // Past the deadline the pause is the draft nobody sent, not a clock that has not run out.
+      expect(ran.out).toContain(
+        late
+          ? 'lead: stays queued (past its wait; the input box holds unsent text)'
+          : 'lead: stays queued (not due yet)',
+      );
       // No attempt was made: nothing was typed, and no boundary line was logged.
       expect(world.did.typed).toEqual([]);
       const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
@@ -699,6 +706,23 @@ describe('team swap now and --run', () => {
     const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
     expect(log).toContain('lead: the old conversation wrote the handover at');
     expect(log).toContain('lead: swapped anthropic Claude Opus 5.5 -> openai GPT Sol 5.0 (handover passed from');
+    expect(queue()).toEqual({});
+  });
+
+  test('a handover that was never written is not reported as passed', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
+    // The old conversation takes the request and writes nothing before the bounded wait ends.
+    const world = fakeHerdr({ newScreen: CODEX_IDLE, handoverWritten: false });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('no handover was written before the wait ended; the launch goes on');
+    expect(log).toContain(
+      'lead: swapped anthropic Claude Opus 5.5 -> openai GPT Sol 5.0 (fresh conversation; no handover was written)',
+    );
+    expect(log).not.toContain('handover passed from');
     expect(queue()).toEqual({});
   });
 

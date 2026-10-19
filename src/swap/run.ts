@@ -47,9 +47,10 @@ export const HANDOVER_WAIT_MS = 120_000;
  *  the owner's authorization, and a `config` swap already passed the queue's gate. */
 const NO_DEV = { on: false, by: null, governed: false, ignored: false, expired: null, refusals: [] };
 
-/** What one run ended as. `wait` is not due yet; `retry` is a busy turn, a replaced pane or an
- *  unreadable herdr, which the next pass tries again; `failed` is worth reporting — a preflight
- *  refusal, a seat this file no longer declares, or a screen that did not read back the model. */
+/** What one run ended as. `wait` is not due yet, or past its wait on a turn, a dialog or unsent
+ *  text (`why` says which); `retry` is a busy turn, a replaced pane or an unreadable herdr, which
+ *  the next pass tries again; `failed` is worth reporting — a preflight refusal, a seat this file
+ *  no longer declares, or a screen that did not read back the model. */
 export type SwapRunResult =
   | {
       kind: 'ready';
@@ -69,7 +70,7 @@ export type SwapRunResult =
     }
   | { kind: 'failed'; seat: string; why: string }
   | { kind: 'retry'; seat: string; why: string }
-  | { kind: 'wait'; seat: string };
+  | { kind: 'wait'; seat: string; why: string };
 
 export type SwapRunOptions = {
   dir: string;
@@ -184,7 +185,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
   if (observed === null) {
     return { kind: 'retry', seat: name, why: 'herdr cannot be read; the queue stands' };
   }
-  if (!swapDue(swap, observed, now())) return { kind: 'wait', seat: name };
+  if (!swapDue(swap, observed, now())) return { kind: 'wait', seat: name, why: waitWhy(swap, observed, now()) };
 
   const current = now();
   if (swap.forced) {
@@ -256,7 +257,15 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
     case 'ready': {
       const from = `${swap.from.vendor} ${swap.from.model} ${swap.from.version}`;
       const to = `${swap.to.vendor} ${swap.to.model} ${swap.to.version}`;
-      const how = resume !== undefined ? `resumed session ${resume}` : handover !== undefined ? `handover passed from ${handover.path}` : 'fresh conversation';
+      // What the launch was actually given, not what was merely asked for: a handover whose
+      // bounded wait ended without the file is not a pass, and the words must not say it was.
+      const how = resume !== undefined
+        ? `resumed session ${resume}`
+        : performed.handover !== undefined
+          ? `handover passed from ${performed.handover}`
+          : handover !== undefined
+            ? 'fresh conversation; no handover was written'
+            : 'fresh conversation';
       // The file's write failed: the new pane runs, but the team file still declares the old
       // model. The request is not done, and no line says it swapped.
       if (performed.declareFailure !== undefined) {
@@ -290,7 +299,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
         pane: performed.pane,
         readBack: performed.readBack,
         ...(resume === undefined ? {} : { resumed: resume }),
-        ...(handover === undefined ? {} : { handover: handover.path }),
+        ...(performed.handover === undefined ? {} : { handover: performed.handover }),
       };
     }
     case 'replaced':
@@ -315,6 +324,17 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
       throw new Error(`swap: unhandled result ${JSON.stringify(unknown)}`);
     }
   }
+}
+
+/** Why a swap that is not due waits, in the words the run prints. Past the deadline the pause is
+ *  the observed screen — a running turn, a dialog or text nobody sent — never a clock that has
+ *  already run out. */
+function waitWhy(swap: QueuedSwap, observed: SwapObservation, now: Date): string {
+  if (Date.parse(swap.deadline) > now.getTime()) return 'not due yet';
+  if (observed.unsent) return 'past its wait; the input box holds unsent text';
+  if (observed.working) return 'past its wait; the seat is mid-turn';
+  if (observed.prompt) return 'past its wait; the seat is at a dialog';
+  return 'past its wait';
 }
 
 /** The recorded session id the launch resumes, when resuming is possible at all: the CLI stays

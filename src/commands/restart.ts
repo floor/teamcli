@@ -442,6 +442,9 @@ export type PerformResult =
       /** The team-file declaration's write failed: the pane runs, but the file still names the
        *  old model. A caller must not call the request done on this. */
       declareFailure?: string;
+      /** The handover file the launch was actually given. Absent when the bounded wait ended
+       *  without one, so a caller never reports a handover that was only asked for. */
+      handover?: string;
     };
 
 export async function performRestart(input: PerformInput): Promise<PerformResult> {
@@ -802,6 +805,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(declareFailure === undefined ? {} : { declareFailure }),
+      ...(handoverPath === undefined ? {} : { handover: handoverPath }),
     };
   } finally {
     runLock.release();

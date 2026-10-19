@@ -551,7 +551,7 @@ async function performRun(origin: RunPlan): Promise<Outcome> {
         io.stdout(`${result.seat}: stays queued (${result.why})\n`);
         break;
       case 'wait':
-        io.stdout(`${result.seat}: stays queued (not due yet)\n`);
+        io.stdout(`${result.seat}: stays queued (${result.why})\n`);
         break;
     }
   }
@@ -605,7 +605,7 @@ function resultDoc(result: SwapRunResult): Record<string, unknown> {
     case 'retry':
       return { seat: result.seat, result: 'stays', why: result.why };
     case 'wait':
-      return { seat: result.seat, result: 'stays', why: 'not due yet' };
+      return { seat: result.seat, result: 'stays', why: result.why };
   }
 }
 
