@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { type KeyObject } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvents } from '../src/bus/log.ts';
 import { findRoot } from '../src/file/load.ts';
 import { messageFile, plantMessage, plantRecord, receiptFile, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
@@ -41,6 +42,8 @@ seats:
 
 const BODY = 'the message body itself';
 const NOW = new Date('2026-10-04T09:00:00.000Z');
+const HERE = dirname(fileURLToPath(import.meta.url));
+const moduleUrl = (relative: string): string => pathToFileURL(join(HERE, '..', relative)).href;
 
 /** The one waiting record of the fixture, at the pinned instant, as the reading prints it. */
 const SHOWN = `team acme, session "acme"
@@ -584,5 +587,204 @@ difference: lead/m1 does not verify: the record is not a message
       served: 'already-served',
     });
     expect(readFileSync(recordReceiptFile(scene.dropDir, ID, 'replied'), 'utf8')).toBe(receipt);
+  });
+
+  // The seat-drop reader now shares the inbox's exclusive publication: a read or replied receipt
+  // already serves the id, and an entry at either receipt name that does not verify is held rather
+  // than repaired. These scenes keep the body count honest on both sides of the gate.
+  test('a replied receipt already serves the id: team messages shows nothing and writes nothing', async () => {
+    const scene = recordScene();
+    const replied = writeReceipt(scene.dropDir, signReceiptPayload({
+      kind: 'receipt',
+      status: 'replied',
+      id: ID,
+      to: 'lead',
+      root: scene.found,
+      session: 'acme',
+      at: '2026-10-04T09:05:00.000Z',
+    }, home), home);
+    expect(replied.ok).toBe(true);
+    const before = readFileSync(recordReceiptFile(scene.dropDir, ID, 'replied'), 'utf8');
+
+    const result = await run();
+    expect(result.code).toBe(0);
+    expect(result.out).toBe('team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n');
+    expect(result.out).not.toContain(BODY);
+    expect(readFileSync(recordReceiptFile(scene.dropDir, ID, 'replied'), 'utf8')).toBe(before);
+    expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(false);
+  });
+
+  test('a damaged read receipt is held: no body, no rewrite, and the difference names it', async () => {
+    const scene = recordScene();
+    const path = recordReceiptFile(scene.dropDir, ID, 'read');
+    const damaged = '{ not a receipt\n';
+    writeFileSync(path, damaged, { mode: 0o600 });
+
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.out).toContain(`lead/${ID}`);
+    expect(result.out).toContain('the read receipt name is held by a file that does not verify for this message');
+    expect(result.out).toContain(`repair: inspect .agents/send-drops/acme/lead/${ID}.read.json: it is left as it is`);
+    expect(result.out).not.toContain(BODY);
+    expect(readFileSync(path, 'utf8')).toBe(damaged);
+  });
+
+  test('a read receipt signed for another seat is held: no body, preserved', async () => {
+    const scene = recordScene();
+    const foreign = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: ID,
+      to: 'worker',
+      root: scene.found,
+      session: 'acme',
+      at: '2026-10-04T08:00:00.000Z',
+    }, home);
+    const written = writeReceipt(scene.dropDir, foreign, home);
+    expect(written.ok).toBe(true);
+    const path = recordReceiptFile(scene.dropDir, ID, 'read');
+    const before = readFileSync(path, 'utf8');
+
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.out).toContain('the read receipt name is held by a file that does not verify for this message');
+    expect(result.out).not.toContain(BODY);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  test('a damaged replied receipt is held: the read shows no body and leaves it alone', async () => {
+    const scene = recordScene();
+    const path = recordReceiptFile(scene.dropDir, ID, 'replied');
+    const damaged = '{ not a receipt\n';
+    writeFileSync(path, damaged, { mode: 0o600 });
+
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.out).toContain('the replied receipt name is held by a file that does not verify for this message');
+    expect(result.out).not.toContain(BODY);
+    expect(readFileSync(path, 'utf8')).toBe(damaged);
+    expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(false);
+  });
+
+  test('one held receipt refuses only its own record, and --json keeps bodies and counts aligned', async () => {
+    const scene = recordScene();
+    const second = '9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f';
+    plantRecord(home, scene.found, 'acme', 'lead', second, 'the second body', { at: '2026-10-04T09:00:00.000Z' });
+    const damagedPath = recordReceiptFile(scene.dropDir, ID, 'read');
+    const damaged = '{ not a receipt\n';
+    writeFileSync(damagedPath, damaged, { mode: 0o600 });
+
+    const result = await runJson();
+    expect(result.code).toBe(1);
+    expect(result.err).toBe('');
+    const doc = assertMatchesOutputSchema<MessagesDoc>(result.out, MESSAGES_OUTPUT_SCHEMA);
+    const refused = doc.rows.find((row) => row.id === ID);
+    const shown = doc.rows.find((row) => row.id === second);
+    expect(refused).toMatchObject({ status: 'refused' });
+    expect(refused).not.toHaveProperty('body');
+    expect(shown).toMatchObject({ status: 'shown', body: 'the second body' });
+    expect(doc.differences.map((difference) => difference.what)).toEqual([
+      `lead/${ID} was not shown: the read receipt name is held by a file that does not verify for this message`,
+    ]);
+    expect(doc.counts).toEqual({ messages: 2, shown: 1, refused: 1 });
+    expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
+    expect(readFileSync(damagedPath, 'utf8')).toBe(damaged);
+  });
+
+  test('an unwritable receipt folder shows no body, and the id is served once it can be written', async () => {
+    const scene = recordScene();
+    chmodSync(scene.dropDir, 0o500);
+    try {
+      const result = await run();
+      expect(result.code).toBe(1);
+      expect(result.out).toContain('the read receipt could not be written');
+      expect(result.out).not.toContain(BODY);
+    } finally {
+      chmodSync(scene.dropDir, 0o700);
+    }
+    expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(false);
+
+    const again = await run();
+    expect(again.code).toBe(0);
+    expect(again.out).toContain(BODY);
+    expect(statusOf(scene.dropDir, ID, scene.context, messageKey())).toBe('read');
+  });
+
+  /** A real child process that runs the manual reader after a barrier file appears. */
+  function messagesChild(atBase: string): string {
+    const script = join(atBase, 'messages-child.ts');
+    writeFileSync(script, `import { existsSync } from 'node:fs';
+import { runMessages } from ${JSON.stringify(moduleUrl('src/commands/messages.ts'))};
+import { testIo } from ${JSON.stringify(pathToFileURL(join(HERE, 'helpers.ts')).href)};
+const [cwd, home, barrier] = process.argv.slice(2);
+while (barrier !== '' && !existsSync(barrier)) await new Promise((tick) => setTimeout(tick, 5));
+const io = testIo(cwd, { kind: 'owner' });
+const code = await runMessages([], io, { home, now: () => new Date() });
+console.log(JSON.stringify({ code, out: io.out, err: io.err }));
+`);
+    return script;
+  }
+
+  /** A real child process that takes the automatic read (`inbox_read`'s gate) after the barrier. */
+  function inboxReadChild(atBase: string): string {
+    const script = join(atBase, 'inbox-read-child.ts');
+    writeFileSync(script, `import { existsSync } from 'node:fs';
+import { readMessage } from ${JSON.stringify(moduleUrl('src/mcp/inbox.ts'))};
+const [dropDir, root, seat, session, home, id, barrier] = process.argv.slice(2);
+while (barrier !== '' && !existsSync(barrier)) await new Promise((tick) => setTimeout(tick, 5));
+console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, home)));
+`);
+    return script;
+  }
+
+  type Child = { code: number | null; out: string; err: string };
+
+  function runInBackground(script: string, args: readonly string[]): Promise<Child> {
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, [script, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        out += chunk.toString('utf8');
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        err += chunk.toString('utf8');
+      });
+      child.on('close', (code) => resolve({ code, out, err }));
+    });
+  }
+
+  test('team messages and an automatic read racing one record expose exactly one body', async () => {
+    const scene = recordScene();
+    const barrier = join(base, 'go');
+    const manual = runInBackground(messagesChild(base), [scene.found, home, barrier]);
+    const automatic = runInBackground(inboxReadChild(base), [
+      scene.dropDir, scene.found, 'lead', 'acme', home, ID, barrier,
+    ]);
+    // Both children wait at the barrier: nothing serves this id before the race starts.
+    await new Promise((tick) => setTimeout(tick, 100));
+    expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(false);
+    writeFileSync(barrier, 'go\n');
+    const [manualRun, automaticRun] = await Promise.all([manual, automatic]);
+    expect(manualRun.code).toBe(0);
+    expect(automaticRun.code).toBe(0);
+    const manualResult = JSON.parse(manualRun.out) as { code: number; out: string; err: string };
+    const automaticResult = JSON.parse(automaticRun.out) as { ok: boolean; body?: string; served?: string };
+    expect(manualResult.code).toBe(0);
+    expect(manualResult.err).toBe('');
+
+    // Counted, never inferred: exactly one side returns the body string.
+    const exposed = (manualResult.out.includes(BODY) ? 1 : 0) + (automaticResult.body === BODY ? 1 : 0);
+    expect(exposed).toBe(1);
+    if (automaticResult.ok) {
+      expect(automaticResult.body).toBe(BODY);
+      expect(manualResult.out).not.toContain(BODY);
+    } else {
+      expect(automaticResult.served).toBe('already-served');
+      expect(manualResult.out).toContain(BODY);
+    }
+    // One signed read receipt stands, it verifies, and no publisher's temp is left behind.
+    expect(statusOf(scene.dropDir, ID, scene.context, messageKey())).toBe('read');
+    expect(readdirSync(scene.dropDir).filter((name) => name.endsWith('.new'))).toEqual([]);
   });
 });

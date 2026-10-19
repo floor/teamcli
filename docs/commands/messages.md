@@ -3,10 +3,14 @@
 Shows a message that is already waiting and writes the receipt that says it was shown. Anyone in
 the checkout may run it. A send writes the message as one signed record into the recipient's
 folder, `<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still
-waiting there, verifies its signature with this checkout's message key, prints the body, and writes
-the signed read receipt (`<id>.read.json`) in that one step. A record that does not verify prints
-no body and writes nothing. A message a previous build left in `.agents/messages/<seat>/` is read
-the same way. The owner's mailbox, `.agents/messages/owner/`, is read with the rest: the Runtime
+waiting there, verifies its signature with this checkout's message key, publishes the signed read
+receipt (`<id>.read.json`) with an exclusive, no-clobber link, makes it durable, and prints the
+body. The receipt is the read-once gate every reader shares, so a record another reader already
+served is skipped, and a body is never printed without the receipt that proves it went out. A
+record that does not verify prints no body and writes nothing. An entry at a receipt name that
+does not verify is held rather than repaired, and shows no body. A message a previous build left
+in `.agents/messages/<seat>/` is read the same way and keeps its own print-then-write order. The
+owner's mailbox, `.agents/messages/owner/`, is read with the rest: the Runtime
 writes a signed record there for each event it delivers to the owner (see [the event log and the
 bus](../internal/events.md)), its `FROM` is `runtime`, and the run shows it and writes its receipt
 like any other waiting record.
@@ -61,12 +65,14 @@ and the signed record keeps the sender's registry id apart from it.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| every waiting record was shown and receipted | the reading above, each verified row `shown` and its body printed before the receipt is written | 0 |
+| every waiting record was shown and receipted | the reading above, each verified row `shown`, its read receipt published and durable before its body is printed; a record another reader already served is skipped | 0 |
 | nothing was waiting | the same reading with no rows, the note `nothing is waiting`, and `0 messages` | 0 |
-| a record did not verify, the message key is missing or unreadable, or the team file can't be read | the record as a `refused` row with its `difference:` block (`repair:` names the file, `who: any seat`), or `team messages: no message key; nothing was shown` / `team messages: <team-file problem>` | 1 |
+| a record did not verify, a read or replied receipt name is held by an entry that does not verify, the message key is missing or unreadable, or the team file can't be read | the record as a `refused` row with its `difference:` block (`repair:` names the file, `who: any seat`), or `team messages: no message key; nothing was shown` / `team messages: <team-file problem>` | 1 |
 | the invocation can't be read, or this folder is neither a checkout nor a team root | `team messages: <problem>`, with the usage for the invocation | 2 |
 
-A record that does not verify prints no body and writes no receipt.
+A record that does not verify prints no body and writes no receipt. A record whose receipt name is
+held by an entry that does not verify prints no body, and the entry is left as it is: it may
+record a read that already happened, so the run never deletes or rewrites it.
 
 The client reading has the same shape: the context line, the table, one heading and body under
 each verified reply, the notes and differences, the `ack:` line when `--ack` was given, and the
