@@ -13,11 +13,15 @@ export function sayConfigValue(value: ConfigValue | null): string {
   return value.join(', ');
 }
 
-/** Where a value comes from, in the words of the read: the file's team order is the team's
- *  default, and no value at all is unset — the layer below (the profile, the launcher, the seat's
- *  name) decides. */
+/** Where a value comes from, in the words of the read: a signed record names its level, the
+ *  file's team order is the team's default, and no value at all is unset — the layer below (the
+ *  profile, the launcher, the seat's name) decides. */
 export function sayConfigOrigin(origin: ConfigOrigin): string {
   switch (origin) {
+    case 'entity record': return 'entity record';
+    case 'project record': return 'project record';
+    case 'team record': return 'team record';
+    case 'seat record': return 'seat record';
     case 'team file': return 'team file';
     case 'team default': return 'team order';
     case 'default': return 'default';

@@ -180,7 +180,7 @@ function verifySettingsMap(
 ): ConfigSourceRead {
   const primaryTarget = expectedTargets[0] ?? null;
   if (rawSettings === undefined || rawSettings === null) {
-    return { ok: true, level, target: primaryTarget, settings: [] };
+    return { ok: true, level, target: primaryTarget, source: sourcePath, settings: [] };
   }
   if (!isMap(rawSettings)) {
     return {
@@ -193,7 +193,7 @@ function verifySettingsMap(
     };
   }
   const entries = Object.entries(rawSettings);
-  if (entries.length === 0) return { ok: true, level, target: primaryTarget, settings: [] };
+  if (entries.length === 0) return { ok: true, level, target: primaryTarget, source: sourcePath, settings: [] };
 
   const state = keyState(home);
   if (state.kind !== 'key') {
@@ -352,7 +352,7 @@ function verifySettingsMap(
   }
 
   out.sort((a, b) => settingOrder(a.key) - settingOrder(b.key) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  return { ok: true, level, target: primaryTarget, settings: out };
+  return { ok: true, level, target: primaryTarget, source: sourcePath, settings: out };
 }
 
 function yamlReadProblem(path: string, error: unknown): string {

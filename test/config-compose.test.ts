@@ -142,3 +142,61 @@ describe('the row order', () => {
     ]);
   });
 });
+
+describe('signed records', () => {
+  const seat: ConfigSeatInput = {
+    model: 'Claude Opus',
+    effort: 'high',
+    nickname: 'Atlas',
+    human: true,
+    deliveryOrder: ['typed'],
+  };
+
+  test('a seat record beats the seat\'s own file entry and names its file', () => {
+    const rows = composeSeatConfig(seat, ['drop'], {
+      model: { level: 'seat', value: 'claude-opus-5-5', sourceFile: '/home/.config/team/agents/agt_1.yaml' },
+    });
+    const model = rows.find((entry) => entry.key === 'model')!;
+    expect(model.value).toBe('claude-opus-5-5');
+    expect(model.origin).toBe('seat record');
+    expect(model.sourceFile).toBe('/home/.config/team/agents/agt_1.yaml');
+    expect(rows.find((entry) => entry.key === 'effort')!.origin).toBe('team file');
+  });
+
+  test('the seat file entry beats a team record; the team record beats the team order', () => {
+    const fileWins = composeSeatConfig(seat, ['drop'], {
+      nickname: { level: 'team', value: 'team-name' },
+    }).find((entry) => entry.key === 'nickname')!;
+    expect(fileWins.value).toBe('Atlas');
+    expect(fileWins.origin).toBe('team file');
+
+    const recordWins = composeSeatConfig(BARE, ['drop'], {
+      delivery_order: { level: 'team', value: ['mcp-inbox'] },
+    }).find((entry) => entry.key === 'delivery_order')!;
+    expect(recordWins.value).toEqual(['mcp-inbox']);
+    expect(recordWins.origin).toBe('team record');
+  });
+
+  test('a project or entity record reads as its own level, and an absent one leaves the fallback', () => {
+    const rows = composeSeatConfig(BARE, null, { effort: { level: 'project', value: 'max' } });
+    expect(rows.find((entry) => entry.key === 'effort')).toEqual({
+      key: 'effort',
+      value: 'max',
+      origin: 'project record',
+      applies: 'restart-resume',
+    });
+    expect(rows.find((entry) => entry.key === 'delivery_order')!.origin).toBe('default');
+    expect(rows.find((entry) => entry.key === 'human')).toEqual({
+      key: 'human',
+      value: false,
+      origin: 'default',
+      applies: 'at-once',
+    });
+  });
+
+  test('a record value is copied, never the caller\'s array by reference', () => {
+    const order = ['mcp-inbox'] as const;
+    const rows = composeSeatConfig(BARE, null, { delivery_order: { level: 'seat', value: [...order] } });
+    expect(rows.find((entry) => entry.key === 'delivery_order')!.value).not.toBe(order);
+  });
+});
