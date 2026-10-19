@@ -11,6 +11,9 @@ import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../c
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive } from '../dev_mode.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
+import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
+import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -75,6 +78,11 @@ export type StatusSources = {
   alive?(pid: number): boolean;
   /** The approved pane's read gate's own reads; the real ones when absent. */
   gate?: DelegateSources;
+  /** The idle-with-work snapshot, from the watch. Read-only; absent when no producer is wired, and
+   *  a test stands in for it. */
+  idleWork?(input: IdleWorkInput): IdleWorkReport;
+  /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
+  pendingGreen?(dir: string): PendingGreenSlice[];
 };
 
 /**
@@ -86,6 +94,9 @@ export function standingSource(home: string): StatusSources['standing'] {
 }
 
 export const realSources: StatusSources = {
+  // The green journal's own pending reader, the same function the watch uses: a corrupt journal
+  // throws, and the presentation names that read as refused rather than as no ready slice.
+  pendingGreen: pendingGreenSlices,
   live(session, team, state) {
     const running = sessionRunning(session);
     if (running === null) return null;
@@ -175,6 +186,12 @@ export interface StatusJson {
     start_cwd?: string;
   }>;
   notes: string[];
+  /** The idle-with-work snapshot, when the watch provides one. */
+  idle_work?: IdleWorkReport;
+  /** Ready-but-not-installed slices, when the green journal was read. */
+  green_slices?: PendingGreenSlice[];
+  /** Why the green journal could not be read; never rendered as an empty list. */
+  green_notice?: string;
   differences: Array<{
     what: string;
     repair: string;
@@ -384,6 +401,20 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const machineMode = sources.home !== undefined ? readDevelopmentMode(sources.home) : null;
   const machineNote = machineMode === null ? null : developmentModeNote(machineMode);
   if (machineNote !== null) comparison.notes.push(machineNote);
+  // Idle with work and ready-but-uninstalled slices: one read each, notes only, no exit change.
+  // The snapshot always exists once the watch provides one (the default local queue counts as a
+  // source); the green read keeps a corrupt journal a named refusal rather than an empty list.
+  const idleWork = sources.idleWork?.({
+    root,
+    team,
+    state,
+    live,
+    now,
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+  });
+  if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
+  const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
+  if (green !== null) comparison.notes.push(...greenNotes(green));
   const record = approvalAndOverrideRows(
     standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
     overrides,
@@ -440,6 +471,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         };
       }),
       notes: comparison.notes,
+      ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
+      ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
+      ...(green?.kind === 'refused' ? { green_notice: green.why } : {}),
       differences: comparison.differences.map(toJsonDifference),
       summary: summaryCounts(comparison.differences),
       notice: current.notice ?? null,

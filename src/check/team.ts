@@ -22,6 +22,8 @@ import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSource
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive, devModeOwnerLift } from '../dev_mode.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
+import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -103,6 +105,11 @@ export type CheckSources = {
    *  `--repair` re-applies the file's lines through them; the real ones when absent. */
   renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
   reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  /** The idle-with-work snapshot, from the watch. Read-only; absent when no producer is wired, and
+   *  a test stands in for it. */
+  idleWork?(input: IdleWorkInput): IdleWorkReport;
+  /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
+  pendingGreen?(dir: string): PendingGreenSlice[];
 };
 
 /**
@@ -156,6 +163,8 @@ export const realCheckSources: CheckSources = {
   standing: realSources.standing,
   now: realSources.now,
   home: realSources.home,
+  // The same pending reader `status` uses, wired once: both commands read the one journal.
+  pendingGreen: realSources.pendingGreen,
 };
 
 /**
@@ -381,6 +390,22 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     })),
   ];
   const warnings = renderDeprecationWarnings(deprecationWarnings);
+  // Idle with work and ready-but-uninstalled slices: the same two reads and the same lines as
+  // `team status`, notes only — neither changes the total nor the exit. A green journal that
+  // cannot be read is named as such, never read as "no slice is ready".
+  const idleWork = sources.idleWork?.({
+    root,
+    team,
+    state,
+    live,
+    now: sources.now(),
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+  });
+  const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
+  const idleNotes = [
+    ...(idleWork !== undefined ? idleWorkNotes(idleWork) : []),
+    ...greenNotes(green),
+  ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   const notes = collapseNotes([
@@ -393,6 +418,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...unknownStatusNotes(team, state, live),
     ...record.notes,
     ...provenance.notes,
+    ...idleNotes,
   ]);
   if (args.json) {
     writeJson(io, 'team.check', {
@@ -406,6 +432,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       warnings,
       repaired,
       notes,
+      ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
+      ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
+      ...(green?.kind === 'refused' ? { green_notice: green.why } : {}),
       differences: differences.map(toJsonDifference),
       summary: summaryCounts(differences),
       ...(briefs.stale ? { hint: ROLLOUT_HINT } : {}),
