@@ -151,6 +151,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   break nobody typed — and that box, a profile with no measured keys, a missing mid-turn key, a
   paste chip and rows the reader cannot read each keep the old hold on send or the old refusal
   on restart, with the box's own reason. `--abandon` still closes the workspace without a copy.
+- **Every command states who may run it.** The generated CLI contract now carries a `who` row for
+  every command and subcommand — the gate kind and the command map's own sentence, plus the
+  detached route (who and where) where the module refuses a run with no terminal — and
+  `docs/reference/cli.md` prints it under each command's `Who may run it` heading. The rows are
+  copied from `COMMAND_GATES` (`src/permissions/map.ts`) as they stand, never reworded, and
+  generation stops on a word the map does not name: the map is closed, so its silence is not an
+  admission and no unlisted word reaches the adapter. The 0.5.2 kinds `any-caller`, `seat-only`,
+  `leads-only`, `team-change`, `team-pause` and `team-read` join the map, `error.rule` carries
+  `team-change`, `team-read` and `terminal`, and a difference repair names the actor it named
+  before: a lead for `team-change`, `team-pause`, `any-caller`, `seat-only` and `leads-only`, any
+  seat for `team-read`.
 
 ### Changed
 
