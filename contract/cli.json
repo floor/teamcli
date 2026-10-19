@@ -643,6 +643,187 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "daemon",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--root",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "install",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon install [--root <folder>] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "registering the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--root",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--started-by",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "run",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon run [--root <folder>] [--started-by <source>]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "starting the one machine daemon is the owner's, or the system service manager starting it in the owner's login session; a seat or a pane never starts it"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "status",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon status [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the status reading is one health probe over the machine socket and reads no team file and no secret"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "uninstall",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon uninstall [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way"
+          }
+        }
+      ],
+      "usage": [
+        "team daemon status [--json]",
+        "team daemon run [--root <folder>] [--started-by <source>]",
+        "team daemon install [--root <folder>] [--dry-run] [--json]",
+        "team daemon uninstall [--json]"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "the one machine daemon is the owner's: install, uninstall and run are owner-only, and the system service manager's no-terminal start is the owner's own login session"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--commands",
           "repeatable": false,
           "takesValue": true

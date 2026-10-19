@@ -155,6 +155,21 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
 | `config.invocation` | `config` | 2 | the invocation is not one of the command's forms | `team config` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
+| `daemon.already-running` | `daemon` | 0 | a machine daemon is already answering; nothing second was started | `team daemon run` |
+| `daemon.dry-run` | `daemon` | 0 | the install plan was printed and nothing was written | `team daemon install --dry-run` |
+| `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the system service manager starts the daemon | `team daemon install` |
+| `daemon.status` | `daemon` | 0 | the one-line health reading was printed: running, not running or unknown | `team daemon status` |
+| `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
+| `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
+| `daemon.entry-missing` | `daemon` | 1 | the CLI entry cannot be found, so the service unit cannot be written | `team daemon install` |
+| `daemon.install-failed` | `daemon` | 1 | the system service manager refused to write or start the unit | `team daemon install` |
+| `daemon.not-owner` | `daemon` | 1 | the caller may not install or remove the machine daemon | `team daemon install` |
+| `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
+| `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system service manager starts it | `team daemon run` |
+| `daemon.service-unavailable` | `daemon` | 1 | no system service manager adapter is available on this platform yet | `team daemon install` |
+| `daemon.uninstall-failed` | `daemon` | 1 | the system service manager refused to stop or remove the unit | `team daemon uninstall` |
+| `daemon.no-root` | `daemon` | 2 | no checkout was named and the current folder has no readable team file | `team daemon install` |
+| `daemon.usage` | `daemon` | 2 | the invocation cannot be read | `team daemon watch` |
 | `delegate.done` | `delegate` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team delegate <session/pane> --commands up,down` |
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
 | `delegate.invalid` | `delegate` | 2 | the team file or proposed authority record is invalid or cannot be read | `team delegate <session/pane> --commands up,down` |

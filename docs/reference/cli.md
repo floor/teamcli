@@ -417,6 +417,131 @@ None.
 
 None.
 
+## `daemon`
+
+Hidden: no
+
+Usage:
+
+    team daemon status [--json]
+    team daemon run [--root <folder>] [--started-by <source>]
+    team daemon install [--root <folder>] [--dry-run] [--json]
+    team daemon uninstall [--json]
+
+### Who may run it
+
+`owner-only` — the one machine daemon is the owner's: install, uninstall and run are owner-only, and the system service manager's no-terminal start is the owner's own login session
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `install`
+
+Hidden: no
+
+Usage:
+
+    team daemon install [--root <folder>] [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — registering the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--root` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `run`
+
+Hidden: no
+
+Usage:
+
+    team daemon run [--root <folder>] [--started-by <source>]
+
+#### Who may run it
+
+`owner-only` — starting the one machine daemon is the owner's, or the system service manager starting it in the owner's login session; a seat or a pane never starts it
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--root` | yes | no | no |
+| `--started-by` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `status`
+
+Hidden: no
+
+Usage:
+
+    team daemon status [--json]
+
+#### Who may run it
+
+`any-caller` — the status reading is one health probe over the machine socket and reads no team file and no secret
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `uninstall`
+
+Hidden: no
+
+Usage:
+
+    team daemon uninstall [--json]
+
+#### Who may run it
+
+`owner-only` — removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `delegate`
 
 Hidden: no
