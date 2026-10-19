@@ -2,8 +2,8 @@
 
 Three records hold who the fleet is: one file per agent under `~/.config/team/agents/`, one teams
 file, and one projects file. `team` writes them — registration happens at a seat's first launch by
-`up`, `add`, `restart` or `reload`, or at its first settings write, which creates the record a
-declared but never-launched seat has none of — and routing, [team list](../commands/list.md),
+`up`, `add`, `restart` or `reload`, or at its first successful settings write, which creates the
+record a declared but never-launched seat has none of — and routing, [team list](../commands/list.md),
 [team send](../commands/send.md) and [team projects](../commands/projects.md) read them. The team
 file (`.agents/team.yaml`) stays the seed and the projection; the registries are the live truth
 that `up` and routing read.
@@ -30,8 +30,9 @@ that `up` and routing read.
 every relaunch; `remove` and the stop of a seat end it — `stopped` comes back to the same agent,
 `retired` never does. A relaunch keeps the id and re-points `reach.pane`, and every write goes
 through a temporary file and a rename. A seat the team file declares that has never launched gets
-its record at the first settings write aimed at it, seeded from the declaration and `registered`
-with no pane, session or state. Removing a declaration never deletes a record: the record is
+its record at the first successful settings write aimed at it, seeded from the declaration and
+`registered` with no pane, session or state; a dry run, a refused write and an unset that finds
+nothing to remove create nothing. Removing a declaration never deletes a record: the record is
 marked orphaned and keeps its signed settings.
 
 ## The team record

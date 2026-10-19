@@ -99,6 +99,9 @@ export type ConfigSetRequest = {
   /** Entity name, project id, team id, or agent id: the record the write lands in. */
   target: string;
   settings: readonly ConfigSettingInput[];
+  /** A seat the caller's team file declares, when the plan names that seat by name before it has
+   *  a record: the plan is validated against the declaration and creates no record itself. */
+  declaration?: SeatDeclaration;
 };
 
 export type ConfigUnsetRequest = {
@@ -666,8 +669,11 @@ function declaredSeatNames(root: string): string[] {
  * plans with no previous value). A name neither the agent registry nor any roster knows is
  * refused here, before a write could reach the store and bump a generation for nothing.
  */
-function seatTargetProblem(home: string, target: string): string | null {
+function seatTargetProblem(home: string, target: string, declaration?: SeatDeclaration): string | null {
   if (getAgent(home, target) !== null) return null;
+  // A caller that holds the declaration answers for its own team, registered or not: planning a
+  // first write must not need the record the planning is meant to precede.
+  if (declaration !== undefined && declaration.seat.name === target) return null;
   try {
     for (const record of Object.values(readTeams(home))) {
       if (record.roster.some((line) => line.agent === target || line.seat === target)) return null;
@@ -767,7 +773,7 @@ export function planConfigSet(home: string, request: ConfigSetRequest): ConfigSe
     planned.push({ key: normalized.key, value: normalized.value });
   }
   if (request.level === 'seat') {
-    const unknown = seatTargetProblem(home, request.target);
+    const unknown = seatTargetProblem(home, request.target, request.declaration);
     if (unknown !== null) return { ok: false, kind: 'source', why: unknown };
   }
   const current = readTargetSource(home, request.level, request.target);
@@ -869,12 +875,39 @@ function writeSettingsMap(
 }
 
 /**
+ * Whether the level and target a plan names can hold a write at all. It is checked before a
+ * generation is bumped: a refused write must not burn the number the next real write carries.
+ * The registry writers keep their own checks; this one answers what no lock is needed to know.
+ */
+function writeTargetProblem(home: string, level: ConfigLevel, target: string): string | null {
+  if (!(CONFIG_LEVELS as readonly string[]).includes(level)) {
+    return `"${level}" is not a settings level: expected ${CONFIG_LEVELS.join(', ')}`;
+  }
+  switch (level) {
+    case 'entity':
+      return 'settings are not written at entity level in this release';
+    case 'project':
+      return getProject(home, target) === null ? `no project ${target} in the registry` : null;
+    case 'team':
+      return getTeam(home, target) === null ? `no team ${target} in the registry` : null;
+    case 'seat':
+      return null;
+  }
+}
+
+/**
  * Signs and writes a planned set. One generation is bumped and every entry of the write is signed
  * with it; the level's record is then replaced once, so all keys of the write land together or
  * none does. The returned records carry the generation and signature the event log names.
  */
 export function writeConfigSet(home: string, plan: ConfigSetPlan, options: ConfigWriteOptions = {}): ConfigWriteResult {
   if (!plan.ok) return plan;
+  try {
+    const problem = writeTargetProblem(home, plan.level, plan.target);
+    if (problem !== null) return { ok: false, kind: 'write', why: problem };
+  } catch (error) {
+    return { ok: false, kind: 'write', why: (error as Error).message };
+  }
   // The target is resolved before the generation is bumped: a write that cannot land must move
   // nothing, or the next real write would carry the burned number. A seat name that has no record
   // yet is the bootstrap case: the first write creates it from the declaration.

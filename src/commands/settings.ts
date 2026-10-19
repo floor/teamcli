@@ -346,9 +346,10 @@ function pairsWord(settings: readonly PlannedConfigSetting[]): string {
 }
 
 /**
- * `set` and `unset` in one body: both walk the same gate (owner, file, team, seat, agent record)
- * and differ only in what they plan and record. Every exit is a literal of its own so the
- * exit-code contract can check each id against its row.
+ * `set` and `unset` in one body: both walk the same gate (owner, file, team, seat) and differ only
+ * in what they plan and record. Neither needs an agent record to start: a declared seat plans
+ * against its declaration, and only a real set that passed every check registers it. Every exit
+ * is a literal of its own so the exit-code contract can check each id against its row.
  */
 function executeWrite(
   verb: 'set' | 'unset',
@@ -386,30 +387,19 @@ function executeWrite(
   const seat = team.seats.find((one) => one.name === parsed.seat);
   if (seat === undefined) return noSeatExit(io, json, parsed.seat, team.project);
   const found = agentIdOf(home, current.root, seat.name);
+  // A declared seat that has never launched has no agent record. Nothing is registered here: a
+  // dry run, a refused write and an unset with nothing to remove all create nothing. The first
+  // successful real set registers the record below, seeded from the declaration, and signs the
+  // setting there. A launch would create the same record; nothing here starts a pane or types.
   let agentId = found.agentId;
-  if (agentId === null) {
-    // The seat is declared but has never launched: the bootstrap ruling makes the first write the
-    // moment its record is created, seeded from the declaration, so `set`, `unset` and a dry run
-    // all answer from a record rather than refuse for the missing one. A launch would create the
-    // same record; nothing here starts a pane, attaches or types anything.
-    const boot = seatRecordForWrite(home, seat.name, { root: current.root, team, seat });
-    if (!boot.ok) {
-      const message = `seat "${seat.name}" has no registered agent record to hold its settings and none could be created: ${boot.why}; run \`team up\` first`;
-      if (json) {
-        writeJsonError(io, 'settings.no-agent', message, 'run `team up` to register the seat');
-      } else {
-        io.stderr(`team settings: ${message}\n`);
-      }
-      // exit: settings.no-agent
-      return 1;
-    }
-    agentId = boot.agentId;
-  }
+  const declaration = { root: current.root, team, seat };
   const dryRun = flags.has('dry-run');
 
   if (verb === 'set') {
     const pairs = (parsed as { pairs: { key: string; value: string }[] }).pairs;
-    const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: pairs });
+    // A seat that never launched plans against its declaration: the name stands in for the record
+    // the plan is meant to precede, and the plan reads no settings under it.
+    const plan = planConfigSet(home, { level: 'seat', target: agentId ?? seat.name, settings: pairs, declaration });
     if (!plan.ok) return planExit(io, json, plan.kind, plan.why);
     const chain = loadAndResolvePolicyChain(
       {
@@ -450,7 +440,7 @@ function executeWrite(
           project: team.project,
           session: team.session,
           level: 'seat' as const,
-          target: agentId,
+          target: agentId ?? seat.name,
           seat: seat.name,
           settings: settings.map((setting) => ({
             key: setting.key,
@@ -471,7 +461,25 @@ function executeWrite(
       return dryRunExit();
     }
 
-    const written = writeConfigSet(home, { ...plan, settings: checked }, { now });
+    // Only a real write that passed every check reaches this point. The record a declared seat
+    // never had is created here, before the generation is bumped and before any setting is signed:
+    // a dry run, a refused key or value, a policy refusal and a collision all leave the registry
+    // as they found it. If the create fails, nothing is written and the refusal says so.
+    if (agentId === null) {
+      const boot = seatRecordForWrite(home, seat.name, declaration);
+      if (!boot.ok) {
+        const message = `seat "${seat.name}" has no registered agent record to hold its settings and none could be created: ${boot.why}; run \`team up\` first`;
+        if (json) {
+          writeJsonError(io, 'settings.no-agent', message, 'run `team up` to register the seat');
+        } else {
+          io.stderr(`team settings: ${message}\n`);
+        }
+        // exit: settings.no-agent
+        return 1;
+      }
+      agentId = boot.agentId;
+    }
+    const written = writeConfigSet(home, { ...plan, target: agentId, settings: checked }, { now });
     if (!written.ok) return planExit(io, json, written.kind, written.why);
     const notice = recordChanges(current, home, seat.name, agentId, settings, written.written);
     logLine(
@@ -508,7 +516,10 @@ function executeWrite(
   }
 
   const keys = (parsed as { keys: string[] }).keys;
-  const request = { level: 'seat' as const, target: agentId, keys };
+  // An unset removes what a record holds, so a seat with no record has nothing to remove: the
+  // plan reads the name as no settings and reports the key not set. Nothing is registered.
+  const targetId = agentId ?? seat.name;
+  const request = { level: 'seat' as const, target: targetId, keys };
   const plan = planConfigUnset(home, request);
   if (!plan.ok) {
     if (plan.kind === 'value') return notSetExit(io, json, plan.why);
@@ -527,7 +538,7 @@ function executeWrite(
         project: team.project,
         session: team.session,
         level: 'seat' as const,
-        target: agentId,
+        target: targetId,
         seat: seat.name,
         settings: removed.map((setting) => ({
           key: setting.key,
@@ -553,14 +564,14 @@ function executeWrite(
     if (written.kind === 'value') return notSetExit(io, json, written.why);
     return planExit(io, json, written.kind, written.why);
   }
-  // The write gate above gives every command an agent record, so the target is its id: a seat
-  // that never launched had its record created from the declaration before the plan read it.
-  const notice = recordRemovals(current, home, seat.name, agentId, removed, now);
+  // A removal reports the record it removed from: the seat's agent id when it has one, and the
+  // seat's name when the plan found nothing to remove under a declared name.
+  const notice = recordRemovals(current, home, seat.name, targetId, removed, now);
   logLine(
     join(current.root, '.agents'),
     'settings',
     'owner',
-    `seat ${seat.name} (${agentId}) ${removed.map((setting) => `${setting.key}: ${sayConfigValue(setting.previous?.value ?? setting.value)} -> unset`).join('; ')}`,
+    `seat ${seat.name} (${targetId}) ${removed.map((setting) => `${setting.key}: ${sayConfigValue(setting.previous?.value ?? setting.value)} -> unset`).join('; ')}`,
     now,
   );
   if (json) {
@@ -572,7 +583,7 @@ function executeWrite(
       project: team.project,
       session: team.session,
       level: 'seat' as const,
-      target: agentId,
+      target: targetId,
       seat: seat.name,
       settings: removed.map((setting) => ({
         key: setting.key,

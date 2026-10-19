@@ -11,13 +11,14 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { readEvents } from '../src/bus/log.ts';
 import { runSettings, USAGE } from '../src/commands/settings.ts';
+import { grantsDir } from '../src/grant.ts';
 import { resolveSeatOverrides } from '../src/config/apply.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { SETTINGS_CHANGE_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { agentsDir, readAgents, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { installKey } from '../src/store/keys.ts';
+import { installKey, recordedGeneration } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -546,13 +547,49 @@ describe('the write verbs', () => {
     expect(resolveSeatOverrides({ home, root, seat: 'lead' })).toEqual({ ok: true, overrides: { nickname: 'Hera' } });
   });
 
-  test('a dry run on a seat that never launched creates its record and writes no setting', async () => {
+  test('a dry run on a seat that never launched prints the change and creates nothing', async () => {
     const result = await run(['set', 'lead', 'nickname=Hera', '--dry-run']);
     expect(result.code).toBe(0);
     expect(result.out).toBe('settings: would set nickname=Hera at seat (lead)\n');
-    const agents = readAgents(home);
-    expect(agents).toHaveLength(1);
-    expect(agents[0]?.settings).toBeUndefined();
+    // A preview is not a write: no record, no setting, no generation and no event.
+    expect(readAgents(home)).toHaveLength(0);
+    expect(recordedGeneration(grantsDir(home), home)).toBeNull();
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (events.ok) expect(events.events).toHaveLength(0);
+  });
+
+  test('a refused key on a seat that never launched creates nothing', async () => {
+    const result = await run(['set', 'lead', 'nope=1']);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('unknown setting "nope"');
+    expect(readAgents(home)).toHaveLength(0);
+    expect(recordedGeneration(grantsDir(home), home)).toBeNull();
+  });
+
+  test('a refused value on a seat that never launched creates nothing', async () => {
+    const result = await run(['set', 'lead', 'model=nope']);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('unknown model "nope" for claude-code');
+    expect(readAgents(home)).toHaveLength(0);
+  });
+
+  test('a policy refusal on a seat that never launched creates nothing', async () => {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const result = await run(['set', 'lead', 'delivery_order=drop']);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('loosens policy "delivery-order"');
+    expect(readAgents(home)).toHaveLength(0);
+    expect(recordedGeneration(grantsDir(home), home)).toBeNull();
+  });
+
+  test('a nickname collision on a seat that never launched creates nothing', async () => {
+    // The team file gives lead the word "Atlas"; a first write for worker is checked against the
+    // composed roster before any record exists for either of them.
+    const result = await run(['set', 'worker', 'nickname=Atlas']);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('seat "worker": the nickname "Atlas" is also on seat "lead"');
+    expect(readAgents(home)).toHaveLength(0);
   });
 
   test('an unset on a seat that never launched says there is nothing to unset, not that its record is missing', async () => {
@@ -560,7 +597,8 @@ describe('the write verbs', () => {
     expect(result.code).toBe(1);
     expect(result.err).toContain('nothing to unset');
     expect(result.err).not.toContain('no registered agent record');
-    expect(readAgents(home)).toHaveLength(1);
+    // Nothing to remove is not a reason to register the seat.
+    expect(readAgents(home)).toHaveLength(0);
   });
 
   test('a seat record that cannot be created is refused, and the id says which', async () => {

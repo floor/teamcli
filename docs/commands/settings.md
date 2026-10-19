@@ -34,7 +34,7 @@ them together as one signed generation in the seat's agent file; `team settings 
 one key, and the level below shows through again. Only the owner writes. The value passes the
 same checks the read describes: the key must be one a seat holds (`model`, `effort`, `nickname`,
 `delivery_order`, `human`), a model must be one the seat's launch profile names — it is recorded
-as the launch id, so a later launch reads the same model — an effort must be one the seat's vendor
+as the launch id — an effort must be one the seat's vendor
 carries, and a nickname must not clash with another seat's name or nickname — the word another seat
 signed standing where its file word does, so a signed word is what a new one is checked against. A
 governed key then
@@ -44,15 +44,17 @@ within, one that adds a leg the policy does not is refused.
 The change is signed, appended to the team log, and raised as `config.changed` with the setting's
 generation; a failed event append leaves the written record in place and the reconcile pass adds
 the missing event. A dry run prints the same summary with `would set`/`would unset` and stops
-before the record is replaced.
+before any record, setting, generation or event is written.
 
-A seat the team file declares that has never launched has no agent record yet. A write form aimed
-at it creates that record first, seeded from the seat's declaration — its name, signing words,
-lab, CLI and launch line, with no pane, session or state — and signs the setting there; a later
-launch finds the same record and keeps its id, so the settings signed before it stay with the
-seat's agent. The create is the record, not a launch: nothing starts, attaches or types. A dry
-run creates the record too and still writes no setting, and an unset on such a seat reports the
-setting is not set. A printed `team settings <seat>` reads the declaration and the team's records
+A seat the team file declares that has never launched has no agent record yet. The first
+successful `set` aimed at it creates that record, seeded from the seat's declaration — its name,
+signing words, lab, CLI and launch line, with no pane, session or state — and signs the setting
+there; a later launch finds the same record and keeps its id, so the settings signed before it
+stay with the seat's agent. The create is the record, not a launch: nothing starts, attaches or
+types. A preview and a refused write create nothing: a `--dry-run`, an unknown key or value, a
+policy refusal and a nickname collision leave the registry, the settings, the generation and the
+event log as they were. An unset on such a seat reports the setting is not set and creates
+nothing either. A printed `team settings <seat>` reads the declaration and the team's records
 without creating anything.
 
 `team settings set lead nickname=Atlas` therefore works on a declared seat before its first
@@ -73,7 +75,9 @@ all, such as a path that is not a directory.
 | `none` | no value is in force and the key has no release default: the cell reads `-` |
 
 `APPLIES` is the registry's timing for the key: `restart that resumes` for the values a CLI takes at
-its next start, `at once` for the ones TeamCLI reads on its next command. A signed `nickname` is
+its next start, `at once` for the ones TeamCLI reads on its next command. A signed `model` or
+`effort` is recorded for a launch to read; this release records it without yet applying it at
+launch, so that timing is declared for those two keys, not performed. A signed `nickname` is
 the name `team send` prints and addresses (`@<nickname>`, `<nickname>@<team>`, `team send --list`)
 in place of the team file's; a signed `delivery_order` and `human` are the words the next send
 walks. The replaced file word addresses nobody.

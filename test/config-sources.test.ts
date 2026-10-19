@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { entitiesPath } from '../src/entities.ts';
+import { grantsDir } from '../src/grant.ts';
 import {
   loadAndResolveConfigChain,
   planConfigSet,
@@ -25,7 +26,7 @@ import { signConfigRecord } from '../src/config/record.ts';
 import { agentsDir, getAgent, registerAgent, updateAgent, type AgentInit } from '../src/registry/agents.ts';
 import { get as getProject, upsertProject } from '../src/registry/projects.ts';
 import { getTeam, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
-import { installKey, keyOf } from '../src/store/keys.ts';
+import { installKey, keyOf, recordedGeneration } from '../src/store/keys.ts';
 
 let home: string;
 
@@ -545,6 +546,53 @@ describe('the registry records above a seat', () => {
     if (written.ok) return;
     expect(written.why).toContain('not written at entity level');
     expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  test('a refused write burns no generation: the next real write carries the first number', () => {
+    const agentId = seatAgent();
+    const grants = grantsDir(home);
+    expect(recordedGeneration(grants, home)).toBeNull();
+
+    // Each of these reaches the writer with a plan and must be refused before the bump.
+    const missingProject = writeConfigSet(home, {
+      ok: true,
+      level: 'project',
+      target: 'no-such-project',
+      settings: [{ key: 'model', value: 'claude-opus-5-5', previous: null }],
+    });
+    expect(missingProject.ok).toBe(false);
+    const missingTeam = writeConfigSet(home, {
+      ok: true,
+      level: 'team',
+      target: 'no-such-team',
+      settings: [{ key: 'model', value: 'claude-opus-5-5', previous: null }],
+    });
+    expect(missingTeam.ok).toBe(false);
+    const badLevel = writeConfigSet(home, {
+      ok: true,
+      level: 'galaxy' as unknown as 'seat',
+      target: agentId,
+      settings: [{ key: 'model', value: 'claude-opus-5-5', previous: null }],
+    });
+    expect(badLevel.ok).toBe(false);
+    const entity = writeConfigSet(home, {
+      ok: true,
+      level: 'entity',
+      target: 'acme',
+      settings: [{ key: 'model', value: 'claude-opus-5-5', previous: null }],
+    });
+    expect(entity.ok).toBe(false);
+
+    expect(recordedGeneration(grants, home)).toBeNull();
+    const written = writeConfigSet(home, planConfigSet(home, {
+      level: 'seat',
+      target: agentId,
+      settings: [{ key: 'model', value: 'claude-opus-5-5' }],
+    }));
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+    expect(written.generation).toBe(1);
+    expect(recordedGeneration(grants, home)?.generation).toBe(1);
   });
 });
 
