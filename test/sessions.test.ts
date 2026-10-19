@@ -37,6 +37,17 @@ const SEAT = (name: string, role: string, model: string): string => `  - role: $
     version: "5.5"
     launch: claude --model claude-${model === 'Claude Opus' ? 'opus' : 'sonnet'}-5-5`;
 
+// A CLI that takes no session id at launch: the launch is the only thing that can tell two of
+// its sessions apart, and a relaunch in the same pane must never be mistaken for the old one.
+const CODEX_SEAT = (name: string): string => `  - role: implementer
+    name: ${name}
+    label: ${name}
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6"
+    launch: codex -m gpt-6-sol`;
+
 function teamYaml(root: string): string {
   return `format: 1
 project: acme
@@ -49,7 +60,8 @@ workspace:
   mode: shared
 seats:
 ${SEAT('lead', 'coordinator', 'Claude Opus')}
-${SEAT('worker', 'implementer', 'Claude Sonnet')}`;
+${SEAT('worker', 'implementer', 'Claude Sonnet')}
+${CODEX_SEAT('codex')}`;
 }
 
 type Fixture = { root: string; home: string; team: TeamFile };
@@ -230,6 +242,45 @@ describe('beginSession and endSession', () => {
     });
     expect(sessions[1]).toMatchObject({ id: second, previous: first });
     expect(sessions[1]?.ended).toBeUndefined();
+  });
+
+  test('a CLI that takes no session id, relaunched in its pane, is a new session linked to the old', () => {
+    const fixture = makeFixture();
+    const first = begin(fixture, 'codex', 'w1:p1', undefined, START);
+    const second = begin(fixture, 'codex', 'w1:p1', undefined, LATER);
+    expect(second).not.toBe(first);
+    const sessions = sessionsOf(fixture);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]).toMatchObject({
+      id: first,
+      ended: LATER.toISOString(),
+      reason: 'crash',
+      note: 'a new launch found this session open',
+      next: second,
+    });
+    expect(sessions[1]).toMatchObject({ id: second, previous: first });
+    expect(sessions[1]?.ended).toBeUndefined();
+  });
+
+  test('a launch that replaces a session closed on purpose ends it as that reason, with no crash note', () => {
+    const fixture = makeFixture();
+    const first = begin(fixture, 'codex', 'w1:p1', undefined, START);
+    const second = beginSession({
+      home: fixture.home,
+      root: fixture.root,
+      team: fixture.team,
+      session: 'sess',
+      seat: seatOf(fixture, 'codex'),
+      pane: 'w2:p1',
+      replaces: 'swap',
+      now: LATER,
+    });
+    if (!('id' in second)) throw new Error(second.note);
+    const sessions = sessionsOf(fixture);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]).toMatchObject({ id: first, ended: LATER.toISOString(), reason: 'swap', next: second.id });
+    expect(sessions[0]?.note).toBeUndefined();
+    expect(sessions[1]).toMatchObject({ id: second.id, previous: first });
   });
 
   test('an end names one seat, or every open record of the team', () => {

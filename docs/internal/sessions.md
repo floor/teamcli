@@ -34,10 +34,15 @@ the same way). Nothing is written from an agent's word: every line comes from th
 launched or stopped a pane.
 
 `crash` is written by the registry itself. A start that finds an open record for the same team,
-herdr session and seat, from another pane or another CLI session, closes it with reason `crash`
-and the note `a new launch found this session open`. That is the only end TeamCLI can tell apart
-from a stop it performed: a CLI that died without one is found by the next launch, not by the
-listing. `quota` is in the vocabulary with no writer in this release.
+herdr session and seat — from another pane, another CLI session, or a CLI that takes no session
+id relaunched in its pane — closes it with reason `crash` and the note `a new launch found this
+session open`. Two launches are one only when both carry the same defined CLI session id: for a
+CLI that takes none, a relaunch is a new session, linked to its predecessor. A launch that
+follows a repair the command made on purpose closes the old record as `swap` — a drift repair in
+`up`, a `reload` — and the new record links back to it. Nothing else ends a record: a seat still
+launched, named, or held at a dialog when `up`'s run ends keeps the open record its launch wrote,
+and only a real stop or `down` closes it. `quota` is in the vocabulary with no writer in this
+release.
 
 Nothing in this release measures tokens, cost, links or handover: the fields are the record's
 shape, and a field no command wrote is absent. The listing prints an absent cost as `unknown`,
