@@ -56,6 +56,8 @@ import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSessions } from '../src/commands/sessions.ts';
+import { runConfig } from '../src/commands/config.ts';
+import { runSettings, type SettingsCommandOptions } from '../src/commands/settings.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -1813,6 +1815,54 @@ scene('seats.not-yours', async (place) => {
   expect(ran.out).toBe('');
   return ran;
 });
+
+{
+  async function configRun(place: Place, argv: readonly string[]): Promise<Ran> {
+    const io = testIo(place.root, owner);
+    return { code: await runConfig([...argv], io), out: io.out, err: io.err };
+  }
+  scene('config.invocation', async (place) => show(await configRun(place, []), 'a subcommand is required'));
+  scene('config.shown', async (place) => show(await configRun(place, ['keys']), 'delivery_order'));
+}
+
+{
+  async function settingsRun(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    over: SettingsCommandOptions = {},
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return {
+      code: await runSettings([...argv], io, { home: place.home, now: NOW, ...over }),
+      out: io.out,
+      err: io.err,
+    };
+  }
+  scene('settings.invocation', async (place) => show(await settingsRun(place, []), 'a seat name is required'));
+  scene('settings.file-owner', async (place) => show(await settingsRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
+  scene('settings.not-a-repo', async (place) => show(await settingsRun(place, ['lead']), 'not inside a git repository'), false);
+  scene('settings.file', async (place) => show(await settingsRun(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+  scene('settings.file-invalid', async (place) => {
+    invalid(place);
+    return show(await settingsRun(place, ['lead', '--file', 'team.yaml']), 'line');
+  });
+  scene('settings.not-yours', async (place) => {
+    write(place, TEAM);
+    return show(
+      await settingsRun(place, ['lead'], other, { gate: { standing: () => ({ kind: 'none' }) } }),
+      'this team is not yours to read',
+    );
+  });
+  scene('settings.no-seat', async (place) => {
+    write(place, TEAM);
+    return show(await settingsRun(place, ['ghost']), 'no seat "ghost" is declared in acme');
+  });
+  scene('settings.shown', async (place) => {
+    write(place, TEAM);
+    return show(await settingsRun(place, ['lead']), 'delivery_order');
+  });
+}
 
 async function up(place: Place, argv: string[], caller: Caller, sources: UpSources): Promise<Ran> {
   const io = testIo(place.root, caller);

@@ -38,6 +38,9 @@ export type ConfigSpec = {
   /** The levels that may set this key. The approved minimum is the seat's own settings. */
   levels: readonly ConfigLevel[];
   type: 'model' | 'effort' | 'nickname' | 'order' | 'boolean';
+  /** What the key accepts, in the words `team config keys` prints. The write path enforces the
+   *  same rule its parser carries; the registry's words are what the owner reads. */
+  allowed: string;
   /**
    * The catalogue policy that limits this key, when the catalogue ships one. The guard reads the
    * policy through the catalogue at check time, so a policy that lands later (the model policy the
@@ -58,6 +61,7 @@ export const CONFIG_REGISTRY: Readonly<Record<ConfigKey, ConfigSpec>> = {
     key: 'model',
     levels: ['seat'],
     type: 'model',
+    allowed: "a model the seat's profile and the allowed-models policy accept",
     governedBy: 'allowed-models',
     applies: 'restart-resume',
   },
@@ -65,18 +69,21 @@ export const CONFIG_REGISTRY: Readonly<Record<ConfigKey, ConfigSpec>> = {
     key: 'effort',
     levels: ['seat'],
     type: 'effort',
+    allowed: "one of the CLI profile's effort levels",
     applies: 'restart-resume',
   },
   nickname: {
     key: 'nickname',
     levels: ['seat'],
     type: 'nickname',
+    allowed: 'unique in the team, never lead',
     applies: 'at-once',
   },
   delivery_order: {
     key: 'delivery_order',
     levels: ['seat'],
     type: 'order',
+    allowed: 'delivery legs, tighten only',
     governedBy: 'delivery-order',
     fallback: DELIVERY_ORDER.fallback,
     applies: 'at-once',
@@ -85,6 +92,7 @@ export const CONFIG_REGISTRY: Readonly<Record<ConfigKey, ConfigSpec>> = {
     key: 'human',
     levels: ['seat'],
     type: 'boolean',
+    allowed: 'true or false',
     fallback: false,
     applies: 'at-once',
   },

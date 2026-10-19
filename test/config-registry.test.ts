@@ -43,6 +43,13 @@ describe('what limits a key', () => {
     expect(CONFIG_REGISTRY.nickname.governedBy).toBeUndefined();
     expect(CONFIG_REGISTRY.human.governedBy).toBeUndefined();
   });
+  test('every key says what it accepts', () => {
+    expect(CONFIG_REGISTRY.model.allowed).toBe("a model the seat's profile and the allowed-models policy accept");
+    expect(CONFIG_REGISTRY.effort.allowed).toBe("one of the CLI profile's effort levels");
+    expect(CONFIG_REGISTRY.nickname.allowed).toBe('unique in the team, never lead');
+    expect(CONFIG_REGISTRY.delivery_order.allowed).toBe('delivery legs, tighten only');
+    expect(CONFIG_REGISTRY.human.allowed).toBe('true or false');
+  });
 });
 
 describe('defaults and application', () => {

@@ -377,6 +377,65 @@
       ]
     },
     {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "config",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "keys",
+          "positionals": [
+            {
+              "name": "level",
+              "optional": true,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team config keys [<level>] [--json]"
+          ]
+        }
+      ],
+      "usage": [
+        "team config keys [<level>] [--json]"
+      ]
+    },
+    {
       "flags": [],
       "hidden": true,
       "name": "conformance-adapter",
@@ -2480,6 +2539,47 @@
       "subcommands": [],
       "usage": [
         "team sessions [<seat>] [--by <model|team|entity>] [--json]"
+      ]
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "settings",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team settings <seat> [--file <path>] [--json]"
       ]
     },
     {

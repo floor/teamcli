@@ -992,6 +992,45 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           }],
         }),
       ],
+      'team.settings': [
+        jsonEnvelope('team.settings', {
+          format: 1 as const,
+          project: 'beacon',
+          seat: 'claude-keeper',
+          settings: [
+            { key: 'model', value: 'Claude Opus 5.5', source: 'team file', applies: 'restart-resume' },
+            { key: 'effort', value: null, source: 'none', applies: 'restart-resume' },
+            { key: 'delivery_order', value: ['mcp-inbox', 'drop', 'typed'], source: 'default', applies: 'at-once' },
+            { key: 'human', value: false, source: 'default', applies: 'at-once' },
+          ],
+        }),
+      ],
+      'team.config-keys': [
+        jsonEnvelope('team.config-keys', {
+          format: 1 as const,
+          level: null,
+          keys: [
+            {
+              key: 'model',
+              levels: ['seat'],
+              type: 'model',
+              allowed: "a model the seat's profile and the allowed-models policy accept",
+              default: null,
+              governed_by: 'allowed-models',
+              applies: 'restart-resume',
+            },
+            {
+              key: 'delivery_order',
+              levels: ['seat'],
+              type: 'order',
+              allowed: 'delivery legs, tighten only',
+              default: ['mcp-inbox', 'drop', 'typed'],
+              governed_by: 'delivery-order',
+              applies: 'at-once',
+            },
+          ],
+        }),
+      ],
       'team.worktree': [
         jsonEnvelope('team.worktree', {
           format: 1 as const,

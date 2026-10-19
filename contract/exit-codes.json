@@ -913,6 +913,20 @@
     },
     {
       "code": 0,
+      "command": "config",
+      "id": "config.shown",
+      "meaning": "the settings registry is printed",
+      "trigger": "team config keys"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.invocation",
+      "meaning": "the invocation is not one of the command's forms",
+      "trigger": "team config"
+    },
+    {
+      "code": 0,
       "command": "conformance-adapter",
       "id": "conformance-adapter.finished",
       "meaning": "the protocol finished",
@@ -3374,6 +3388,62 @@
       "id": "sessions.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team sessions --by nothing"
+    },
+    {
+      "code": 0,
+      "command": "settings",
+      "id": "settings.shown",
+      "meaning": "the seat's settings are printed",
+      "trigger": "team settings lead"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.file-owner",
+      "meaning": "--file is the owner's",
+      "trigger": "team settings lead --file .agents/team.yaml"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.no-seat",
+      "meaning": "the team file declares no seat of that name",
+      "trigger": "team settings ghost"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.file",
+      "meaning": "the team file can't be found or read",
+      "trigger": "team settings lead --file missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.file-invalid",
+      "meaning": "the team file does not parse or does not validate",
+      "trigger": "team settings lead --file team.yaml"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.invocation",
+      "meaning": "the invocation is not one of the command's forms",
+      "trigger": "team settings"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.not-a-repo",
+      "meaning": "the directory is not inside a git repository",
+      "trigger": "team settings lead"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.not-yours",
+      "meaning": "the team is not the caller's to read",
+      "trigger": "team settings lead"
     },
     {
       "code": 0,

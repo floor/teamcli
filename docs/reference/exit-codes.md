@@ -136,6 +136,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.range` | `commits` | 2 | the range can't be resolved | `team commits check missing..also` |
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
+| `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
+| `config.invocation` | `config` | 2 | the invocation is not one of the command's forms | `team config` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
 | `delegate.done` | `delegate` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team delegate <session/pane> --commands up,down` |
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
@@ -488,6 +490,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `sessions.shown` | `sessions` | 0 | the session records were listed | `team sessions` |
 | `sessions.read` | `sessions` | 1 | a session registry can't be read | `team sessions` |
 | `sessions.invocation` | `sessions` | 2 | the invocation can't be read | `team sessions --by nothing` |
+| `settings.shown` | `settings` | 0 | the seat's settings are printed | `team settings lead` |
+| `settings.file-owner` | `settings` | 1 | --file is the owner's | `team settings lead --file .agents/team.yaml` |
+| `settings.no-seat` | `settings` | 1 | the team file declares no seat of that name | `team settings ghost` |
+| `settings.file` | `settings` | 2 | the team file can't be found or read | `team settings lead --file missing.yaml` |
+| `settings.file-invalid` | `settings` | 2 | the team file does not parse or does not validate | `team settings lead --file team.yaml` |
+| `settings.invocation` | `settings` | 2 | the invocation is not one of the command's forms | `team settings` |
+| `settings.not-a-repo` | `settings` | 2 | the directory is not inside a git repository | `team settings lead` |
+| `settings.not-yours` | `settings` | 2 | the team is not the caller's to read | `team settings lead` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |

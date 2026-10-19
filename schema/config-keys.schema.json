@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/config-keys.schema.json",
+  "title": "team config keys --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "level",
+    "keys"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.config-keys"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "level": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "entity",
+        "project",
+        "team",
+        "seat",
+        null
+      ]
+    },
+    "keys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "levels",
+          "type",
+          "allowed",
+          "default",
+          "governed_by",
+          "applies"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "model",
+              "effort",
+              "nickname",
+              "delivery_order",
+              "human"
+            ]
+          },
+          "levels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "entity",
+                "project",
+                "team",
+                "seat"
+              ]
+            }
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "model",
+              "effort",
+              "nickname",
+              "order",
+              "boolean"
+            ]
+          },
+          "allowed": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": {
+            "type": [
+              "string",
+              "boolean",
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "native",
+                "mcp-inbox",
+                "typed",
+                "drop"
+              ]
+            }
+          },
+          "governed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "applies": {
+            "type": "string",
+            "enum": [
+              "restart-resume",
+              "at-once"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

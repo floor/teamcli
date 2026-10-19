@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
+import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';
 import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
@@ -1912,6 +1913,71 @@ export const USAGE_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+
+/** Published `--json` output schema for `team settings <seat>` (`schema/settings.schema.json`):
+ *  one row per registered setting, each with the value and the level it came from. */
+export const SETTINGS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.settings',
+  fileName: 'settings.schema.json',
+  title: 'team settings <seat> --json output',
+  required: ['format', 'project', 'seat', 'settings'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    settings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'value', 'source', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          value: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          source: { type: 'string', enum: ['team file', 'team default', 'default', 'none'] },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+        },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team config keys` (`schema/config-keys.schema.json`):
+ *  the registry as the command lists it, one entry per key. */
+export const CONFIG_KEYS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.config-keys',
+  fileName: 'config-keys.schema.json',
+  title: 'team config keys --json output',
+  required: ['format', 'level', 'keys'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    level: { type: ['string', 'null'], enum: [...CONFIG_LEVELS, null] },
+    keys: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'levels', 'type', 'allowed', 'default', 'governed_by', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          levels: { type: 'array', items: { type: 'string', enum: [...CONFIG_LEVELS] } },
+          type: { type: 'string', enum: ['model', 'effort', 'nickname', 'order', 'boolean'] },
+          allowed: { type: 'string', minLength: 1 },
+          default: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          governed_by: { type: ['string', 'null'] },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+        },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -1960,6 +2026,8 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   COMMITS_OUTPUT_SCHEMA,
   PR_OUTPUT_SCHEMA,
   USAGE_OUTPUT_SCHEMA,
+  SETTINGS_OUTPUT_SCHEMA,
+  CONFIG_KEYS_OUTPUT_SCHEMA,
 ];
 
 

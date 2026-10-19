@@ -219,6 +219,47 @@ Usage:
 | --- | --- | --- |
 | `ref` | no | no |
 
+## `config`
+
+Hidden: no
+
+Usage:
+
+    team config keys [<level>] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `keys`
+
+Hidden: no
+
+Usage:
+
+    team config keys [<level>] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `level` | yes | no |
+
 ## `conformance-adapter`
 
 Hidden: yes
@@ -1333,6 +1374,29 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | yes | no |
+
+## `settings`
+
+Hidden: no
+
+Usage:
+
+    team settings <seat> [--file <path>] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ## `status`
 
