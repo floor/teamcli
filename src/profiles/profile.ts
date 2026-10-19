@@ -139,7 +139,7 @@ export type InboxBlock = {
 /** What a launch fills into the profile's `mcp_inbox` words. `command` and `entry` are this
  *  install's runner — the executable and its entry script — which reach the inbox server
  *  whether or not `team` is on the PATH. */
-export type InboxPlace = { seat: string; session: string; command: string; entry: string };
+export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string };
 
 /** A profile word with the launch's own values filled in. */
 export function fillInboxPlace(text: string, place: InboxPlace): string {

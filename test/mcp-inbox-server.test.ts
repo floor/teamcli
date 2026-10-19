@@ -214,6 +214,49 @@ describe('team mcp serve', () => {
     }
   });
 
+  test('a lobby folder with the launch file serves that team, whatever folder it starts in', async () => {
+    const at = place();
+    const lobby = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-lobby-')));
+    try {
+      signed(at, 'lead', LEAD_ID, 'for lead');
+      const io = testIo(lobby);
+      const replies: string[] = [];
+      const code = await runMcpServe({ seat: 'lead', session: SESSION, file: join(at.root, '.agents', 'team.yaml') }, io, {
+        lines: (async function* () {
+          yield call('1', 'inbox_check');
+        })(),
+        write: (line) => replies.push(line),
+      }, { home: at.home });
+      expect(code).toBe(0);
+      expect(io.err).toBe('');
+      const reply = JSON.parse(replies[0]!) as Record<string, any>;
+      const listed = JSON.parse(reply.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+    } finally {
+      at.cleanup();
+      rmSync(lobby, { recursive: true, force: true });
+    }
+  });
+
+  test('a lobby folder with no team file and no launch file refuses', async () => {
+    const at = place();
+    const lobby = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-lobby-')));
+    try {
+      const io = testIo(lobby);
+      const code = await runMcpServe({ seat: 'lead', session: SESSION }, io, {
+        lines: (async function* () {
+          // no lines
+        })(),
+        write: () => {},
+      }, { home: at.home });
+      expect(code).toBe(2);
+      expect(io.err).toContain('pass --file');
+    } finally {
+      at.cleanup();
+      rmSync(lobby, { recursive: true, force: true });
+    }
+  });
+
   test('an undeclared seat, a wrong session, or no seat at all refuses to start', async () => {
     const at = place();
     try {

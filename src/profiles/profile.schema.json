@@ -94,7 +94,7 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "minItems": 1,
-          "description": "the CLI's own project-scope mcp add subcommand arguments, run in the seat's folder at launch"
+          "description": "the CLI's own project-scope mcp add subcommand arguments, run in the seat's folder at launch; {seat}, {session}, {command} and {entry} are filled from the launch, and a whole {file} word is the launch's --file pair when it names the team file, nothing otherwise"
         },
         "target": {
           "type": "string",

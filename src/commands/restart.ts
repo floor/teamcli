@@ -356,6 +356,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
+      teamFile: path,
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
       watchLabel: watchLabel(team.project),
     });
@@ -470,6 +471,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
+      teamFile: path,
       cliHooks: installed,
       watchLabel: watchLabel(team.project),
     });
@@ -744,7 +746,7 @@ function hostOf(input: {
     confirmLobby: () => null,
     paneRun: launch.paneRun,
     ...(launch.registerInbox
-      ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+      ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }

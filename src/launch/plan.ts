@@ -23,10 +23,11 @@ export type Op =
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined }
   /** `cli` and `cwd` let the launch register the seat's team inbox in its folder before the
-   *  command runs (`execute.ts`). `watcher` is how the seat will learn a drop is waiting, as
-   *  this run leaves it; recorded with the launch. Absent only on a hand-built op: every planned
-   *  launch names them. */
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; watcher?: CliWatcher }
+   *  command runs (`execute.ts`); `teamFile` is the team file the run read, which the seat's
+   *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
+   *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
+   *  on a hand-built op: every planned launch names them. */
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -319,6 +320,12 @@ export interface UpInput {
    * plans the map it would install and prints the line the real run would type.
    */
   cliHooks?: Readonly<Record<string, string>>;
+  /**
+   * The team file this run read and validated, as its absolute path. A seat's folder may be a
+   * lobby with no team file, so the launch's inbox registration and the server it names are told
+   * this file. Absent on a plan built by hand, whose launches register from the seat's folder.
+   */
+  teamFile?: string;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -627,7 +634,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: said ? `${said}; would launch; ${watched}` : watched,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(said ? { notice: said } : {}), watcher },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher },
       });
     }
     const rules = profile.rulesMode;

@@ -47,7 +47,7 @@ describe('registerInbox', () => {
     const gemini = profileFor('gemini');
     expect(gemini?.mcpInbox).toEqual({
       launchArgs: [],
-      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}'],
+      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}', '{file}'],
       target: '.gemini/settings.json',
       file: null,
     });
@@ -57,7 +57,7 @@ describe('registerInbox', () => {
     const grok = profileFor('grok');
     expect(grok?.mcpInbox).toEqual({
       launchArgs: [],
-      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}'],
+      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}', '{file}'],
       target: '.grok/config.toml',
       file: null,
     });
@@ -142,6 +142,32 @@ describe('registerInbox', () => {
     expect(calls).toEqual([]);
   });
 
+  test('a lobby folder with no team file registers from the file its launch read', () => {
+    const project = folder();
+    const lobby = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
+    dirs.push(lobby);
+    const teamFile = join(project, '.agents', 'team.yaml');
+    const { run, calls } = fakeAdd();
+    const runner = selfRunner();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: lobby, file: teamFile, run })).toEqual({ ok: true });
+    expect(calls).toEqual([{
+      command: 'gemini',
+      cwd: lobby,
+      args: ['mcp', 'add', '-s', 'project', 'team-inbox', runner.command, '--', runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web', '--file', teamFile],
+    }]);
+  });
+
+  test('a launch file that cannot be read refuses: the server would start with no team', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
+    dirs.push(dir);
+    const { run, calls } = fakeAdd();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, file: join(dir, 'gone.yaml'), run })).toEqual({
+      ok: false,
+      reason: 'the team file its launch read could not be read',
+    });
+    expect(calls).toEqual([]);
+  });
+
   test('a CLI with no file route registers nothing', () => {
     expect(registerInbox({ cli: 'codex', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
     expect(registerInbox({ cli: 'muse', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
@@ -172,6 +198,23 @@ describe('the cursor file route', () => {
       },
     });
     expect(statSync(join(dir, '.cursor', 'mcp.json')).mode & 0o777).toBe(0o600);
+  });
+
+  test('a lobby folder writes its file from the launch team file, naming it to the server', () => {
+    const project = folder();
+    const lobby = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
+    dirs.push(lobby);
+    const teamFile = join(project, '.agents', 'team.yaml');
+    const runner = selfRunner();
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: lobby, file: teamFile })).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(lobby, '.cursor', 'mcp.json'), 'utf8'))).toEqual({
+      mcpServers: {
+        'team-inbox': {
+          command: runner.command,
+          args: [runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web', '--file', teamFile],
+        },
+      },
+    });
   });
 
   test('an existing file keeps its other keys and its other servers', () => {
