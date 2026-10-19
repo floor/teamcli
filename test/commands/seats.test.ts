@@ -155,6 +155,20 @@ describe('team seats', () => {
     expect(ioJsonHelp.out).toBe(USAGE);
   });
 
+  test('a pause prints above the table and in --json', async () => {
+    const pause = { by: 'owner', at: '2026-10-03T14:00:00.000Z', stops: [] };
+    updateState(join(dir, '.agents'), (state) => {
+      state.pause = pause;
+    });
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file], io, statusSources)).toBe(0);
+    expect(io.out).toContain('paused since 2026-10-03T14:00:00.000Z by owner');
+    expect(io.out.indexOf('paused since')).toBeLessThan(io.out.indexOf('SEAT '));
+    const again = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], again, statusSources)).toBe(0);
+    expect((JSON.parse(again.out) as SeatsJson).pause).toEqual(pause);
+  });
+
   test('lists active seats in the 12-column registry table and omits stopped seats by default', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runSeats(['--file', file], io, statusSources);

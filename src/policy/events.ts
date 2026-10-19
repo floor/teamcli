@@ -59,9 +59,10 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   'message.replied': ['sender'],
   // The lead's copy is raised only after `held-threshold`; the sender's word is immediate.
   'message.held': ['sender', 'lead'],
-  // Working and idle are read by the bus and the watch; a lead that wants them adds itself.
+  // Working is read by the bus and the watch; a lead that wants it adds itself.
+  // A worker seat idle past its window with assigned work reaches its lead once per idle stretch.
   'seat.working': [],
-  'seat.idle': [],
+  'seat.idle': ['lead'],
   'seat.idle-timeout': ['lead'],
   'seat.blocked': ['lead', 'operator'],
   'seat.at-prompt': ['lead', 'operator'],
@@ -69,6 +70,9 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   // the event reaches the entity's own lead and the owner at once. The owner stands even when
   // the registry names no entity lead, so a climb is never silent.
   'seat.prompt-escalated': ['entity', 'owner'],
+  // A seat that was blocked at a prompt and is now working again: closes the open at-prompt
+  // notice for the lead and operator.
+  'seat.unblocked': ['lead', 'operator'],
   'seat.unreachable': ['lead', 'operator'],
   'seat.done': ['lead', 'operator'],
   'work.claimed': ['lead'],
@@ -186,6 +190,28 @@ export const EVENT_THRESHOLDS_SETTING = {
     'prompt_escalation_seconds',
   ],
 } as const;
+
+/**
+ * The seven event thresholds as catalogue policies, in the order `team policy view` lists them:
+ * each field's signed policy name. The prompt-escalation window is not one of them in this
+ * release; `src/policy/thresholds.ts` reads a resolved chain through this map, so a number is
+ * named once here and the policy catalogue and every reader take it from the same place.
+ */
+export const EVENT_THRESHOLD_POLICIES = {
+  thread_ttl_seconds: 'event-thread-ttl-seconds',
+  thread_cap: 'event-thread-cap',
+  retention_days: 'event-retention-days',
+  held_threshold_seconds: 'event-held-threshold-seconds',
+  unreachable_threshold_seconds: 'event-unreachable-threshold-seconds',
+  idle_threshold_seconds: 'event-idle-threshold-seconds',
+  reconcile_interval_seconds: 'event-reconcile-interval-seconds',
+} as const;
+
+/** One field of the threshold set an owner may set through `team policy set`. */
+export type EventThresholdField = keyof typeof EVENT_THRESHOLD_POLICIES;
+
+/** The catalogued policy name of one threshold field. */
+export type EventThresholdPolicyName = (typeof EVENT_THRESHOLD_POLICIES)[EventThresholdField];
 
 /**
  * Whether a kind is privileged under a list of patterns. A pattern is an exact kind or a prefix

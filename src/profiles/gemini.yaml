@@ -60,6 +60,7 @@ mcp_inbox:
     - '{seat}'
     - --session
     - '{session}'
+    - '{file}'
   target: .gemini/settings.json
 models:
   option:

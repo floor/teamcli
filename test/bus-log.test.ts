@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -25,7 +25,7 @@ import {
   readEventsFromCursor,
   verifySignedEvent,
 } from '../src/bus/log.ts';
-import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
+import { messageKeyOf, messageKeyPath, signDomain, type Json } from '../src/store/keys.ts';
 import { seatResolverOf } from '../src/bus/seats.ts';
 import type { Agent, AgentLifecycle } from '../src/registry/agents.ts';
 
@@ -74,7 +74,7 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBe(31);
+    expect(EVENT_KINDS.length).toBe(32);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
     expect(isEventKind('record.invalid')).toBe(true);
@@ -82,6 +82,7 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
     expect(isEventKind('team.event-log-dropped')).toBe(true);
     expect(isPrivilegedKind('team.event-log-dropped')).toBe(false);
     expect(isEventKind('seat.at-prompt')).toBe(true);
+    expect(isEventKind('seat.unblocked')).toBe(true);
     expect(isEventKind('not.a.kind')).toBe(false);
     expect(isEventKind('seat.started')).toBe(false);
     expect(isEventKind('seat.provider-error')).toBe(false);
@@ -331,6 +332,16 @@ describe('durable signed event log (RFC 002 Amendment 01 §4.1, §4.2)', () => {
     expect(read.events.length).toBe(1);
     expect(read.events[0]!.payload.seq).toBe(1);
     expect(read.unverified).toBe(2);
+
+    // The forged record sits past the verified sequence, so it is checked again on every read;
+    // the verified record below the checkpoint is not.
+    const again = readEvents('acme', root, home);
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.full).toBe(false);
+    expect(again.checked).toBe(1);
+    expect(again.unverified).toBe(2);
+    expect(again.events.length).toBe(1);
   });
 
   test('a record another writer appended is seen by the next append, and an unverified line in the tail is never a duplicate', () => {
@@ -626,5 +637,143 @@ describe('event-log retention: 30 days or 100 MB per team, oldest first', () => 
       expect(read.dropped_oldest_seq).toBeUndefined();
       expect(read.dropped_newest_seq).toBeUndefined();
     }
+  });
+});
+
+describe('bus verification checkpoint: verify only what came after the last verified sequence', () => {
+  const TS = '2026-10-18T12:00:00.000Z';
+
+  function appendOne(root: string, home: string, id: string): ReturnType<typeof appendEvent> {
+    return appendEvent('acme', root, home, { ts: TS, kind: 'message.arrived', session: 'acme', record_id: id });
+  }
+
+  test('a first read verifies the whole log; the next reads check only what was appended since it', () => {
+    const { root, home } = makeScratch();
+    for (const id of ['m-1', 'm-2', 'm-3']) expect(appendOne(root, home, id).ok).toBe(true);
+
+    const first = readEvents('acme', root, home);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.full).toBe(true);
+    expect(first.checked).toBe(3);
+    expect(first.events.map((event) => event.payload.seq)).toEqual([1, 2, 3]);
+
+    const quiet = readEvents('acme', root, home);
+    expect(quiet.ok).toBe(true);
+    if (!quiet.ok) return;
+    expect(quiet.full).toBe(false);
+    expect(quiet.checked).toBe(0);
+    expect(quiet.unverified).toBe(0);
+    expect(quiet.events.map((event) => event.payload.seq)).toEqual([1, 2, 3]);
+
+    // A subscription reads through the same checkpoint.
+    const subscribed = readEventsFromCursor('acme', root, home, 0);
+    expect(subscribed.ok).toBe(true);
+    if (!subscribed.ok) return;
+    expect(subscribed.kind).toBe('events');
+    if (subscribed.kind === 'events') {
+      expect(subscribed.full).toBe(false);
+      expect(subscribed.checked).toBe(0);
+      expect(subscribed.events.map((event) => event.payload.seq)).toEqual([1, 2, 3]);
+    }
+
+    expect(appendOne(root, home, 'm-4').ok).toBe(true);
+    const grown = readEvents('acme', root, home);
+    expect(grown.ok).toBe(true);
+    if (!grown.ok) return;
+    expect(grown.full).toBe(false);
+    expect(grown.checked).toBe(1);
+    expect(grown.events.map((event) => event.payload.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  test('a record altered in place changes the digest, so the next read verifies the whole log and catches it', () => {
+    const { root, home } = makeScratch();
+    for (const id of ['m-1', 'm-2', 'm-3']) expect(appendOne(root, home, id).ok).toBe(true);
+    const first = readEvents('acme', root, home);
+    expect(first.ok).toBe(true);
+
+    // Rewrite the second line's payload without the key: it still parses, but its signature no
+    // longer verifies. The checkpoint covered the bytes that were there.
+    const path = eventLogPath('acme', root, home);
+    const lines = readFileSync(path, 'utf8').split('\n');
+    const second = JSON.parse(lines[1]!) as { payload: Record<string, unknown>; signature: string };
+    second.payload.record_id = 'm-2-altered';
+    lines[1] = JSON.stringify(second);
+    writeFileSync(path, lines.join('\n'));
+
+    const altered = readEvents('acme', root, home);
+    expect(altered.ok).toBe(true);
+    if (!altered.ok) return;
+    expect(altered.full).toBe(true);
+    expect(altered.checked).toBe(3);
+    expect(altered.unverified).toBe(1);
+    expect(altered.events.map((event) => event.payload.record_id)).toEqual(['m-1', 'm-3']);
+
+    // The rebuilt checkpoint covers the altered line too: the next read trusts the bytes it just
+    // verified, keeps the line counted as unverified, and checks nothing.
+    const again = readEvents('acme', root, home);
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.full).toBe(false);
+    expect(again.checked).toBe(0);
+    expect(again.unverified).toBe(1);
+    expect(again.events.map((event) => event.payload.record_id)).toEqual(['m-1', 'm-3']);
+  });
+
+  test('a rotation that keeps every byte keeps the checkpoint; a trim under it forces a full verify', () => {
+    const { root, home } = makeScratch();
+    for (const id of ['m-1', 'm-2', 'm-3']) expect(appendOne(root, home, id).ok).toBe(true);
+    const first = readEvents('acme', root, home);
+    expect(first.ok).toBe(true);
+
+    // Move the file boundary without dropping a byte: a rotation on its own is not a trim.
+    const path = eventLogPath('acme', root, home);
+    renameSync(path, `${path}.1`);
+    expect(appendOne(root, home, 'm-4').ok).toBe(true);
+
+    const rotated = readEvents('acme', root, home);
+    expect(rotated.ok).toBe(true);
+    if (!rotated.ok) return;
+    expect(rotated.full).toBe(false);
+    expect(rotated.checked).toBe(1);
+    expect(rotated.events.map((event) => event.payload.seq)).toEqual([1, 2, 3, 4]);
+
+    // The trim drops the segment the checkpoint covered: the digest no longer matches and the
+    // retained log is verified again.
+    unlinkSync(`${path}.1`);
+    const trimmed = readEvents('acme', root, home);
+    expect(trimmed.ok).toBe(true);
+    if (!trimmed.ok) return;
+    expect(trimmed.full).toBe(true);
+    expect(trimmed.checked).toBe(1);
+    expect(trimmed.events.map((event) => event.payload.seq)).toEqual([4]);
+  });
+
+  test('a key change invalidates the checkpoint rather than trusting records checked under the old key', () => {
+    const { root, home } = makeScratch();
+    expect(appendOne(root, home, 'm-1').ok).toBe(true);
+    const first = readEvents('acme', root, home);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.checked).toBe(1);
+
+    const keyFile = messageKeyPath(home);
+    const saved = readFileSync(keyFile, 'utf8');
+    unlinkSync(keyFile);
+
+    const missing = readEvents('acme', root, home);
+    expect(missing.ok).toBe(true);
+    if (!missing.ok) return;
+    expect(missing.full).toBe(true);
+    expect(missing.events).toHaveLength(0);
+    expect(missing.unverified).toBe(1);
+
+    writeFileSync(keyFile, saved, { mode: 0o600 });
+    const restored = readEvents('acme', root, home);
+    expect(restored.ok).toBe(true);
+    if (!restored.ok) return;
+    expect(restored.full).toBe(true);
+    expect(restored.checked).toBe(1);
+    expect(restored.events.map((event) => event.payload.seq)).toEqual([1]);
   });
 });

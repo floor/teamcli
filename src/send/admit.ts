@@ -112,7 +112,8 @@ export type SendSide = Agent | SendSeat | DeclaredSender;
 export const RULE_SUMMARY = [
   'the owner',
   'an orchestrator to another orchestrator',
-  "an orchestrator or operator to a seat of its own team",
+  'an orchestrator or operator to a seat of its own team',
+  'an operator to another operator of its own team',
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
   'an owner-signed grant naming send',
@@ -137,6 +138,12 @@ export const PROJECT_RULES = [
 ] as const;
 
 export const PROJECT_RULE_SUMMARY = PROJECT_RULES.join('; ');
+
+/** The one role word admission reads, and the only pair it decides: two seats of one team whose
+ *  roster lines carry `role: operator` write to each other. Every other role word still names
+ *  nothing — a seat called `operator`, or one whose file marks the operator place, is not reached
+ *  by this word — and the pair never crosses teams. */
+export const OPERATOR_ROLE = 'operator';
 
 /**
  * The verdict for one send. `caller` is the sender's registry record, or the literal `owner`;
@@ -212,6 +219,14 @@ export function admitSend(
   const leadsOwnTeam = seatOf(caller) === leadSeat(callerTeam) || seatOf(caller) === operatorSeat(callerTeam);
   if (callerTeam !== undefined && targetTeam === callerTeam && leadsOwnTeam) {
     return { ok: true, rule: 'an orchestrator or operator to a seat of its own team' };
+  }
+  // Two seats the file writes the role word `operator` on, in one team, write to each other: the
+  // operators of a team coordinate, and neither sits in the file's operator place. It is the one
+  // rule that reads a role's word — the owner asked for the word itself — and only for this pair:
+  // the same word is no lead, no assistant and no other reach, and the pair never leaves the team,
+  // so another team's operator is still reached through its orchestrator or a grant.
+  if (callerTeam !== undefined && targetTeam === callerTeam && roleOf(caller, callerTeam) === OPERATOR_ROLE && roleOf(target, targetTeam) === OPERATOR_ROLE) {
+    return { ok: true, rule: 'an operator to another operator of its own team' };
   }
   // The entity's assistant writes to the coordinator of its own entity: the seat above the
   // entity's teams. Which seat that is, is a place in the chain and the capability the file
@@ -366,6 +381,21 @@ function leadSeat(team: AdmitTeam | undefined): string | null {
  *  the file's lead. A role word named `operator` is no place at all. */
 function operatorSeat(team: AdmitTeam | undefined): string | null {
   return team?.operator ?? null;
+}
+
+/** The role word a side's own line carries in its team's roster: a side a command already placed
+ *  carries its role as it stands; a registry record is named by its agent id first, and by its
+ *  seat when the roster holds no line for the id, which is the file's own seat behind the store's.
+ *  Null when the team or the line is not there — the word then decides nothing. */
+function roleOf(side: SendSide, team: AdmitTeam | undefined): string | null {
+  if (team === undefined) return null;
+  if (!('reach' in side) && side.role !== undefined) return side.role;
+  const id = idOf(side);
+  if (id !== '') {
+    const byId = team.roster.find((entry) => entry.agent === id);
+    if (byId !== undefined) return byId.role;
+  }
+  return team.roster.find((entry) => entry.seat === seatOf(side))?.role ?? null;
 }
 
 /**

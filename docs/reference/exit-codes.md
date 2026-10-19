@@ -29,6 +29,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
 | `add.herdr` | `add` | 1 | herdr doesn't answer | `team add worker` |
 | `add.human` | `add` | 1 | the named seat is a human's pane | `team add worker` |
+| `add.like-exists` | `add` | 1 | the new seat's name is already declared | `team add worker --like lead` |
 | `add.lobby` | `add` | 1 | the lobby could not be created for the launch | `team add worker` |
 | `add.machine` | `add` | 1 | the machine is over a launch limit | `team add worker` |
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
@@ -63,7 +64,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
 | `add.reserved-name` | `add` | 2 | a new seat may not be named lead | `team add lead` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
-| `add.temporary-flags` | `add` | 2 | --like, --until and --worktree need --temporary | `team add worker --like lead` |
+| `add.temporary-flags` | `add` | 2 | --until and --worktree need --temporary | `team add worker --until result:out.md` |
 | `add.temporary-unexpected` | `add` | 2 | an unexpected argument was passed to --temporary | `team add extra --temporary` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
@@ -257,11 +258,20 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.caller` | `next` | 1 | the caller is not a seat of this team on its recorded pane | `team next` |
 | `next.file` | `next` | 1 | the team file can't be read, or it declares no task source | `team next` |
 | `next.missing` | `next` | 1 | the task file is not there | `team next` |
+| `next.paused` | `next` | 1 | the team is paused, so nothing was claimed | `team next` |
 | `next.policy` | `next` | 1 | a task policy the validator refuses | `team next` |
 | `next.read` | `next` | 1 | the broker failed the read | `team next` |
 | `next.shape` | `next` | 1 | nothing was taken, and a record is not a task or the task file is not a list | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
+| `pause.placed` | `pause` | 0 | the team was paused | `team pause` |
+| `pause.caller` | `pause` | 1 | not the owner or the orchestrator | `team pause` |
+| `pause.detached` | `pause` | 1 | a run with no terminal | `team pause` |
+| `pause.io` | `pause` | 1 | the state or the registry can't be read or written | `team pause` |
+| `pause.paused` | `pause` | 1 | the team is already paused | `team pause` |
+| `pause.file` | `pause` | 2 | the team file can't be read | `team pause` |
+| `pause.invocation` | `pause` | 2 | the invocation can't be read | `team pause --all --json` |
+| `pause.team` | `pause` | 2 | the team name is not registered or names more than one | `team pause other` |
 | `plan.none` | `plan` | 0 | nothing is takeable | `team plan` |
 | `plan.shown` | `plan` | 0 | the takeable queue was printed | `team plan` |
 | `plan.broker` | `plan` | 1 | no broker is running, or its answer was not one this build knows | `team plan` |
@@ -428,6 +438,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
 | `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
 | `restart.usage` | `restart` | 2 | the invocation can't be read | `team restart` |
+| `resume.resumed` | `resume` | 0 | the team resumed | `team resume` |
+| `resume.caller` | `resume` | 1 | not the owner or the orchestrator | `team resume` |
+| `resume.detached` | `resume` | 1 | a run with no terminal | `team resume` |
+| `resume.io` | `resume` | 1 | the state or the registry can't be read or written | `team resume` |
+| `resume.not-paused` | `resume` | 1 | no pause stands | `team resume` |
+| `resume.file` | `resume` | 2 | the team file can't be read | `team resume` |
+| `resume.invocation` | `resume` | 2 | the invocation can't be read | `team resume --all --json` |
+| `resume.team` | `resume` | 2 | the team name is not registered or names more than one | `team resume other` |
 | `revoke.done` | `revoke` | 0 | the authority was removed or matched, the standing grant's revocation was appended or already named, or a write-free preview passed | `team revoke flag-gate` |
 | `revoke.refused` | `revoke` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team revoke grant` |
 | `revoke.invalid` | `revoke` | 2 | the team file, the named target or the proposed authority record is invalid or cannot be read | `team revoke delegate malformed` |
@@ -466,6 +484,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
+| `sessions.none` | `sessions` | 0 | no session record matched | `team sessions` |
+| `sessions.shown` | `sessions` | 0 | the session records were listed | `team sessions` |
+| `sessions.read` | `sessions` | 1 | a session registry can't be read | `team sessions` |
+| `sessions.invocation` | `sessions` | 2 | the invocation can't be read | `team sessions --by nothing` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |

@@ -86,7 +86,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
+        "team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]"
       ],
       "who": {
@@ -1083,6 +1083,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
@@ -1111,7 +1117,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team mcp serve --seat <seat> [--session <session>]"
+            "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
           ],
           "who": {
             "gate": "any-caller",
@@ -1155,7 +1161,7 @@
       "usage": [
         "team mcp status [--json]",
         "team mcp doctor [--json]",
-        "team mcp serve --seat <seat> [--session <session>]"
+        "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
       ],
       "who": {
         "gate": "any-caller",
@@ -1244,6 +1250,61 @@
       "who": {
         "gate": "seat-record",
         "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--reason",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "pause",
+      "positionals": [
+        {
+          "name": "team",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team pause [<team>] [--reason <text>] [--all] [--json]"
+      ],
+      "who": {
+        "gate": "team-pause",
+        "terminal": {
+          "where": "a terminal outside herdr or its own seat",
+          "who": "the owner or the orchestrator"
+        },
+        "why": "a pause stops every seat's intake of new work, the orchestrator's own lever on the team: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`"
       }
     },
     {
@@ -2238,6 +2299,55 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "resume",
+      "positionals": [
+        {
+          "name": "team",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team resume [<team>] [--all] [--json]"
+      ],
+      "who": {
+        "gate": "team-pause",
+        "terminal": {
+          "where": "a terminal outside herdr or its own seat",
+          "who": "the owner or the orchestrator"
+        },
+        "why": "a resume reopens the intake a pause closed, by the same gate: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -2569,6 +2679,51 @@
       "who": {
         "gate": "admission",
         "why": "admission is chain position and the pair's setting, never a role's name: it is decided by the send admission, and this map admits no one to it"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--by",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "sessions",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team sessions [<seat>] [--by <model|team|entity>] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read"
       }
     },
     {

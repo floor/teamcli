@@ -80,11 +80,59 @@ Before typing an exit sequence or closing a live pane, `team restart` checks `se
   ```
 
 Without `--abandon`:
-- Only `free`, `exited`, and `gone` are stopped.
-- Any busy state is refused before touching the pane (`restart.busy`, exit 1):
+- `free`, `exited`, and `gone` are stopped outright.
+- `unsent` on a seat herdr reports `idle` or `done`, whose CLI's profile carries an `input` block,
+  is stopped after its text is copied: the box is read at once, the copy is written under the
+  state folder, and the text is pasted back into the new pane's box (see **Unsent text: copy,
+  close, paste back** below).
+- Every other busy state is refused before touching the pane (`restart.busy`, exit 1):
   ```
   team restart: <seat> is <state>; left as it is
   ```
+- `unsent` keeps that refusal where a faithful copy cannot be made — a CLI whose profile has no
+  `input` block, a seat herdr reports mid-turn, a box behind a fold marker or a paste chip, a box
+  drawn over more than one row (where a soft wrap cannot be told from a newline), or a
+  box whose rows cannot be read. The box's own reason follows the box words where there is one,
+  and the owner's two ways out are named:
+  ```
+  team restart: <seat> holds unsent text in its input box <reason>; left as it is (the owner clears it in its pane, or team restart <seat> --abandon closes it)
+  ```
+  A CLI with no measured input keys keeps the plain words: `team restart: <seat> holds unsent
+  text in its input box; left as it is`.
+
+### Unsent text: copy, close, paste back
+
+An idle seat holding unsent text is restarted, not refused. The run, in order:
+
+1. Reads the box with its styling and captures its row — the same capture a delivery makes: a
+   fold marker, a paste chip, a box drawn over more than one row (a soft wrap and a newline draw
+   alike, so the rows cannot be copied faithfully), and a box whose rows cannot be read are
+   refused, never guessed.
+2. Writes the text to `<state dir>/restart-drafts/<session>/<seat>.draft` (0600, its folders
+   `0700`) under the session run lock, before anything is closed. An identical copy already
+   there is reused; one holding different text is an earlier run's and is never overwritten — the
+   restart is refused and both stay as they are.
+3. Prints the pre-close facts with the copy's path:
+   ```
+   <seat>: input box: holds unsent text, copied to <path> and pasted back once the new pane is ready
+   <seat>: turn: not working (unsent)
+   <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
+   ```
+4. Closes the old workspace without typing into it — the copied text is what waits for the new
+   pane, so no exit sequence is typed over it — and relaunches as usual.
+5. Once the new pane reaches `ready`, waits for herdr to report it `idle` or `done` and pastes the
+   text back with a bracketed paste, reading the box back as the same row (a CLI that folds the
+   paste is read by its paste chip's line count) for up to two seconds.
+   - Read back: the copy is removed and the run prints `<seat>: unsent text pasted back`.
+   - Not read back: the copy stays, and the run prints `<seat>: the unsent text could not be
+     pasted back (<reason>); its copy is at <path>` and names it in the log. The seat still
+     counts as restarted.
+6. A failure before the new pane is ready keeps the copy too, and the refusal or failure names
+   it (`; its unsent text is copied at <path>`). The copy is removed only after the text is read
+   back in the new box.
+
+`--abandon` stays what it was: it closes the workspace without typing and without a copy, since
+abandoning is the owner saying the text may go. `--dry-run` names the copy the run would make.
 
 With `--abandon`:
 - **Owner**: any busy state (including `working`) is closed by closing the workspace directly without typing into the pane.
@@ -98,7 +146,7 @@ With `--abandon`:
 Whenever `team restart` closes a running or exited pane, it first prints three lines on stdout stating what is in the pane and what closing it entails:
 
 ```
-<seat>: input box: empty | holds unsent text | not read (the screen is not recognised)
+<seat>: input box: empty | holds unsent text | holds unsent text, copied to <path> and pasted back once the new pane is ready | not read (the screen is not recognised)
 <seat>: turn: not working (<state>) | mid-turn (working)
 <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
 ```
