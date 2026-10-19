@@ -522,6 +522,28 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           resumed: { by: 'owner', at: '2026-10-04T09:00:00.000Z', stops: [{ seat: 'lead' }] },
         }),
       ],
+      'team.sessions': [
+        jsonEnvelope('team.sessions', {
+          format: 1 as const,
+          by: null,
+          seat: null,
+          sessions: [
+            {
+              id: 'ses_0123456789ab',
+              seat: 'worker',
+              team: 'beacon',
+              project: 'beacon',
+              cli: 'claude',
+              lab: 'anthropic',
+              account: 'max',
+              herdr_session: 'beacon',
+              started: '2026-10-17T10:00:00Z',
+              ended: '2026-10-17T12:00:00Z',
+              reason: 'swap',
+            },
+          ],
+        }),
+      ],
       'team.raise': [
         jsonEnvelope('team.raise', {
           format: 1 as const,
