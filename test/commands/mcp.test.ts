@@ -372,7 +372,7 @@ describe('team mcp invocation', () => {
     expect(USAGE.split('\n')[0]).toMatch(/^Usage: team mcp\b/);
     expect(USAGE).toContain('team mcp status [--json]');
     expect(USAGE).toContain('team mcp doctor [--json]');
-    expect(USAGE).toContain('team mcp serve --seat <seat> [--session <session>]');
+    expect(USAGE).toContain('team mcp serve --seat <seat> [--session <session>] [--file <path>]');
   });
 });
 

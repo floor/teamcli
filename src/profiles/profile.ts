@@ -125,7 +125,10 @@ export function shellQuote(word: string): string {
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
   /** Launch-line arguments, appended when a seat launches. `{seat}`, `{session}`, `{command}`
-   *  and `{entry}` are filled from the launch. Empty when the CLI takes none. */
+   *  and `{entry}` are filled from the launch; `{command_json}`, `{entry_json}` and
+   *  `{seat_json}` are the same values escaped for a double-quoted string inside a structured
+   *  word; `{file_args}` is the team file's `--file` pair as array elements inside such a
+   *  word, and nothing when the launch read no file. Empty when the CLI takes none. */
   launchArgs: readonly string[];
   /** The CLI's own project-scope `mcp add` subcommand arguments, run in the seat's folder at
    *  launch. Null when the CLI has no measured add command. */
@@ -139,16 +142,33 @@ export type InboxBlock = {
 
 /** What a launch fills into the profile's `mcp_inbox` words. `command` and `entry` are this
  *  install's runner — the executable and its entry script — which reach the inbox server
- *  whether or not `team` is on the PATH. */
-export type InboxPlace = { seat: string; session: string; command: string; entry: string };
+ *  whether or not `team` is on the PATH. `file` is the team file the launch read, when it read
+ *  one: the server resolves the team from it, whatever folder it starts in. */
+export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string };
 
-/** A profile word with the launch's own values filled in. */
+/** A profile word with the launch's own values filled in.
+ *
+ *  `{file_args}` is for a launch-line route whose word holds the server's arguments inside a
+ *  structured string (codex's `mcp_servers.team_inbox.args=[...]`): it is the `--file` pair as
+ *  array elements, the path escaped as a JSON string (which is also a TOML basic string), and
+ *  nothing at all when the launch named no team file. A whole `{file}` word is for a command's
+ *  own argv (`mcp add`), where the pair is two words and the shell never sees them.
+ *
+ *  `{command_json}`, `{entry_json}` and `{seat_json}` are the same values escaped for a
+ *  double-quoted string inside such a structured word, for the profile that supplies the
+ *  quotes: a quote or a backslash in a path stays part of the value. The plain forms stay raw
+ *  for argv words (`mcp add`), where no escaping belongs. */
 export function fillInboxPlace(text: string, place: InboxPlace): string {
+  const inside = (value: string): string => JSON.stringify(value).slice(1, -1);
   return text
     .replaceAll('{seat}', place.seat)
     .replaceAll('{session}', place.session)
     .replaceAll('{command}', place.command)
-    .replaceAll('{entry}', place.entry);
+    .replaceAll('{entry}', place.entry)
+    .replaceAll('{command_json}', inside(place.command))
+    .replaceAll('{entry_json}', inside(place.entry))
+    .replaceAll('{seat_json}', inside(place.seat))
+    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`);
 }
 
 /**

@@ -19,13 +19,16 @@ proves a read of a record the server authenticated.
 
 A seat's launch registers the server with its CLI where a run measured a route. A codex seat's
 launch line carries the registration itself — two `-c` values naming the server and this
-install's runner, and no file written into the seat's folder. A gemini or grok seat's launch
+install's runner, and no file written into the seat's folder; the team file the launch read is
+named there too, in the server's own arguments. A gemini or grok seat's launch
 runs that CLI's own `mcp add -s project` in the seat's folder, naming the same runner, and the
 file the command writes is the CLI's own project settings (`.gemini/settings.json`,
 `.grok/config.toml`). A cursor seat's launch merges the server into the seat's own
 `.cursor/mcp.json` and carries `--approve-mcps`, so the CLI loads the server team registered
 for it. The server names the seat it launched for;
-the session it serves is the team file's in the seat's folder, read the way a sender reads it.
+the session it serves is the team file's the launch read — the file the launch resolved and passed
+to the registration, which names it to the server too, so a seat whose folder is a lobby (it holds
+no team file of its own) serves the same team as every other seat.
 Where the seat's folder is a git work tree that does not ignore a file the registration would
 write, team refuses to register: the seat stays on its drop and typed legs, and its line
 carries the reason.
@@ -34,7 +37,7 @@ carries the reason.
 
     team mcp status [--json]
     team mcp doctor [--json]
-    team mcp serve --seat <seat> [--session <session>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>]
 
 ## Flags
 
@@ -43,6 +46,7 @@ carries the reason.
 | `--json` | — | the report as one `team.mcp` document (`format: 1`) instead of the lines; a run whose invocation can't be read writes the structured error document; `serve` takes no `--json` |
 | `--seat` | a seat the team file declares | `serve` only, required: the seat whose inbox is served. The server is started by that seat's launch line, and this argument must name the seat it was started for |
 | `--session` | the team's session | `serve` only: stamped on the listener and on every receipt; must be the team file's own session |
+| `--file` | a team file | `serve` only: the team file the seat's launch read. A seat that starts in a lobby has no team file in its folder, so its registration names the launch's file and the server reads that instead |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
