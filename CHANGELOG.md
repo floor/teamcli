@@ -66,6 +66,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where the seat's process runs, for a declared seat and a temporary one alike. A temporary seat
   is read the same way from its record, with its like-seat's CLI. `--json` renders each line's
   `what` as it stands, cleaned with the report's own plain-line reader.
+- **The event thresholds are the owner's to set.** Seven `event-*` policies join the release
+  catalogue: how long an unanswered thread stays open (`event-thread-ttl-seconds`, 72 hours by
+  default), how many records a thread may hold (`event-thread-cap`, 50), how many days the event
+  log keeps (`event-retention-days`, 30), when a held record reaches the lead
+  (`event-held-threshold-seconds`, 600), when a seat that watches nothing reads `unreachable`
+  (`event-unreachable-threshold-seconds`, 600), when an idle seat's lead is told
+  (`event-idle-threshold-seconds`, 300), and how often the bus reconciles
+  (`event-reconcile-interval-seconds`, 120). Each takes a whole number — seconds, days for
+  retention, records for the cap — and a seconds value may carry an `s` suffix; the shorter field
+  spellings are accepted and written back under the canonical name. The three delay thresholds may
+  only be shortened: a value above the release default is refused, and so is a level's word that
+  lengthens the one above it. `team bus` reads the held, retention and reconcile numbers when it
+  starts and refuses to start on a signed policy source it cannot read or verify, with the
+  problem on stderr and exit 2, and `team reply` reads the thread life and cap from the caller's
+  chain.
 
 ### Changed
 
