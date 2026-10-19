@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { composeSeatConfig } from '../src/config/compose.ts';
 import type { ConfigSeatInput } from '../src/config/compose.ts';
 import type { DeliveryLeg } from '../src/settings/inherit.ts';
+import { DELIVERY_ORDER } from '../src/settings/inherit.ts';
 
 const BARE: ConfigSeatInput = { model: 'claude-opus-5-5' };
 
@@ -82,6 +83,41 @@ describe('a seat that writes none of them', () => {
       origin: 'default',
       applies: 'at-once',
     });
+  });
+});
+
+describe('the model the file decides', () => {
+  test('an empty model is unset, not an empty team-file value', () => {
+    expect(row({ model: '' }, null, 'model')).toEqual({
+      key: 'model',
+      value: null,
+      origin: 'none',
+      applies: 'restart-resume',
+    });
+  });
+
+  test('a model the launcher chooses is unset: the file does not decide it', () => {
+    expect(row({ model: 'Claude Opus', modelFrom: 'launcher' }, null, 'model')).toEqual({
+      key: 'model',
+      value: null,
+      origin: 'none',
+      applies: 'restart-resume',
+    });
+  });
+});
+
+describe('the order arrays', () => {
+  test('are copies, never the source arrays by reference', () => {
+    const seatOrder: DeliveryLeg[] = ['typed'];
+    const teamOrder: DeliveryLeg[] = ['mcp-inbox', 'typed'];
+    const own = composeSeatConfig({ model: 'claude-opus-5-5', deliveryOrder: seatOrder }, teamOrder);
+    const inherited = composeSeatConfig({ model: 'claude-opus-5-5' }, teamOrder);
+    const fallback = composeSeatConfig({ model: 'claude-opus-5-5' }, null);
+    expect(own.find((entry) => entry.key === 'delivery_order')!.value).not.toBe(seatOrder);
+    expect(inherited.find((entry) => entry.key === 'delivery_order')!.value).not.toBe(teamOrder);
+    // The release default is the registry's own array: a caller's edit must not reach it.
+    expect(fallback.find((entry) => entry.key === 'delivery_order')!.value).not.toBe(DELIVERY_ORDER.fallback);
+    expect(fallback.find((entry) => entry.key === 'delivery_order')!.value).toEqual(DELIVERY_ORDER.fallback);
   });
 });
 

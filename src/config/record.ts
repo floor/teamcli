@@ -38,6 +38,14 @@ function jsonValue(value: ConfigValue): Json {
   return [...value];
 }
 
+/** Whether a value read off disk is one this record can carry. The record comes from a file a
+ *  user can edit: a null, a number or an object where a value belongs is a corrupt record, and
+ *  the verifier answers false for it rather than throwing out of the reader. */
+function isConfigValue(value: unknown): value is ConfigValue {
+  if (typeof value === 'string' || typeof value === 'boolean') return true;
+  return Array.isArray(value) && value.every((one) => typeof one === 'string');
+}
+
 /** The canonical payload (the signer canonicalizes object keys itself). */
 export function configSignaturePayload(entry: ConfigRecordInput): Json {
   return {
@@ -58,7 +66,16 @@ export function signConfigRecord(entry: ConfigRecordInput, key: KeyObject): Sign
 
 /** Whether the record's signature is this key's over this payload: a record that does not verify
  *  is refused whole, never read for its fields first. The key is the owner's key as `keyOf`
- *  hands it out — the private half, whose public half the verifier derives. */
+ *  hands it out — the private half, whose public half the verifier derives.
+ *
+ *  The record is untrusted disk JSON, so the answer is a boolean and never an exception: a value
+ *  of the wrong shape or a signature that is not a string is a false like a tampered payload. */
 export function verifyConfigRecord(record: SignedConfigRecord, key: KeyObject): boolean {
-  return verifyDomain(CONFIG_DOMAIN, configSignaturePayload(record), record.signature, key);
+  if (!isConfigValue(record.value)) return false;
+  if (typeof record.signature !== 'string') return false;
+  try {
+    return verifyDomain(CONFIG_DOMAIN, configSignaturePayload(record), record.signature, key);
+  } catch {
+    return false;
+  }
 }

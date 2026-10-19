@@ -103,6 +103,14 @@ describe('a record that changed after signing', () => {
   test('refuses a signature that is not hex', () => {
     expect(verifyConfigRecord({ ...signed, signature: 'not-a-signature' }, key)).toBe(false);
   });
+
+  test('refuses a corrupt disk value with false, never a throw', () => {
+    // The record is read from a file a user can edit: a value that is not one of the record's
+    // shapes is a false like any other mismatch, and the reader must not crash on it.
+    for (const value of [null, 123, {}, 0]) {
+      expect(verifyConfigRecord({ ...signed, value: value as never }, key)).toBe(false);
+    }
+  });
 });
 
 describe('the domain', () => {

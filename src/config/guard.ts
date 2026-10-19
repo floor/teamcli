@@ -19,7 +19,12 @@ export type ConfigRefusal = {
   why: string;
 };
 
-export type ConfigCheck = { ok: true } | { ok: false; refusals: readonly ConfigRefusal[] };
+export type ConfigCheck =
+  | { ok: true }
+  /** The key has a governor the catalogue does not ship yet: nothing checked the value, and the
+   *  answer says so instead of reading as an enforced pass. */
+  | { ok: true; status: 'unconstrained'; policy: string }
+  | { ok: false; refusals: readonly ConfigRefusal[] };
 
 /** A policy value in words: an order as its legs, a boolean as on/off. */
 function sayValue(value: PolicyValue): string {
@@ -41,8 +46,13 @@ export function checkConfigValue(
 ): ConfigCheck {
   const spec = CONFIG_REGISTRY[key];
   const governing = spec.governedBy !== undefined ? getPolicySpec(spec.governedBy) : null;
-  // The release does not ship the policy: nothing to check the value against yet.
-  if (governing === null) return { ok: true };
+  // The release does not ship the policy: nothing checked the value, and the answer is never a
+  // bare pass — a caller that sees only `ok` would read an unchecked value as an enforced one.
+  if (governing === null) {
+    return spec.governedBy === undefined
+      ? { ok: true }
+      : { ok: true, status: 'unconstrained', policy: spec.governedBy };
+  }
 
   if (!chain.ok) {
     const first = chain.refusals[0];

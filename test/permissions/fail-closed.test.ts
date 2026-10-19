@@ -129,8 +129,10 @@ describe('a registry that cannot be read (a)', () => {
 });
 
 describe('a caller no registry record stands for (b)', () => {
-  test('the map carries the nine seat-record rows this scene walks', () => {
-    expect(SEAT_RECORDS).toHaveLength(9);
+  test('the map carries the ten seat-record rows this scene walks', () => {
+    // The nine Runtime read surfaces, plus `config:keys`, which reads the settings registry and
+    // no team file: the same "any seat with a registry record" admission.
+    expect(SEAT_RECORDS).toHaveLength(10);
   });
 
   test('every seat-record gate refuses a record-less caller, whatever the file declares', () => {

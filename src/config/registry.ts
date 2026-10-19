@@ -99,9 +99,12 @@ export const CONFIG_REGISTRY: Readonly<Record<ConfigKey, ConfigSpec>> = {
 };
 
 /** The spec for a key, or null for a word this registry does not hold. A caller that takes a key
- *  from a command line asks first; a caller that holds a `ConfigKey` reads the table directly. */
+ *  from a command line asks first; a caller that holds a `ConfigKey` reads the table directly.
+ *  The lookup is an own-property test: `toString`, `constructor` and `__proto__` are words a
+ *  command line can hand in, and none of them is a setting. */
 export function getConfigSpec(key: string): ConfigSpec | null {
-  return (CONFIG_REGISTRY as Readonly<Record<string, ConfigSpec>>)[key] ?? null;
+  if (!Object.hasOwn(CONFIG_REGISTRY, key)) return null;
+  return (CONFIG_REGISTRY as Readonly<Record<string, ConfigSpec>>)[key] as ConfigSpec;
 }
 
 /** The keys a level may set, in the read order. */

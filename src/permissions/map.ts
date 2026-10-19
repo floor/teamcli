@@ -100,6 +100,38 @@ function buildGates(): Record<string, Gate> {
       kind: 'pane-authority',
       why: 'a key into another agent\'s pane belongs to the pane\'s lead, a seat above it, or the owner\'s word for that case; trust, login and security prompts to the owner\'s alone — pane authority is its own gate, and this map admits no one to it',
     },
+    config: {
+      kind: 'owner-or-leads',
+      why: 'a settings write above a seat: the owner, or `leads` within its role policy — the settings write path reads the role policy itself, and the row admits no other seat',
+    },
+    'config:keys': {
+      kind: 'seat-record',
+      why: 'listing the settings registry reads no team file and changes nothing: any seat with a registry record',
+    },
+    settings: {
+      kind: 'owner-or-own-team',
+      why: 'one seat\'s settings and where each value comes from: the owner, or a seat of that team; the command\'s read gate also admits a delegate the file names, and `--file` stays owner-only inside the command',
+    },
+    seat: {
+      kind: 'owner-or-own-team',
+      why: 'one seat as an object — its settings, its status row and its newest session: the owner, or a seat of that team; the command\'s read gate also admits a delegate the file names',
+    },
+    'seat:add': {
+      kind: 'owner-only',
+      why: 'the `add` row for a seat: adding a seat is the owner\'s in 0.5.0, where no `agree` or `grant` holders stand',
+    },
+    'seat:remove': {
+      kind: 'owner-or-leads',
+      why: 'the `remove` row for a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner',
+    },
+    'seat:restart': {
+      kind: 'owner-or-leads',
+      why: 'the `restart` row for a seat: as `start`, the owner or `leads` for its own team',
+    },
+    'seat:rename': {
+      kind: 'owner-or-leads',
+      why: 'the `rename` row for a seat: the owner or `leads` for its own team',
+    },
   };
   for (const word of READ_SURFACES) {
     gates[word] = {

@@ -84,4 +84,11 @@ describe('lookup', () => {
     expect(getConfigSpec('')).toBeNull();
     expect(getConfigSpec('Model')).toBeNull();
   });
+
+  test('a prototype member name is not a setting', () => {
+    // A command line can hand in any word; the table's prototype must not answer for it.
+    for (const word of ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      expect(getConfigSpec(word)).toBeNull();
+    }
+  });
 });

@@ -45,9 +45,19 @@ describe('a key no policy governs', () => {
     expect(checkConfigValue('nickname', 'Atlas', BROKEN)).toEqual({ ok: true });
   });
 
-  test('the model is ungoverned until the model policy ships', () => {
-    expect(checkConfigValue('model', 'claude-opus-5-5', OPEN)).toEqual({ ok: true });
-    expect(checkConfigValue('model', 'claude-opus-5-5', BROKEN)).toEqual({ ok: true });
+  test('the model is unconstrained until the model policy ships, and the answer says so', () => {
+    // `ok` alone would read as an enforced pass; the classification names the policy that will
+    // govern the key once the catalogue ships it, on a resolved chain and a broken one alike.
+    expect(checkConfigValue('model', 'claude-opus-5-5', OPEN)).toEqual({
+      ok: true,
+      status: 'unconstrained',
+      policy: 'allowed-models',
+    });
+    expect(checkConfigValue('model', 'claude-opus-5-5', BROKEN)).toEqual({
+      ok: true,
+      status: 'unconstrained',
+      policy: 'allowed-models',
+    });
   });
 });
 

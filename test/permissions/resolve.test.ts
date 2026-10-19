@@ -248,7 +248,10 @@ describe('the map is the table, and no more', () => {
 
   test('the map holds exactly the table\'s rows', () => {
     const reads = ['messages', 'feed', 'status', 'list', 'check', 'usage', 'available', 'next', 'waits'];
-    const rows = ['init', 'up', 'down', 'restart', 'reload', 'add', 'remove', 'rename', 'register', 'grant', 'revoke', 'delegate', 'send', 'answer', ...reads, ...GRANT_CAPABILITIES];
+    const rows = ['init', 'up', 'down', 'restart', 'reload', 'add', 'remove', 'rename', 'register', 'grant', 'revoke', 'delegate', 'send', 'answer', ...reads, ...GRANT_CAPABILITIES,
+      // The settings surface: its own commands above a seat, one seat's settings, the seat
+      // object, and the lifecycle verbs grouped under it (each the row of the command it runs).
+      'config', 'config:keys', 'settings', 'seat', 'seat:add', 'seat:remove', 'seat:restart', 'seat:rename'];
     expect(Object.keys(COMMAND_GATES).sort()).toEqual([...rows].sort());
   });
 });
