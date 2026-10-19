@@ -137,6 +137,7 @@ function executeRead(
     project: team.project,
     seat,
     teamDeliveryOrder: team.deliveryOrder,
+    entity: team.entity,
   });
   if (!read.ok) return sourceExit(io, json, read.refusals.map((one) => one.why));
   const rows = read.rows;
