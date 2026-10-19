@@ -28,9 +28,15 @@
 // publication ledger (`fallback-published-<key>.jsonl`, append-only) immediately after the append
 // and before the marker's intent clears. That record is what keeps replay dedup alive when the
 // event-log segments holding the event are dropped by retention: recovery finds the published
-// record and appends nothing. The ledger and the event log are separate writes, so this is
-// at-least-once publication deduplicated for the episode's lifetime, not a claim of global
-// exactly-once.
+// record and appends nothing.
+//
+// Publication is at-least-once, not globally exactly-once. The ledger deduplicates a retry once
+// its line lands; a crash between the append and that line leaves `appendEvent`'s
+// retained-history dedup as the only guard. Single effect therefore rests on the receiver and the
+// subscriber deduplicating over the replay lifetime by the deterministic event identity — every
+// attempt carries the same record id — and this module makes no global exactly-once claim. There
+// is deliberately one ledger per concern (attempts, publications); none exists merely to narrow
+// that crash gap.
 //
 // A call takes a lock on the episode's canonical key (a directory under the store's `locks/`,
 // held by `withLock`), so attempts, a due escalation and a delivery cannot interleave their
