@@ -7,7 +7,7 @@
 // cannot widen the team envelope. The store scenes write real owner-signed records into a
 // temporary home and resolve through `resolveFromHome` — the fresh read every gate makes.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -237,22 +237,140 @@ describe('the capability rows: the own list intersected with the envelope', () =
   });
 });
 
-describe('the map is the table, and no more', () => {
-  test('a command the Kernel\'s table does not name is refused, not judged', () => {
-    for (const command of ['watch', 'seats', 'projects', 'sudo']) {
+describe('the map names every word the contract exposes, and no more', () => {
+  test('a word the map does not name is refused, not judged', () => {
+    for (const command of ['sudo', 'create', 'approve', 'swap']) {
       const decision = resolvePermission(OWNER, { id: TEAM }, command, [], TARGET);
       expect(decision).toMatchObject({ effect: 'deny', rule: 'not-in-map' });
       expect(decision.why).toContain("gates no command the Kernel's table does not name");
     }
   });
 
-  test('the map holds exactly the table\'s rows', () => {
+  test('the map holds the table\'s rows and every contract word, and nothing else', () => {
     const reads = ['messages', 'feed', 'status', 'list', 'check', 'usage', 'available', 'next', 'waits'];
-    const rows = ['init', 'up', 'down', 'restart', 'reload', 'add', 'remove', 'rename', 'register', 'grant', 'revoke', 'delegate', 'send', 'answer', ...reads, ...GRANT_CAPABILITIES,
-      // The settings surface: its own commands above a seat, one seat's settings, the seat
-      // object, and the lifecycle verbs grouped under it (each the row of the command it runs).
-      'config', 'config:keys', 'settings', 'seat', 'seat:add', 'seat:remove', 'seat:restart', 'seat:rename'];
-    expect(Object.keys(COMMAND_GATES).sort()).toEqual([...rows].sort());
+    const table = ['init', 'up', 'down', 'restart', 'reload', 'add', 'remove', 'rename', 'register', 'grant', 'revoke', 'delegate', 'send', 'answer', ...reads, ...GRANT_CAPABILITIES];
+    const contract = JSON.parse(readFileSync(join(import.meta.dir, '..', '..', 'contract', 'cli.json'), 'utf8')) as {
+      commands: { name: string; subcommands?: { name: string }[] }[];
+    };
+    const exposed = contract.commands.flatMap((command) => [
+      command.name,
+      ...(command.subcommands ?? []).map((sub) => `${command.name}:${sub.name}`),
+    ]);
+    expect(Object.keys(COMMAND_GATES).sort()).toEqual([...new Set([...table, ...exposed])].sort());
+  });
+
+  test('`any-caller` admits a caller with no record at all', () => {
+    for (const command of ['help', 'doctor']) {
+      expect(resolvePermission(null, { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'allow',
+        rule: 'any-caller',
+      });
+    }
+  });
+
+  test('a row carrying a terminal requirement refuses here without the bridge\'s proof', () => {
+    for (const command of ['watch', 'proc', 'proc:add', 'proc:done']) {
+      for (const caller of [null, OWNER, seat({ leads: true })]) {
+        const decision = resolvePermission(caller, { id: TEAM }, command, [], TARGET);
+        expect(decision, `${command} should refuse without the proof`).toMatchObject({ effect: 'deny', rule: 'terminal' });
+        expect(decision.why).toContain('only ');
+      }
+    }
+    // The proof is the module's `detachedRefusal` answer, both undefined where it permits:
+    // the row then decides as it stands, never by a record alone.
+    expect(resolvePermission(null, { id: TEAM }, 'watch', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'any-caller',
+    });
+    expect(resolvePermission(seat(), { id: TEAM }, 'proc', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'own-team',
+    });
+    expect(resolvePermission(OWNER, { id: TEAM }, 'proc', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'owner',
+    });
+  });
+
+  test('a `team-change` row is the verdict function\'s, and a record alone refuses it', () => {
+    for (const command of ['hold', 'worktree', 'worktree:list', 'worktree:new', 'worktree:remove']) {
+      expect(COMMAND_GATES[command]?.kind).toBe('team-change');
+      // A `leads` seat is not one of the three callers the function admits, and membership is
+      // not placement: the record-only resolver says so and names the function.
+      const decision = resolvePermission(seat({ leads: true }), { id: TEAM }, command, [], TARGET);
+      expect(decision).toMatchObject({ effect: 'deny', rule: 'team-change' });
+      expect(decision.why).toContain('mayChangeTeamVerdict');
+      // The owner is one of the three, and the resolver says the row is the owner's.
+      expect(resolvePermission(OWNER, { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'allow',
+        rule: 'owner',
+      });
+    }
+  });
+
+  test('a `team-read` row is the read gate\'s, and a record alone refuses it', () => {
+    for (const command of ['policy', 'proc:list', 'seats']) {
+      expect(COMMAND_GATES[command]?.kind).toBe('team-read');
+      // Membership is not placement and is no delegate evidence: the resolver refuses, and
+      // says the read gate decides.
+      const decision = resolvePermission(seat(), { id: TEAM }, command, [], TARGET);
+      expect(decision).toMatchObject({ effect: 'deny', rule: 'team-read' });
+      expect(decision.why).toContain('mayReadTeam');
+      // The owner is admitted before the read gate runs, and the resolver agrees.
+      expect(resolvePermission(OWNER, { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'allow',
+        rule: 'owner',
+      });
+    }
+  });
+
+  test('`seat-only` admits a seat of the team, and neither the owner nor another team\'s seat', () => {
+    for (const command of ['drops', 'plan']) {
+      expect(resolvePermission(seat(), { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'allow',
+        rule: 'own-team',
+      });
+      expect(resolvePermission(OWNER, { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'deny',
+        rule: 'seat-only',
+      });
+      expect(resolvePermission(seat({ team: OTHER_TEAM }), { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'deny',
+        rule: 'seat-only',
+      });
+    }
+  });
+
+  test('`leads-only` admits a lead of the team, and neither the owner nor a seat without `leads`', () => {
+    expect(resolvePermission(seat({ leads: true }), { id: TEAM }, 'raise', [], TARGET)).toMatchObject({
+      effect: 'allow',
+      rule: 'leads',
+    });
+    expect(resolvePermission(seat(), { id: TEAM }, 'raise', [], TARGET)).toMatchObject({
+      effect: 'deny',
+      rule: 'leads-only',
+    });
+    expect(resolvePermission(OWNER, { id: TEAM }, 'raise', [], TARGET)).toMatchObject({
+      effect: 'deny',
+      rule: 'leads-only',
+    });
+    expect(resolvePermission(seat({ leads: true, team: OTHER_TEAM }), { id: TEAM }, 'raise', [], TARGET)).toMatchObject({
+      effect: 'deny',
+      rule: 'leads-only',
+    });
+  });
+
+  test('the words whose modules refuse non-owners outright say `owner-only`', () => {
+    for (const command of ['bus', 'broker', 'tempo']) {
+      expect(resolvePermission(OWNER, { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'allow',
+        rule: 'owner',
+      });
+      expect(resolvePermission(seat(), { id: TEAM }, command, [], TARGET)).toMatchObject({
+        effect: 'deny',
+        rule: 'owner-only',
+      });
+    }
   });
 });
 

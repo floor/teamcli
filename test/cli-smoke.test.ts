@@ -50,6 +50,8 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
   bus: 'starts a long-running local event bus server on .agents/bus.sock',
   hold: 'mutates .agents/state.json to place or clear a team hold',
+  pause: 'writes pause state for one or more teams',
+  resume: 'clears pause state for one or more teams',
   raise: "writes one signed owner mailbox record and one event, and rings the owner's notification",
   init: 'writes .agents/team.yaml and registers the project on disk',
   lock: 'mutates project lock state to acquire a named lock',
@@ -81,6 +83,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'settings', args: ['settings', 'claude-keeper'], schemaKey: 'team.settings' },
   { command: 'seat', args: ['seat', 'claude-keeper'], schemaKey: 'team.seat' },
   { command: 'config', args: ['config', 'keys'], schemaKey: 'team.config-keys' },
+  { command: 'sessions', args: ['sessions'], schemaKey: 'team.sessions' },
   { command: 'doctor', args: ['doctor'], schemaKey: 'team.doctor' },
   { command: 'check', args: ['check'], schemaKey: 'team.check' },
   { command: 'list', args: ['list'], schemaKey: 'team.list' },
@@ -468,4 +471,3 @@ process.stdout.write(JSON.stringify(out));
     }
   }, 15_000);
 });
-

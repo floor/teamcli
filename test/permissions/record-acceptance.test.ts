@@ -156,9 +156,16 @@ describe('the resolver is deterministic — the same inputs give the same answer
 });
 
 describe('a caller with no registry record is refused, and the refusal names the rule', () => {
-  test('every row of the map refuses a record-less caller under `no-record`', () => {
-    for (const command of Object.keys(COMMAND_GATES)) {
+  test('every row but `any-caller` refuses a record-less caller, naming the rule', () => {
+    for (const [command, gate] of Object.entries(COMMAND_GATES)) {
+      if (gate.kind === 'any-caller') continue;
       const decision = resolvePermission(null, { id: TEAM }, command, [], TARGET);
+      // A row carrying a terminal requirement is refused before the caller is read: the
+      // requirement is the module's own, and a record cannot show a terminal either.
+      if (gate.terminal !== undefined) {
+        expect(decision, command).toMatchObject({ effect: 'deny', rule: 'terminal' });
+        continue;
+      }
       expect(decision).toMatchObject({ effect: 'deny', rule: 'no-record' });
       expect(decision.why).toContain('no registry record stands for this caller');
       expect(decision.why).toContain('and a caller with no record is refused');
@@ -174,6 +181,8 @@ describe('a caller with no registry record is refused, and the refusal names the
       merge: '`merge` is admitted by the seat holding it, within its scope',
       send: "admission is chain position and the pair's setting, decided by the send admission",
       answer: "a pane key is the pane's lead's, a seat above's, or the owner's word",
+      drops: '`drops` admits a declared seat of the team on the pane its state records, and not the owner',
+      raise: '`raise` admits a seat the team marks `leads`, on its recorded pane, and not the owner',
     };
     for (const [command, phrase] of Object.entries(said)) {
       expect(resolvePermission(null, { id: TEAM }, command, [], TARGET).why).toContain(phrase);

@@ -1,4 +1,8 @@
-export type Problem = { line: number; message: string };
+/** A problem in the team file: the line it is on (0 when no line names it) and the message a
+ *  reader prints. `unreadable` marks the one failure no text names — the read itself failed —
+ *  so a caller that tells a file that cannot be read from one that does not load keeps the two
+ *  apart now that the loader returns this refusal instead of throwing it. */
+export type Problem = { line: number; message: string; unreadable?: true };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';

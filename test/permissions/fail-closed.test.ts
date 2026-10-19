@@ -51,6 +51,7 @@ function fileTeam(id: string): BridgeTeam {
   return {
     id,
     orchestrator: 'lead',
+    operator: 'operator',
     seats: [
       { name: 'lead', role: 'coordinator' },
       { name: 'worker', role: 'implementer' },
@@ -129,10 +130,10 @@ describe('a registry that cannot be read (a)', () => {
 });
 
 describe('a caller no registry record stands for (b)', () => {
-  test('the map carries the ten seat-record rows this scene walks', () => {
-    // The nine Runtime read surfaces, plus `config:keys`, which reads the settings registry and
-    // no team file: the same "any seat with a registry record" admission.
-    expect(SEAT_RECORDS).toHaveLength(10);
+  test('the map carries the nine seat-record rows this scene walks', () => {
+    // The nine Runtime read surfaces. A command that reads no team file asks for no record
+    // either, so it carries `any-caller`, not this row.
+    expect(SEAT_RECORDS).toHaveLength(9);
   });
 
   test('every seat-record gate refuses a record-less caller, whatever the file declares', () => {

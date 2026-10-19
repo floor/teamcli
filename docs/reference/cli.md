@@ -36,6 +36,10 @@ Usage:
     team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
+### Who may run it
+
+`owner-only` — adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -69,6 +73,10 @@ Usage:
 
 Literal: `trust`
 
+### Who may run it
+
+`pane-authority` — a key into another agent's pane belongs to the pane's lead, a seat above it, or the owner's word for that case; trust, login and security prompts to the owner's alone — pane authority is its own gate, and this map admits no one to it
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -92,6 +100,10 @@ Hidden: no
 Usage:
 
     team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]
+
+### Who may run it
+
+`any-caller` — it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read
 
 ### Flags
 
@@ -118,6 +130,10 @@ Usage:
 
     team broker
 
+### Who may run it
+
+`owner-only` — the broker reads the tracker credential from the owner's keychain, one per clone, from a terminal outside herdr
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -136,6 +152,10 @@ Hidden: no
 Usage:
 
     team bus
+
+### Who may run it
+
+`owner-only` — the bus reconciles the project's event log, and the owner runs it, one per clone, from a terminal outside herdr
 
 ### Flags
 
@@ -156,6 +176,10 @@ Usage:
 
     team check [--session <name>] [--file <path>] [--repair] [--json]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -184,6 +208,10 @@ Usage:
 
     team commits check <ref> [--since <ref>] [--file <path>] [--json]
 
+### Who may run it
+
+`any-caller` — it reads the commit range and the ledger only, from any folder, and asks for no session and no terminal
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -202,6 +230,10 @@ Hidden: no
 Usage:
 
     team commits check <ref> [--since <ref>] [--file <path>] [--json]
+
+#### Who may run it
+
+`any-caller` — the check reads the commit range and the ledger only, from any folder, and asks for no session and no terminal
 
 #### Flags
 
@@ -227,6 +259,10 @@ Usage:
 
     team config keys [<level>] [--json]
 
+### Who may run it
+
+`any-caller` — it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -245,6 +281,10 @@ Hidden: no
 Usage:
 
     team config keys [<level>] [--json]
+
+#### Who may run it
+
+`any-caller` — the listing is the command's only verb and reads the registry only: no team file, seat or terminal is read
 
 #### Flags
 
@@ -266,6 +306,10 @@ Hidden: yes
 
 Usage: none
 
+### Who may run it
+
+`any-caller` — the hidden port answers classify and yaml requests on stdin: it reads no team file and asks for no caller
+
 ### Flags
 
 None.
@@ -281,6 +325,10 @@ Hidden: no
 Usage:
 
     team delegate <session/pane> --commands <act,...> [--dry-run] [--json]
+
+### Who may run it
+
+`owner-only` — a standing grant with a command list, written against this map: the owner's
 
 ### Flags
 
@@ -306,6 +354,10 @@ Usage:
 
     team doctor [--session <name>] [--file <path>] [--login] [--json]
 
+### Who may run it
+
+`any-caller` — the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -328,6 +380,10 @@ Hidden: no
 Usage:
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — `stop`: the owner or `leads` for its own team, and the owner may always stop
 
 ### Flags
 
@@ -355,6 +411,10 @@ Usage:
     team drops [--follow] [--json]
     team drops --read --seat <seat> [--session <session>]
 
+### Who may run it
+
+`seat-only` — a drop folder is one seat's mailbox: the seat the team declares, on the pane the state records for it, and never the owner; --read is the launch line's own invocation and asks for no caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -378,6 +438,10 @@ Hidden: no
 Usage:
 
     team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -405,6 +469,10 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+
+### Who may run it
+
+`owner-only` — granting is the approval, and the owner grants alone in 0.5.0
 
 ### Flags
 
@@ -434,6 +502,10 @@ Usage:
 
     team <command> [options]
 
+### Who may run it
+
+`any-caller` — the help text reads no team file and asks for no caller
+
 ### Flags
 
 None.
@@ -450,6 +522,10 @@ Usage:
 
     team hold <reason> [--until <time>] [--json]
     team hold --release [--json]
+
+### Who may run it
+
+`team-change` — a hold is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, places and releases it
 
 ### Flags
 
@@ -475,6 +551,10 @@ Usage:
 
     team init [--restore] [--json]
 
+### Who may run it
+
+`owner-only` — writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -496,6 +576,10 @@ Usage:
 
     team issues [--json]
 
+### Who may run it
+
+`any-caller` — it lists the task file the owner committed, from the checkout, and asks for no session and no terminal
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -515,6 +599,10 @@ Hidden: no
 Usage:
 
     team list [--all] [--seats] [--watch] [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -538,6 +626,10 @@ Hidden: no
 Usage:
 
     team lock <name> [--for <text>] [--wait <seconds>] [--json]
+
+### Who may run it
+
+`any-caller` — any caller may take a free machine lock from a folder whose team file loads; a lock another caller holds is refused, and unlock releases only the caller's own
 
 ### Flags
 
@@ -565,6 +657,10 @@ Usage:
     team mcp doctor [--json]
     team mcp serve --seat <seat> [--session <session>] [--file <path>]
 
+### Who may run it
+
+`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat and asks for none either
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -583,6 +679,10 @@ Hidden: no
 Usage:
 
     team mcp doctor [--json]
+
+#### Who may run it
+
+`any-caller` — the report writes nothing and asks for no caller
 
 #### Flags
 
@@ -603,6 +703,10 @@ Hidden: no
 Usage:
 
     team mcp serve --seat <seat> [--session <session>] [--file <path>]
+
+#### Who may run it
+
+`any-caller` — the launch line names its seat and session; the server reads and receipts only that seat's inbox, and asks for no caller
 
 #### Flags
 
@@ -626,6 +730,10 @@ Usage:
 
     team mcp status [--json]
 
+#### Who may run it
+
+`any-caller` — the report writes nothing and asks for no caller
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -646,6 +754,10 @@ Usage:
 
     team messages [--json]
 
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -665,6 +777,10 @@ Hidden: no
 Usage:
 
     team next [--mine | --release] [--wait] [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -688,6 +804,12 @@ Hidden: no
 Usage:
 
     team pause [<team>] [--reason <text>] [--all] [--json]
+
+### Who may run it
+
+`team-pause` — a pause stops every seat's intake of new work, the orchestrator's own lever on the team: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`
+
+A run with no terminal is refused: only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat
 
 ### Flags
 
@@ -713,6 +835,10 @@ Usage:
 
     team plan [--json]
 
+### Who may run it
+
+`seat-only` — a declared seat of this team plans, on the pane the state records for it; the owner and a run with no terminal are not admitted
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -735,6 +861,10 @@ Usage:
     team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
     team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
 
+### Who may run it
+
+`team-read` — the view is read by the owner, a seat the state places on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -756,6 +886,10 @@ Hidden: no
 Usage:
 
     team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — the owner alone sets the policy, from a terminal outside herdr, signed and logged
 
 #### Flags
 
@@ -788,6 +922,10 @@ Usage:
 
     team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
 
+#### Who may run it
+
+`owner-only` — the owner alone unsets the policy, from a terminal outside herdr, signed and logged
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -816,6 +954,10 @@ Usage:
 
     team pr check <file> [--file <path>] [--json]
 
+### Who may run it
+
+`any-caller` — it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -834,6 +976,10 @@ Hidden: no
 Usage:
 
     team pr check <file> [--file <path>] [--json]
+
+#### Who may run it
+
+`any-caller` — the check reads the pull request body and the checks only, from any folder, and asks for no session and no terminal
 
 #### Flags
 
@@ -860,6 +1006,12 @@ Usage:
     team proc list [--json]
     team proc done <name> [--json]
 
+### Who may run it
+
+`owner-or-own-team` — add and done are the owner's or a declared seat's, from a terminal; list reads what status does, so an approved delegate pane may list too
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -878,6 +1030,12 @@ Hidden: no
 Usage:
 
     team proc add <name> [--pid <pid>] [--note <text>] [--json]
+
+#### Who may run it
+
+`owner-or-own-team` — the owner or a declared seat records its process; a seat of another team and a run with no terminal are refused
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
 
 #### Flags
 
@@ -903,6 +1061,12 @@ Usage:
 
     team proc done <name> [--json]
 
+#### Who may run it
+
+`owner-or-own-team` — a seat clears its own, a lead clears another seat's, and the owner clears any; a run with no terminal is refused
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -925,6 +1089,10 @@ Usage:
 
     team proc list [--json]
 
+#### Who may run it
+
+`team-read` — the owner, a seat the state places on its own pane, or an approved delegate pane reads the list
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -945,6 +1113,10 @@ Usage:
 
     team projects [--json]
 
+### Who may run it
+
+`any-caller` — it reads the project registry and changes nothing, from any folder
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -964,6 +1136,10 @@ Hidden: no
 Usage:
 
     team raise <kind> <text> [--dry-run] [--json]
+
+### Who may run it
+
+`leads-only` — the line is the lead's: the orchestrator's seat or a seat the team marks `leads`, on its recorded pane, and the owner is not admitted
 
 ### Flags
 
@@ -988,6 +1164,10 @@ Hidden: no
 Usage:
 
     team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]
+
+### Who may run it
+
+`owner-or-own-team` — a registry record is a report and confers no right: the owner, or the seat's own team
 
 ### Flags
 
@@ -1014,6 +1194,10 @@ Usage:
 
     team release check <package@version> [--json] [--file <path>]
 
+### Who may run it
+
+`any-caller` — it reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1032,6 +1216,10 @@ Hidden: no
 Usage:
 
     team release check <package@version> [--json] [--file <path>]
+
+#### Who may run it
+
+`any-caller` — the check reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain
 
 #### Flags
 
@@ -1056,6 +1244,10 @@ Usage:
 
     team reload <seat> [--file <path>] [--json]
 
+### Who may run it
+
+`owner-or-leads` — the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1078,6 +1270,10 @@ Hidden: no
 Usage:
 
     team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — removing a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner
 
 ### Flags
 
@@ -1105,6 +1301,10 @@ Usage:
 
     team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
     team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — renaming a seat: the owner or `leads` for its own team
 
 ### Flags
 
@@ -1134,6 +1334,10 @@ Usage:
     team reply <id> [<text>] [--close] [--json]
     team reply <id> --close
 
+### Who may run it
+
+`admission` — a reply is judged by the send admission exactly as a send is, with the reply rule; the caller must be the record's addressee
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1157,6 +1361,10 @@ Hidden: no
 Usage:
 
     team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — the `start` row for a seat: as `start`
 
 ### Flags
 
@@ -1184,6 +1392,12 @@ Usage:
 
     team resume [<team>] [--all] [--json]
 
+### Who may run it
+
+`team-pause` — a resume reopens the intake a pause closed, by the same gate: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted
+
+A run with no terminal is refused: only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1209,6 +1423,10 @@ Usage:
     team revoke delegate <session/pane> [--dry-run] [--json]
     team revoke <name> [--dry-run] [--json]
 
+### Who may run it
+
+`owner-only` — removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1231,6 +1449,10 @@ Hidden: no
 Usage:
 
     team revoke delegate <session/pane> [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — removing a standing delegation is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal
 
 #### Flags
 
@@ -1255,6 +1477,10 @@ Usage:
 
     team revoke grant [--dry-run] [--json]
 
+#### Who may run it
+
+`owner-only` — removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1275,6 +1501,10 @@ Hidden: no
 Usage:
 
     team route <seat> [--json] [--dry-run]
+
+### Who may run it
+
+`admission` — a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused
 
 ### Flags
 
@@ -1303,6 +1533,10 @@ Usage:
     team seat restart <seat>
     team seat rename <seat> <name>
 
+### Who may run it
+
+`team-read` — one seat as an object — its settings, its status row and its newest session: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` and `--session` are the owner's alone, and the lifecycle verbs gate as the commands they run (their rows below)
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1327,6 +1561,10 @@ Usage:
 
     team seat add <seat>
 
+#### Who may run it
+
+`owner-only` — the `add` row for a seat: adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1348,6 +1586,10 @@ Usage:
 
     team seat remove <seat>
 
+#### Who may run it
+
+`owner-or-leads` — the `remove` row for a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1368,6 +1610,10 @@ Hidden: no
 Usage:
 
     team seat rename <seat> <name>
+
+#### Who may run it
+
+`owner-or-leads` — the `rename` row for a seat: the owner or `leads` for its own team
 
 #### Flags
 
@@ -1391,6 +1637,10 @@ Usage:
 
     team seat restart <seat>
 
+#### Who may run it
+
+`owner-or-leads` — the `restart` row for a seat: as `start`, the owner or `leads` for its own team
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1411,6 +1661,10 @@ Hidden: no
 Usage:
 
     team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+
+### Who may run it
+
+`team-read` — the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone
 
 ### Flags
 
@@ -1440,6 +1694,10 @@ Usage:
     team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
+
+### Who may run it
+
+`admission` — admission is chain position and the pair's setting, never a role's name: it is decided by the send admission, and this map admits no one to it
 
 ### Flags
 
@@ -1473,6 +1731,10 @@ Usage:
 
     team sessions [<seat>] [--by <model|team|entity>] [--json]
 
+### Who may run it
+
+`any-caller` — it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1499,6 +1761,10 @@ Usage:
     team settings set <seat> <key=value> [--dry-run] [--json]
     team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]
 
+### Who may run it
+
+`team-read` — one seat's settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner's alone, and set and unset are the owner's outright (their rows below)
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1522,6 +1788,10 @@ Usage:
 
     team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]
     team settings set <seat> <key=value> [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — recording a seat's setting is the owner's: a lead's write within its role policy waits for the role policy the approved minimum leaves out, and this build refuses rather than admit a write no policy authorized
 
 #### Flags
 
@@ -1550,6 +1820,10 @@ Usage:
 
     team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]
 
+#### Who may run it
+
+`owner-only` — removing a seat's setting is the owner's by the same gate as set: a lead's write within its role policy is not shipped yet, and this build refuses rather than admit one
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1575,6 +1849,10 @@ Usage:
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
 
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1599,6 +1877,10 @@ Usage:
 
     team tempo <word> [--json]
 
+### Who may run it
+
+`owner-only` — the tempo word is the owner's, from a terminal outside herdr
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1621,6 +1903,10 @@ Usage:
 
     team unlock <name> [--json]
 
+### Who may run it
+
+`any-caller` — a lock is anyone's to take, and its release is the holder's alone: the caller the holder file names releases it, and anyone else is shown the holder
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1642,6 +1928,10 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — `start`: it runs the hash-pinned start command, and an operation is reached only through `leads` held in a role, never through a grant
 
 ### Flags
 
@@ -1667,6 +1957,10 @@ Usage:
 
     team usage [--json] [--all] [--tree]
 
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1688,6 +1982,12 @@ Hidden: no
 Usage:
 
     team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]
+
+### Who may run it
+
+`any-caller` — anyone in a terminal or its own pane starts the watch; a run with no terminal is refused before it starts
+
+A run with no terminal is refused: only the owner or a placed seat runs this, from a terminal outside herdr or its own pane
 
 ### Flags
 
@@ -1714,6 +2014,10 @@ Usage:
     team worktree list [--session <name>] [--file <path>] [--json]
     team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
+### Who may run it
+
+`team-change` — the owner, the orchestrator's seat or the operator's seat manages worktrees; --session and --file are the owner's
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1732,6 +2036,10 @@ Hidden: no
 Usage:
 
     team worktree list [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`team-change` — the owner, the orchestrator's seat or the operator's seat lists the worktrees; --session and --file are the owner's
 
 #### Flags
 
@@ -1754,6 +2062,10 @@ Hidden: no
 Usage:
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`team-change` — the owner, the orchestrator's seat or the operator's seat creates a worktree; --session and --file are the owner's
 
 #### Flags
 
@@ -1780,6 +2092,10 @@ Hidden: no
 Usage:
 
     team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`team-change` — the owner, the orchestrator's seat or the operator's seat removes a worktree; --session and --file are the owner's
 
 #### Flags
 

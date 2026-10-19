@@ -522,6 +522,48 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           resumed: { by: 'owner', at: '2026-10-04T09:00:00.000Z', stops: [{ seat: 'lead' }] },
         }),
       ],
+      'team.sessions': [
+        jsonEnvelope('team.sessions', {
+          format: 1 as const,
+          by: null,
+          seat: null,
+          sessions: [
+            {
+              id: 'ses_0123456789ab',
+              seat: 'worker',
+              team: 'beacon',
+              project: 'beacon',
+              cli: 'claude',
+              lab: 'anthropic',
+              account: 'max',
+              herdr_session: 'beacon',
+              started: '2026-10-17T10:00:00Z',
+              ended: '2026-10-17T12:00:00Z',
+              reason: 'swap',
+            },
+          ],
+        }),
+        jsonEnvelope('team.sessions', {
+          format: 1 as const,
+          by: 'team' as const,
+          seat: 'claude-keeper',
+          sessions: [
+            {
+              id: 'ses_aaaaaaaaaaaa',
+              seat: 'claude-keeper',
+              team: 'beacon',
+              project: 'beacon',
+              cli: 'claude-code',
+              lab: 'anthropic',
+              account: 'anthropic',
+              herdr_session: 'beacon',
+              started: '2026-10-19T13:58:00Z',
+              ended: '2026-10-19T14:03:00Z',
+              reason: 'restart' as const,
+            },
+          ],
+        }),
+      ],
       'team.raise': [
         jsonEnvelope('team.raise', {
           format: 1 as const,
@@ -1002,28 +1044,6 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
             { key: 'effort', value: null, source: 'none', applies: 'restart-resume' },
             { key: 'delivery_order', value: ['mcp-inbox', 'drop', 'typed'], source: 'default', applies: 'at-once' },
             { key: 'human', value: false, source: 'default', applies: 'at-once' },
-          ],
-        }),
-      ],
-      'team.sessions': [
-        jsonEnvelope('team.sessions', {
-          format: 1 as const,
-          by: 'team' as const,
-          seat: 'claude-keeper',
-          sessions: [
-            {
-              id: 'ses_aaaaaaaaaaaa',
-              seat: 'claude-keeper',
-              team: 'beacon',
-              project: 'beacon',
-              cli: 'claude-code',
-              lab: 'anthropic',
-              account: 'anthropic',
-              herdr_session: 'beacon',
-              started: '2026-10-19T13:58:00Z',
-              ended: '2026-10-19T14:03:00Z',
-              reason: 'restart' as const,
-            },
           ],
         }),
       ],

@@ -66,14 +66,14 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 Every command, flag, refusal and exit code is in
 [the command reference](https://github.com/floor/teamcli/blob/main/docs/commands/README.md).
 
-## What's new in 0.5.1
+## What's new in 0.5.2
 
-0.5.1 adds the `drop` leg and `human: true` seats, the native handoff with `team send --confirm`,
-and `team mcp serve` with the `mcp-inbox` leg that reports `delivered (read)`. A plain send is one
-signed message record in the recipient's folder before any leg runs, and `team messages` writes a
-signed receipt for each record it shows. It also adds `team drops` and closes the human-seat guards
-across the commands. The full list is in
-[CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
+0.5.2 adds team pause and resume, session records, per-seat spend, and `team add --like`.
+Operators of one team can message each other, `team check` names held prompts, and seat status
+becomes signed events with configurable thresholds. Typed delivery and restart preserve a
+one-row unsent draft where the profile has measured input keys; ambiguous multi-row drafts
+stay untouched. The generated command contract now states who may run every command.
+The full list is in [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
 
 ## Learn more
 
