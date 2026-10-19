@@ -25,7 +25,7 @@ import { entitiesPath } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { grantsDir } from '../grant.ts';
-import { agentsDir, findAgent, getAgent, isAgentId, updateAgent } from '../registry/agents.ts';
+import { agentsDir, findAgent, getAgent, isAgentId, readAgents, updateAgent } from '../registry/agents.ts';
 import { get as getProject, projectsFile, upsertProject } from '../registry/projects.ts';
 import { registerDeclaredSeat } from '../registry/sync.ts';
 import { getTeam, readTeams, teamIdOf, teamsFile, upsertTeam } from '../registry/teams.ts';
@@ -693,38 +693,45 @@ function seatTargetProblem(home: string, target: string, declaration?: SeatDecla
 /** One seat a registered team's file declares: the declaration a first write is seeded from. */
 export type SeatDeclaration = { root: string; team: TeamFile; seat: Seat };
 
-/** The declaration of a seat by name across the registered teams, or null when none names it. */
-function declaredSeatOf(home: string, name: string): SeatDeclaration | null {
+/**
+ * Every team that knows a seat name, by team id: its file declares the seat, its roster line names
+ * a live agent for it, or an agent record still answers to it. The value is the declaration where
+ * one loads, so a first write has something to seed from. Keyed by team, the answer never depends
+ * on the registry's order.
+ */
+function seatBindings(home: string, name: string): Map<string, SeatDeclaration | null> {
+  const teams = new Map<string, SeatDeclaration | null>();
   try {
-    for (const record of Object.values(readTeams(home))) {
-      const loaded = loadTeamFile(record.root, { home });
-      if (!loaded.ok) continue;
-      const seat = loaded.team.seats.find((one) => one.name === name);
-      if (seat !== undefined) return { root: record.root, team: loaded.team, seat };
+    for (const [teamId, record] of Object.entries(readTeams(home))) {
+      let declaration: SeatDeclaration | null = null;
+      try {
+        const loaded = loadTeamFile(record.root, { home });
+        if (loaded.ok) {
+          const seat = loaded.team.seats.find((one) => one.name === name);
+          if (seat !== undefined) declaration = { root: record.root, team: loaded.team, seat };
+        }
+      } catch {
+        // A team file this build cannot read declares nothing; a roster line or record still binds.
+      }
+      const line = record.roster.find((entry) => entry.seat === name && getAgent(home, entry.agent) !== null);
+      if (declaration !== null || line !== undefined) teams.set(teamId, declaration);
+    }
+    for (const agent of readAgents(home)) {
+      if (agent.lifecycle === 'retired' || agent.reach.seat !== name) continue;
+      if (!teams.has(agent.reach.team)) teams.set(agent.reach.team, null);
     }
   } catch {
-    // An unreadable team registry declares no seat here; the caller answers with what it found.
+    // An unreadable registry binds no team here; the caller reports what it could not find.
   }
-  return null;
+  return teams;
 }
 
-/** The agent that already holds a seat: its roster line first, then the record whose reach names
- *  the seat. Null when no agent record holds it yet. */
-function seatAgentId(home: string, name: string): string | null {
-  try {
-    const records = Object.values(readTeams(home));
-    for (const record of records) {
-      const line = record.roster.find((entry) => entry.seat === name);
-      if (line !== undefined && getAgent(home, line.agent) !== null) return line.agent;
-    }
-    for (const record of records) {
-      const found = findAgent(home, { team: teamIdOf(record.root), seat: name });
-      if (found !== null) return found.id;
-    }
-  } catch {
-    // An unreadable registry names no agent here; the caller reports what it could not find.
-  }
-  return null;
+/** Creates the record a declared seat never had: the first write's create, not a launch. Nothing
+ *  starts, attaches or types; the identity words are the declaration's own. */
+function materializeSeat(home: string, declaration: SeatDeclaration): { ok: true; agentId: string } | { ok: false; why: string } {
+  const created = registerDeclaredSeat({ home, root: declaration.root, team: declaration.team, by: 'team settings' }, declaration.seat);
+  if ('note' in created) return { ok: false, why: created.note };
+  return { ok: true, agentId: created.id };
 }
 
 /**
@@ -732,22 +739,51 @@ function seatAgentId(home: string, name: string): string | null {
  * declared but never launched has none: the bootstrap ruling makes the first write the moment its
  * record is created, seeded from the declaration and signed like any other record, so the write
  * never refuses for the missing record and no launch or pane operation happens as its side effect.
+ *
+ * The binding is the team's, not the first registry entry's: a declaration from the caller's own
+ * team answers for that team only, and a bare name with no declaration resolves only when one team
+ * knows it. Two teams that both know the name make the bare name ambiguous, and the call refuses
+ * rather than picking one; the caller names the agent id to choose.
  */
 export function seatRecordForWrite(
   home: string,
   target: string,
   declaration?: SeatDeclaration,
 ): { ok: true; agentId: string } | { ok: false; why: string } {
-  if (getAgent(home, target) !== null) return { ok: true, agentId: target };
-  const known = seatAgentId(home, target);
-  if (known !== null) return { ok: true, agentId: known };
-  const declared = declaration ?? declaredSeatOf(home, target);
-  if (declared === null) {
+  if (getAgent(home, target) !== null) {
+    // An id is the caller's binding — the roster line it resolved for its own team — and a name
+    // lookup below never replaces it with another team's same-named seat.
+    return { ok: true, agentId: target };
+  }
+  if (declaration !== undefined) {
+    if (declaration.seat.name !== target) {
+      return { ok: false, why: `"${target}" is not the seat "${declaration.seat.name}" the team file declares` };
+    }
+    const known = findAgent(home, { team: teamIdOf(declaration.root), seat: target });
+    if (known !== null) return { ok: true, agentId: known.id };
+    return materializeSeat(home, declaration);
+  }
+  const teams = seatBindings(home, target);
+  if (teams.size === 0) {
     return { ok: false, why: `no registered agent "${target}" in ${agentsDir(home)}, and no team roster declares it` };
   }
-  const created = registerDeclaredSeat({ home, root: declared.root, team: declared.team, by: 'team settings' }, declared.seat);
-  if ('note' in created) return { ok: false, why: created.note };
-  return { ok: true, agentId: created.id };
+  if (teams.size > 1) {
+    return {
+      ok: false,
+      why: `the seat name "${target}" is known to ${teams.size} teams (${[...teams.keys()].sort().join(', ')}); name the seat's agent id to choose one`,
+    };
+  }
+  const teamId = [...teams.keys()][0];
+  if (teamId === undefined) {
+    return { ok: false, why: `no team declares the seat "${target}"` };
+  }
+  const known = findAgent(home, { team: teamId, seat: target });
+  if (known !== null) return { ok: true, agentId: known.id };
+  const declared = teams.get(teamId) ?? null;
+  if (declared === null) {
+    return { ok: false, why: `team ${teamId} knows the seat "${target}" but its team file no longer declares it; run \`team up\` first` };
+  }
+  return materializeSeat(home, declared);
 }
 
 /**

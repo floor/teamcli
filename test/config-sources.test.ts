@@ -16,14 +16,17 @@ import {
   readSeatConfigSource,
   readTeamConfigSource,
   resolveConfigChain,
+  seatRecordForWrite,
   writeConfigAcross,
   writeConfigSet,
   writeConfigUnset,
   type ConfigSourceRead,
+  type SeatDeclaration,
 } from '../src/config/sources.ts';
+import { loadTeamFile } from '../src/file/load.ts';
 import type { SignedConfigRecord } from '../src/config/record.ts';
 import { signConfigRecord } from '../src/config/record.ts';
-import { agentsDir, getAgent, registerAgent, updateAgent, type AgentInit } from '../src/registry/agents.ts';
+import { agentsDir, getAgent, readAgents, registerAgent, updateAgent, type AgentInit } from '../src/registry/agents.ts';
 import { get as getProject, upsertProject } from '../src/registry/projects.ts';
 import { getTeam, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { installKey, keyOf, recordedGeneration } from '../src/store/keys.ts';
@@ -100,6 +103,61 @@ function registeredTeam(): string {
   return id;
 }
 
+const DECLARED_TEAM = (name: string): string => `format: 1
+project: teamcli
+coordinator: ${name}
+operator: ${name}
+workspace:
+  mode: shared
+seats:
+  - role: builder
+    name: ${name}
+    label: ${name}
+    cli: antigravity
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: agy
+`;
+
+/** A team file at `root` that declares one never-launched seat, loaded as the caller would. */
+function declaredSeat(root: string, name = 'builder-1'): SeatDeclaration {
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  writeFileSync(join(root, '.agents', 'team.yaml'), DECLARED_TEAM(name));
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(`the fixture team file does not load: ${loaded.errors.map((error) => error.message).join('; ')}`);
+  const seat = loaded.team.seats.find((one) => one.name === name);
+  if (seat === undefined) throw new Error(`the fixture team file declares no ${name}`);
+  return { root, team: loaded.team, seat };
+}
+
+/** Two teams that know one seat name, the second holding a live record for it; returns the
+ *  declarations, the existing id, and the bytes of its file before any write. */
+function twoTeamsOneSeat(order: 'declaring-first' | 'holding-first'): {
+  mine: SeatDeclaration;
+  other: SeatDeclaration;
+  otherId: string;
+  otherBytes: string;
+} {
+  const mineRoot = join(home, 'team-a');
+  const otherRoot = join(home, 'team-b');
+  const mine = declaredSeat(mineRoot);
+  const other = declaredSeat(otherRoot);
+  const otherId = registerAgent(home, init({
+    reach: { team: teamIdOf(otherRoot), seat: 'builder-1', session: 'teamcli', pane: 'w36:p2', address: null },
+  })).id;
+  const teams = [
+    { id: teamIdOf(mineRoot), record: { project: 'teamcli', session: 'teamcli', root: mineRoot, lobby: '', roster: [] } },
+    {
+      id: teamIdOf(otherRoot),
+      record: { project: 'teamcli', session: 'teamcli', root: otherRoot, lobby: '', roster: [{ agent: otherId, seat: 'builder-1', role: 'builder' }] },
+    },
+  ];
+  const ordered = order === 'declaring-first' ? teams : [...teams].reverse();
+  for (const team of ordered) upsertTeam(home, team.id, team.record);
+  return { mine, other, otherId, otherBytes: readFileSync(seatFile(otherId), 'utf8') };
+}
+
 describe('the seat record', () => {
   test('a multi-key write lands in agents/<id>.yaml and reads back every value', () => {
     const agentId = seatAgent();
@@ -159,6 +217,57 @@ describe('the seat record', () => {
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(second.written[0]?.generation).toBe(first.generation + 1);
+  });
+
+  test('a declaration binds its own team\'s seat, never another team\'s same-named record', () => {
+    const { mine, other, otherId, otherBytes } = twoTeamsOneSeat('declaring-first');
+    const bound = seatRecordForWrite(home, 'builder-1', mine);
+
+    expect(bound.ok).toBe(true);
+    if (!bound.ok) return;
+    expect(bound.agentId).not.toBe(otherId);
+    const created = getAgent(home, bound.agentId);
+    expect(created?.reach).toEqual({ team: teamIdOf(mine.root), seat: 'builder-1', session: 'teamcli', pane: null, address: null });
+    expect(created?.lifecycle).toBe('registered');
+    // The other team's record is not touched by a write for this one.
+    expect(readFileSync(seatFile(otherId), 'utf8')).toBe(otherBytes);
+    expect(getAgent(home, otherId)?.settings).toBeUndefined();
+    expect(other.seat.name).toBe(mine.seat.name);
+  });
+
+  test('the binding is the same when the registry lists the other team first', () => {
+    const { mine, otherId, otherBytes } = twoTeamsOneSeat('holding-first');
+    const bound = seatRecordForWrite(home, 'builder-1', mine);
+
+    expect(bound.ok).toBe(true);
+    if (!bound.ok) return;
+    expect(bound.agentId).not.toBe(otherId);
+    expect(getAgent(home, bound.agentId)?.reach.team).toBe(teamIdOf(mine.root));
+    expect(readFileSync(seatFile(otherId), 'utf8')).toBe(otherBytes);
+  });
+
+  test('a bare seat name two teams know is refused, never bound to the first team', () => {
+    const { mine, otherId, otherBytes } = twoTeamsOneSeat('declaring-first');
+    const refused = seatRecordForWrite(home, 'builder-1');
+
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.why).toContain('is known to 2 teams');
+    expect(refused.why).toContain(teamIdOf(mine.root));
+    expect(readAgents(home)).toHaveLength(1);
+    expect(readFileSync(seatFile(otherId), 'utf8')).toBe(otherBytes);
+  });
+
+  test('an ambiguous bare name refuses the same way when the registry order reverses', () => {
+    const { mine, otherId, otherBytes } = twoTeamsOneSeat('holding-first');
+    const refused = seatRecordForWrite(home, 'builder-1');
+
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.why).toContain('is known to 2 teams');
+    expect(refused.why).toContain(teamIdOf(mine.root));
+    expect(readAgents(home)).toHaveLength(1);
+    expect(readFileSync(seatFile(otherId), 'utf8')).toBe(otherBytes);
   });
 
   test('a value changed after signing refuses the whole source, naming the file', () => {
