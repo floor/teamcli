@@ -1761,6 +1761,13 @@
     {
       "code": 1,
       "command": "next",
+      "id": "next.paused",
+      "meaning": "the team is paused, so nothing was claimed",
+      "trigger": "team next"
+    },
+    {
+      "code": 1,
+      "command": "next",
       "id": "next.policy",
       "meaning": "a task policy the validator refuses",
       "trigger": "team next"
@@ -1792,6 +1799,62 @@
       "id": "next.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team next"
+    },
+    {
+      "code": 0,
+      "command": "pause",
+      "id": "pause.placed",
+      "meaning": "the team was paused",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.caller",
+      "meaning": "not the owner or the orchestrator",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.io",
+      "meaning": "the state or the registry can't be read or written",
+      "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.paused",
+      "meaning": "the team is already paused",
+      "trigger": "team pause"
+    },
+    {
+      "code": 2,
+      "command": "pause",
+      "id": "pause.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team pause"
+    },
+    {
+      "code": 2,
+      "command": "pause",
+      "id": "pause.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team pause --all --json"
+    },
+    {
+      "code": 2,
+      "command": "pause",
+      "id": "pause.team",
+      "meaning": "the team name is not registered or names more than one",
+      "trigger": "team pause other"
     },
     {
       "code": 0,
@@ -2954,6 +3017,62 @@
       "id": "restart.usage",
       "meaning": "the invocation can't be read",
       "trigger": "team restart"
+    },
+    {
+      "code": 0,
+      "command": "resume",
+      "id": "resume.resumed",
+      "meaning": "the team resumed",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.caller",
+      "meaning": "not the owner or the orchestrator",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.io",
+      "meaning": "the state or the registry can't be read or written",
+      "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.not-paused",
+      "meaning": "no pause stands",
+      "trigger": "team resume"
+    },
+    {
+      "code": 2,
+      "command": "resume",
+      "id": "resume.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team resume"
+    },
+    {
+      "code": 2,
+      "command": "resume",
+      "id": "resume.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team resume --all --json"
+    },
+    {
+      "code": 2,
+      "command": "resume",
+      "id": "resume.team",
+      "meaning": "the team name is not registered or names more than one",
+      "trigger": "team resume other"
     },
     {
       "code": 0,
