@@ -15,9 +15,10 @@ export type HostServerOptions = {
   /** The caller's socket path. The host binds it and never unlinks or chmods it; Node's listener
    *  removes the path it bound when it closes. */
   socketPath: string;
-  /** The decoded request as untrusted data: plain JSON, never a trusted principal. The caller
+  /** The decoded request as untrusted data: plain JSON, never a trusted principal, plus the raw
+   *  line it was decoded from (newline stripped) for a line-based protocol validator. The caller
    *  returns the complete response line, trailing newline included. */
-  onRequest: (input: unknown) => string | Promise<string>;
+  onRequest: (input: unknown, line: string) => string | Promise<string>;
   /** The exact refusal line (newline included) for a connection the handler never saw. */
   onRefused: (reason: HostRefusalReason) => string;
   /** Buffered characters allowed before the newline search; defaults to HOST_FRAME_LIMIT. */

@@ -84,10 +84,12 @@ describe('relay host framing', () => {
 
   test('reads one complete line, decodes it as untrusted data, and writes the exact answer', async () => {
     const answers: string[] = [];
+    const lines: string[] = [];
     const { server, socketPath, seen } = start({
-      onRequest: (input) => {
+      onRequest: (input, line) => {
         // The whole decoded value is passed through; no field is treated as a principal.
         answers.push(JSON.stringify(input));
+        lines.push(line);
         return '  {"v":1, "ok":true}  \n';
       },
     });
@@ -97,6 +99,7 @@ describe('relay host framing', () => {
     const answer = await ask(socketPath, `${input}\n{"v":1,"op":"second"}\n`);
     expect(answer).toEqual({ text: '  {"v":1, "ok":true}  \n', closed: true });
     expect(answers).toEqual([input]);
+    expect(lines).toEqual([input]);
     expect(seen).toEqual([]);
     await server.close();
   });
@@ -161,9 +164,11 @@ describe('relay host framing', () => {
 
   test('a multi-byte character split across writes is decoded before the line is parsed', async () => {
     const inputs: unknown[] = [];
+    const lines: string[] = [];
     const { server, socketPath } = start({
-      onRequest: (input) => {
+      onRequest: (input, line) => {
         inputs.push(input);
+        lines.push(line);
         return '{"ok":true}\n';
       },
     });
@@ -189,6 +194,7 @@ describe('relay host framing', () => {
     });
     expect(answer).toEqual({ text: '{"ok":true}\n', closed: true });
     expect(inputs).toEqual([{ note: 'é' }]);
+    expect(lines).toEqual(['{"note":"é"}']);
     await server.close();
   });
 
