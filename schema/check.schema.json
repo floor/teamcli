@@ -229,6 +229,9 @@
     "hint": {
       "type": "string",
       "minLength": 1
+    },
+    "daemon": {
+      "type": "object"
     }
   }
 }
