@@ -16,9 +16,10 @@ import { runPause } from '../src/commands/pause.ts';
 import { runResume } from '../src/commands/resume.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { readState, updateState } from '../src/state.ts';
+import { readState, updateState, emptySession } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import type { WorkPush, WorkPushRequest } from '../src/watch/dispatch.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -271,12 +272,13 @@ describe('the watch reads the pause from the state', () => {
     });
   }
 
-  function watchOnce(): Promise<number> {
+  function watchOnce(over: Partial<WatchSources> = {}): Promise<number> {
     // A fresh watch process reads a fresh screen: what the previous run typed is not there.
     screenNow = idle;
     const io = testIo(dir, { kind: 'owner' });
     return runWatch(['--file', file], io, sources({
       ownPane: () => ({ pane: 'watch:pane', workspace: 'watch' }),
+      ...over,
     }));
   }
 
@@ -301,18 +303,29 @@ describe('the watch reads the pause from the state', () => {
     expect(typed.some((line) => line.includes(PROMPT))).toBe(false);
   });
 
-  test('the resume restores the ordinary nudge', async () => {
+  test('the resume restores the ordinary direct dispatch', async () => {
     seedPause();
     expect(await watchOnce()).toBe(0);
     expect(typed.some((line) => line.includes(PROMPT))).toBe(false);
 
     updateState(join(dir, '.agents'), (state) => {
       delete state.pause;
+      const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
+      for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
+        seats[seat] = { stage: 'ready', last_active: '2026-10-03T13:00:00.000Z' };
+      }
     });
+    writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
+    const pushed: WorkPushRequest[] = [];
+    const pushWork: WorkPush = async (request) => {
+      pushed.push(request);
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
     typed = [];
-    expect(await watchOnce()).toBe(0);
-    const nudges = triggers();
-    expect(nudges).toHaveLength(1);
-    expect(readFileSync(nudges[0] as string, 'utf8')).toBe(PROMPT);
+    expect(await watchOnce({ pushWork })).toBe(0);
+    // The ordinary route after a resume is the dispatcher's direct push; nothing is typed.
+    expect(pushed.map((one) => one.seat)).toEqual(['deepseek-acme-2']);
+    expect(triggers()).toHaveLength(0);
+    expect(typed.some((line) => line.includes(PROMPT))).toBe(false);
   });
 });

@@ -1,17 +1,15 @@
 // No `team send` this process runs opens another session's cross-session socket: not the plain
-// send, not `--wait`, not a request through the daemon — and the watch's nudge, which is the same
-// drop file and typed trigger, dials nothing either. Each send-side scene hands the path a
-// `deliver` that counts the attempt and throws, so a swallow somewhere on the way still leaves
-// the count behind (the gate is SOCKET_SEND in src/send/uds.ts; flipping it back reddens these
-// scenes). The watch's pass takes no host — its sources carry no socket hook at all — so its
-// scene pins the channel a dial would have to replace: the trigger typed into the pane is the
-// exact line a plain send types.
+// send, not `--wait`, not a request through the daemon. The watch's own automatic work typing is
+// retired: every automatic work request is the dispatcher's, and the dispatcher reaches a seat
+// only through the sources' `pushWork`, never a keystroke of its own. Its scene pins that an idle
+// seat with a takeable queue and no route is typed nothing and leaves no work drop, so the
+// watch's own passes never reach a send socket.
 //
 // Fixtures only: fake seats, fake panes, a fake sockets folder, and this test's own runWatch
 // sources. No live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -21,8 +19,9 @@ import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { requestDaemon, startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
-import { readTriggerLine, triggerLine } from '../src/send/native.ts';
+import { readTriggerLine } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { claudeBox, recordBody, testIo } from './helpers.ts';
@@ -244,14 +243,22 @@ describe('the sending paths never dial while the socket is off', () => {
   });
 });
 
-describe("the watch's nudge is the typed channel", () => {
-  test('a work nudge types the same trigger a plain send does, and takes no socket', async () => {
+describe('the watch types no automatic work', () => {
+  test('an idle seat with a takeable queue and no direct route is typed nothing, and no drop is written', async () => {
     base = realpathSync(mkdtempSync(join(tmpdir(), 'team-no-dial-watch-')));
     const dir = join(base, 'acme-web');
     mkdirSync(join(dir, '.agents'), { recursive: true });
     execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
     const raw = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
     writeFileSync(join(dir, '.agents', 'team.yaml'), raw.replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`));
+    writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
+    // Truthful idle clocks: the reading would offer both workers the task if a route were wired.
+    updateState(join(dir, '.agents'), (state) => {
+      const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
+      for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
+        seats[seat] = { stage: 'ready', last_active: '2026-10-03T13:00:00.000Z' };
+      }
+    });
 
     const IDLE = `● Done.\n\n${RULE}\n❯ \n${RULE}\n  main · …/acme-web · Opus 5.5\n`;
     const BUSY = `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${RULE}\n❯ \n${RULE}\n  main · …/acme-web · Opus 5.5\n`;
@@ -284,7 +291,7 @@ describe("the watch's nudge is the typed channel", () => {
     // is this watch's own, so the one work drop the cadence finds is `second:pane`'s.
     const typed: string[] = [];
     let screenNow = IDLE;
-    let clock = 0;
+    let clock = Date.parse('2026-10-03T14:00:00Z');
     let passes = 2;
     const sources: WatchSources = {
       live: () => live,
@@ -322,17 +329,12 @@ describe("the watch's nudge is the typed channel", () => {
     const code = await runWatch(['--file', join(dir, '.agents', 'team.yaml')], io, sources);
 
     expect(code).toBe(0);
-    const triggers = typed.filter((line) => line.includes(' and do that.'));
-    expect(triggers).toHaveLength(1);
-    const line = triggers[0] as string;
-    expect(line.startsWith('second:pane Read ')).toBe(true);
-    const path = line.slice('second:pane Read '.length, -' and do that.'.length);
-    // The same line, the same file, the same channel a plain send uses.
-    expect(line).toBe(`second:pane ${triggerLine(path)}`);
-    expect(readFileSync(path, 'utf8')).toBe(PROMPT);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    // Nothing this scene typed was a frame, and the drop lives where `team send` writes its own.
-    expect(path).toContain(join('.agents', 'send-drops', 'acme-web', 'deepseek-acme-2'));
-    expect(typed.some((one) => one.includes('"type":"user"'))).toBe(false);
+    // The one thing the retired path would have done is type a work drop at the second pane;
+    // the dispatcher has no route to attempt, so nothing is typed and no drop exists.
+    expect(typed).toEqual([]);
+    expect(existsSync(join(dir, '.agents', 'send-drops'))).toBe(false);
+    // The refused route is announced where the watch reports, as a signed mailbox record, not as
+    // a keystroke.
+    expect(existsSync(join(dir, '.agents', 'messages'))).toBe(true);
   });
 });
