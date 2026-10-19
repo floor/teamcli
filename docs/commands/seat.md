@@ -3,8 +3,9 @@
 One seat as an object: the settings it holds and where each value comes from, the row `team seats`
 reads for it (status, state, source, pane, last active), its last turn as the CLI hook wrote it,
 and the newest session TeamCLI recorded for it in this session — the conversation, when it started
-and ended, and its cost when one was measured. The read form reads the team file, the state, the
-session registry and the CLI hook; it writes nothing. The seat's lifecycle verbs are grouped under
+and ended, and its cost when one was measured. The read form reads the team file, the signed
+settings records in the registry, the state, the session registry and the CLI hook; it writes
+nothing. The seat's lifecycle verbs are grouped under
 the same word and run the commands of their names.
 
 The settings half is `team settings <seat>`; the status half is the seat's row in `team seats`. The
@@ -36,7 +37,7 @@ position: `team seat add` is the lifecycle command, never a read of a seat calle
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
-| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seat`, `settings`, `status`, `turn`, `conversation`, and `cost`/`tokens` when the record holds them) |
+| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seat`, `settings`, `status`, `turn`, `conversation`, and `cost`/`tokens` when the record holds them); a setting a signed record wins adds `source_file` |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Fields
@@ -58,7 +59,7 @@ position: `team seat add` is the lifecycle command, never a read of a seat calle
 | --- | --- |
 | 0 | the seat was printed |
 | 1 | an owner-only flag was refused, the team file declares no seat of that name, or the session registry cannot be read |
-| 2 | the invocation, the team file, or herdr cannot be read |
+| 2 | the invocation, the team file, herdr, or a signed settings record cannot be read |
 
 ## Example
 

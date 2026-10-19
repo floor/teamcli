@@ -1,9 +1,9 @@
 # team settings
 
-One seat's settings, each with where its value comes from: the team file, the team's own order
-standing under a seat that writes none, the release default, or `unset`. The read is the team file
-and the registry (`team config keys`); it writes nothing, and the value verbs wait on the
-signed-record store the decision leaves open.
+One seat's settings, each with where its value comes from: a signed settings record at the seat,
+team, project or entity level; the team file; the team's own order standing under a seat that
+writes none; the release default; or `unset`. The read is the team file, the signed records in the
+registry, and the registry's key list (`team config keys`); it writes nothing.
 
 A setting is a value, not a permission. `team settings` shows no value it would not accept: the
 `model` it prints is the value the file decides, or `unset` when the field is empty or the
@@ -19,13 +19,17 @@ it.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
-| `--json` | — | print a JSON document (`format: 1`, `project`, `seat`, `settings`), one entry per key with `value`, `source` and `applies` |
+| `--json` | — | print a JSON document (`format: 1`, `project`, `seat`, `settings`), one entry per key with `value`, `source` and `applies`, and `source_file` when a signed record wins the key |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Where a value comes from
 
 | Source | Meaning |
 | --- | --- |
+| `seat record` | a signed record at the seat level writes the value, ahead of the seat's team-file entry |
+| `team record` | a signed record at the team level writes it, unless the seat's own entry does |
+| `project record` | a signed record at the project level writes it, under any nearer level |
+| `entity record` | a signed record at the entity level writes it, under any nearer level |
 | `team file` | the seat's own entry in the team file writes the value |
 | `team order` | the seat writes no `delivery_order`, so the team's order stands in |
 | `default` | neither the seat nor the team writes the key: the release default applies |
@@ -40,7 +44,7 @@ its next start, `at once` for the ones TeamCLI reads on its next command.
 | --- | --- |
 | 0 | the seat's settings were printed |
 | 1 | `--file` is not the caller's, or the team file declares no seat of that name |
-| 2 | the invocation, the team file, or the caller's right to read this team cannot be read |
+| 2 | the invocation, the team file, the caller's right to read this team, or a signed settings record cannot be read |
 
 ## Example
 
