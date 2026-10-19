@@ -41,7 +41,7 @@ import type { BusPublishOutcome } from '../bus/server.ts';
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { isRead, readRecord, RECEIPT_STATUSES, verifyRecord } from '../send/record.ts';
+import { isRead, readRecord, RECEIPT_STATUSES, sameFolder, verifyRecord } from '../send/record.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
@@ -502,13 +502,17 @@ export function seatHasAssignedWorkOnDisk(
           if (isRead(dropDir, name, context, key)) continue;
           // Every delivery of this build's brief is the launch's, not assigned work: the current
           // id is skipped above from the claim, and a superseded id the state no longer lists is
-          // recognized from the record itself — same key, same sender, same delivered body.
+          // recognized from the record itself — same key, same sender, same checkout, same
+          // delivered body. The key is the home's, shared by every checkout it serves, so the
+          // record's root must name this checkout too; another checkout's brief is not work this
+          // seat has taken.
           const held = readRecord(join(dropDir, name), name);
           if (
             held.ok
             && held.record !== null
             && held.record.payload.to === seatName
             && held.record.payload.session === session
+            && sameFolder(held.record.payload.root, root)
             && held.record.payload.from === GENERAL_BRIEF_FROM
             && held.record.payload.brief_sha256 === GENERAL_BRIEF_SHA256
             && verifyRecord(held.record, key)

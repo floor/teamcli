@@ -440,8 +440,9 @@ export type StatusContext = { to: string; root: string; session: string };
 
 /** Whether two folder paths name one folder once links are resolved; a path that cannot be
  *  resolved is compared as written. A receipt and the message it belongs to are written by
- *  different commands, so their `root` strings need not be spelled the same way. */
-function sameFolder(left: string, right: string): boolean {
+ *  different commands, so their `root` strings need not be spelled the same way. The same rule
+ *  binds a delivery record to the checkout it was delivered for. */
+export function sameFolder(left: string, right: string): boolean {
   const real = (at: string): string => {
     try {
       return realpathSync(at);
