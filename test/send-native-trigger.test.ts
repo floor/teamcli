@@ -71,4 +71,27 @@ test('a named wake fits at exactly the measured limit and is refused one charact
 test('a sender that is not one clean line is refused, never written nameless', () => {
   expect(triggerLine('/drops/a', { seat: 'tester\n2', team: 'teamcli' })).toBeNull();
   expect(triggerLine('/drops/a', { seat: 'tester-2', team: 'team\ncli' })).toBeNull();
+  expect(readTriggerLine('lead', 'acme', { seat: 'tester\n2', team: 'teamcli' })).toBeNull();
+  expect(readTriggerLine('lead', 'acme', { seat: 'tester-2', team: 'team\ncli' })).toBeNull();
+});
+
+test('a read wake with a sender names it; one without keeps the old form', () => {
+  expect(readTriggerLine('lead', 'acme')).toBe('Run team drops --read --seat lead --session acme and do that.');
+  expect(readTriggerLine('lead', 'acme', { seat: 'tester-2', team: 'teamcli' })).toBe(
+    'From tester-2@teamcli: run team drops --read --seat lead --session acme and do that.',
+  );
+});
+
+test('a named read wake fits at exactly the measured limit and is refused one character past it', () => {
+  const head = 'From tester-2@teamcli: run team drops --read --seat lead --session ';
+  const tail = ' and do that.';
+  const sessionFits = 's'.repeat(TRIGGER_MAX - head.length - tail.length);
+  expect(sessionFits.length).toBeGreaterThan(0);
+  const named = readTriggerLine('lead', sessionFits, { seat: 'tester-2', team: 'teamcli' });
+  expect(named).toBe(`${head}${sessionFits}${tail}`);
+  expect((named as string).length).toBe(TRIGGER_MAX);
+  // One more character is refused, and the nameless form is never the fallback: a wake for a
+  // message always names its sender.
+  expect(readTriggerLine('lead', `${sessionFits}s`, { seat: 'tester-2', team: 'teamcli' })).toBeNull();
+  expect(readTriggerLine('lead', `${sessionFits}s`)).not.toBeNull();
 });

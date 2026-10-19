@@ -925,7 +925,7 @@ test('expiry typed leg whose trigger writes the read receipt is delivered (read)
   await expirePendingNative(scene);
 
   expect(existsSync(pending(made))).toBe(false);
-  expect(watchPane.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+  expect(watchPane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme' }) as string]);
   expect(watchPane.enters).toBe(1);
   expect(receipt.at).toBe(join(drops, `${ID}.read.json`));
   expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.read.json`]);

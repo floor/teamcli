@@ -79,11 +79,20 @@ export function triggerLine(path: string, sender?: TriggerSender): string | null
  * The trigger a message's typed leg types: the seat runs its own drop read, the same command its
  * turn-start hook runs, so the line that wakes it is also the one that writes the signed read
  * receipt beside the drop — `team drops --read` prints the body after the receipt is on disk. The
- * seat and session are the receiver's, exactly as its launch names them. Null when that line
- * would be longer than `TRIGGER_MAX` or would not be one line; the caller then refuses the send
- * before anything is written.
+ * seat and session are the receiver's, exactly as its launch names them. When the wake has a
+ * message sender (every route but a work nudge), the first line names it: `From <seat>@<team>: run
+ * team drops --read ...`. The name is the signed record's, so a name typed into a body cannot
+ * change who the wake says wrote it. A message wake never drops the name to make it fit: null when
+ * that line would be longer than `TRIGGER_MAX` or would not be one line, and the caller keeps the
+ * drop and ends held with its reason. The earlier nameless form is used only by callers with no
+ * message sender; receivers still read it during the transition.
  */
-export function readTriggerLine(seat: string, session: string): string | null {
+export function readTriggerLine(seat: string, session: string, sender?: TriggerSender): string | null {
+  if (sender !== undefined) {
+    const named = `From ${sender.seat}@${sender.team}: run team drops --read --seat ${seat} --session ${session} and do that.`;
+    if (named.includes('\n') || named.length > TRIGGER_MAX) return null;
+    return named;
+  }
   const line = `Run team drops --read --seat ${seat} --session ${session} and do that.`;
   if (line.includes('\n') || line.length > TRIGGER_MAX) return null;
   return line;
