@@ -44,7 +44,8 @@ type Node = {
   subcommands: Node[];
   /** A required word after a positional. Omitted when the command has none, so other commands' keys stay as they are. */
   literals?: string[];
-  /** The who-may-run row. Omitted on the program and on subcommands, which are not words of their own. */
+  /** The who-may-run row: the command's own, or `command:subcommand` for a verb that gates
+   *  differently. Omitted on the program, which is no word of its own. */
   who?: Who;
 };
 type Contract = { program: Node; commands: Node[] };
@@ -486,14 +487,17 @@ function commandNode(
   const ownLines = lines.filter((line) => line.subcommand === null);
   const subcommands = [...fromSource].sort(cmp).map((sub): Node => {
     const subLines = lines.filter((line) => line.subcommand === sub);
-    return {
-      name: sub,
-      hidden: subLines.length === 0,
-      usage: subLines.map((line) => line.line),
-      flags: flagsOn(subLines, helpFlags(help, texts), rel),
-      positionals: mergePositionals(subLines),
-      subcommands: [],
-    };
+    return withWho(
+      {
+        name: sub,
+        hidden: subLines.length === 0,
+        usage: subLines.map((line) => line.line),
+        flags: flagsOn(subLines, helpFlags(help, texts), rel),
+        positionals: mergePositionals(subLines),
+        subcommands: [],
+      },
+      `${name}:${sub}`,
+    );
   });
 
   const node: Node = {
@@ -616,25 +620,22 @@ function emptyNode(name: string, hidden: boolean, usage: string[]): Node {
 }
 
 /**
- * The word's who-may-run row. Where the map holds one, its kind and `why` are copied as they
- * stand — the contract repeats the decision record, it does not reword it. Where the map holds
- * no row the answer is `unlisted`, never open: the map is closed on purpose (a word it does not
- * name is refused by the resolver, not judged), and a command that decides for itself must not
- * read here as one anyone may run.
+ * The word's who-may-run row. The map holds one for every command and every subcommand, and its
+ * kind and `why` are copied as they stand — the contract repeats the decision record, it does
+ * not reword it. A word the map does not name stops generation: the map is closed on purpose (a
+ * word it does not name is refused by the resolver, not judged), so a command added to the CLI
+ * without a row must never reach the adapter as a tool. Naming the word here is the failure.
  */
-function whoOf(name: string): Who {
-  const gate = COMMAND_GATES[name];
+function whoOf(key: string): Who {
+  const gate = COMMAND_GATES[key];
   if (gate === undefined) {
-    return {
-      gate: 'unlisted',
-      why: 'the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller',
-    };
+    throw new Error(`the command-to-capability map holds no row for "${key}": every command and subcommand the contract exposes needs one`);
   }
   return { gate: gate.kind, why: gate.why };
 }
 
-function withWho(node: Node): Node {
-  node.who = whoOf(node.name);
+function withWho(node: Node, key: string = node.name): Node {
+  node.who = whoOf(key);
   return node;
 }
 

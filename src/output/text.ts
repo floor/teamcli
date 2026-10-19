@@ -249,6 +249,9 @@ function narrowestWho(legs: readonly DifferenceWho[]): DifferenceWho {
  * - `owner-or-leads` / `pane-authority` → `"the team's lead"`
  * - `capability` / `GRANT_SCOPES` (`reload`, `swap`, `approve`) → `'a grant holder'`
  * - `seat-record` / `owner-or-own-team` / `admission` → `'any seat'`
+ * - `any-caller` / `seat-only` / `leads-only` → `"the team's lead"`, the answer the fallback
+ *   gives: the rows 0.5.2 adds describe who the contract admits, and they leave every
+ *   difference's actor as it was.
  */
 export function whoFromCommand(command: string): DifferenceWho {
   if (command === 'tempo' || command === 'broker') return 'the owner';
@@ -279,9 +282,10 @@ export function whoFromCommand(command: string): DifferenceWho {
  *    its who is the actor every leg admits, the narrowest of the four (a `team remove … then
  *    team add …` chain is the owner's, because `add` is); an alternative branch is not a leg
  *    and does not narrow it. A repair that names no `team` subcommand falls back to
- *    `"the team's lead"`, and so does a `team <word>` the map does not carry — prose like
- *    "the team file's model", or a session-level `watch`/`worktree` — which keeps the actor
- *    such a line named before the chain rule.
+ *    `"the team's lead"`, and so does a `team <word>` whose map row is one of the 0.5.2 kinds
+ *    (`any-caller`, `seat-only`, `leads-only`) or that the map does not carry at all — prose
+ *    like "the team file's model" — which keeps the actor such a line named before the chain
+ *    rule.
  */
 export function whoOfDifference(diff: OutputDifference): DifferenceWho {
   if (diff.who !== undefined) return diff.who;
