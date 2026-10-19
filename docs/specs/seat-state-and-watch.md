@@ -1,0 +1,420 @@
+---
+created: 2026-10-18
+updated: 2026-10-18
+kind: spec-draft
+status: draft
+read-at: v0.5.0 (52db9b75)
+for: Runtime, chapters C and F (commitments 8, 9, 20 and 21)
+public: not yet; staged in the private docs; ported after review with no private link
+---
+
+# Spec: seat state and watch
+
+## 1. Scope
+
+This spec covers the word a seat's state is read as, the sources it is read from and their
+ranking, the thresholds that bound the reading, the sixteen checks the watch runs, the reports it
+makes, and the fixed lines it may type. It leaves the launch steps that record a seat's pane
+to the launch spec, the records that hold the state to the registry spec, and the admission rules
+that let a seat act to the Kernel. It says what the code at the tag does, in the code's words.
+
+## 2. Terms
+
+- **state word**: one of `working`, `idle`, `done`, `blocked`, `held`, `unreachable`, `unknown`.
+- **source**: where the word was read — `cli`, `cli-hook`, `herdr`, `trace`, `process`, `hold`,
+  `none` — printed beside the word.
+- **hold**: the team's own `team hold` note; while one stands the seat reads `held`.
+- **trace**: a seat's last commit, ack or message, each with its own instant.
+- **blind**: an `unknown` seat past the blind threshold; `team status` prints `unknown (blind)`.
+- **liveness windows**: idle-to-lead, idle-to-owner and unknown-to-blind, in whole seconds.
+- **check**: one named module in the watch's pass; sixteen run.
+- **report**: `{ key, text, to }`; `to` is `operator` or `owner`.
+- **nudge**: the one fixed work line the watch types into an idle worker.
+- **ring**: the one fixed line the watch types when a message waits for a seat.
+- **held send**: a send held as a drop while a pane was busy, whose trigger the watch may type.
+- **pass**: one interval's reading of the seats, the file, the state and the machine.
+
+## 3. Formats
+
+### 3.1 The state reading
+
+`src/labels/state.ts` defines the words and the sources:
+
+| State word | Meaning |
+|---|---|
+| `working` | the seat is in a turn |
+| `idle` | the seat is at a prompt with nothing behind it |
+| `done` | the process the launch recorded is no longer in its pane |
+| `blocked` | the screen is neither mid-turn nor at a prompt: a dialog, a question, an error, or a composer holding unsent text |
+| `held` | a hold stands over the team |
+| `unreachable` | herdr cannot reach the seat |
+| `unknown` | no source was certain |
+
+| Source | Meaning |
+|---|---|
+| `cli` | the pane's screen, read against the seat's CLI profile |
+| `cli-hook` | the CLI's own turn-start and turn-end hook |
+| `herdr` | herdr's own status word |
+| `trace` | TeamCLI's traces inside the trace window |
+| `process` | the recorded process identity |
+| `hold` | the team's hold |
+| `none` | nothing was certain; the word is `unknown` |
+
+The reading answers the first source that is certain, in this order:
+
+1. a hold over the team — `held`;
+2. herdr unable to reach the seat — `unreachable`;
+3. the launched process no longer in its pane — `done` (`process`);
+4. a screen that is a dialog, a question, an error, or a composer holding unsent text —
+   `blocked`, whatever any clock says;
+5. the CLI's own signal through the hooks the launch installed — `working` at turn start,
+   `idle` at turn end, with the instant it wrote; a `working` hook older than the working window
+   keeps its word only where the screen is absent or unknown;
+6. the pane's screen read against the seat's CLI — `working` or `idle`;
+7. herdr's own status word — `working`, `idle` or `done`;
+8. TeamCLI's traces within the window — `working`;
+9. otherwise `unknown`; past the blind threshold it counts as not working and is flagged
+   `blind`.
+
+Two exceptions to that order. A trace inside the window outranks an idle word from the hook, the
+screen or herdr, because a seat that just committed, acked or was messaged is working even while
+its prompt shows. A `working` hook older than the hook working window of §3.2 (120 s at the tag)
+outranks neither a recognised working screen nor a recognised idle one: the screen answers,
+because an interrupted turn leaves the hook behind and the prompt shows again. Past its window
+the hook still answers `working` for the rest of its day only when the screen is absent or
+unknown. A tool row on a screen carries no clock and is kept for display, never weighed as
+recency.
+
+The hook reading stands for a day (`CLI_HOOK_FRESH_SECONDS` = 86400); a hook timestamp more than
+sixty seconds in the future (`CLI_HOOK_FUTURE_SKEW_SECONDS`) is not a reading. The working window
+is the shorter bound above: past it a readable screen wins, and the hook stands only where no
+screen can be read.
+
+### 3.2 Thresholds
+
+The shipped values, and the policy names that carry them:
+
+| Threshold | Shipped | Policy name | May be loosened by |
+|---|---|---|---|
+| idle to the lead | 300 s | `liveness-idle-lead-seconds` | no level |
+| idle to the owner | 900 s | `liveness-idle-owner-seconds` | no level |
+| unknown to blind | 300 s | `state-blind-after-seconds` | the project |
+| trace window | 120 s | `state-trace-window-seconds` | the project |
+| hook working window | 120 s | `state-hook-working-seconds` | the project |
+
+The chain is machine → entity → project → team → seat, read outermost first. `liveness` maps at
+the machine's settings file, an entity's entry, a project's record and a seat's own team-file
+entry carry `idle_lead_seconds`, `idle_owner_seconds` and `blind_after_seconds`. The team file's
+`watch` section carries `idle_first`, `idle_owner` and `blind_after`; its `liveness` words are
+read the same way. Only a `watch` value that differs from the shipped default is handed on as the
+team's declaration; the idle reports read the effective per-seat `idle_lead_seconds` and
+`idle_owner_seconds` (`src/settings/declared.ts`, `src/watch/checks/idle.ts`). A liveness word MUST
+be whole seconds of at least one; a fraction or a zero
+is set aside as invalid, never called a loosening, and the value in force stands:
+
+    state_blind_after_seconds: the team declared 1.5s, which is not a whole number of seconds; it is set aside
+
+The one rule, in the code's words:
+
+    a liveness threshold may be tightened, never loosened, unless the level above allows it
+
+The blind window is the one the project may open again once something closed it; every level
+inside may close it again. A word that would loosen one is set aside, the value in force stands, and the watch says the rule
+once per setting as a line of its own — never a report, never a typed line:
+
+    liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
+
+`tempo` scales `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`, and the idle window
+after the tighten-only check; it never scales `idle_owner` or `blind_after`.
+
+### 3.3 The sixteen checks
+
+`src/watch/check.ts` holds the order and the names; `ALWAYS_ON` names the four a file cannot
+switch off.
+
+| # | Check | Runs on | Always on | Reads |
+|---|---|---|---|---|
+| 1 | `missing` | seat | yes | the file has a seat herdr does not list |
+| 2 | `restored` | seat | no | the recorded process changed but the stored agent session came back |
+| 3 | `model-drift` | seat | yes | the running model or version differs from the file's |
+| 4 | `attention` | seat | yes | a permission prompt, question, vendor notice, or a blocked or unknown status |
+| 5 | `provider-error` | seat | no | a provider error or rate limit while the seat runs and is not working |
+| 6 | `unsent` | seat | no | text in the input box that was never sent |
+| 7 | `idle` | seat | no | quiet past the lead's window, then the owner's |
+| 8 | `extra` | team | no | an agent in the session no seat claims |
+| 9 | `team-idle` | team | no | every non-lead, non-parked seat quiet past `team_idle` |
+| 10 | `approval` | team | yes | the file differs from its last verified approval |
+| 11 | `load` | team | no | load per core past `machine.load_max` |
+| 12 | `memory` | team | no | free memory under `machine.memory_min` |
+| 13 | `disk` | team | no | free disk under `machine.disk_min` |
+| 14 | `swap-free` | team | no | free swap under `machine.swap_free_min` |
+| 15 | `swap-growth` | team | no | swap growth past `machine.swap_growth_max` inside its window |
+| 16 | `budget` | team | no | an account past a mark, inside its reserve, at its floor, or unknown while a seat runs on it |
+
+A file switches a check off under `watch.checks`; the four always-on checks ignore that switch.
+
+The shipped watch defaults, as `defaultWatch()` carries them: a pass every 120 s, `team_idle`
+600 s, `unsent_after` 60 s and `nudge_wait` 600 s (`src/file/sections/watch.ts`). The machine's
+readings, checks 11 to 15, are logged every ten minutes: `READINGS_EVERY` is 600 s
+(`src/commands/watch.ts`).
+
+The same figures are the machine's limit contract, and this section is its home:
+`machine.load_max`, `machine.memory_min`, `machine.disk_min`, `machine.swap_free_min` and
+`machine.swap_growth_max` are read by the launch gate of `up` and `add`, which refuses a launch
+past a limit and writes the figures it decided on into the log, and by checks 11 to 15 against the
+readings they log. A change to a figure changes both.
+
+### 3.4 The report rule
+
+A report says what is; the model and launcher reports also name the restart, and a report never
+starts a seat. A report is said when it starts and again only after it has cleared, with one
+exception: the idle report to the operator repeats after `watch.idle_repeat` while the same idle
+period continues, and the owner's escalation is said once per idle period. The core owns that
+rule and the check's memory slot: `once`, `keep`, or `memory(kind,start)`, which remembers a kind
+against the instant its period began. The watch's own notices — the file cannot be read,
+herdr does not answer, a typed line was not sent, the watch stopped — follow the same rule.
+
+### 3.5 The report catalogue
+
+The texts, as `docs/commands/watch.md` prints them at the tag. `<repair>` and `<n>` are filled by
+the pass.
+
+| Report | Made when |
+|---|---|
+| `<seat> is in the file and is not running` | herdr lists no agent for a seat the file has, does not stop, and the watch has not seen running |
+| `<seat> was running and is gone (its pane closed, or its CLI ended)` | herdr lists no agent for a seat the watch had seen running; said at each disappearance |
+| `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the pane runs no CLI, or a program the tool did not launch runs in it and the agent session is not the one stored at launch |
+| `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched — <repair>` | a launcher-started seat's pane holds a process the tool did not launch; a lead's own seat is never restarted alone, so its report is `<seat>: started by a launcher; team cannot tell its process from the one it launched`, with no repair |
+| `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question |
+| `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
+| `<seat> shows a vendor notice: its owner's to act on` | a captured vendor notice, such as an update screen |
+| `<seat> shows a provider error: connection lost, and no capture names a retry` | a provider's connection error; told to the operator and the owner, once, while the seat is not working |
+| `<seat> is at a rate limit on <account>: usage limit, resets at <time>` | a usage-limit screen that names its reset |
+| `<seat> is at a rate limit on <account>: usage limit, and the screen names no reset time` | the same, without a reset |
+| `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
+| `<seat>: herdr reports the status "<status>"` | a status that is none of idle, done, working, blocked, and the screen cannot be read |
+| `<seat> holds text in its input box that was never sent` | unsent text past `watch.unsent_after` |
+| `<seat> has been idle since the watch started` | quiet past the seat's `idle_lead_seconds`, never seen working |
+| `<seat> has been idle for <n> minutes` | quiet past the seat's `idle_lead_seconds` since its last turn |
+| `<seat> has been idle for <n> minutes — reported to the owner` (or `… since the watch started — reported to the owner`) | the same period past the seat's `idle_owner_seconds`, said once and to the owner |
+| `every agent is idle` | every non-lead, non-parked seat quiet past `watch.team_idle` |
+| `message <id> for <seat> has been waiting <n> minutes` | a message older than `nudge_wait` whose seat's box was not free; the owner's, said once, and nothing is typed |
+| `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` | the running model or version is not the file's; the repair is the seat's remove-and-add, or a whole-team down and up for a lead |
+| `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims; a workspace labelled `Watch · <project>` is set aside |
+| `approved before records were signed` | the record was written by an earlier tool: not trusted, said once |
+| `<why the record was refused>` | a signed record that does not verify; said once |
+| `the load is <n> per core, above <n>` | over `machine.load_max` |
+| `free memory is <n>%, below <n>%` | under `machine.memory_min` |
+| `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
+| `free swap is <n> GB, below <n> GB` | under `machine.swap_free_min` |
+| `swap grew by <n> GB in <n> minutes, above <n> GB` | over `machine.swap_growth_max` inside its window |
+| `<account> <window> is <n>% used, past the <n>% mark` | an account at or past a mark, once per window |
+| `<account> <window> left <n>%, inside its <n>% reserve` | a subscription account inside its reserve |
+| `<account> <n> <currency> left, at its <n> <currency> floor` | a spend account at or below its floor |
+| `<account> is unknown while <seat> runs on it` | nothing counts for an account whose seats are running |
+
+### 3.6 The typed lines
+
+The watch types fixed lines and never a report.
+
+- **The nudge**: the work drop's line, typed into an idle worker. Its body is the file's
+  `watch.nudge`, or the fixed line `Team watch: reports are waiting in .agents/team.log` when
+  the file omits it.
+- **The ring**: `Team: run team messages`, typed when a message already waits for a seat and the
+  seat's box is an empty idle prompt.
+- **The held-send retry**: `Read <path> and do that.`, naming the drop of a send held while a
+  pane was busy, typed on a local pass unless `--no-nudge` is set. It requires the seat's status
+  to be `idle` or `done` and a readable screen that is either an idle prompt or holds exactly
+  that trigger unsent, and it takes the seat lock before delivering. The pending marker beside
+  the drop is its ownership evidence: a trigger another sender process left may be submitted,
+  and another person's draft is never typed. The retry is bounded, and giving up says the
+  drop's path. The default nudge body `NUDGE_TEXT` is never typed.
+
+A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
+orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that
+holds the watch's own typed line is sent, not typed into twice, and only by the process that
+typed it; the held-send retry is the exception, proved by its marker above. `--no-nudge` types
+nothing, the retry included, and writes no drop; `--no-notify` drops the operator's desktop
+notification alone. Neither flag removes a log line or a report from `team status`.
+
+### 3.7 The watch's record
+
+The watch is recorded in the session state beside the seats:
+
+| Field | Type | Required | Default | Since | Meaning |
+|---|---|---|---|---|---|
+| `pid` | number | no | absent until a pass records one | 0.5.0 | The watch's process |
+| `heartbeat` | ISO 8601 | yes | — | 0.5.0 | The last pass |
+| `pane` | string | no | absent on a record an older detached watch left | 0.5.0 | The pane it runs in |
+| `workspace` | string | no | absent | 0.5.0 | The workspace of its own |
+
+The watch's workspace is labelled `Watch · <project>`. A heartbeat older than two in-force
+intervals is flagged by `team check`.
+
+### 3.8 An example reading
+
+A hook-written `working` inside its window, with no trace in the window:
+
+```text
+SEAT          STATE    SOURCE    LAST ACTIVE
+worker-alpha  working  cli-hook  2026-10-18T09:14:02.000Z
+```
+
+### 3.9 The seat's two sidebar lines
+
+Each seat's pane carries two lines on its sidebar:
+
+| Line | Written from |
+|---|---|
+| 1, the label | the file's label for the seat, which is its workspace title |
+| 2, the display line | the file's `display`, followed by the effort word in force |
+
+While a seat runs, the watch repaints line 2 for each pass. The line is the file's `display`
+when the screen shows the file's own model and version, or when the screen cannot be read;
+otherwise it is `<model> <version>` from the screen, the observation replacing the display. The
+effort word follows the display, separated by one space: the word the screen shows, else the last
+word a screen showed, else the file's. A screen this version cannot read keeps the file's display
+and **never** the CLI's name in place of a model. The effort word, once seen, stays until a
+later screen shows a different one.
+
+The observed line is never written into the team file. `team check` and the watch's `model-drift`
+report name the difference, and `team register` re-applies both lines from the file without a
+relaunch. The observed model is not stored on the agent record: the commit-signature policy's
+model match needs it, and the place it is kept is an open point of the Runtime text (§10,
+question 11).
+
+## 4. Commands and options
+
+    team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]
+    team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+    team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+
+`team watch` exit ids: `watch.started` (0), `watch.stopped` (0), `watch.already`,
+`watch.caller`, `watch.file-owner`, `watch.no-notify`, `watch.no-nudge`, `watch.watchdog`,
+`watch.workspace` (1), `watch.file`, `watch.file-invalid`, `watch.invocation`,
+`watch.not-a-repo` (2). `--json` is an invocation refusal on the daemon loop: one `team.error`
+document on stdout with stderr empty, exit 2.
+
+`team seats` prints STATE and SOURCE per seat; `--watch` refreshes every two seconds. `team
+status` prints `unknown (blind)` for an unknown seat past the blind threshold.
+
+## 5. Rules
+
+1. **One state per seat, read from ranked sources, with the source said beside it.** The reading
+   MUST answer the first certain source in the order of §3.1, and MUST print the source word
+   beside the state word. A trace inside the window MUST outrank an idle word from the hook, the
+   screen or herdr; a `working` hook older than the working window MUST yield to a recognised
+   working or idle screen, and MUST answer only where the screen is absent or unknown. *Source:*
+   `src/labels/state.ts`, `src/commands/seats.ts`. *Proof:* `test/seat-state.test.ts`,
+   `test/cli-hook.test.ts` (the working-window cases).
+2. **A trace inside the window outranks an idle word.** A seat that just committed, acked or was
+   messaged MUST read `working` while its prompt shows. *Source:* `src/labels/state.ts`.
+   *Proof:* `test/labels-traces.test.ts`.
+3. **A dialog, a question, an error or unsent text reads `blocked`, whatever any clock says.**
+   *Source:* `src/labels/state.ts`, `src/watch/pass.ts` (`attentionOf`). *Proof:*
+   `test/seat-state.test.ts`.
+4. **An unknown seat past the blind threshold MUST count as not working and be flagged
+   `blind`.** *Source:* `src/labels/state.ts`, `src/settings/inherit.ts`. *Proof:*
+   `test/seat-state.test.ts`.
+5. **A threshold MAY be tightened and MUST NOT be loosened, unless the level above allows it.**
+   A loosening word MUST be set aside and the value in force kept. *Source:*
+   `src/settings/inherit.ts` (`LIVENESS_RULE`, `looseningLevels`). *Proof:*
+   `test/liveness-defaults.test.ts`.
+6. **A liveness word MUST be whole seconds, at least one.** A fraction or zero MUST be set aside
+   as invalid, not as a loosening. *Source:* `src/settings/inherit.ts` (`LIVENESS_RULE`),
+   `src/settings/declared.ts` (`livenessMap`), `src/registry/projects.ts` (`checkedLiveness`).
+   *Proof:* `test/liveness-defaults.test.ts`, `test/registry/projects.test.ts`.
+7. **Sixteen checks run, four always.** A file MAY switch off the other twelve under
+   `watch.checks`; it MUST NOT switch off `attention`, `missing`, `model-drift` or `approval`.
+   *Source:* `src/watch/check.ts` (`CHECK_NAMES`, `ALWAYS_ON`). *Proof:*
+   `test/watch-checks.test.ts`.
+8. **A report is said when it starts and again only after it has cleared, except the idle
+   reminder.** The core's rule MUST hold for every report; the operator's idle report MUST repeat
+   after `watch.idle_repeat` while the same idle period continues; the owner's escalation MUST be
+   said once per idle period. *Source:* `src/watch/pass.ts`, `src/watch/check.ts`
+   (`CheckContext`), `src/watch/checks/idle.ts`. *Proof:* `test/watch.test.ts` (a condition said
+   once, and again only after two passes that cleared), `test/watch-idle-once.test.ts` (the
+   repeat and the owner once).
+9. **The watch MUST type only its fixed lines and a held send's exact trigger, and MUST NOT type
+   into a dialog or a box that holds unsent text.** The nudge, the ring and the held-send retry
+   are the only delivery paths; the retry MUST use the persisted marker as its ownership
+   evidence, MUST require an idle or done status and a readable idle or exact-trigger screen, and
+   MUST hold the seat lock; `--no-nudge` MUST suppress it too. *Source:* `src/watch/pass.ts`
+   (`NUDGE_TEXT`, `RING_TEXT`), `src/watch/retry.ts`, `src/send/native.ts` (`triggerLine`), the
+   watch command. *Proof:* `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`,
+   `test/held-retry.test.ts`.
+10. **A second watch MUST refuse while the first is alive.** The recorded pane, a heartbeat no
+    older than two in-force intervals, or a live pid is what counts. *Source:*
+    `src/commands/watch.ts`. *Proof:* `test/watch-nudge-boundaries.test.ts` (the second-watch
+    tests), `test/commands/watch-pane.test.ts`.
+11. **`--no-nudge` and `--no-notify` are the owner's alone.** *Source:* `src/commands/watch.ts`.
+    *Proof:* `test/watch.test.ts` (a seat cannot pass `--no-notify` or `--no-nudge`).
+12. **A watch on another session reads and reports and MUST save no reading, budget or spend.**
+    *Source:* `src/commands/watch.ts`, `src/state.ts`. *Proof:* `test/commands/watch-close.test.ts`.
+13. **A report addressed to the owner MUST be a desktop notification; `--no-notify` MUST NOT drop
+    it.** *Source:* `src/commands/watch.ts`. *Proof:* `test/watch.test.ts` (`--no-notify` still
+    delivers a floor report, and the log keeps it).
+14. **The display line MUST follow the observed screen, and the observation MUST NOT be written
+    into the team file.** A screen that cannot be read keeps the file's display; an effort word
+    once seen stays until a later screen shows a different one. *Source:* `src/labels/observe.ts`,
+    `src/watch/seat-label.ts`, `src/status/statusline.ts`. *Proof:* `test/labels-observe.test.ts`.
+
+## 6. Registries
+
+**`seat-states-and-prompt-kinds`**:
+
+| Entry | Meaning | Since | Source at the tag | Note |
+|---|---|---|---|---|
+| `working` | in a turn | 0.5.0 | `src/labels/state.ts` | state word |
+| `idle` | at a prompt, nothing behind it | 0.5.0 | `src/labels/state.ts` | state word |
+| `done` | the launched process is no longer in its pane | 0.5.0 | `src/labels/state.ts` | state word |
+| `blocked` | the screen is a dialog, question, error or unsent text | 0.5.0 | `src/labels/state.ts` | state word |
+| `held` | a hold stands over the team | 0.5.0 | `src/labels/state.ts` | state word |
+| `unreachable` | herdr cannot reach the seat | 0.5.0 | `src/labels/state.ts` | state word |
+| `unknown` | no source was certain | 0.5.0 | `src/labels/state.ts` | state word; blind past the threshold |
+| `cli` | the pane's screen, read against the profile | 0.5.0 | `src/labels/state.ts` | source |
+| `cli-hook` | the CLI's own turn hooks | 0.5.0 | `src/labels/state.ts` | source; stands for a day |
+| `herdr` | herdr's status word | 0.5.0 | `src/labels/state.ts` | source |
+| `trace` | a commit, ack or message inside the window | 0.5.0 | `src/labels/state.ts` | source |
+| `process` | the recorded process identity | 0.5.0 | `src/labels/state.ts` | source |
+| `hold` | the team's hold | 0.5.0 | `src/labels/state.ts` | source |
+| `none` | nothing was certain | 0.5.0 | `src/labels/state.ts` | source |
+| `missing` … `budget` | the sixteen check names | 0.5.0 | `src/watch/check.ts` | one entry per name in §3.3 |
+
+**`policy-names`** (also fed by the policies spec):
+
+| Entry | Meaning | Since | Source at the tag | Note |
+|---|---|---|---|---|
+| `liveness-idle-lead-seconds` | idle to the lead | 0.5.0 | `src/policy/types.ts` | enforced |
+| `liveness-idle-owner-seconds` | idle to the owner | 0.5.0 | `src/policy/types.ts` | enforced |
+| `state-blind-after-seconds` | unknown to blind | 0.5.0 | `src/policy/types.ts` | enforced |
+| `state-trace-window-seconds` | the trace window | 0.5.0 | `src/policy/types.ts` | enforced |
+| `state-hook-working-seconds` | the hook's working word | 0.5.0 | `src/policy/types.ts` | enforced |
+
+**`exit-codes`**: the `watch.*` rows in §4.
+
+## 7. Open points
+
+- **The trace order.** The code ranks a fresh trace above an idle word; one module's text ranks
+  the traces last with no exception. The order in §3.1 is the code's; which text governs is open.
+- **Which level may loosen.** The code lets the project lengthen the blind, trace and hook
+  windows; the amendment's inheritance says only that a lower level tightens. The spec records
+  the code.
+- **The entity level is keyed by name, not by a record.** A team's entity is the name its team
+  record carries; the entity's `liveness` word is read from its entry in `.config/team/entities.yaml`,
+  and a team that names none starts at the machine's level.
+- **The receipts of the message phase are not a trace.** No reader consumes a receipt as a trace
+  at the tag, so a receipt never makes a seat `working`.
+- **The round's liveness thresholds are not read.** The watch's windows are its own; the round's
+  table is another text's.
+- **`idle_repeat` repeats the operator's line only.** The owner is told once per idle period.
+
+## Revision log
+
+- **Draft** (the Runtime text's writer, 2026-10-18): lifted from the Runtime's chapters C and F;
+  read at the tag.
+- **Draft, amended** (the Runtime text's writer, 2026-10-18): a second read against the tag
+  corrected four points — the working-hook window yields to a readable screen; provider errors
+  and rate limits sit under the optional `provider-error` check; the idle report's repeat is the
+  one exception to the once-until-cleared rule; and the held-send retry is a third typing path
+  with its marker.
