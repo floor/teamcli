@@ -19,7 +19,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { connect, createServer, type Server, type Socket } from 'node:net';
+import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
@@ -28,10 +28,11 @@ import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine } from '../launch/plain.ts';
 import { pidAlive } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
-import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from './protocol.ts';
+import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
+import { createHostServer } from '../../packages/relay/host/server.js';
 import {
   ensureMachineDir,
   writeDaemonState,
@@ -232,7 +233,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   }
 
   const inFlight = new Map<string, InFlight>();
-  const connections = new Set<Socket>();
   const roots: MachineRootStatus[] = [];
   let heartbeatAt = since;
   let closed = false;
@@ -281,64 +281,48 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
-  const server = createServer((socket: Socket) => {
-    connections.add(socket);
-    let buffer = '';
-    let answered = false;
-    const answer = (text: string): void => {
-      if (answered) return;
-      answered = true;
-      socket.end(text);
-    };
-    socket.on('error', () => {
-      // A connection that ends early is one unanswered request, never the daemon's end.
-    });
-    socket.on('close', () => connections.delete(socket));
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      if (buffer.length > DAEMON_FRAME_LIMIT) {
-        answer(
-          formatDaemonResponse({
-            v: DAEMON_PROTOCOL_VERSION,
-            id: '',
-            ok: false,
-            error: { code: 'daemon.bad-frame', message: 'the request line exceeds the frame limit' },
-          }),
-        );
-        return;
-      }
-      const newline = buffer.indexOf('\n');
-      if (newline === -1) return;
-      const line = buffer.slice(0, newline);
-      buffer = '';
+  // The accept, frame and close mechanics live in the relay package's framing host; this process
+  // keeps the protocol: the same line parser and refusal bytes, the same health answer and
+  // in-flight tracking, and the same socket file, permission and stale-path ownership below.
+  const host = createHostServer({
+    socketPath,
+    frameLimit: DAEMON_FRAME_LIMIT,
+    onError: (error) => {
+      // A listener error after the bind is recorded; the service manager still owns restarts.
+      appendDaemonLog(home, `machine socket: ${error.message}`, now());
+    },
+    // The daemon's parser owns validation and takes the exact framed line; the decoded value the
+    // host also offers is never a principal and is not needed here.
+    onRequest: (_input, line) => {
       const parsed = parseDaemonRequest(line);
       if (!parsed.ok) {
-        answer(formatDaemonResponse({ v: DAEMON_PROTOCOL_VERSION, id: parsed.id, ok: false, error: parsed.error }));
-        return;
+        return formatDaemonResponse({ v: DAEMON_PROTOCOL_VERSION, id: parsed.id, ok: false, error: parsed.error });
       }
       const started = now().getTime();
       inFlight.set(parsed.request.id, { op: parsed.request.op, since: started });
       try {
-        answer(formatDaemonResponse(answerDaemonRequest(parsed.request, health())));
+        return formatDaemonResponse(answerDaemonRequest(parsed.request, health()));
       } finally {
         inFlight.delete(parsed.request.id);
       }
-    });
+    },
+    onRefused: (reason) => {
+      const error: { code: DaemonErrorCode; message: string } =
+        reason === 'frame-limit'
+          ? { code: 'daemon.bad-frame', message: 'the request line exceeds the frame limit' }
+          : reason === 'malformed'
+            ? { code: 'daemon.bad-frame', message: 'the request line is not JSON' }
+            : { code: 'daemon.internal', message: 'the request could not be answered' };
+      return formatDaemonResponse({ v: DAEMON_PROTOCOL_VERSION, id: '', ok: false, error });
+    },
   });
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(socketPath, () => {
-        server.removeListener('error', reject);
-        resolve();
-      });
-    });
-  } catch (error) {
+  const listening = await host.listen();
+  if (!listening.ok) {
     releaseLock();
     return {
       kind: 'bind-failed',
-      reason: `the daemon socket could not be bound: ${(error as NodeJS.ErrnoException).code ?? 'unknown error'}`,
+      reason: `the daemon socket could not be bound: ${listening.code ?? 'unknown error'}`,
     };
   }
   chmodSync(socketPath, 0o600);
@@ -528,8 +512,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // Closing is best effort; the process is ending.
       }
     }
-    for (const socket of connections) socket.destroy();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await host.close();
     try {
       if (existsSync(socketPath)) unlinkSync(socketPath);
     } catch {
