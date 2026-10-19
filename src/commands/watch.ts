@@ -942,7 +942,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             delivered.add(item.pane);
           }
         }
-        if (result.ring && delivered.size === 0) {
+        // The ring is a typed path of its own: a seat whose idle episode the dispatcher owns is
+        // not typed at by it either. That episode is the dispatcher's to deliver (or to report
+        // undelivered to the lead), and a stored signed copy waiting unread is not a wake.
+        if (result.ring && delivered.size === 0 && !suppressed.has(result.ring.to)) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${result.ring.text}`, false);
           else await deliver({
             pane: result.ring.pane,
