@@ -59,7 +59,8 @@ export function parseModelRule(raw: unknown): ModelRuleEntry[] | null {
 
 /** The catalogue's custom reason a raw value was refused; null when it parses. */
 export function modelRuleProblem(raw: unknown): string | null {
-  if (typeof raw !== 'string') return 'model-rule must be one line of entries, not a list';
+  if (Array.isArray(raw)) return 'model-rule must be one line of entries, not a list';
+  if (typeof raw !== 'string') return 'model-rule must be one line of entries';
   const text = raw.trim();
   if (text === '') return 'model-rule is empty; unset it instead';
   const seen = new Set<string>();
