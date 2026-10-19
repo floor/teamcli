@@ -24,10 +24,10 @@ in this same package without importing TeamCLI: `host/server.js` frames one call
 socket, and `host/queue.js` holds durable messages for a host that took verified admission. The
 framing host binds only when its caller calls `listen`, inside the caller's process; the queue
 opens no socket. The listener and the verified caller stay the receiving session's host. The
-modules are package files, not package exports in this build: the manifest exports only
-`@teamcli/relay`, and its file list carries only the entry files and this page. The public
-subpath names and the manifest change are the package owner's; this page names module paths, not
-import specifiers.
+modules are source modules in this repository, not packed or exported in this build: the manifest
+exports only `@teamcli/relay`, and its file list carries only the entry files and this page, so
+`host/` is neither exported nor packed. The public subpath names and the manifest change are the
+package owner's; this page names module paths, not import specifiers.
 
 ## Current endpoints and auth
 
@@ -53,10 +53,12 @@ Four rules are fixed, not configurable:
 - one message ID, with de-duplication at the receiver;
 - every attempt is recorded.
 
-In this version the copy-before-attempt rule is the caller's contract: `stage` first, then one
-`deliver`. The package makes no fallback decision and keeps no attempt record; receiver
-de-duplication, the attempt record, escalation and fallback are the next change, not this one.
-The timing values reviewed for that next change are listed in
+In this version the copy-before-attempt rule is the caller's contract for this standalone API:
+`stage` first, then one `deliver`. This package makes no fallback decision and keeps no attempt
+record; for the standalone API, receiver de-duplication, the attempt record, escalation and
+fallback are the next change, not this one. TeamCLI's caller-side send path carries its own
+sender walk separately; this package neither implements nor measures it. The timing values
+reviewed for that next change are listed in
 `packages/relay/docs/live-proof.md` under "Reviewed next behavior"; they are not in this build
 and are not measured here.
 
@@ -104,9 +106,9 @@ deadline when supplied; `timeoutMs` applies to the package's default dial.
 ## Host modules
 
 The host modules are plain Node ESM with hand-written declarations beside the code: no
-dependencies, no TeamCLI import, no service. They are package files, not package exports in this
-build (see "Current endpoints and auth"); the manifest and the public subpath names remain the
-package owner's to change.
+dependencies, no TeamCLI import, no service. They are source modules today, not packed or
+exported in this build (see "Current endpoints and auth"); the manifest and the public subpath
+names remain the package owner's to change.
 
 ### `host/server.js` — socket framing
 
@@ -147,11 +149,12 @@ extraction's existing-file answer kept as history, the correction's byte match a
 the holder untouched, one complete frame taken by a local fixture peer, the refusals, and a
 packed tarball and installed build whose relay files are byte-identical to the extraction
 commit's. No run shows a runtime reading a delivered frame, and no run wakes or reads a durable
-copy. Those remain unproven, and the next change is not measured here.
+copy. Those remain unproven, and this standalone API's next change is not measured here.
 
 ## Compatibility
 
 The frame bytes and the drop names and contents are frozen in this extraction: TeamCLI still
-builds the frame line and signs the record, and this package writes those bytes unchanged. The
-fallback change — a held route continuing to the next allowed route, cross-route de-duplication,
-recorded attempts and escalation — is a later, explicit change.
+builds the frame line and signs the record, and this package writes those bytes unchanged. For
+this standalone API, the fallback change — a held route continuing to the next allowed route,
+cross-route de-duplication, recorded attempts and escalation — is a later, explicit change;
+TeamCLI's caller-side send path carries its own walk separately.

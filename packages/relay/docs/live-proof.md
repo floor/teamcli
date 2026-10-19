@@ -140,10 +140,10 @@ written and read back in these runs.
 
 The framing host module is `packages/relay/host/server.js` with `server.d.ts`; the daemon adapter
 is the accept, frame, bind and close section of `src/daemon/host.ts`. Both changes are local to
-this repository: the module is not a package export in this build, and the daemon still hosts
-each checkout's existing send and bus listeners, so N checkouts mean 2N+1 endpoints in one
-process. Nothing in these runs removes a per-root listener or installs or starts the daemon
-service.
+this repository: the module is a source module, not packed or exported in this build, and the
+daemon still hosts each checkout's existing send and bus listeners, so N checkouts mean 2N+1
+endpoints in one process. Nothing in these runs removes a per-root listener or installs or starts
+the daemon service.
 
 ### What the framing host tests show
 
@@ -219,18 +219,20 @@ delivery-escalation delays. The fixed invariants are: a signed durable copy befo
 route that would hold or block is never chosen; one message ID with de-duplication at the
 receiver; every attempt recorded.
 
-This version makes the copy-before-attempt rule the caller's contract and performs one attempt
-without falling back. Receiver de-duplication, the attempt record, escalation and fallback are
-the next change. The package starts no live server, listener or delivery queue: the framing host
+For the standalone relay API, this version makes the copy-before-attempt rule the caller's
+contract and performs one attempt without falling back. Receiver de-duplication, the attempt
+record, escalation and fallback are that API's next change; TeamCLI's caller-side send path
+carries its own sender walk separately, which this package neither implements nor measures. The
+package starts no live server, listener or delivery queue: the framing host
 binds only when its caller calls `listen`, inside the caller's process, and the queue opens no
 socket. The daemon still hosts the per-root send and bus listeners, so N checkouts mean 2N+1
 endpoints in one process.
 
-## Reviewed next behavior (not in this build, not measured)
+## Reviewed next behavior for the standalone API (not in this package, not measured)
 
-The timing values reviewed for the next change, kept under the three policy names
+The timing values reviewed for this package's next change, kept under the three policy names
 `delivery-order`, `delivery-timeout` and `delivery-escalation`. They are recorded here as
-direction only: nothing on this page measures them, and no code in this version implements them.
+direction only: nothing on this page measures them, and no code in this package implements them.
 
 - attempt: 15s per route, until the receiver takes it;
 - post-submit READ receipt: 120s, never shorter than the attempt;
@@ -246,7 +248,7 @@ A read receipt is not transport: an ordinary dial is not turned into a synchrono
 
 - A runtime reading a delivered frame. No read receipt is returned by this build.
 - Any wake, read or delivery of a durable copy.
-- Receiver de-duplication, attempt recording, fallback or escalation — none is active here.
+- Receiver de-duplication, attempt recording, fallback or escalation — none is in this package.
 - Any server, listener or queue started by this package outside a caller's own process; the
   framing host and adapter runs above use a synthetic socket in a temp folder.
 - A single endpoint: the daemon still hosts 2N+1 endpoints for N checkouts.
@@ -256,6 +258,6 @@ A read receipt is not transport: an ordinary dial is not turned into a synchrono
 - Exactly-once delivery, or any timing value in the reviewed-next section above.
 - Any behavior beyond the commits and runs written down on this page.
 
-Plans for the next change — a route that is held continuing to the next allowed route,
-cross-route de-duplication, an attempt record, an ambiguous-receipt case and escalation — are
-plans, not measurements. They are not validated by anything on this page.
+Plans for this standalone API's next change — a route that is held continuing to the next
+allowed route, cross-route de-duplication, an attempt record, an ambiguous-receipt case and
+escalation — are plans, not measurements. They are not validated by anything on this page.
