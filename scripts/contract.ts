@@ -15,18 +15,26 @@
 // (`args.rest[1]`) to it. Nothing is repeatable: each parser stores
 // one value per name.
 //
+// Every command also carries who may run it: the gate row the command-to-
+// capability map (src/permissions/map.ts) holds for its word, kind and reason,
+// and `unlisted` where the map holds no row — the map is closed, so its silence
+// is not an admission and the contract never reads it as one.
+//
 //   bun scripts/contract.ts
 //   bun scripts/contract.ts --check
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript';
+import { COMMAND_GATES } from '../src/permissions/map.ts';
 
 const JSON_REL = 'contract/cli.json';
 const MARKDOWN_REL = 'docs/reference/cli.md';
 
 type Flag = { name: string; takesValue: boolean; repeatable: boolean; hidden: boolean };
 type Positional = { name: string; optional: boolean; repeatable: boolean };
+/** Who may run one command, as the map states it: the gate's kind, and the map's own sentence. */
+type Who = { gate: string; why: string };
 type Node = {
   name: string;
   hidden: boolean;
@@ -36,6 +44,8 @@ type Node = {
   subcommands: Node[];
   /** A required word after a positional. Omitted when the command has none, so other commands' keys stay as they are. */
   literals?: string[];
+  /** The who-may-run row. Omitted on the program and on subcommands, which are not words of their own. */
+  who?: Who;
 };
 type Contract = { program: Node; commands: Node[] };
 
@@ -605,6 +615,29 @@ function emptyNode(name: string, hidden: boolean, usage: string[]): Node {
   return { name, hidden, usage, flags: [], positionals: [], subcommands: [] };
 }
 
+/**
+ * The word's who-may-run row. Where the map holds one, its kind and `why` are copied as they
+ * stand — the contract repeats the decision record, it does not reword it. Where the map holds
+ * no row the answer is `unlisted`, never open: the map is closed on purpose (a word it does not
+ * name is refused by the resolver, not judged), and a command that decides for itself must not
+ * read here as one anyone may run.
+ */
+function whoOf(name: string): Who {
+  const gate = COMMAND_GATES[name];
+  if (gate === undefined) {
+    return {
+      gate: 'unlisted',
+      why: 'the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller',
+    };
+  }
+  return { gate: gate.kind, why: gate.why };
+}
+
+function withWho(node: Node): Node {
+  node.who = whoOf(node.name);
+  return node;
+}
+
 export function extract(root: string = rootOf(), overrides?: ReadonlyMap<string, string>): Contract {
   const once = repeatable(root, overrides);
   const cliText = load(root, 'src/cli.ts', overrides);
@@ -632,19 +665,21 @@ export function extract(root: string = rootOf(), overrides?: ReadonlyMap<string,
   }
 
   const commands: Node[] = table.map((entry) =>
-    commandNode(entry.name, false, entry.rel, load(root, entry.rel, overrides), after, programUsage),
+    withWho(commandNode(entry.name, false, entry.rel, load(root, entry.rel, overrides), after, programUsage)),
   );
   for (const entry of dispatch.hidden) {
     if (table.some((command) => command.name === entry.name)) throw new Error(`src/cli.ts: ${entry.name} is listed and hidden`);
     commands.push(
-      entry.rel
-        ? commandNode(entry.name, true, entry.rel, load(root, entry.rel, overrides), [], programUsage)
-        : emptyNode(entry.name, true, []),
+      withWho(
+        entry.rel
+          ? commandNode(entry.name, true, entry.rel, load(root, entry.rel, overrides), [], programUsage)
+          : emptyNode(entry.name, true, []),
+      ),
     );
   }
   for (const word of [...new Set(dispatch.helpWords)].sort(cmp)) {
     if (commands.some((command) => command.name === word)) throw new Error(`src/cli.ts: ${word} is already a command`);
-    commands.push(emptyNode(word, true, [programLine]));
+    commands.push(withWho(emptyNode(word, true, [programLine])));
   }
   commands.sort((a, b) => cmp(a.name, b.name));
 
@@ -685,6 +720,7 @@ function renderNode(node: Node, level: number): string[] {
   if (node.usage.length === 0) lines.push('Usage: none', '');
   else lines.push('Usage:', '', ...node.usage.map((line) => `    ${line}`), '');
   if (node.literals && node.literals.length > 0) lines.push(`Literal: ${node.literals.map((word) => `\`${word}\``).join(', ')}`, '');
+  if (node.who) lines.push(`${'#'.repeat(level + 1)} Who may run it`, '', `\`${node.who.gate}\` — ${node.who.why}`, '');
   lines.push(`${'#'.repeat(level + 1)} Flags`, '');
   if (node.flags.length === 0) lines.push('None.', '');
   else {

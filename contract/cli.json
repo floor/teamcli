@@ -88,7 +88,11 @@
       "usage": [
         "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand"
+      }
     },
     {
       "flags": [
@@ -138,7 +142,11 @@
       "subcommands": [],
       "usage": [
         "team answer <seat> trust [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "pane-authority",
+        "why": "a key into another agent's pane belongs to the pane's lead, a seat above it, or the owner's word for that case; trust, login and security prompts to the owner's alone — pane authority is its own gate, and this map admits no one to it"
+      }
     },
     {
       "flags": [
@@ -191,7 +199,11 @@
       "subcommands": [],
       "usage": [
         "team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -214,7 +226,11 @@
       "subcommands": [],
       "usage": [
         "team broker"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -237,7 +253,11 @@
       "subcommands": [],
       "usage": [
         "team bus"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -303,7 +323,11 @@
       "usage": [
         "team check [--session <name>] [--file <path>] [--repair] [--json]",
         "team check <ref> [--pr <file>] [--since <ref>] [--file <path>]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -374,7 +398,11 @@
       ],
       "usage": [
         "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [],
@@ -382,7 +410,11 @@
       "name": "conformance-adapter",
       "positionals": [],
       "subcommands": [],
-      "usage": []
+      "usage": [],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -429,7 +461,11 @@
       "subcommands": [],
       "usage": [
         "team delegate <session/pane> --commands <act,...> [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "a standing grant with a command list, written against this map: the owner's"
+      }
     },
     {
       "flags": [
@@ -476,7 +512,11 @@
       "subcommands": [],
       "usage": [
         "team doctor [--session <name>] [--file <path>] [--login] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -535,7 +575,11 @@
       "subcommands": [],
       "usage": [
         "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "`stop`: the owner or `leads` for its own team, and the owner may always stop"
+      }
     },
     {
       "flags": [
@@ -589,7 +633,11 @@
       "usage": [
         "team drops [--follow] [--json]",
         "team drops --read --seat <seat> [--session <session>]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -654,7 +702,11 @@
       "subcommands": [],
       "usage": [
         "team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -725,7 +777,11 @@
       "usage": [
         "team grant <seat> --scope <act,...> [--dry-run] [--json]",
         "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "granting is the approval, and the owner grants alone in 0.5.0"
+      }
     },
     {
       "flags": [],
@@ -735,7 +791,11 @@
       "subcommands": [],
       "usage": [
         "team <command> [options]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -783,7 +843,11 @@
       "usage": [
         "team hold <reason> [--until <time>] [--json]",
         "team hold --release [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -818,7 +882,11 @@
       "subcommands": [],
       "usage": [
         "team init [--restore] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`"
+      }
     },
     {
       "flags": [
@@ -847,7 +915,11 @@
       "subcommands": [],
       "usage": [
         "team issues [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -894,7 +966,11 @@
       "subcommands": [],
       "usage": [
         "team list [--all] [--seats] [--watch] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -941,7 +1017,11 @@
       "subcommands": [],
       "usage": [
         "team lock <name> [--for <text>] [--wait <seconds>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1060,7 +1140,11 @@
         "team mcp status [--json]",
         "team mcp doctor [--json]",
         "team mcp serve --seat <seat> [--session <session>]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1089,7 +1173,11 @@
       "subcommands": [],
       "usage": [
         "team messages [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -1136,7 +1224,11 @@
       "subcommands": [],
       "usage": [
         "team next [--mine | --release] [--wait] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -1165,7 +1257,11 @@
       "subcommands": [],
       "usage": [
         "team plan [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1366,7 +1462,11 @@
         "team policy [--seat <name>] [--file <path>] [--json]",
         "team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]",
         "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1431,7 +1531,11 @@
       ],
       "usage": [
         "team pr check <file> [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1568,7 +1672,11 @@
         "team proc add <name> [--pid <pid>] [--note <text>] [--json]",
         "team proc list [--json]",
         "team proc done <name> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1597,7 +1705,11 @@
       "subcommands": [],
       "usage": [
         "team projects [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1643,7 +1755,11 @@
       "subcommands": [],
       "usage": [
         "team raise <kind> <text> [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1696,7 +1812,11 @@
       "subcommands": [],
       "usage": [
         "team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-own-team",
+        "why": "a registry record is a report and confers no right: the owner, or the seat's own team"
+      }
     },
     {
       "flags": [
@@ -1761,7 +1881,11 @@
       ],
       "usage": [
         "team release check <package@version> [--json] [--file <path>]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -1802,7 +1926,11 @@
       "subcommands": [],
       "usage": [
         "team reload <seat> [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act"
+      }
     },
     {
       "flags": [
@@ -1861,7 +1989,11 @@
       "subcommands": [],
       "usage": [
         "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "removing a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner"
+      }
     },
     {
       "flags": [
@@ -1926,7 +2058,11 @@
       "usage": [
         "team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]",
         "team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "renaming a seat: the owner or `leads` for its own team"
+      }
     },
     {
       "flags": [
@@ -1973,7 +2109,11 @@
       "usage": [
         "team reply <id> [<text>] [--close] [--json]",
         "team reply <id> --close"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -2032,7 +2172,11 @@
       "subcommands": [],
       "usage": [
         "team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "the `start` row for a seat: as `start`"
+      }
     },
     {
       "flags": [
@@ -2152,7 +2296,11 @@
         "team revoke grant [--dry-run] [--json]",
         "team revoke delegate <session/pane> [--dry-run] [--json]",
         "team revoke <name> [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal"
+      }
     },
     {
       "flags": [
@@ -2193,7 +2341,11 @@
       "subcommands": [],
       "usage": [
         "team route <seat> [--json] [--dry-run]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -2246,7 +2398,11 @@
       "subcommands": [],
       "usage": [
         "team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -2345,7 +2501,11 @@
         "team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]",
         "team send --list [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "admission",
+        "why": "admission is chain position and the pair's setting, never a role's name: it is decided by the send admission, and this map admits no one to it"
+      }
     },
     {
       "flags": [
@@ -2398,7 +2558,11 @@
       "subcommands": [],
       "usage": [
         "team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -2433,7 +2597,11 @@
       "subcommands": [],
       "usage": [
         "team tempo <word> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -2468,7 +2636,11 @@
       "subcommands": [],
       "usage": [
         "team unlock <name> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -2521,7 +2693,11 @@
       "subcommands": [],
       "usage": [
         "team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "`start`: it runs the hash-pinned start command, and an operation is reached only through `leads` held in a role, never through a grant"
+      }
     },
     {
       "flags": [
@@ -2562,7 +2738,11 @@
       "subcommands": [],
       "usage": [
         "team usage [--json] [--all] [--tree]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -2609,7 +2789,11 @@
       "subcommands": [],
       "usage": [
         "team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     },
     {
       "flags": [
@@ -2788,7 +2972,11 @@
         "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]",
         "team worktree list [--session <name>] [--file <path>] [--json]",
         "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "unlisted",
+        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+      }
     }
   ],
   "program": {
