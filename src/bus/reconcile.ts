@@ -209,7 +209,10 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
           file.endsWith('.delivered') ||
           file.endsWith('.delivered.json') ||
           file.endsWith('.replied') ||
-          file.endsWith('.replied.json')
+          file.endsWith('.replied.json') ||
+          // The fallback episode's marker beside a message record: a summary of route
+          // attempts, never a record some seat was sent.
+          file.endsWith('.fallback.json')
         ) {
           continue;
         }

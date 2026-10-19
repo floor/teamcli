@@ -86,7 +86,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   expect(pane.typed[0]).not.toContain('hello');
   expect(pane.enters).toBe(1);
   const drops = dropDir(made.dir, 'lead');
-  const files = readdirSync(drops);
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(files.length).toBe(1);
   expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
@@ -117,7 +117,7 @@ test('--wait to a claude-code seat walks the typed leg without dialing the socke
   expect(pane.typed.length).toBe(1);
   expect(pane.enters).toBe(1);
   const drops = dropDir(made.dir, 'lead');
-  const files = readdirSync(drops);
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(files.length).toBe(1);
   expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
@@ -355,7 +355,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
   expect(code).toBe(0);
   expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
   expect(pane.typed.length).toBe(1);
-  expect(readdirSync(dropDir(made.dir, 'lead')).length).toBe(1);
+  expect(readdirSync(dropDir(made.dir, 'lead')).filter((name) => !name.includes('.')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
