@@ -4,25 +4,40 @@
 // module turns those facts into the two signals the owner asked for:
 //
 //   1. The instant the last live route fails, one event — `message.held`, routed by the existing
-//      default `['sender', 'lead']`, so the sender and the receiver's lead hear it. Nothing is
-//      emitted before that, and nothing per failed route.
-//   2. If no delivery follows within the owner's policy delay
-//      (`unreachable_threshold_seconds`, resolved by `eventThresholdsInForce`), one escalation to
-//      the main — entity — orchestrator: an event addressed to that seat and one signed mailbox
-//      record. A later delivery cancels the pending escalation.
+//      default `['sender', 'lead']`. Its actual fanout is the sender, every lead of the receiver's
+//      team, and the addressed recipient: the payload names the recipient in `to`, as the existing
+//      reconcile emitters do, and the bus delivers an event addressed to a seat as well as one a
+//      routing word selects (`matchesSubscriber`). Nothing is emitted before that point, and
+//      nothing per failed route.
+//   2. If no delivery follows within the owner's policy delay — the canonical
+//      `delivery-escalation`, read today through its one compatibility mapping to
+//      `unreachable_threshold_seconds` — one escalation to the main (entity) orchestrator: an
+//      event addressed to that seat and one signed mailbox record. A later delivery cancels the
+//      pending escalation. The escalation event goes to the orchestrator (addressed), the sender
+//      and the receiver team's lead, by the same routing.
 //
-// Episode state is a derivative file beside the message record:
-// `<root>/.agents/send-drops/<session>/<seat>/<id>.fallback.json`, the same shape as a thread's
-// `<id>.closed.json`. That file, not the event log, is the replay-lifetime proof: the log rotates
-// and `appendEvent`'s dedup index is rebuilt from whatever segments survived, so a second process
-// or a restart could otherwise see an empty index. The marker remembers `allFailedAt`,
-// `dueAt` and `escalatedAt`, so a restart resumes a due escalation and repeats write nothing.
+// Every attempt is appended whole to a durable ledger in the project's state store
+// (`fallback-attempts-<key>.jsonl`, one JSON line per fact, never rotated). The marker beside the
+// message record (`<root>/.agents/send-drops/<session>/<seat>/<id>.fallback.json`) keeps a
+// bounded summary of recent attempts plus the lifecycle: `allFailedAt`, `dueAt`, `escalatedAt`,
+// `escalatedTo` and a pending `outbox` intent. The marker, not the event log, is the replay-
+// lifetime proof: the log rotates and `appendEvent`'s dedup index is rebuilt from whatever
+// segments survived, so a second process or a restart could otherwise see an empty index.
+//
+// A call takes a lock on the episode's canonical key (a directory under the store's `locks/`,
+// held by `withLock`), so attempts, a due escalation and a delivery cannot interleave their
+// read-modify-write. The event is emitted through an outbox intent written to the marker first:
+// a crash between the intent and the append leaves the intent for the next pass, and
+// `appendEvent`'s deterministic record id makes the retry a duplicate rather than a second event.
+// A delivery arriving in that window cancels the intent: the message is not undelivered.
 //
 // The key is (canonical recipient, message id). The record digest is an immutable value of that
 // key, checked on every fact: a fact that reuses the key with another digest is a conflict and
-// writes nothing. It is never an extra dimension of the key. The recipient is the one TeamCLI
-// verified (team, seat, registry id, session, root); the sender is the verified `Caller` the host
-// passes beside the fact. Nothing here reads an identity out of a payload.
+// writes nothing. It is never an extra dimension of the key. Every deterministic id this module
+// mints — event record id and mailbox id — hashes the canonical key, so one message id sent to
+// two recipients in one session cannot share an event or a mailbox record. The recipient is the
+// one TeamCLI verified (team, seat, registry id, session, root); the sender is the verified
+// `Caller` the host passes beside the fact. Nothing here reads an identity out of a payload.
 //
 // A transport receipt is stored as it came, as an object: `stored` with its id,
 // `maybe-consumed`, or — when the transport returned none — explicit `unknown`. None of these is
@@ -46,7 +61,8 @@ import { recordDir } from '../commands/messages.ts';
 import type { TeamFile } from '../file/types.ts';
 import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { readNoFollow } from './history.ts';
+import { withLock } from '../state.ts';
+import { appendStoreLine, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
 
 /** The receiver as TeamCLI verified it: the registry team and seat, the seat's registry id when
@@ -107,7 +123,7 @@ export type FallbackContext = {
   orchestrator?: EntityOrchestrator | null;
 };
 
-/** One attempt, as the marker keeps it. The receipt is the last one stored, typed. */
+/** One attempt, as the marker's bounded summary keeps it. The durable ledger keeps every one. */
 export type AttemptRecord = {
   route: TransportRoute;
   outcome: AttemptOutcome;
@@ -115,6 +131,18 @@ export type AttemptRecord = {
   ms: number;
   reason?: string;
   receipt: RelayReceipt;
+};
+
+/** An event the episode decided to emit, written to the marker before the append: the outbox. A
+ *  crash before the event goes out leaves the intent for the next pass to retry. */
+export type EventIntent = {
+  kind: 'all-failed' | 'escalated';
+  recordId: string;
+  at: string;
+  /** The route whose failure ended the order, on an all-failed intent. */
+  route?: string;
+  /** The escalation sentence, fixed when the intent is formed so a retry repeats it exactly. */
+  reason?: string;
 };
 
 /** The episode's durable state, written beside the record. The recipient is part of the identity,
@@ -127,12 +155,18 @@ export type FallbackMarker = {
   /** The sender's log tag, fixed at the first fact: a restart reuses it for the escalation. */
   sender: string;
   status: 'trying' | 'all-failed' | 'delivered';
+  /** The most recent attempts: a summary. `attemptLedgerFileName` names the full ledger. */
   attempts: AttemptRecord[];
   allFailedAt?: string;
   /** ISO: the first instant the delayed escalation may fire. Cleared by a delivery. */
   dueAt?: string;
-  /** ISO: when the main escalation ran. Its presence is what makes a repeat a no-op. */
+  /** ISO: when the main escalation was decided. Its presence is what makes a repeat a no-op. */
   escalatedAt?: string;
+  /** The entity lead the escalation was addressed to, fixed with `escalatedAt` so a retry after a
+   *  restart reaches the same seat even if the registry moved. */
+  escalatedTo?: EntityOrchestrator;
+  /** An event decided but not yet confirmed appended. Cleared once the append returns. */
+  outbox?: EventIntent;
   receipt: RelayReceipt;
   updatedAt: string;
 };
@@ -144,14 +178,14 @@ export type FallbackNote =
       ok: true;
       state: 'continued' | 'delivered' | 'duplicate' | 'all-failed';
       marker: FallbackMarker;
-      /** The all-failed event, on the first exhaustion; absent on every other state. */
+      /** An event confirmed during this call: the exhaustion event, or an intent a crash left. */
       event?: SignedEventRecord;
       /** Whether the event append found its record already in the retained log. */
       eventDuplicate: boolean;
       /** The pending main escalation's instant, when one is scheduled. */
       dueAt: string | null;
-      /** Why the policy delay could not be resolved; the episode is still recorded, with no due
-       *  instant, and a later `escalateDue` under a readable policy leaves it pending. */
+      /** Why the policy delay could not be resolved; the episode is still recorded and a later
+       *  `escalateDue` pass retries the resolution. */
       policyRefusal?: string;
     }
   | { ok: false; kind: 'conflict' | 'marker'; reason: string };
@@ -175,9 +209,18 @@ export type EscalationReport = {
   scanned: number;
 };
 
+/** The most attempts the marker keeps as a summary. The ledger keeps every one; this bound only
+ *  keeps the marker legible and its writes small. */
+export const MARKER_ATTEMPT_LIMIT = 16;
+
 /** `(canonical recipient, message id)`, with NUL separators so no two tuples can spell one key. */
 export function fallbackKeyOf(recipient: CanonicalRecipient, messageId: string): string {
   return [recipient.team, recipient.seat, recipient.session, recipient.root, messageId].join('\u0000');
+}
+
+/** A stable 16-hex digest of the episode key, for ids and file names. */
+function episodeHash(recipient: CanonicalRecipient, messageId: string): string {
+  return createHash('sha256').update(fallbackKeyOf(recipient, messageId)).digest('hex').slice(0, 16);
 }
 
 /** The marker's path: a derivative file beside the message record. */
@@ -185,41 +228,97 @@ export function markerPathOf(recipient: CanonicalRecipient, messageId: string): 
   return join(recordDir(recipient.root, recipient.session, recipient.seat), `${messageId}.fallback.json`);
 }
 
-/** The event record id of the immediate all-failed event: deterministic per episode. */
-export function allFailedRecordId(messageId: string): string {
-  return `fallback:all-failed:${messageId}`;
+/** The full attempt ledger's file name in the project's state store. Append-only, never rotated. */
+export function attemptLedgerFileName(recipient: CanonicalRecipient, messageId: string): string {
+  return `fallback-attempts-${episodeHash(recipient, messageId)}.jsonl`;
+}
+
+/** The event record id of the immediate all-failed event: deterministic per episode, and derived
+ *  from the canonical recipient as well as the message id, so two recipients of one message id in
+ *  one session never share an event key. */
+export function allFailedRecordId(recipient: CanonicalRecipient, messageId: string): string {
+  return `fallback:all-failed:${episodeHash(recipient, messageId)}`;
 }
 
 /** The event record id of the delayed main escalation: deterministic per episode. */
-export function escalatedRecordId(messageId: string): string {
-  return `fallback:main-escalated:${messageId}`;
+export function escalatedRecordId(recipient: CanonicalRecipient, messageId: string): string {
+  return `fallback:main-escalated:${episodeHash(recipient, messageId)}`;
 }
 
-/** The mailbox id of the delayed main escalation. A hash keeps the name safe whatever the
- *  message id holds, and deterministic, so `once: true` finds an earlier publication. */
-export function escalationMailboxId(messageId: string): string {
-  return `evt-fallback-${createHash('sha256').update(messageId).digest('hex').slice(0, 16)}`;
+/** The mailbox id of the delayed main escalation. A hash keeps the name safe whatever the message
+ *  id holds, and deterministic, so `once: true` finds an earlier publication. */
+export function escalationMailboxId(recipient: CanonicalRecipient, messageId: string): string {
+  return `evt-fallback-${episodeHash(recipient, messageId)}`;
 }
 
-/** The most attempts a marker keeps. A long episode stays legible; the state it drives is in
- *  `allFailedAt`/`dueAt`/`escalatedAt`, not in the count. */
-const MAX_ATTEMPTS = 64;
+/** The canonical policy name for the main-escalation delay: the design round's
+ *  `delivery-escalation` (delays). Until B5's shared resolver and catalogue land, the delay is
+ *  read through the one compatibility mapping below to the existing
+ *  `event-unreachable-threshold-seconds`, whose release default is 600 s. The resolver owns the
+ *  compatibility rule — when both names are enforced the effective delay respects both shorten-
+ *  only caps — and this module duplicates none of it: it consumes the resolved number and
+ *  implements no route timing. `delivery-order` (the route sequence) and per-route
+ *  `delivery-timeout` stay the transport's; the immediate all-failed event is a fixed invariant,
+ *  not a policy. */
+export const ESCALATION_DELAY_POLICY = 'event-unreachable-threshold-seconds';
+
+/**
+ * Resolve the main-escalation delay through the signed chain in force. The canonical name is
+ * `delivery-escalation`; the compatibility mapping is `unreachable_threshold_seconds` (600 s
+ * release default, shorten-only), and B5's shared resolver will be swapped in here when it is
+ * green, with both caps honoured there. An unreadable or invalid chain schedules nothing and says
+ * why — never a fallback delay — and the episode is still recorded; a later pass under a readable
+ * chain schedules it from the original failure time.
+ */
+export function escalationDelayOf(
+  ctx: FallbackContext,
+  at: string,
+): { ms: number | null; policy: string; refusal?: string } {
+  const resolved = eventThresholdsInForce({
+    home: ctx.home,
+    root: ctx.root,
+    team: ctx.team,
+    now: new Date(at),
+  });
+  if (!resolved.ok) {
+    return {
+      ms: null,
+      policy: ESCALATION_DELAY_POLICY,
+      refusal: resolved.refusals.map((refusal) => refusal.message).join('; '),
+    };
+  }
+  return {
+    ms: resolved.thresholds.unreachable_threshold_seconds * 1000,
+    policy: ESCALATION_DELAY_POLICY,
+  };
+}
 
 /**
  * Record one transport fact in the message's fallback episode.
  *
  * The episode key is (recipient, messageId); `recordDigest` must match a marker already there, or
- * the call refuses as a conflict and writes nothing. A delivered fact ends the episode and cancels
- * any pending escalation. A failed or held fact while the order still holds a live route is a
- * continuation. The first failure with no live route left appends exactly one `message.held`
- * event and schedules the policy-delayed escalation. Any later fact for a finished episode is a
- * duplicate and appends no second event, including after a restart and after the event log has
- * rotated away from the first one.
+ * the call refuses as a conflict and writes nothing. The attempt is appended to the durable
+ * ledger first; a ledger that cannot be written refuses the call, so no attempt goes unrecorded.
+ * A delivered fact ends the episode, cancels any pending escalation and cancels an event intent
+ * a crash left behind. A failed or held fact while the order still holds a live route is a
+ * continuation. The first failure with no live route left writes a durable all-failed intent and
+ * appends exactly one `message.held` event; any later fact for a finished episode is a duplicate
+ * and appends no second event, including after a restart and after the event log rotated away.
+ *
+ * The whole read-modify-write holds the episode's key lock, so a concurrent attempt, escalation
+ * or delivery cannot overwrite or reopen it.
  */
 export function noteTransport(ctx: FallbackContext, fact: TransportFact): FallbackNote {
   const problem = factProblem(fact);
   if (problem !== null) return { ok: false, kind: 'marker', reason: problem };
+  try {
+    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact));
+  } catch (error) {
+    return { ok: false, kind: 'marker', reason: errorMessage(error) };
+  }
+}
 
+function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
   const path = markerPathOf(fact.recipient, fact.messageId);
   const read = markerAt(path);
   if (read.kind === 'unreadable') return { ok: false, kind: 'marker', reason: read.reason };
@@ -254,7 +353,6 @@ export function noteTransport(ctx: FallbackContext, fact: TransportFact): Fallba
     };
   }
 
-  const wasDelivered = marker.status === 'delivered';
   const receipt = normalizeReceipt(fact.receipt);
   const attempt: AttemptRecord = {
     route: fact.route,
@@ -264,15 +362,43 @@ export function noteTransport(ctx: FallbackContext, fact: TransportFact): Fallba
     ...(fact.reason !== undefined ? { reason: fact.reason } : {}),
     receipt,
   };
-  marker.attempts = [...marker.attempts, attempt].slice(-MAX_ATTEMPTS);
+
+  // Every attempt is recorded whole, before any state moves. A ledger that cannot be written
+  // refuses the call; the host may retry the same fact.
+  const ledger = appendStoreLine(
+    ctx.team.project,
+    fact.recipient.root,
+    ctx.home,
+    attemptLedgerFileName(fact.recipient, fact.messageId),
+    {
+      ts: fact.at,
+      messageId: fact.messageId,
+      recipient: fact.recipient,
+      recordDigest: fact.recordDigest,
+      route: fact.route,
+      outcome: fact.outcome,
+      ms: fact.ms,
+      ...(fact.reason !== undefined ? { reason: fact.reason } : {}),
+      receipt,
+    },
+    { rotate: false, label: 'the fallback attempt ledger' },
+  );
+  if (!ledger.ok) {
+    return { ok: false, kind: 'marker', reason: `the attempt was not recorded: ${ledger.reason}` };
+  }
+
+  const wasDelivered = marker.status === 'delivered';
+  marker.attempts = [...marker.attempts, attempt].slice(-MARKER_ATTEMPT_LIMIT);
   marker.receipt = receipt;
   marker.updatedAt = fact.at;
 
   if (fact.outcome === 'delivered') {
     if (!wasDelivered) {
       marker.status = 'delivered';
-      // Recovery cancels a pending escalation, including one a restart had already scheduled.
+      // Recovery cancels a pending escalation, including one a restart had already scheduled,
+      // and an event intent formed before it: the message is not undelivered after all.
       delete marker.dueAt;
+      delete marker.outbox;
     }
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
@@ -285,57 +411,87 @@ export function noteTransport(ctx: FallbackContext, fact: TransportFact): Fallba
     };
   }
 
+  // An intent an earlier process wrote before its event went out is retried now, under this key's
+  // lock. A delivery above cancelled one instead.
+  let drained: FlushResult;
+  try {
+    drained = flushOutbox(ctx, marker, path);
+  } catch (error) {
+    return { ok: false, kind: 'marker', reason: errorMessage(error) };
+  }
+  if (!drained.ok) return { ok: false, kind: 'marker', reason: drained.reason };
+  const eventFields = drained.event === null ? {} : { event: drained.event };
+
   if (wasDelivered) {
-    // The episode is over: the attempt is kept for the record, nothing is emitted or reopened.
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
-    return { ok: true, state: 'duplicate', marker, eventDuplicate: false, dueAt: marker.dueAt ?? null };
+    return {
+      ok: true,
+      state: 'duplicate',
+      marker,
+      eventDuplicate: drained.duplicate,
+      dueAt: marker.dueAt ?? null,
+      ...eventFields,
+    };
   }
 
   if (marker.allFailedAt !== undefined) {
     // The marker, not the rotated log, is what makes this a repeat.
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
-    return { ok: true, state: 'duplicate', marker, eventDuplicate: false, dueAt: marker.dueAt ?? null };
+    return {
+      ok: true,
+      state: 'duplicate',
+      marker,
+      eventDuplicate: drained.duplicate,
+      dueAt: marker.dueAt ?? null,
+      ...eventFields,
+    };
   }
 
   if (fact.liveRoutesRemain) {
     marker.status = 'trying';
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
-    return { ok: true, state: 'continued', marker, eventDuplicate: false, dueAt: marker.dueAt ?? null };
+    return {
+      ok: true,
+      state: 'continued',
+      marker,
+      eventDuplicate: drained.duplicate,
+      dueAt: marker.dueAt ?? null,
+      ...eventFields,
+    };
   }
 
-  // First exhaustion. Schedule before the event so the persisted state explains what was emitted.
+  // First exhaustion: schedule, then persist the event intent, then emit it. A crash after the
+  // intent and before the append leaves an episode the next pass drains.
   marker.status = 'all-failed';
   marker.allFailedAt = fact.at;
-  const delay = escalationDelayMs(ctx, fact.at);
+  const delay = escalationDelayOf(ctx, fact.at);
   if (delay.ms !== null) marker.dueAt = new Date(Date.parse(fact.at) + delay.ms).toISOString();
   else delete marker.dueAt;
-
-  const input: EventAppendInput = {
-    ts: fact.at,
-    kind: 'message.held',
-    session: fact.recipient.session,
-    record_id: allFailedRecordId(fact.messageId),
-    from: marker.sender,
-    to: fact.recipient.seat,
-    seat: fact.recipient.seat,
-    thread: fact.messageId,
-    via: fact.route,
-    reason: 'all live routes failed',
+  marker.outbox = {
+    kind: 'all-failed',
+    recordId: allFailedRecordId(fact.recipient, fact.messageId),
+    at: fact.at,
+    route: fact.route,
   };
-  const appended = appendEvent(ctx.team.project, fact.recipient.root, ctx.home, input);
-  if (!appended.ok) return { ok: false, kind: 'marker', reason: appended.reason };
+  const intent = writeMarker(path, marker);
+  if (!intent.ok) return { ok: false, kind: 'marker', reason: intent.reason };
 
-  const wrote = writeMarker(path, marker);
-  if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
+  let flushed: FlushResult;
+  try {
+    flushed = flushOutbox(ctx, marker, path);
+  } catch (error) {
+    return { ok: false, kind: 'marker', reason: errorMessage(error) };
+  }
+  if (!flushed.ok) return { ok: false, kind: 'marker', reason: flushed.reason };
   return {
     ok: true,
     state: 'all-failed',
     marker,
-    event: appended.record,
-    eventDuplicate: appended.duplicate,
+    ...(flushed.event !== null ? { event: flushed.event } : {}),
+    eventDuplicate: flushed.duplicate,
     dueAt: marker.dueAt ?? null,
     ...(delay.refusal !== undefined ? { policyRefusal: delay.refusal } : {}),
   };
@@ -343,13 +499,16 @@ export function noteTransport(ctx: FallbackContext, fact: TransportFact): Fallba
 
 /**
  * Fire the delayed main escalation for every episode whose `dueAt` has passed and whose delivery
- * has not followed. The scan reads markers under each root given (`ctx.root` by default); an
- * episode found in another checkout still resolves that checkout's entity lead by its own root.
+ * has not followed, and retry event intents a crash left pending. The scan reads markers under
+ * `ctx.root`; an episode is processed under its own key lock and re-read inside it, so a pass
+ * running beside a send cannot fire twice or act on a stale marker.
  *
  * Idempotent: `escalatedAt` in the marker makes a second call — in this process, after a restart,
  * or after the event log rotated — write nothing. A delivery that arrived first has already
- * cleared `dueAt`. When the entity orchestrator does not resolve, the entry is refused and left
- * pending, so a pass under a repaired registry can still raise it.
+ * cleared `dueAt` and any intent. When the entity orchestrator does not resolve, the entry is
+ * refused and left pending, so a pass under a repaired registry can still raise it. When the
+ * escalation delay cannot be resolved, no escalation is scheduled — fail closed — and the refusal
+ * is reported; a later pass under a readable chain schedules it from the original failure time.
  */
 export function escalateDue(ctx: FallbackContext, options: { at?: Date } = {}): EscalationReport {
   const at = options.at ?? ctx.now();
@@ -361,96 +520,198 @@ export function escalateDue(ctx: FallbackContext, options: { at?: Date } = {}): 
       report.unreadable.push(found.path);
       continue;
     }
+    const { recipient, messageId } = found.marker;
+    let step: EscalationStep;
+    try {
+      step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso));
+    } catch (error) {
+      step = { kind: 'refused', reason: errorMessage(error) };
+    }
+    if (step.kind === 'none') continue;
     report.scanned += 1;
-    const { marker, path } = found;
-    if (marker.status !== 'all-failed') continue;
-    if (marker.dueAt === undefined || marker.escalatedAt !== undefined) continue;
-    const due = Date.parse(marker.dueAt);
-    if (!Number.isFinite(due) || due > at.getTime()) continue;
-
-    const orchestrator =
-      ctx.orchestrator !== undefined
-        ? ctx.orchestrator
-        : readEntityOrchestrator(ctx.home, teamIdOf(marker.recipient.root));
-    if (orchestrator === null) {
-      report.refused.push({
-        messageId: marker.messageId,
-        recipient: marker.recipient,
-        reason: `no main orchestrator resolves for ${marker.recipient.team}`,
-      });
-      continue;
-    }
-
-    const seconds = Math.round((at.getTime() - Date.parse(marker.allFailedAt ?? atIso)) / 1000);
-    const input: EventAppendInput = {
-      ts: atIso,
-      kind: 'message.held',
-      session: marker.recipient.session,
-      record_id: escalatedRecordId(marker.messageId),
-      from: marker.sender,
-      to: orchestrator.seat,
-      seat: marker.recipient.seat,
-      thread: marker.messageId,
-      via: 'fallback',
-      reason: `still undelivered after ${seconds}s: all live routes failed`,
-    };
-    const appended = appendEvent(ctx.team.project, marker.recipient.root, ctx.home, input);
-    if (!appended.ok) {
-      report.refused.push({ messageId: marker.messageId, recipient: marker.recipient, reason: appended.reason });
-      continue;
-    }
-
-    let mailbox: string | null = null;
-    if (orchestrator.seat !== marker.recipient.seat) {
-      const wrote = writeRuntimeMailboxRecord({
-        root: orchestrator.root,
-        home: ctx.home,
-        to: orchestrator.seat,
-        id: escalationMailboxId(marker.messageId),
-        text: `all live routes to ${marker.recipient.seat} failed; message ${marker.messageId} is still undelivered after ${seconds}s`,
-        session: orchestrator.session,
-        at: atIso,
-        once: true,
-      });
-      if (!wrote.ok) {
-        // The event stands; leave `escalatedAt` unset so the next pass retries the mailbox.
-        report.refused.push({ messageId: marker.messageId, recipient: marker.recipient, reason: wrote.error });
-        continue;
-      }
-      mailbox = wrote.path;
-    }
-
-    marker.escalatedAt = atIso;
-    marker.updatedAt = atIso;
-    const wrote = writeMarker(path, marker);
-    if (!wrote.ok) {
-      report.refused.push({ messageId: marker.messageId, recipient: marker.recipient, reason: wrote.reason });
-      continue;
-    }
-    report.escalated.push({
-      messageId: marker.messageId,
-      recipient: marker.recipient,
-      event: appended.record,
-      duplicate: appended.duplicate,
-      mailbox,
-    });
+    if (step.kind === 'unreadable') report.unreadable.push(step.path);
+    else if (step.kind === 'refused') report.refused.push({ messageId, recipient, reason: step.reason });
+    else if (step.kind === 'escalated') report.escalated.push(step.entry);
   }
   return report;
 }
 
-/** The policy delay before the main escalation. Resolved through the signed chain in force at the
- *  failure; an unreadable policy schedules nothing and says why. */
-function escalationDelayMs(ctx: FallbackContext, at: string): { ms: number | null; refusal?: string } {
-  const resolved = eventThresholdsInForce({
-    home: ctx.home,
-    root: ctx.root,
-    team: ctx.team,
-    now: new Date(at),
-  });
-  if (!resolved.ok) {
-    return { ms: null, refusal: resolved.refusals.map((refusal) => refusal.message).join('; ') };
+type EscalationStep =
+  | { kind: 'none' }
+  | { kind: 'idle' }
+  | { kind: 'unreadable'; path: string }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'escalated'; entry: EscalationEntry };
+
+function escalateOne(
+  ctx: FallbackContext,
+  recipient: CanonicalRecipient,
+  messageId: string,
+  at: Date,
+  atIso: string,
+): EscalationStep {
+  const path = markerPathOf(recipient, messageId);
+  const read = markerAt(path);
+  if (read.kind === 'unreadable') return { kind: 'unreadable', path };
+  if (read.kind === 'none') return { kind: 'none' };
+  const marker = read.marker;
+  if (!sameRecipient(marker.recipient, recipient) || marker.messageId !== messageId) {
+    return { kind: 'refused', reason: `${path}: the marker names another episode` };
   }
-  return { ms: resolved.thresholds.unreachable_threshold_seconds * 1000 };
+
+  // A pending intent comes first, whatever the state: a crash before an event is retried here.
+  const drained = flushOutbox(ctx, marker, path);
+  if (!drained.ok) return { kind: 'refused', reason: drained.reason };
+  if (drained.kind === 'escalated' && drained.event !== null) {
+    return {
+      kind: 'escalated',
+      entry: {
+        messageId,
+        recipient,
+        event: drained.event,
+        duplicate: drained.duplicate,
+        mailbox: drained.mailbox,
+      },
+    };
+  }
+
+  if (marker.status !== 'all-failed') return { kind: 'idle' };
+  if (marker.escalatedAt !== undefined) return { kind: 'idle' };
+
+  if (marker.dueAt === undefined) {
+    // The first pass ran under an unreadable policy and scheduled nothing. Retry the resolution
+    // now, from the original failure instant, and keep the episode unscheduled while it refuses.
+    const delay = escalationDelayOf(ctx, marker.allFailedAt ?? atIso);
+    if (delay.ms === null) {
+      return { kind: 'refused', reason: `the escalation delay is unreadable: ${delay.refusal ?? 'no delay resolved'}` };
+    }
+    marker.dueAt = new Date(Date.parse(marker.allFailedAt ?? atIso) + delay.ms).toISOString();
+    const wrote = writeMarker(path, marker);
+    if (!wrote.ok) return { kind: 'refused', reason: wrote.reason };
+  }
+  const due = Date.parse(marker.dueAt);
+  if (!Number.isFinite(due) || due > at.getTime()) return { kind: 'idle' };
+
+  const orchestrator =
+    ctx.orchestrator !== undefined
+      ? ctx.orchestrator
+      : readEntityOrchestrator(ctx.home, teamIdOf(marker.recipient.root));
+  if (orchestrator === null) {
+    return { kind: 'refused', reason: `no main orchestrator resolves for ${marker.recipient.team}` };
+  }
+
+  const seconds = Math.round((at.getTime() - Date.parse(marker.allFailedAt ?? atIso)) / 1000);
+  marker.escalatedAt = atIso;
+  marker.escalatedTo = orchestrator;
+  marker.updatedAt = atIso;
+  marker.outbox = {
+    kind: 'escalated',
+    recordId: escalatedRecordId(recipient, messageId),
+    at: atIso,
+    reason: `still undelivered after ${seconds}s: all live routes failed`,
+  };
+  const intent = writeMarker(path, marker);
+  if (!intent.ok) return { kind: 'refused', reason: intent.reason };
+
+  const flushed = flushOutbox(ctx, marker, path);
+  if (!flushed.ok) return { kind: 'refused', reason: flushed.reason };
+  if (flushed.event === null) return { kind: 'refused', reason: `${path}: the escalation intent emitted no event` };
+  return {
+    kind: 'escalated',
+    entry: { messageId, recipient, event: flushed.event, duplicate: flushed.duplicate, mailbox: flushed.mailbox },
+  };
+}
+
+type FlushResult =
+  | { ok: true; kind: EventIntent['kind'] | null; event: SignedEventRecord | null; duplicate: boolean; mailbox: string | null }
+  | { ok: false; reason: string };
+
+/**
+ * Emit the marker's pending intent, then clear it. Called under the episode's key lock. The
+ * deterministic record id makes a retry an `appendEvent` duplicate rather than a second event; the
+ * mailbox is `once`, so a retry after a mailbox failure finds the first record. The intent stays
+ * in the marker until both writes return, so a crash in this function is retried next pass.
+ */
+function flushOutbox(ctx: FallbackContext, marker: FallbackMarker, path: string): FlushResult {
+  const intent = marker.outbox;
+  if (intent === undefined) return { ok: true, kind: null, event: null, duplicate: false, mailbox: null };
+
+  let input: EventAppendInput;
+  let mailbox: string | null = null;
+  if (intent.kind === 'all-failed') {
+    input = {
+      ts: intent.at,
+      kind: 'message.held',
+      session: marker.recipient.session,
+      record_id: intent.recordId,
+      from: marker.sender,
+      to: marker.recipient.seat,
+      seat: marker.recipient.seat,
+      thread: marker.messageId,
+      via: intent.route ?? 'fallback',
+      reason: 'all live routes failed',
+    };
+  } else {
+    const target = marker.escalatedTo;
+    if (target === undefined) {
+      return { ok: false, reason: `fallback: ${marker.messageId} has an escalation intent with no recorded target` };
+    }
+    input = {
+      ts: intent.at,
+      kind: 'message.held',
+      session: marker.recipient.session,
+      record_id: intent.recordId,
+      from: marker.sender,
+      to: target.seat,
+      seat: marker.recipient.seat,
+      thread: marker.messageId,
+      via: 'fallback',
+      reason: intent.reason ?? 'still undelivered: all live routes failed',
+    };
+  }
+
+  const appended = appendEvent(ctx.team.project, marker.recipient.root, ctx.home, input);
+  if (!appended.ok) return { ok: false, reason: appended.reason };
+
+  if (intent.kind === 'escalated') {
+    const target = marker.escalatedTo!;
+    // An orchestrator that is the recipient itself is reached by the event alone; a mailbox
+    // record to the same seat would be a second copy of it.
+    if (target.seat !== marker.recipient.seat) {
+      const wrote = writeRuntimeMailboxRecord({
+        root: target.root,
+        home: ctx.home,
+        to: target.seat,
+        id: escalationMailboxId(marker.recipient, marker.messageId),
+        text: intent.reason ?? `all live routes to ${marker.recipient.seat} failed; message ${marker.messageId} is still undelivered`,
+        session: target.session,
+        at: intent.at,
+        once: true,
+      });
+      if (!wrote.ok) {
+        // The event stands; the intent stays, so the next pass retries the mailbox.
+        return { ok: false, reason: wrote.error };
+      }
+      mailbox = wrote.path;
+    }
+  }
+
+  delete marker.outbox;
+  const wrote = writeMarker(path, marker);
+  if (!wrote.ok) return { ok: false, reason: wrote.reason };
+  return { ok: true, kind: intent.kind, event: appended.record, duplicate: appended.duplicate, mailbox };
+}
+
+/** The lock's directory, unique per canonical episode key, under the project's state store. */
+function withKeyLock<T>(ctx: FallbackContext, recipient: CanonicalRecipient, messageId: string, work: () => T): T {
+  const storeDir = dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
+  const ladder = ensureStoreLadder(storeDir, ctx.home);
+  if (ladder !== null) throw new Error(ladder);
+  return withLock(join(storeDir, 'locks', `fallback-${episodeHash(recipient, messageId)}`), work, { waitMs: 10_000 });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 type MarkerRead =
@@ -546,7 +807,7 @@ const MESSAGE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SEGMENT = /^[^/\\\u0000]+$/;
 
 /** Anything the host could hand in that is not a usable fact is refused before a write, so a
- *  malformed value can never mint a marker or an event. */
+ *  malformed value can never mint a marker, a ledger line or an event. */
 function factProblem(fact: TransportFact): string | null {
   const r = fact.recipient;
   if (!SEGMENT.test(r.team) || !SEGMENT.test(r.seat) || !SEGMENT.test(r.session)) {
@@ -611,6 +872,12 @@ function markerOf(value: unknown): FallbackMarker | null {
     if (typeof stamp !== 'string' || !Number.isFinite(Date.parse(stamp))) return null;
     marker[key] = stamp;
   }
+  const target = orchestratorOf(raw.escalatedTo);
+  if (raw.escalatedTo !== undefined && target === null) return null;
+  if (target !== null) marker.escalatedTo = target;
+  const intent = intentOf(raw.outbox);
+  if (raw.outbox !== undefined && intent === null) return null;
+  if (intent !== null) marker.outbox = intent;
   return marker;
 }
 
@@ -628,6 +895,34 @@ function recipientOf(value: unknown): CanonicalRecipient | null {
     session: raw.session as string,
     root: raw.root as string,
   };
+}
+
+function orchestratorOf(value: unknown): EntityOrchestrator | null {
+  if (value === null || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  for (const key of ['seat', 'team', 'root', 'session'] as const) {
+    if (typeof raw[key] !== 'string' || raw[key] === '') return null;
+  }
+  return {
+    seat: raw.seat as string,
+    team: raw.team as string,
+    root: raw.root as string,
+    session: raw.session as string,
+  };
+}
+
+function intentOf(value: unknown): EventIntent | null {
+  if (value === null || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.kind !== 'all-failed' && raw.kind !== 'escalated') return null;
+  if (typeof raw.recordId !== 'string' || raw.recordId === '') return null;
+  if (typeof raw.at !== 'string' || !Number.isFinite(Date.parse(raw.at))) return null;
+  if (raw.route !== undefined && typeof raw.route !== 'string') return null;
+  if (raw.reason !== undefined && typeof raw.reason !== 'string') return null;
+  const intent: EventIntent = { kind: raw.kind, recordId: raw.recordId, at: raw.at };
+  if (typeof raw.route === 'string') intent.route = raw.route;
+  if (typeof raw.reason === 'string') intent.reason = raw.reason;
+  return intent;
 }
 
 function attemptOf(value: unknown): AttemptRecord | null {

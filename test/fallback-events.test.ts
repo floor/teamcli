@@ -1,9 +1,13 @@
-// The fallback episode's focused fixtures: one all-failed event per episode, routed to the sender
-// and the receiver's lead; persistent dedup in the marker, not the rotating event log; the policy-
-// delayed main escalation fired once and resumed after a restart; recovery cancellation; the
-// digest as a checked value; and typed transport receipts where a missing one is explicit.
+// The fallback episode's focused fixtures: one all-failed event per episode (its actual fanout:
+// the sender, the receiver's lead and the addressed recipient — the bus matches `to`); persistent
+// dedup in the marker, not the rotating event log; every attempt kept in the durable ledger while
+// the marker carries a bounded summary; deterministic ids from the canonical recipient as well as
+// the message id; event intents retried after a crash on either side of the append; the policy-
+// delayed main escalation fired once and resumed after a restart, and its delay re-resolved by a
+// later pass after an unreadable policy; recovery cancellation; the digest as a checked value; and
+// typed transport receipts where a missing one is explicit.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { eventLogPath, readEvents, verifySignedEvent, type SignedEventRecord } from '../src/bus/log.ts';
@@ -16,9 +20,13 @@ import { eventThresholdsInForce } from '../src/policy/thresholds.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   allFailedRecordId,
+  attemptLedgerFileName,
+  ESCALATION_DELAY_POLICY,
   escalateDue,
   escalatedRecordId,
+  escalationDelayOf,
   escalationMailboxId,
+  MARKER_ATTEMPT_LIMIT,
   markerPathOf,
   noteTransport,
   type CanonicalRecipient,
@@ -27,6 +35,7 @@ import {
   type RelayReceipt,
   type TransportFact,
 } from '../src/send/fallback-events.ts';
+import { historyPath } from '../src/send/history.ts';
 
 const TEAM_YAML = `format: 1
 entity: floor
@@ -159,7 +168,7 @@ function verifiedLog(world: World): SignedEventRecord[] {
 }
 
 describe('the fallback episode', () => {
-  test('records one all-failed event for the sender and the receiver lead', () => {
+  test('records one all-failed event and its actual fanout is sender, receiver lead and recipient', () => {
     const world = makeWorld();
     const note = noteTransport(world.ctx, fact(world));
     if (!note.ok) throw new Error(note.reason);
@@ -167,12 +176,17 @@ describe('the fallback episode', () => {
     expect(note.state).toBe('all-failed');
     expect(note.eventDuplicate).toBe(false);
     expect(note.dueAt).toBe(new Date(Date.parse(AT) + delayMs(world)).toISOString());
+    const delay = escalationDelayOf(world.ctx, AT);
+    expect(delay.policy).toBe(ESCALATION_DELAY_POLICY);
+    expect(delay.policy).toBe('event-unreachable-threshold-seconds');
+    expect(delay.ms).toBe(delayMs(world));
+    expect(delay.refusal).toBeUndefined();
 
     const events = verifiedLog(world);
     expect(events).toHaveLength(1);
     const payload = events[0]!.payload;
     expect(payload.kind).toBe('message.held');
-    expect(payload.record_id).toBe(allFailedRecordId('m-001'));
+    expect(payload.record_id).toBe(allFailedRecordId(world.recipient, 'm-001'));
     expect(payload.from).toBe('worker-1');
     expect(payload.to).toBe('worker-2');
     expect(payload.seat).toBe('worker-2');
@@ -182,6 +196,13 @@ describe('the fallback episode', () => {
     const routed = recipientsForEvent(payload, world.team);
     expect(routed.has('worker-1')).toBe(true);
     expect(routed.has('crew-lead')).toBe(true);
+    // `to` names the held recipient, as the existing reconcile emitters do. `recipientsForEvent`
+    // alone answers the routing word (sender + lead); the bus's `matchesSubscriber` also
+    // delivers an event addressed to a seat, so the actual audience is the union: sender,
+    // receiver lead and the addressed recipient. The delayed escalation's audience is the same
+    // union with the entity orchestrator in the addressed place.
+    const audience = new Set([...routed, ...(payload.to === undefined ? [] : [payload.to])]);
+    expect(audience.has('worker-2')).toBe(true);
 
     const marker = readMarker(world);
     expect(marker.status).toBe('all-failed');
@@ -307,17 +328,23 @@ describe('the fallback episode', () => {
     expect(fired.refused).toHaveLength(0);
     expect(fired.escalated).toHaveLength(1);
     const entry = fired.escalated[0]!;
-    expect(entry.event.payload.record_id).toBe(escalatedRecordId('m-001'));
+    expect(entry.event.payload.record_id).toBe(escalatedRecordId(world.recipient, 'm-001'));
     expect(entry.event.payload.kind).toBe('message.held');
     expect(entry.event.payload.to).toBe('entity-lead');
     expect(entry.event.payload.from).toBe('worker-1');
     expect(entry.event.payload.via).toBe('fallback');
-    expect(entry.mailbox).toBe(messageFile(world.entityRoot, 'entity-lead', escalationMailboxId('m-001')));
+    const escalationFanout = recipientsForEvent(entry.event.payload, world.team);
+    // Routed to the sender and receiver lead; addressed to the entity orchestrator, which the
+    // bus also delivers to via `to`.
+    expect(escalationFanout.has('worker-1')).toBe(true);
+    expect(escalationFanout.has('crew-lead')).toBe(true);
+    expect(entry.event.payload.to).toBe('entity-lead');
+    expect(entry.mailbox).toBe(messageFile(world.entityRoot, 'entity-lead', escalationMailboxId(world.recipient, 'm-001')));
     const mailbox = JSON.parse(readFileSync(entry.mailbox!, 'utf8')) as {
       payload: { to: string; id: string; body: string; session: string };
     };
     expect(mailbox.payload.to).toBe('entity-lead');
-    expect(mailbox.payload.id).toBe(escalationMailboxId('m-001'));
+    expect(mailbox.payload.id).toBe(escalationMailboxId(world.recipient, 'm-001'));
     expect(mailbox.payload.session).toBe('floor-hq');
     expect(mailbox.payload.body).toContain('still undelivered');
     expect(readMarker(world).escalatedAt).toBe(new Date(due).toISOString());
@@ -409,5 +436,191 @@ describe('the fallback episode', () => {
     if (!stored.ok) throw new Error(stored.reason);
     expect(readMarker(world, 'm-stored').receipt).toEqual({ kind: 'stored', id: 'drop-7' });
     expect(verifiedLog(world)).toHaveLength(0);
+  });
+
+  test('every attempt is kept in the durable ledger while the marker summary stays bounded', () => {
+    const world = makeWorld();
+    const total = MARKER_ATTEMPT_LIMIT + 2;
+    for (let n = 0; n < total; n++) {
+      const note = noteTransport(world.ctx, fact(world, {
+        messageId: 'm-ledger',
+        outcome: 'held',
+        liveRoutesRemain: true,
+        route: n % 2 === 0 ? 'socket' : 'native',
+        at: new Date(Date.parse(AT) + n * 1_000).toISOString(),
+        ms: n,
+        receipt: { kind: 'stored', id: `drop-${n}` },
+      }));
+      if (!note.ok) throw new Error(note.reason);
+      expect(note.state).toBe('continued');
+    }
+
+    const ledgerPath = join(
+      dirname(historyPath(world.team.project, world.root, world.home)),
+      attemptLedgerFileName(world.recipient, 'm-ledger'),
+    );
+    const lines = readFileSync(ledgerPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toHaveLength(total);
+    expect(lines[0]!.route).toBe('socket');
+    expect(lines[total - 1]!.route).toBe('native');
+    expect(lines[total - 1]!.recipient).toEqual(world.recipient);
+    expect(lines[total - 1]!.receipt).toEqual({ kind: 'stored', id: `drop-${total - 1}` });
+
+    const marker = readMarker(world, 'm-ledger');
+    expect(marker.attempts).toHaveLength(MARKER_ATTEMPT_LIMIT);
+    // The two oldest left the marker summary only; the ledger above still holds them.
+    expect(marker.attempts[0]!.route).toBe('socket');
+    expect(marker.attempts[MARKER_ATTEMPT_LIMIT - 1]!.route).toBe('native');
+    expect(marker.status).toBe('trying');
+    expect(verifiedLog(world)).toHaveLength(0);
+  });
+
+  test('one message id to two recipients never shares an event, a ledger or a mailbox', () => {
+    const world = makeWorld();
+    const other: CanonicalRecipient = {
+      team: 'acme',
+      seat: 'crew-lead',
+      toId: 'agt_crewlead0000',
+      session: 'acme-dev',
+      root: world.root,
+    };
+    const first = noteTransport(world.ctx, fact(world, { messageId: 'm-twin' }));
+    if (!first.ok) throw new Error(first.reason);
+    const second = noteTransport(world.ctx, fact(world, { messageId: 'm-twin', recipient: other }));
+    if (!second.ok) throw new Error(second.reason);
+
+    expect(first.event!.payload.record_id).not.toBe(second.event!.payload.record_id);
+    expect(second.event!.payload.to).toBe('crew-lead');
+    expect(verifiedLog(world)).toHaveLength(2);
+
+    expect(attemptLedgerFileName(world.recipient, 'm-twin')).not.toBe(attemptLedgerFileName(other, 'm-twin'));
+    const storeDir = dirname(historyPath(world.team.project, world.root, world.home));
+    expect(readdirSync(storeDir).filter((name) => name.startsWith('fallback-attempts-'))).toHaveLength(2);
+
+    const fired = escalateDue(world.ctx, { at: new Date(Date.parse(first.dueAt!) + 1_000) });
+    expect(fired.refused).toHaveLength(0);
+    expect(fired.escalated).toHaveLength(2);
+    const mailboxes = fired.escalated.map((entry) => entry.mailbox);
+    expect(new Set(mailboxes).size).toBe(2);
+    expect(escalationMailboxId(world.recipient, 'm-twin')).not.toBe(escalationMailboxId(other, 'm-twin'));
+    expect(readdirSync(join(world.entityRoot, '.agents', 'messages', 'entity-lead'))).toHaveLength(2);
+    // Both immediate events and both escalation events stand apart.
+    expect(verifiedLog(world)).toHaveLength(4);
+  });
+
+  test('an event intent left before the append is drained exactly once after a restart', () => {
+    const world = makeWorld();
+    const first = noteTransport(world.ctx, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+
+    // The crash window: the intent is durable, the process died before the append ran. Model it
+    // by re-adding the intent to the marker and dropping the event log.
+    const marker = readMarker(world);
+    marker.outbox = {
+      kind: 'all-failed',
+      recordId: allFailedRecordId(world.recipient, 'm-001'),
+      at: AT,
+      route: 'socket',
+    };
+    writeFileSync(markerPathOf(world.recipient, 'm-001'), `${JSON.stringify(marker)}\n`);
+    unlinkSync(eventLogPath(world.team.project, world.root, world.home));
+
+    const resumed = noteTransport(world.ctx, fact(world, { at: '2026-10-20T10:00:05.000Z' }));
+    if (!resumed.ok) throw new Error(resumed.reason);
+    expect(resumed.state).toBe('duplicate');
+    expect(resumed.eventDuplicate).toBe(false);
+    expect(resumed.event!.payload.record_id).toBe(allFailedRecordId(world.recipient, 'm-001'));
+    expect(verifiedLog(world)).toHaveLength(1);
+    expect(readMarker(world).outbox).toBeUndefined();
+
+    const again = noteTransport(world.ctx, fact(world, { at: '2026-10-20T10:00:10.000Z' }));
+    if (!again.ok) throw new Error(again.reason);
+    expect(again.event).toBeUndefined();
+    expect(verifiedLog(world)).toHaveLength(1);
+  });
+
+  test('an intent left after the append is drained as a duplicate, not a second event', () => {
+    const world = makeWorld();
+    const first = noteTransport(world.ctx, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+
+    // The other crash window: the append returned, the process died before the marker cleared
+    // the intent. The log still holds the event.
+    const marker = readMarker(world);
+    marker.outbox = {
+      kind: 'all-failed',
+      recordId: allFailedRecordId(world.recipient, 'm-001'),
+      at: AT,
+      route: 'socket',
+    };
+    writeFileSync(markerPathOf(world.recipient, 'm-001'), `${JSON.stringify(marker)}\n`);
+
+    const resumed = noteTransport(world.ctx, fact(world, { route: 'native', at: '2026-10-20T10:00:05.000Z' }));
+    if (!resumed.ok) throw new Error(resumed.reason);
+    expect(resumed.state).toBe('duplicate');
+    expect(resumed.eventDuplicate).toBe(true);
+    expect(resumed.event!.payload.record_id).toBe(allFailedRecordId(world.recipient, 'm-001'));
+    expect(verifiedLog(world)).toHaveLength(1);
+    expect(readMarker(world).outbox).toBeUndefined();
+  });
+
+  test('a crash after the escalation mailbox write retries as a duplicate, not a second record', () => {
+    const world = makeWorld();
+    const first = noteTransport(world.ctx, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+    const due = Date.parse(first.dueAt!);
+    const fired = escalateDue(world.ctx, { at: new Date(due) });
+    expect(fired.escalated).toHaveLength(1);
+    const mailbox = fired.escalated[0]!.mailbox!;
+
+    // The crash window after both writes and before the marker's outbox was cleared.
+    const marker = readMarker(world);
+    marker.outbox = {
+      kind: 'escalated',
+      recordId: escalatedRecordId(world.recipient, 'm-001'),
+      at: fired.escalated[0]!.event.payload.ts,
+      reason: 'still undelivered after 600s: all live routes failed',
+    };
+    writeFileSync(markerPathOf(world.recipient, 'm-001'), `${JSON.stringify(marker)}\n`);
+
+    const retried = escalateDue(world.ctx, { at: new Date(due + 1_000) });
+    expect(retried.escalated).toHaveLength(1);
+    expect(retried.escalated[0]!.duplicate).toBe(true);
+    expect(retried.escalated[0]!.mailbox).toBe(mailbox);
+    expect(readMarker(world).outbox).toBeUndefined();
+    expect(verifiedLog(world)).toHaveLength(2);
+    expect(readdirSync(join(world.entityRoot, '.agents', 'messages', 'entity-lead'))).toHaveLength(1);
+  });
+
+  test('an unreadable policy leaves the escalation unscheduled until a later pass resolves it', () => {
+    const world = makeWorld();
+    const unreadable: FallbackContext = { ...world.ctx, team: { ...world.team, policies: 'unreadable' } };
+
+    const first = noteTransport(unreadable, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+    expect(first.state).toBe('all-failed');
+    expect(first.dueAt).toBeNull();
+    expect(first.policyRefusal).toContain('must be a map');
+    // The immediate all-failed event is fixed and does not wait for the policy.
+    expect(verifiedLog(world)).toHaveLength(1);
+    expect('dueAt' in readMarker(world)).toBe(false);
+
+    // Fail closed while unreadable: no escalation, no zero-delay shortcut, the episode stays.
+    const pending = escalateDue(unreadable, { at: new Date(Date.parse(AT) + 10 * 60_000) });
+    expect(pending.escalated).toHaveLength(0);
+    expect(pending.refused).toHaveLength(1);
+    expect(pending.refused[0]!.reason).toContain('unreadable');
+    expect(verifiedLog(world)).toHaveLength(1);
+    expect(existsSync(join(world.entityRoot, '.agents', 'messages', 'entity-lead'))).toBe(false);
+
+    // A later pass under a readable chain schedules from the original failure and fires now.
+    const repaired = escalateDue(world.ctx, { at: new Date(Date.parse(AT) + delayMs(world) + 1_000) });
+    expect(repaired.refused).toHaveLength(0);
+    expect(repaired.escalated).toHaveLength(1);
+    expect(readMarker(world).dueAt).toBe(new Date(Date.parse(AT) + delayMs(world)).toISOString());
+    expect(verifiedLog(world)).toHaveLength(2);
   });
 });
