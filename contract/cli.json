@@ -2390,9 +2390,135 @@
           "repeatable": false
         }
       ],
-      "subcommands": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "add",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat add <seat>"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "remove",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat remove <seat>"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "rename",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "name",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat rename <seat> <name>"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "restart",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat restart <seat>"
+          ]
+        }
+      ],
       "usage": [
-        "team seat <seat> [--session <name>] [--file <path>] [--json]"
+        "team seat <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat add <seat>",
+        "team seat remove <seat>",
+        "team seat restart <seat>",
+        "team seat rename <seat> <name>"
       ]
     },
     {

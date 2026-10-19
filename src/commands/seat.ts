@@ -1,10 +1,12 @@
 // `team seat <seat>` — one seat as an object: the settings it holds and where each value comes
 // from, the row `team seats` reads for it (status, state, pane, last active), the newest CLI
 // session TeamCLI recorded for it in this session (its conversation and cost) and the CLI hook's
-// last turn boundary when the launch keeps one. The composition writes nothing; the lifecycle
-// verbs under `team seat` arrive with their alias dispatch.
+// last turn boundary when the launch keeps one. The composition writes nothing. The seat's
+// lifecycle is grouped under the same word — `team seat add|remove|restart|rename` run the
+// top-level commands, which stay as aliases — and dispatch first.
 
 import { watchInForceOf } from '../approve/approval.ts';
+import { runAdd } from './add.ts';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { composeSeatConfig } from '../config/compose.ts';
@@ -22,6 +24,9 @@ import {
 import { hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { mayReadTeam } from '../read-gate.ts';
+import { runRemove } from './remove.ts';
+import { runRename } from './rename.ts';
+import { runRestart } from './restart.ts';
 import { readAllSessions, type SessionRecord } from '../sessions/registry.ts';
 import { emptySession, liveHold, readState } from '../state.ts';
 import { compare } from '../status/compare.ts';
@@ -34,8 +39,12 @@ import {
 } from './seats.ts';
 
 export const USAGE = `Usage: team seat <seat> [--session <name>] [--file <path>] [--json]
+       team seat add <seat>
+       team seat remove <seat>
+       team seat restart <seat>
+       team seat rename <seat> <name>
 
-Shows one seat as an object: its settings and where each value comes from, its status and state as \`team seats\` reads them, and the newest CLI session TeamCLI recorded for it in this session — the conversation, when it started and ended, and its cost when one was measured. Reads the team file, the state and the session registry; changes nothing.
+Shows one seat as an object: its settings and where each value comes from, its status and state as \`team seats\` reads them, and the newest CLI session TeamCLI recorded for it in this session — the conversation, when it started and ended, and its cost when one was measured. Reads the team file, the state and the session registry; changes nothing. The lifecycle verbs group the commands of the same names — \`team seat add\` runs \`team add\`, and so on; the top-level commands stay, and their options are theirs.
 
 Exits 0 when the seat is shown, 1 when an owner-only flag is refused, the seat is not declared, or a session registry can't be read, and 2 when the invocation, the team file, or herdr can't be read.
 `;
@@ -48,12 +57,21 @@ export default seat;
 type Turn = { state: CliHookReading['state']; since: string };
 
 export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = realSeatsSources): Promise<number> {
+  // The first word is read before the option parser: a grouped verb carries the top-level
+  // command's own options, which this command's `readArgs` would refuse.
+  const args = { rest: argv };
+  const verb = args.rest[0];
+  if (verb === 'add') return runAdd(argv.slice(1), rawIo);
+  if (verb === 'remove') return runRemove(argv.slice(1), rawIo);
+  if (verb === 'restart') return runRestart(argv.slice(1), rawIo);
+  if (verb === 'rename') return runRename(argv.slice(1), rawIo);
+
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file'], ['json']);
-  if (args.error !== undefined || args.rest.length !== 1) {
-    const why = args.error
-      ?? (args.rest.length === 0 ? 'a seat name is required' : `unexpected "${args.rest[1]}"`);
+  const read = readArgs(argv, ['session', 'file'], ['json']);
+  if (read.error !== undefined || read.rest.length !== 1) {
+    const why = read.error
+      ?? (read.rest.length === 0 ? 'a seat name is required' : `unexpected "${read.rest[1]}"`);
     if (json) {
       writeJsonError(io, 'seat.invocation', why, null);
     } else {
@@ -62,12 +80,12 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     // exit: seat.invocation
     return 2;
   }
-  const seatName = args.rest[0] as string;
+  const seatName = read.rest[0] as string;
 
   const walked = walkCaller(io);
   const owner = isOwner(walked);
-  if (args.values.file !== undefined) {
-    const refusal = fileOwnerRefusal(io, args.values.file);
+  if (read.values.file !== undefined) {
+    const refusal = fileOwnerRefusal(io, read.values.file);
     if (refusal !== undefined) {
       if (json) {
         writeJsonError(io, 'seat.file-owner', refusal, 'the owner runs `team seat <seat> --file <path>` from a terminal outside herdr', 1, 'owner-only');
@@ -78,7 +96,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
       return 1;
     }
   }
-  if (args.values.session !== undefined && !owner) {
+  if (read.values.session !== undefined && !owner) {
     const refusal = sessionOwnerRefusal(walked);
     if (json) {
       writeJsonError(io, 'seat.session-owner', refusal, 'the owner runs `team seat <seat> --session <name>` from a terminal outside herdr', 1, 'owner-only');
@@ -90,7 +108,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   }
 
   const now = sources.now();
-  const current = currentTeam(io.cwd, owner ? args.values.file : undefined, now, sources.home, owner);
+  const current = currentTeam(io.cwd, owner ? read.values.file : undefined, now, sources.home, owner);
   if (!owner) {
     if (!current.ok || !mayReadTeam(current, io, sources)) {
       if (json) {
@@ -126,7 +144,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   }
   if (!json && current.notice !== undefined) io.stdout(`${current.notice}\n`);
 
-  const session = args.values.session ?? team.session;
+  const session = read.values.session ?? team.session;
   const whole = readState(dir);
   const state = whole.sessions[session] ?? emptySession();
   const live = sources.live(session, team, state);

@@ -288,6 +288,39 @@ describe('--json', () => {
   });
 });
 
+describe('the grouped lifecycle verbs', () => {
+  test('each word runs the top-level command of that name, on the words after it', async () => {
+    // Each command refuses an empty invocation with its own name, so the first line says which
+    // handler ran, and none of them read the team file before refusing.
+    const cases = [
+      { argv: ['add'], first: 'team add: a seat name is required' },
+      { argv: ['remove'], first: 'team remove: a seat name is required' },
+      { argv: ['restart'], first: 'team restart: a seat name is required' },
+      { argv: ['rename'], first: 'team rename: a seat name and a new seat name are required (or pass --renumber)' },
+    ];
+    for (const one of cases) {
+      const io = testIo(root, OWNER);
+      expect(await runSeat(one.argv, io, sources())).toBe(2);
+      expect(io.err.split('\n')[0]).toBe(one.first);
+      expect(io.out).toBe('');
+    }
+  });
+
+  test('hands the words after the verb to that command unchanged', async () => {
+    // Rename reads one name as a missing second name; were the verb kept in the arguments, it
+    // would read two names and look for a seat called "rename" instead.
+    const io = testIo(root, OWNER);
+    expect(await runSeat(['rename', 'worker'], io, sources())).toBe(2);
+    expect(io.err).toContain('team rename: missing <new-seat> after "worker"');
+  });
+
+  test('a word that is not a verb is still the seat to read', async () => {
+    const result = await run(['worker']);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain('  role          implementer\n');
+  });
+});
+
 describe('refusals', () => {
   test('an invocation with no seat', async () => {
     const result = await run([]);

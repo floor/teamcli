@@ -1298,6 +1298,10 @@ Hidden: no
 Usage:
 
     team seat <seat> [--session <name>] [--file <path>] [--json]
+    team seat add <seat>
+    team seat remove <seat>
+    team seat restart <seat>
+    team seat rename <seat> <name>
 
 ### Flags
 
@@ -1310,6 +1314,91 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `add`
+
+Hidden: no
+
+Usage:
+
+    team seat add <seat>
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `remove`
+
+Hidden: no
+
+Usage:
+
+    team seat remove <seat>
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
+### `rename`
+
+Hidden: no
+
+Usage:
+
+    team seat rename <seat> <name>
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+| `name` | no | no |
+
+### `restart`
+
+Hidden: no
+
+Usage:
+
+    team seat restart <seat>
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |

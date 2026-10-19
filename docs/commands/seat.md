@@ -3,8 +3,9 @@
 One seat as an object: the settings it holds and where each value comes from, the row `team seats`
 reads for it (status, state, source, pane, last active), its last turn as the CLI hook wrote it,
 and the newest session TeamCLI recorded for it in this session — the conversation, when it started
-and ended, and its cost when one was measured. The command reads the team file, the state, the
-session registry and the CLI hook; it writes nothing.
+and ended, and its cost when one was measured. The read form reads the team file, the state, the
+session registry and the CLI hook; it writes nothing. The seat's lifecycle verbs are grouped under
+the same word and run the commands of their names.
 
 The settings half is `team settings <seat>`; the status half is the seat's row in `team seats`. The
 conversation is the newest registry record whose team, seat and herdr session are this one's; a seat
@@ -14,6 +15,20 @@ value.
 ## Synopsis
 
     team seat <seat> [--session <name>] [--file <path>] [--json]
+    team seat add <seat>
+    team seat remove <seat>
+    team seat restart <seat>
+    team seat rename <seat> <name>
+
+## The grouped lifecycle
+
+`team seat add`, `remove`, `restart` and `rename` run the commands of the same names — the same
+handlers, with the words after the verb handed to them unchanged. The top-level commands stay as
+aliases, and their options are theirs: a grouped verb takes that command's own flags (`--cli` on
+`add`, `--keep` on `remove`, `--dry-run` on `restart`, `--renumber` on `rename`, and so on), and
+`team add --help` and its siblings document them. The grouped verb prints that command's output and
+returns its exit codes; the table below is for the read form. `seat` is not a seat name in the verb
+position: `team seat add` is the lifecycle command, never a read of a seat called `add`.
 
 ## Flags
 
