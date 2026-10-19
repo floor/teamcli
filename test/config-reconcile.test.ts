@@ -2,15 +2,16 @@
 // record whose `config.changed` event never reached the log gets one event, marked reconciled,
 // exactly once — across passes and across sessions.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendConfigChanged } from '../src/config/events.ts';
-import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
+import { planConfigSet, readSeatConfigSource, writeConfigSet } from '../src/config/sources.ts';
 import type { SignedConfigRecord } from '../src/config/record.ts';
 import { readEvents } from '../src/bus/log.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
-import { agentsDir, registerAgent, type AgentInit } from '../src/registry/agents.ts';
+import { agentsDir, getAgent, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { installKey } from '../src/store/keys.ts';
 
@@ -34,7 +35,7 @@ afterEach(() => {
   rmSync(base, { recursive: true, force: true });
 });
 
-function init(): AgentInit {
+function init(overrides: Partial<AgentInit> = {}): AgentInit {
   return {
     name: 'Builder One',
     signing: { model: 'Claude Sonnet', version: '5.5', role: 'builder' },
@@ -47,6 +48,7 @@ function init(): AgentInit {
     skills: [],
     lifecycle: 'running',
     by: 'team up',
+    ...overrides,
   };
 }
 
@@ -171,5 +173,79 @@ describe('reconcile: a signed settings record with no config.changed event', () 
     expect(configEvents().length).toBe(0);
     // The record's signed generation is still the one on disk; nothing was invented for it.
     expect(record.value).toBe('claude-opus-5-5');
+  });
+});
+
+const DECLARED = `format: 1
+project: teamcli
+coordinator: builder-1
+operator: builder-1
+workspace:
+  mode: shared
+seats:
+  - role: builder
+    name: builder-1
+    label: builder-1
+    cli: antigravity
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: agy
+`;
+
+const DECLARATION_GONE = `format: 1
+project: teamcli
+coordinator: builder-2
+operator: builder-2
+workspace:
+  mode: shared
+seats:
+  - role: builder
+    name: builder-2
+    label: builder-2
+    cli: antigravity
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: agy
+`;
+
+describe('reconcile: a seat record whose declaration is gone', () => {
+  test('is marked orphaned and kept, its signed setting still verifies, and the mark does not move', () => {
+    const repo = join(base, 'orphan-repo');
+    mkdirSync(join(repo, '.agents'), { recursive: true });
+    execSync('git init -q -b main', { cwd: repo });
+    const teamId = teamIdOf(repo);
+    const agentId = registerAgent(home, init({
+      reach: { team: teamId, seat: SEAT, session: SESSION, pane: 'w36:p1', address: null },
+    })).id;
+    writeFileSync(join(repo, '.agents', 'team.yaml'), DECLARED);
+    const plan = planConfigSet(home, {
+      level: 'seat',
+      target: agentId,
+      settings: [{ key: 'nickname', value: 'b1' }],
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(writeConfigSet(home, plan, { now: new Date('2026-10-19T08:00:00Z') }).ok).toBe(true);
+
+    // While the file declares the seat, a pass marks nothing.
+    expect(reconcilePass({ project: PROJECT, root: repo, session: SESSION, home }).ok).toBe(true);
+    expect(getAgent(home, agentId)?.orphaned_at).toBeUndefined();
+
+    writeFileSync(join(repo, '.agents', 'team.yaml'), DECLARATION_GONE);
+    expect(reconcilePass({ project: PROJECT, root: repo, session: SESSION, home, now: new Date('2026-10-19T12:00:00Z') }).ok).toBe(true);
+
+    // Retained, not deleted; the signed word still verifies and reads.
+    expect(existsSync(join(agentsDir(home), `${agentId}.yaml`))).toBe(true);
+    expect(getAgent(home, agentId)?.orphaned_at).toBe('2026-10-19T12:00:00.000Z');
+    const read = readSeatConfigSource(home, agentId, SEAT);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.settings.map((entry) => [entry.key, entry.value])).toEqual([['nickname', 'b1']]);
+
+    // A later pass leaves the mark where the removal was first seen.
+    expect(reconcilePass({ project: PROJECT, root: repo, session: SESSION, home, now: new Date('2026-10-20T00:00:00Z') }).ok).toBe(true);
+    expect(getAgent(home, agentId)?.orphaned_at).toBe('2026-10-19T12:00:00.000Z');
   });
 });

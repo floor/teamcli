@@ -8,6 +8,7 @@
 import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
 import * as projects from '../registry/projects.ts';
+import { loadTeamFile } from '../file/load.ts';
 import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -217,6 +218,35 @@ export function registerDeclaredSeat(input: RegistryTeam, seat: Seat): { id: str
 }
 
 /**
+ * Marks the retained record of a seat the team file no longer declares: the bootstrap ruling's
+ * orphan marker. Nothing is deleted and no signed entry is touched, so every setting stays
+ * readable; a record already marked is left as it is. A team file that does not load declares
+ * nothing here, so no file this build cannot read can orphan a record.
+ */
+export function markOrphanedSeats(home: string, root: string, now: Date): string[] {
+  const marked: string[] = [];
+  let declared: Set<string>;
+  try {
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok) return marked;
+    declared = new Set(loaded.team.seats.map((seat) => seat.name));
+  } catch {
+    return marked;
+  }
+  const teamId = teamIdOf(root);
+  for (const agent of readAgents(home)) {
+    if (agent.reach.team !== teamId || declared.has(agent.reach.seat) || agent.orphaned_at != null) continue;
+    try {
+      updateAgent(home, agent.id, { orphaned_at: now.toISOString() });
+      marked.push(agent.id);
+    } catch {
+      // The next pass retries; a record this build cannot write marks nothing now.
+    }
+  }
+  return marked;
+}
+
+/**
  * A seat was renamed from `fromSeat` to `toSeat`: its agent record keeps the same `agt_…` id
  * (so grants keyed by agent id continue to cover the seat) while `name` and `reach.seat` move
  * to `toSeat` and the team's roster is re-keyed. Returns `{ id }` when an agent record was
@@ -289,7 +319,13 @@ export function registerEnd(
     if (known.reach.session !== (input.session ?? input.team.session)) {
       return notes.length === 0 ? null : { note: notes.join('; ') };
     }
-    updateAgent(input.home, known.id, { lifecycle: ending, reach: { ...known.reach, pane: null } });
+    // A retired seat's declaration is gone with its roster line: the record is retained and
+    // marked orphaned, never deleted, so its signed settings stay readable.
+    updateAgent(input.home, known.id, {
+      lifecycle: ending,
+      reach: { ...known.reach, pane: null },
+      ...(ending === 'retired' ? { orphaned_at: new Date().toISOString() } : {}),
+    });
     if (ending === 'retired') writeRoster(input, teamId, seat, null);
     return notes.length === 0 ? null : { note: notes.join('; ') };
   } catch (error) {

@@ -20,6 +20,7 @@ import {
   type ConfigSourceRead,
 } from '../config/sources.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
+import { markOrphanedSeats } from '../registry/sync.ts';
 import { readHistory } from '../send/history.ts';
 import { readPending } from '../send/pending.ts';
 import { readState } from '../state.ts';
@@ -128,6 +129,15 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
 
   const existing = readEvents(project, root, home, { kept: options.kept });
   if (!existing.ok) return existing;
+
+  // A seat whose declaration is gone keeps its record and every signed setting: the bootstrap
+  // ruling asks for an observable mark instead of a delete, and this pass is where the removal
+  // is first seen. A team file that does not load marks nothing.
+  try {
+    markOrphanedSeats(home, root, nowDate);
+  } catch {
+    // The next pass retries; a registry this pass cannot write does not fail the reconcile.
+  }
 
   const seen = new Set<string>();
   // A settings change is machine-wide: the signed generation it names is the same in every

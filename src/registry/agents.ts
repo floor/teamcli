@@ -92,6 +92,12 @@ export type Agent = {
   policies?: Record<string, YamlValue>;
   /** Owner-signed seat-level settings (OD-20261018-08), one signed entry per key, when present. */
   settings?: Record<string, YamlValue>;
+  /**
+   * When the team file stopped declaring the seat, this record is retained and marked orphaned:
+   * the bootstrap ruling keeps every signed setting and never deletes the file. Absent on a record
+   * whose seat is still declared (and on records written before the mark existed).
+   */
+  orphaned_at?: string | null;
 };
 
 export type AgentInit = Omit<Agent, 'id' | 'provenance'> & {
@@ -372,6 +378,7 @@ function fromValue(value: YamlValue): Agent | null {
   const pane = strOrNull(reach.pane);
   const address = strOrNull(reach.address);
   const handle = strOrNull(value.seat_handle);
+  const orphanedAt = strOrNull(value.orphaned_at);
   const id = str(value.id);
   const name = str(value.name);
   const model = text(signing.model);
@@ -393,7 +400,7 @@ function fromValue(value: YamlValue): Agent | null {
     lab === null || cli === null || launch === null || team === null || seat === null ||
     session === null || registeredBy === null || registeredAt === null || updatedAt === null ||
     mcp === null || skills === null || launcher === undefined || pane === undefined ||
-    address === undefined || handle === undefined
+    address === undefined || handle === undefined || orphanedAt === undefined
   ) {
     return null;
   }
@@ -427,6 +434,7 @@ function fromValue(value: YamlValue): Agent | null {
     },
   };
   if (handle !== null) agent.seat_handle = handle;
+  if (orphanedAt !== null) agent.orphaned_at = orphanedAt;
   if (isObj(value.policies) && Object.keys(value.policies).length > 0) {
     agent.policies = value.policies;
   }
@@ -447,6 +455,9 @@ function invalid(agent: Agent): string | null {
   if (!agent.reach.team.trim() || !agent.reach.seat.trim()) return 'reach.team and reach.seat are required';
   if (!(LIFECYCLES as readonly string[]).includes(agent.lifecycle)) return `"${agent.lifecycle}" is not a lifecycle state`;
   if (agent.seat_handle != null && !isSeatId(agent.seat_handle)) return 'seat_handle is not seat_ plus 12 hex';
+  if (agent.orphaned_at != null && !Number.isFinite(Date.parse(agent.orphaned_at))) {
+    return 'orphaned_at is not a readable timestamp';
+  }
   if (agent.settings !== undefined && !isObj(agent.settings)) return '"settings" must be a map';
   return null;
 }
@@ -554,6 +565,9 @@ function emit(agent: Agent): string {
     lines.push(`    command: ${quote(agent.provenance.delegated.command)}`);
   }
   if (agent.seat_handle != null) lines.push(`seat_handle: ${quote(agent.seat_handle)}`);
+  // A retained record whose declaration is gone says so in its own line; a live seat's file
+  // carries no mark, so the records every ordinary run writes read as they always did.
+  if (agent.orphaned_at != null) lines.push(`orphaned_at: ${quote(agent.orphaned_at)}`);
   if (agent.policies && Object.keys(agent.policies).length > 0) {
     lines.push(...emitPolicies(agent.policies));
   }
