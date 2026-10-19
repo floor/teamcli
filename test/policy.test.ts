@@ -16,6 +16,7 @@ import { buildCommandOutputSchema, POLICY_OUTPUT_SCHEMA } from '../src/output/in
 import {
   DEV_MODE_OPERATIONS,
   loadAndResolvePolicyChain,
+  normalizePolicyName,
   planPolicySet,
   POLICY_CATALOGUE,
   POLICY_LEVELS,
@@ -180,6 +181,41 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(POLICY_CATALOGUE['dev-mode'].levels).toEqual(['entity', 'project', 'team']);
     expect(POLICY_CATALOGUE['dev-mode'].defaultValue).toBe('off');
     expect(POLICY_CATALOGUE['dev-mode'].gateLifting).toBe(true);
+  });
+
+  test('codex-daemon defaults on at every level and a lower level may always switch it off', () => {
+    const spec = POLICY_CATALOGUE['codex-daemon'];
+    expect(spec.kind).toBe('enforced');
+    expect(spec.levels).toEqual(['entity', 'project', 'team', 'seat']);
+    expect(spec.defaultValue).toBe('on');
+    expect(spec.gateLifting).toBe(false);
+    expect(normalizePolicyName('codex_daemon')).toBe('codex-daemon');
+
+    const absent = resolvePolicy('codex-daemon', []);
+    expect(absent.ok).toBe(true);
+    if (absent.ok) {
+      expect(absent.effective.value).toBe('on');
+      expect(absent.effective.level).toBe('default');
+    }
+
+    const optOut = resolvePolicy('codex-daemon', [
+      { name: 'codex-daemon', value: 'on', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'codex-daemon', value: 'off', level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(optOut.ok).toBe(true);
+    if (optOut.ok) {
+      expect(optOut.effective.value).toBe('off');
+      expect(optOut.effective.level).toBe('seat');
+    }
+
+    const backOn = resolvePolicy('codex-daemon', [
+      { name: 'codex-daemon', value: 'off', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'codex-daemon', value: 'on', level: 'team', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(backOn.ok).toBe(false);
+    if (!backOn.ok) {
+      expect(backOn.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'codex-daemon', higherLevel: 'entity', lowerLevel: 'team' });
+    }
   });
 
   test('absent declarations resolve to the release default, and off for gate-lifting policies', () => {
