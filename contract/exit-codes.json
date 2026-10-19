@@ -2299,6 +2299,83 @@
     },
     {
       "code": 0,
+      "command": "queue",
+      "id": "queue.added",
+      "meaning": "the record was added to the queue",
+      "trigger": "team queue add \"the task title\" --id m1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.none",
+      "meaning": "the queue is empty",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.present",
+      "meaning": "the same record was already queued; nothing was written",
+      "trigger": "team queue add \"the task title\" --id m1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.shown",
+      "meaning": "the queue was listed",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.caller",
+      "meaning": "the caller is not the owner or a seat of this team on its recorded pane",
+      "trigger": "team queue add \"the task title\" --id m1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.duplicate",
+      "meaning": "the id is already queued with a different record",
+      "trigger": "team queue add \"another title\" --id m1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.read",
+      "meaning": "the task file is missing, not a list, or could not be written or read back",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.source",
+      "meaning": "the team file declares a linear task source; there is no local queue, and the tracker is never written",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 2,
+      "command": "queue",
+      "id": "queue.invocation",
+      "meaning": "the invocation can't be read, or a value is not a task id, a declared seat, or a one-line title or priority",
+      "trigger": "team queue add"
+    },
+    {
+      "code": 2,
+      "command": "queue",
+      "id": "queue.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 0,
       "command": "raise",
       "id": "raise.dry-run",
       "meaning": "the route the raise would take; nothing was written",

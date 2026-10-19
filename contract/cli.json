@@ -252,6 +252,12 @@
             },
             {
               "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--session",
               "repeatable": false,
               "takesValue": true
@@ -268,7 +274,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+            "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
           ],
           "who": {
             "gate": "team-read",
@@ -277,7 +283,7 @@
         }
       ],
       "usage": [
-        "team brief rollout [--apply] [--session <session>] [--file <path>] [--json]"
+        "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
       ],
       "who": {
         "gate": "team-read",
@@ -2109,6 +2115,125 @@
       "who": {
         "gate": "any-caller",
         "why": "it reads the project registry and changes nothing, from any folder"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "queue",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--assignee",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--id",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--priority",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "add",
+          "positionals": [
+            {
+              "name": "title",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "adding to the local queue is the owner's or a declared seat's; the module refuses a seat the state cannot place on its recorded pane"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "list",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team queue list [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the listing reads the checkout and the queue only, and asks for no session and no terminal"
+          }
+        }
+      ],
+      "usage": [
+        "team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]",
+        "team queue list [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "list reads the local task queue from the checkout and asks no caller; add is the owner's or a seat of this team's, on the pane the state records for it"
       }
     },
     {

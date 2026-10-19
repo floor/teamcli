@@ -31,6 +31,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   sessions: () => import('./commands/sessions.ts'),
   next: () => import('./commands/next.ts'),
   plan: () => import('./commands/plan.ts'),
+  queue: () => import('./commands/queue.ts'),
   worktree: () => import('./commands/worktree.ts'),
   add: () => import('./commands/add.ts'),
   answer: () => import('./commands/answer.ts'),

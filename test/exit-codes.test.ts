@@ -48,6 +48,7 @@ import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
 import { runPlan } from '../src/commands/plan.ts';
+import { runQueue } from '../src/commands/queue.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runProc, type ProcSources } from '../src/commands/proc.ts';
@@ -3767,6 +3768,54 @@ scene('plan.read', async (place) => {
     await serving.handle.close();
   }
 });
+
+async function queued(place: Place, argv: string[], caller: Caller = leadSeat): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runQueue(argv, io, { home: place.home }), out: io.out, err: io.err };
+}
+
+scene('queue.added', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1']), 'queued q1 in .agents/queue.yaml');
+});
+scene('queue.present', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1']), 'q1 is already queued in .agents/queue.yaml');
+});
+scene('queue.none', async (place) => {
+  write(place, TEAM);
+  return show(await queued(place, ['list']), '0 tasks');
+});
+scene('queue.shown', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['list']), 'q1  a queued task');
+});
+scene('queue.caller', async (place) => {
+  write(place, TEAM);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1'], other), 'only the owner or a seat of this team adds to the queue; this call is other');
+});
+scene('queue.duplicate', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['add', 'another queued task', '--id', 'q1']), 'q1 is already queued with a different record');
+});
+scene('queue.file', async (place) => show(await queued(place, ['list']), 'no team file'));
+scene('queue.read', async (place) => {
+  write(place, TASKS);
+  return show(await queued(place, ['list']), 'the task file is not there');
+});
+scene('queue.source', async (place) => {
+  write(place, LINEAR);
+  return show(await queued(place, ['list']), 'declares a linear task source');
+});
+scene('queue.invocation', async (place) => show(await queued(place, ['bogus']), 'unexpected "bogus"'));
+scene('queue.not-a-repo', async (place) => show(await queued(place, ['list']), 'run team from a project\n'), false);
 
 /** `team send`'s fixtures: a fake seat of the fixture's own file, a sockets folder with a file
  *  at the pid the fake pane process reports, and a deliver that accepts — with `reply` set,

@@ -229,6 +229,18 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal',
     },
+    queue: {
+      kind: 'any-caller',
+      why: 'list reads the local task queue from the checkout and asks no caller; add is the owner\'s or a seat of this team\'s, on the pane the state records for it',
+    },
+    'queue:add': {
+      kind: 'owner-or-own-team',
+      why: 'adding to the local queue is the owner\'s or a declared seat\'s; the module refuses a seat the state cannot place on its recorded pane',
+    },
+    'queue:list': {
+      kind: 'any-caller',
+      why: 'the listing reads the checkout and the queue only, and asks for no session and no terminal',
+    },
     proc: {
       kind: 'owner-or-own-team',
       why: 'add and done are the owner\'s or a declared seat\'s, from a terminal; list reads what status does, so an approved delegate pane may list too',
