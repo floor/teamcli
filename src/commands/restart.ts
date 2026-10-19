@@ -857,17 +857,37 @@ async function askForHandover(input: {
     return undefined;
   }
   const started = input.sources.now().getTime();
+  // The file landing is not the end of the turn: the conversation may still be finishing its
+  // final response, and the stop's recheck would refuse the seat as mid-turn. The wait is the
+  // bound: it goes on until the seat is no longer working. A file written by a turn that ran
+  // past the wait is still used — the launch reads it, and the recheck decides the stop.
   for (;;) {
     if (fileHasText(input.path)) {
-      input.log(`${input.name}: the old conversation wrote the handover at ${input.path}`);
-      return input.path;
+      if (!workingNow(input.sources, input.session, input.pane)) {
+        input.log(`${input.name}: the old conversation wrote the handover at ${input.path}`);
+        return input.path;
+      }
     }
     if (input.sources.now().getTime() - started >= input.waitMs) {
+      if (fileHasText(input.path)) {
+        input.log(
+          `${input.name}: the old conversation wrote the handover at ${input.path} and its turn is still running; the launch goes on`,
+        );
+        return input.path;
+      }
       input.log(`${input.name}: no handover was written before the wait ended; the launch goes on`);
       return undefined;
     }
     await input.sources.upLaunch.sleep(HANDOVER_POLL_MS);
   }
+}
+
+/** Whether herdr still reports the pane mid-turn. An unreadable herdr is not called working: the
+ *  stop's own recheck reads the same source and decides. */
+function workingNow(sources: RestartSources, session: string, pane: string): boolean {
+  const agents = sources.agents(session);
+  const agent = agents?.find((candidate) => candidate.pane === pane);
+  return agent?.status === 'working';
 }
 
 /** The words a model id is compared by: lowercased, split where a CLI or a file may spell the
