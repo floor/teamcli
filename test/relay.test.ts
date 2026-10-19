@@ -3,7 +3,8 @@
 // parses or checks them — and the socket is a stub dial, so no listener is opened and no live
 // session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capabilities, deliver, FRAME_LIMIT, SEND_TIMEOUT_MS, stage } from '../packages/relay/index.js';
@@ -35,24 +36,91 @@ describe('stage', () => {
     expect(statSync(copy.dir).mode & 0o777).toBe(0o700);
   });
 
-  test('a regular file already at the name is existing, untouched, and unread', async () => {
+  test('a different record already at the name is refused and left untouched', async () => {
     const dir = scratch();
     const copy = { dir, name: 'msg-2' };
     writeFileSync(join(dir, 'msg-2'), 'not a record at all');
     const staged = await stage(copy, { id: 'msg-2', record }, { now: () => AT });
-    if (staged.outcome !== 'stored') throw new Error(JSON.stringify(staged));
-    expect(staged.receipt.existing).toBe(true);
+    expect(staged).toMatchObject({ outcome: 'refused', reason: 'a different record already holds that id' });
     expect(readFileSync(join(dir, 'msg-2'), 'utf8')).toBe('not a record at all');
   });
 
-  test('a second stage of the same name never overwrites the first bytes', async () => {
+  test('a second stage of identical bytes is existing and never rewrites the file', async () => {
     const dir = scratch();
     const copy = { dir, name: 'msg-3' };
     await stage(copy, { id: 'msg-3', record }, { now: () => AT });
-    const again = await stage(copy, { id: 'msg-3', record: 'different\n' }, { now: () => AT });
+    const again = await stage(copy, { id: 'msg-3', record }, { now: () => AT });
     if (again.outcome !== 'stored') throw new Error(JSON.stringify(again));
     expect(again.receipt.existing).toBe(true);
     expect(readFileSync(join(dir, 'msg-3'), 'utf8')).toBe(record);
+  });
+
+  test('a second stage of different bytes is refused and keeps the first bytes', async () => {
+    const dir = scratch();
+    const copy = { dir, name: 'msg-3b' };
+    await stage(copy, { id: 'msg-3b', record }, { now: () => AT });
+    const again = await stage(copy, { id: 'msg-3b', record: 'different\n' }, { now: () => AT });
+    expect(again).toMatchObject({ outcome: 'refused', reason: 'a different record already holds that id' });
+    expect(readFileSync(join(dir, 'msg-3b'), 'utf8')).toBe(record);
+  });
+
+  test('a holder that cannot be read is refused, never replaced', async () => {
+    const dir = scratch();
+    const path = join(dir, 'msg-3c');
+    writeFileSync(path, 'locked bytes');
+    chmodSync(path, 0o000);
+    try {
+      const staged = await stage({ dir, name: 'msg-3c' }, { id: 'msg-3c', record }, { now: () => AT });
+      expect(staged).toMatchObject({
+        outcome: 'refused',
+        reason: 'the file that already holds that id could not be read',
+      });
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    expect(readFileSync(path, 'utf8')).toBe('locked bytes');
+  });
+
+  test('a FIFO at the name is refused without blocking or replacing it', async () => {
+    const dir = scratch();
+    const path = join(dir, 'msg-3d');
+    execFileSync('mkfifo', [path]);
+    const staged = await stage({ dir, name: 'msg-3d' }, { id: 'msg-3d', record }, { now: () => AT });
+    expect(staged).toMatchObject({ outcome: 'refused', reason: 'a file that is not a record already holds that id' });
+    expect(statSync(path).isFIFO()).toBe(true);
+  });
+
+  test('concurrent writers under different bytes: one publish, every other refused, winner untouched', async () => {
+    const dir = scratch();
+    const name = 'msg-3e';
+    const start = Date.now() + 400;
+    const entry = new URL('../packages/relay/index.js', import.meta.url).href;
+    const children = ['race-a', 'race-b', 'race-c', 'race-d'].map((mark) => {
+      const recordText = `{"payload":"${mark}"}\n`;
+      const code = `import { stage } from ${JSON.stringify(entry)};
+await new Promise((resolve) => setTimeout(resolve, ${String(start)} - Date.now()));
+const result = await stage({ dir: ${JSON.stringify(dir)}, name: ${JSON.stringify(name)} }, { id: ${JSON.stringify(name)}, record: ${JSON.stringify(recordText)} });
+process.stdout.write(JSON.stringify({ record: ${JSON.stringify(recordText)}, result }));`;
+      const proc = Bun.spawn([process.execPath, '-e', code], { stdout: 'pipe', stderr: 'pipe' });
+      return { proc, record: recordText };
+    });
+    const results = await Promise.all(
+      children.map(async ({ proc, record: recordText }) => {
+        const [out, err, code] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ]);
+        if (code !== 0) throw new Error(`race child exited ${String(code)}: ${err}`);
+        const parsed = JSON.parse(out) as { record: string; result: { outcome: string } };
+        expect(parsed.record).toBe(recordText);
+        return parsed;
+      }),
+    );
+    const stored = results.filter((item) => item.result.outcome === 'stored');
+    expect(stored).toHaveLength(1);
+    expect(results.filter((item) => item.result.outcome === 'refused')).toHaveLength(3);
+    expect(readFileSync(join(dir, name), 'utf8')).toBe(stored[0]!.record);
   });
 
   test('a link at the name is refused, never followed', async () => {

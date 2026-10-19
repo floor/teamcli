@@ -8,7 +8,8 @@ Private and local-only. Nothing here is published; publishing waits for the owne
 ## What it owns
 
 - The durable copy write: the record's bytes at the caller's path, whole, mode 0600, inside a
-  folder kept at 0700, never through a link or over an existing holder.
+  folder kept at 0700, published by an exclusive hard link, so an existing holder is never
+  replaced and the record is never written through a link.
 - One socket attempt: the frame line as given, one connection, the measured frame limit and
   deadline, and the receipt's byte count and time.
 - `capabilities`: a pure, synchronous answer about what the calling runtime carries.
@@ -52,9 +53,11 @@ Outcome words are the transport's, not the message's:
 - `refused` — the copy could not be stored, or the route was not attempted; `reason` is the
   caller's fallback line.
 
-`existing` on a receipt means a regular file already held the name. The package does not read it;
-the caller decides whether that file is this message's record (same id, same signature), exactly
-as admission always has.
+`stage` is create-or-match. A regular file already at the name is read without following a link:
+identical bytes make the copy `existing`; different bytes are refused and the file is left
+untouched. A link, FIFO, folder or other holder is refused. The package never checks a signature,
+so the caller still decides what the record means (same id, same signature), exactly as admission
+always has.
 
 `dial` is the raw socket primitive TeamCLI's `src/send/uds.ts` delegates to. Callers that inject
 their own transport pass it as `options.dial`; that keeps an injected host's dial and the
