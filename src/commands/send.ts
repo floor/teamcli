@@ -29,7 +29,7 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor } from '../send/names.ts';
-import { bindPane, deliverTrigger, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
+import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { markTaken } from '../send/taken.ts';
@@ -110,14 +110,21 @@ The outcome is one of eight, and none of them is silent:
                reply follows on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
                held-message dialog keeps, printed held (socket) — and the pane was
-               left untouched because the seat remained busy, locked, in a dialog,
-               or holding an unsent draft (exit 1)
+               left untouched because the seat remained busy, locked, or in a dialog,
+               or its unsent text has no way out of the box this version measured:
+               the reason names the copy's path when one was kept. A box holding
+               unsent text does not hold the delivery: the text is copied beside the
+               drop, the box is cleared with the profile's measured keys, the trigger
+               is typed and pressed Enter, and the text is pasted back exactly, its
+               rows unchanged (multi-line included), before the run's verdict (exit 1
+               only where the box could not be cleared or the text put back)
   not-submitted the line was typed and the seat never took it (exit 1): Enter was
                pressed up to three times, and only to a box still holding exactly the
                trigger; the message names what the box holds, faint suggestions not
-               counted, and the drop path. A compose seat's brief that was typed and
-               never confirmed is also not-submitted: its message names the screen
-               that never came and the one line that repairs it
+               counted, the drop path, and where the unsent text went — pasted back,
+               or kept in its copy with the copy's path. A compose seat's brief that
+               was typed and never confirmed is also not-submitted: its message names
+               the screen that never came and the one line that repairs it
   timeout      --wait: the record was sent, and no reply record on the thread arrived
                within the window (exit 1); the thread stays open
   unreachable  the channel did not confirm (exit 1): the session is not running, no
@@ -1623,6 +1630,9 @@ async function deliverNative(
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
   let taken = false;
+  // An unsent draft the delivery moved out of the box and put back: its one-line word rides
+  // on the outcome heard here. The copy's path, when the put-back failed, is in that line.
+  let draft: string | undefined;
   try {
     let path: string;
     try {
@@ -1637,6 +1647,7 @@ async function deliverNative(
     path = written.path;
     const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli);
     const where = `the record is at ${path}`;
+    draft = result.draft === undefined ? undefined : draftNote(result.draft);
     // A held drop gets a record beside it, for the watch to deliver once the seat is free. The
     // line names that retry, so a sender does not have to guess whether the drop still travels.
     const retry = 'a running watch retries it when the seat is idle';
@@ -1659,10 +1670,10 @@ async function deliverNative(
     if (result.outcome === 'not-submitted') {
       appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
       markPending(dropDir, entry);
-      return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}`, host, report);
+      return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}${draft === undefined ? '' : `; ${draft}`}`, host, report);
     }
     taken = result.evidence === 'taken';
-    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)})`, host.now());
+    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)}${draft === undefined ? '' : `; ${draft}`})`, host.now());
     if (taken) {
       markTaken(dropDir, {
         id: msgId,
@@ -1682,6 +1693,7 @@ async function deliverNative(
   // A taken send is a delivery with its confirmation still to come: the history says so, and a
   // record beside the drop lets a running watch look for the later sign. It is never a retry
   // record — a taken line is never typed again.
+  const outcomeNote = [taken ? TAKEN_REASON : undefined, draft].filter((one): one is string => one !== undefined).join('; ');
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from,
@@ -1692,12 +1704,13 @@ async function deliverNative(
     id: msgId,
     thread: payload.thread,
     outcome: 'delivered',
-    ...(taken ? { note: TAKEN_REASON } : {}),
+    ...(outcomeNote === '' ? {} : { note: outcomeNote }),
     ms: host.now().getTime() - startedAt,
     via: 'typed',
     ...failed,
   });
-  return delivered(io, seatName, report, taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note);
+  const takenNote = taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note;
+  return delivered(io, seatName, report, draft === undefined ? takenNote : takenNote === undefined ? draft : `${takenNote}; ${draft}`);
 }
 
 /**

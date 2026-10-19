@@ -23,7 +23,6 @@ import { join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { boxHoldsText } from '../launch/deliver.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
 import {
@@ -48,6 +47,9 @@ export type RetrySources = {
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
   sleep(ms: number): Promise<void>;
+  /** One key, spelled as herdr spells it. Absent, a retry that meets unsent text holds: the box
+   *  is never cleared without the delivery's own copy and restore. */
+  sendKey?(pane: string, key: string, session: string): boolean;
   /** The pane's process identity, as the send's typed leg reads it; null when herdr can't tell.
    *  A pane whose foreground is its own shell is not the seat, and no retry is typed there. */
   processes?(pane: string, session: string): PaneProcesses | null;
@@ -104,12 +106,16 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
     status: (id) => scene.sources.status(id, scene.session),
     wait: (ms) => scene.sources.sleep(ms),
     readAnsi: (id) => scene.sources.screen(id, scene.session),
+    ...(scene.sources.sendKey
+      ? { sendKey: (id: string, key: string) => scene.sources.sendKey!(id, key, scene.session) }
+      : {}),
   };
 }
 
 /**
- * One held drop, when its seat is free. The screen is read first, and a dialog, another's draft,
- * or a status that is not idle/done ends the pass here — the box is never typed blind. The seat
+ * One held drop, when its seat is free. The screen is read first, and a dialog or a status that
+ * is not idle/done ends the pass here — the box is never typed blind. Unsent text is the
+ * delivery's to copy and put back; a retry types nothing itself. The seat
  * lock is taken for the delivery, so a second watch and a `team send` cannot type into one pane
  * at once, then the box is read again by the delivery itself, which is the final guard. A pane
  * back at its shell is refused under the lock, as the typed leg and the daemon refuse it: its
@@ -133,10 +139,10 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
   // add a second one. The age bound ends a marker left behind a pane that never reads again.
   if (screen === null || (status !== 'idle' && status !== 'done')) return;
   const kind = readScreen(cli, screen).kind;
-  const ownLine = kind === 'unsent' && boxHoldsText(cli, line, screen);
-  // A dialog, or unsent text that is not the trigger: the seat is not free, and the text is not
-  // ours to clear or type over.
-  if (kind !== 'idle' && !ownLine) return;
+  // A dialog screen is never typed into here. Unsent text goes to the delivery below, which
+  // copies it beside the drop, clears the box, delivers and pastes it back — or holds where this
+  // CLI has no measured way into its box; either way the retry types nothing itself.
+  if (kind !== 'idle' && kind !== 'unsent') return;
 
   const lock = acquireSeatLock(scene.dir, scene.session, drop.to);
   if (!('release' in lock)) return;
