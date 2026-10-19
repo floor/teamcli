@@ -41,6 +41,7 @@ import {
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { BuildIdentity } from '../version.ts';
+import { admitInboxMessage, flushReceipt } from './inbox-admission.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -383,7 +384,7 @@ export type InboxRefusal = {
 
 export type InboxRead =
   | { ok: true; body: string }
-  | { ok: false; reason: string; refusal?: InboxRefusal; superseded?: true };
+  | { ok: false; reason: string; refusal?: InboxRefusal; superseded?: true; served?: 'already-served' | 'busy' };
 
 /**
  * The claim a brief's read is served under. `claim` is resolved again immediately before the
@@ -415,6 +416,15 @@ export type InboxTarget = { dropDir: string; root: string; seat: string; session
  * serves nothing until its seat is launched again. The receipt carries the claim's binding and
  * the claim's diagnostics, and a name already held by a file that does not verify for this
  * claim is refused rather than replaced — only the rollout's recovery may move past it.
+ *
+ * A message is served at most once. A signed receipt that already verifies for this message
+ * under this read's binding is proof the content went out: the read returns `already-served`
+ * and no body, and writes nothing. Otherwise the read takes the seat's exclusive claim for the
+ * id (`inbox-admission.ts`) before it writes the receipt or returns the body; a rival reader
+ * that loses the claim is told `busy` or `already-served`, never shown the record. The receipt
+ * is flushed to disk before the body leaves. The honest guarantee is at-most-once content
+ * exposure: a crash after the receipt but before the body spends the message, and a crash
+ * before the receipt leaves an id a later reader may serve.
  */
 export function readMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
   if (!MESSAGE_ID.test(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
@@ -476,33 +486,84 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
     binding = { incarnation: claim.incarnation, sha256: claim.sha256, epoch: claim.epoch };
     servedClaim = claim;
   }
-  // The signed status receipt `team messages` also writes: one shape under one name, so `statusOf`,
-  // `team drops` and the watch all read it. It is write-once — a second read finds it there and
-  // changes nothing, and no read can move the status backward.
-  const receipt: ReceiptPayload = {
-    kind: 'receipt',
-    status: 'read',
-    id,
-    to: target.seat,
+  // Read-once admission. A receipt that already verifies under this read's binding proves the
+  // content went out; the read then shows nothing. Otherwise the claim is taken before the
+  // receipt and the body, and released whatever this read decides.
+  const context: StatusContext = { to: target.seat, root: target.root, session: target.session };
+  const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key.key, binding);
+  const alreadyServed = (): InboxRead => ({
+    ok: false,
+    reason: `message ${JSON.stringify(id)} was already served in this inbox`,
+    served: 'already-served',
+  });
+  if (receiptHeldNow()) return alreadyServed();
+  const admission = admitInboxMessage({
+    dropDir: target.dropDir,
     root: target.root,
+    seat: target.seat,
     session: target.session,
-    at: new Date().toISOString(),
-    ...(binding === undefined ? {} : {
-      brief_sha256: binding.sha256,
-      incarnation: binding.incarnation,
-      brief_epoch: binding.epoch,
-      ...(servedClaim?.seat_handle === undefined ? {} : { brief_seat_handle: servedClaim.seat_handle }),
-      ...(servedClaim?.pane_root_pid === undefined ? {} : { brief_pane_root_pid: servedClaim.pane_root_pid }),
-    }),
-  };
-  const written = writeReceipt(target.dropDir, signReceiptPayload(receipt, home), home, binding);
-  if (!written.ok) {
-    if (written.reason === 'the read receipt name is held by a file that does not verify for this brief') {
-      return { ok: false, reason: written.reason };
+    id,
+    receiptHeld: receiptHeldNow,
+  });
+  if (!admission.ok) {
+    if (admission.state === 'already-served') return alreadyServed();
+    if (admission.state === 'busy') {
+      return { ok: false, reason: `message ${JSON.stringify(id)} is being served by another reader`, served: 'busy' };
     }
-    return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
+    return { ok: false, reason: `message ${JSON.stringify(id)} was not admitted: ${admission.why}` };
   }
-  return { ok: true, body: payload.body };
+  try {
+    // A receipt that appeared while the claim was being taken is still proof the content was
+    // served, and the read returns no body.
+    if (receiptHeldNow()) return alreadyServed();
+    // The launch's claim is resolved once more now that the read owns the id: a delivery that
+    // landed while the claim was being taken must not be served under the earlier binding.
+    if (launchRecord) {
+      const current = brief?.claim() ?? null;
+      if (current === null || servedClaim === undefined
+        || current.id !== servedClaim.id || current.incarnation !== servedClaim.incarnation
+        || current.sha256 !== servedClaim.sha256 || current.epoch !== servedClaim.epoch) {
+        return { ok: false, reason: 'the general seat brief has been superseded by a later delivery', superseded: true };
+      }
+    }
+    // The signed status receipt `team messages` also writes: one shape under one name, so `statusOf`,
+    // `team drops` and the watch all read it. It is write-once — a second read finds it there and
+    // changes nothing, and no read can move the status backward.
+    const receipt: ReceiptPayload = {
+      kind: 'receipt',
+      status: 'read',
+      id,
+      to: target.seat,
+      root: target.root,
+      session: target.session,
+      at: new Date().toISOString(),
+      ...(binding === undefined ? {} : {
+        brief_sha256: binding.sha256,
+        incarnation: binding.incarnation,
+        brief_epoch: binding.epoch,
+        ...(servedClaim?.seat_handle === undefined ? {} : { brief_seat_handle: servedClaim.seat_handle }),
+        ...(servedClaim?.pane_root_pid === undefined ? {} : { brief_pane_root_pid: servedClaim.pane_root_pid }),
+      }),
+    };
+    const written = writeReceipt(target.dropDir, signReceiptPayload(receipt, home), home, binding);
+    if (!written.ok) {
+      if (written.reason === 'the read receipt name is held by a file that does not verify for this brief') {
+        return { ok: false, reason: written.reason };
+      }
+      return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
+    }
+    // Another reader's receipt at the name is the same proof: the content was served. Returning
+    // the body here would be the duplicate exposure this gate exists to stop.
+    if (written.existing === true) return alreadyServed();
+    // The receipt must survive a crash before any body is shown. A receipt that cannot be
+    // flushed is not proof, so the read returns nothing (and the message stays spent).
+    if (!flushReceipt(written.path, target.dropDir)) {
+      return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
+    }
+    return { ok: true, body: payload.body };
+  } finally {
+    admission.release();
+  }
 }
 
 /**

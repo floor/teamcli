@@ -530,7 +530,13 @@ difference: lead/m1 does not verify: the record is not a message
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
 
     const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
-    expect(read).toEqual({ ok: true, body: BODY });
+    // The receipt `team messages` already wrote proves the body went out: the inbox returns no
+    // second copy, so the content is exposed at most once across both readers.
+    expect(read).toEqual({
+      ok: false,
+      reason: `message ${JSON.stringify(ID)} was already served in this inbox`,
+      served: 'already-served',
+    });
     expect(readFileSync(receiptPath, 'utf8')).toBe(receipt);
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
     expect(listUnread(scene.dropDir, scene.context, home)).toEqual([]);
@@ -558,15 +564,25 @@ difference: lead/m1 does not verify: the record is not a message
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('replied');
 
     const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
-    expect(read).toEqual({ ok: true, body: BODY });
+    // A `replied` receipt proves the body was served before the reply: no second copy is shown,
+    // and no `read` receipt is written over the higher status.
+    expect(read).toEqual({
+      ok: false,
+      reason: `message ${JSON.stringify(ID)} was already served in this inbox`,
+      served: 'already-served',
+    });
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('replied');
-    expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(true);
+    expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(false);
     expect(listUnread(scene.dropDir, scene.context, home)).toEqual([]);
 
-    // Write-once: a second read leaves the receipt exactly as the first wrote it.
-    const receiptPath = recordReceiptFile(scene.dropDir, ID, 'read');
-    const receipt = readFileSync(receiptPath, 'utf8');
-    expect(readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home)).toEqual({ ok: true, body: BODY });
-    expect(readFileSync(receiptPath, 'utf8')).toBe(receipt);
+    // Write-once: the repeat read leaves the durable status exactly where the replied receipt
+    // put it, and still returns no body.
+    const receipt = readFileSync(recordReceiptFile(scene.dropDir, ID, 'replied'), 'utf8');
+    expect(readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home)).toEqual({
+      ok: false,
+      reason: `message ${JSON.stringify(ID)} was already served in this inbox`,
+      served: 'already-served',
+    });
+    expect(readFileSync(recordReceiptFile(scene.dropDir, ID, 'replied'), 'utf8')).toBe(receipt);
   });
 });
