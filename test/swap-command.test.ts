@@ -17,6 +17,7 @@ import { SWAP_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { beginSession } from '../src/sessions/registry.ts';
 import { readState } from '../src/state.ts';
+import type { Screen } from '../src/watch/screen.ts';
 import { CLAUDE_IDLE, claudeBox, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -108,13 +109,31 @@ type FakeHerdr = {
  * launch that makes `pane-new-1` (its text is the captured idle screen, so the read-back is
  * unread), and a clock that advances when the run sleeps — the handover wait and the ready wait
  * end in fake time, never in the wall clock. `unreadable` is herdr failing to answer at all.
+ * `screen` is the old pane's screen kind; a new pane is idle. `slowHandover` makes the old
+ * conversation's handover turn still read `working` after its file lands, until the next sleep.
  */
-function fakeHerdr(opts: { status?: string; screen?: 'idle' | 'working'; unreadable?: boolean; newScreen?: string } = {}): FakeHerdr {
+function fakeHerdr(
+  opts: {
+    status?: string;
+    screen?: 'idle' | 'working' | 'unsent' | 'provider error' | 'rate limit';
+    unreadable?: boolean;
+    newScreen?: string;
+    slowHandover?: boolean;
+  } = {},
+): FakeHerdr {
   const did = { typed: [] as string[], closed: [] as string[], runs: [] as string[] };
   let clock = NOW.getTime();
   const now = (): Date => new Date(clock);
+  // A handover turn that is still finishing when its file lands: the old pane reads `working`
+  // until the next sleep, as a conversation finishing its final response does.
+  let handoverTurn = false;
   const sleep = async (ms: number): Promise<void> => {
     clock += ms;
+    if (handoverTurn) {
+      handoverTurn = false;
+      const old = led[0];
+      if (old) old.status = 'idle';
+    }
   };
   const led: { name: string; pane: string; workspace: string; status: string }[] = [
     { name: 'lead', pane: 'pane-old', workspace: 'ws-old', status: opts.status ?? 'idle' },
@@ -226,7 +245,13 @@ function fakeHerdr(opts: { status?: string; screen?: 'idle' | 'working'; unreada
     typeText(_session, pane, text) {
       did.typed.push(text);
       const at = / to (\S+):/.exec(text);
-      if (at) writeFileSync(at[1]!, '# handover\n\nwhat is left\n');
+      if (at) {
+        writeFileSync(at[1]!, '# handover\n\nwhat is left\n');
+        if (opts.slowHandover && pane === 'pane-old') {
+          handoverTurn = true;
+          if (led[0]) led[0].status = 'working';
+        }
+      }
       const slot = newPanes.get(pane);
       if (slot !== undefined) {
         slot.text = slot.text.includes('› Ask Codex to do anything')
@@ -257,6 +282,7 @@ function fakeHerdr(opts: { status?: string; screen?: 'idle' | 'working'; unreada
     home,
   };
   const screenKind = opts.screen ?? 'idle';
+  const screenOf = (kind: Screen['kind']): Screen => (kind === 'rate limit' ? { kind, reset: null } : { kind });
   const sources: RestartSources = {
     home,
     sessionRunning: () => true,
@@ -264,7 +290,7 @@ function fakeHerdr(opts: { status?: string; screen?: 'idle' | 'working'; unreada
     agents: () => (opts.unreadable ? null : agents()),
     workspaces: () => agents().map((agent) => ({ id: agent.workspace })),
     alive: () => true,
-    screen: () => ({ kind: screenKind }),
+    screen: (_session, pane) => (pane === 'pane-old' ? screenOf(screenKind) : { kind: 'idle' }),
     screenText: (_session, pane) => (pane === 'pane-old' ? boxedText : newPanes.get(pane)?.text ?? CLAUDE_IDLE),
     status: (_session, pane) => agents().find((agent) => agent.pane === pane)?.status ?? null,
     foreground: (_session, pane) => (pane === 'pane-old' && shelled ? ['zsh'] : [binaries.get(pane) ?? 'claude']),
@@ -592,7 +618,7 @@ describe('team swap now and --run', () => {
     expect(helper).not.toContain('deepseek');
   });
 
-  test('a screen that shows another model is a read-back mismatch, and the record is gone', async () => {
+  test('a screen that shows another model is a read-back mismatch; nothing says it swapped and the record stands', async () => {
     place();
     setRule('*=!anthropic');
     await swap(['queue', 'lead']);
@@ -603,6 +629,63 @@ describe('team swap now and --run', () => {
     expect(ran.code).toBe(1);
     expect(ran.err).toContain('read-back: mismatch');
     expect(ran.err).toContain('the file declares deepseek-flash, the screen shows deepseek-v4; the swap failed');
+    // A failed swap is not done: the record stands, and no log line says it swapped.
+    expect(queue().lead).toBeDefined();
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('read-back: mismatch');
+    expect(log).not.toContain('lead: swapped ');
+  });
+
+  test('a seat at a rate limit or provider error swaps at once, closed without typing', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    const world = fakeHerdr({ screen: 'provider error' });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('lead: at a rate limit or provider error; the swap runs at once');
+    // The pane cannot answer, so no handover is asked and no exit text is typed into it.
+    expect(log).toContain('lead: no handover is asked; the screen is at a rate limit or provider error');
+    expect(world.did.typed.join('\n')).not.toContain('write a handover');
+    expect(world.did.typed).not.toContain('/exit');
+    // The workspace was closed without typing, and the request is done.
+    expect(world.did.closed).toContain('ws-old');
+    expect(log).toContain('lead: swapped ');
+    expect(queue()).toEqual({});
+  });
+
+  test('unsent text is never a boundary and never the past-deadline pause', async () => {
+    for (const late of [false, true]) {
+      place();
+      setRule('*=!anthropic');
+      await swap(['queue', 'lead']);
+      const world = fakeHerdr({ screen: 'unsent' });
+      // `late` reads the queue an hour past a deadline that was NOW + 30 minutes.
+      const at = late ? new Date(NOW.getTime() + 3_600_000) : NOW;
+      const ran = await swap(['--run'], OWNER, { sources: world.sources, now: () => at });
+      expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+      expect(ran.out).toContain('lead: stays queued (not due yet)');
+      // No attempt was made: nothing was typed, and no boundary line was logged.
+      expect(world.did.typed).toEqual([]);
+      const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+      expect(log).not.toContain('at its boundary');
+      expect(log).not.toContain('the wait ran out');
+      expect(queue().lead).toBeDefined();
+    }
+  });
+
+  test('the handover wait runs until the conversation\'s turn ends, not just until its file lands', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
+    // The old conversation writes the file inside its turn and is still working after it.
+    const world = fakeHerdr({ newScreen: CODEX_IDLE, slowHandover: true });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('lead: the old conversation wrote the handover at');
+    expect(log).toContain('lead: swapped anthropic Claude Opus 5.5 -> openai GPT Sol 5.0 (handover passed from');
     expect(queue()).toEqual({});
   });
 
