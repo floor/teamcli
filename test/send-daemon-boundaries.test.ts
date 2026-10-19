@@ -267,8 +267,9 @@ describe('the send daemon\'s boundaries', () => {
     expect(host.typed.length).toBe(1);
     expect(host.enters).toEqual([]);
     const directDrops = join(world.dir, 'send-drops', 'acme', 'lead');
-    // The drop, and the retry record a held send leaves beside it.
-    const directFiles = readdirSync(directDrops).filter((name) => !name.endsWith('.pending'));
+    // The drop, and the retry record a held send leaves beside it; the episode marker beside the
+    // drop is a dotted sidecar, not a second record.
+    const directFiles = readdirSync(directDrops).filter((name) => !name.endsWith('.pending') && !name.includes('.'));
     expect(directFiles.length).toBe(1);
     expect(recordBody(join(directDrops, directFiles[0]!))).toBe(filed(longBrief));
     expect(readdirSync(directDrops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
@@ -299,7 +300,7 @@ describe('the send daemon\'s boundaries', () => {
     expect(history.ok && history.entries.map((entry) => entry.outcome)).toEqual(['held', 'held', 'held']);
   });
 
-  test('a delivered message writes 0600 files under the state folder and none in the lobby or the repository', async () => {
+  test('a delivered message writes 0600 files under the state folder and only the staged record in the checkout', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     const started = await startSendDaemon({ root: world.root, dir: world.dir, team: world.team, host });
@@ -318,7 +319,19 @@ describe('the send daemon\'s boundaries', () => {
       expect(lstatSync(join(drops, file)).mode & 0o777).toBe(0o600);
     }
     const inRepo = readdirSync(world.root, { recursive: true }).map((entry) => String(entry));
-    expect(inRepo.some((entry) => entry.includes('send-drops') || entry.endsWith('messages.jsonl'))).toBe(false);
+    // The walk stages the one signed record in the checkout, with its episode marker beside it,
+    // before the daemon dial. Nothing else from the send reaches the checkout: no history file,
+    // no pending marker and no second record.
+    const staged = join('.agents', 'send-drops', 'acme', 'native', files[0]!);
+    expect(inRepo.filter((entry) => entry.includes('send-drops') || entry.endsWith('messages.jsonl')).sort()).toEqual(
+      [
+        '.agents/send-drops',
+        '.agents/send-drops/acme',
+        '.agents/send-drops/acme/native',
+        staged,
+        `${staged}.fallback.json`,
+      ].sort(),
+    );
     expect(readdirSync(lobbyDir(world.home))).toEqual([]);
   });
 
