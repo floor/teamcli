@@ -42,7 +42,8 @@ key. `team drops` verifies it; a file at that name the key did not sign, or one 
 another message, seat, checkout or session, proves nothing and the drop is still listed. A
 receipt for the general seat brief also carries the claim's binding — its incarnation, the text's
 sha256 and the runtime epoch — and only a receipt carrying this claim's three counts as its read;
-one an earlier agent, an earlier text or an earlier runtime left does not. The read never
+one an earlier agent, an earlier text or an earlier runtime left does not, so the delivery is
+still listed and the read meets the occupied name. The read never
 replaces such a receipt: a name already held by a file that does not verify for this claim is a
 refusal, its body is not printed, and the file is left in place — only
 `team brief rollout --apply` moves past it, by recovering the delivery at a new id.

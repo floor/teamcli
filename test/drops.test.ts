@@ -23,13 +23,13 @@ import { readEvents } from '../src/bus/log.ts';
 import type { Caller } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
-import { generalBriefRecord, GENERAL_BRIEF_SHA256 } from '../src/launch/general-brief.ts';
+import { generalBriefRecord, GENERAL_BRIEF_SHA256, currentBriefClaim } from '../src/launch/general-brief.ts';
 import { DROPS_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { signRecord, signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, writeRecord, type ReceiptPayload } from '../src/send/record.ts';
-import { listUnread, receiptPath } from '../src/mcp/inbox.ts';
+import { signRecord, signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, writeRecord, type ReceiptPayload, type RecordPayload } from '../src/send/record.ts';
+import { listUnread, readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { messageKeyState } from '../src/store/keys.ts';
-import { updateState } from '../src/state.ts';
+import { readState, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -105,6 +105,40 @@ function drop(name: string, text: string): string {
   const path = join(dropDir, name);
   writeFileSync(path, text);
   return path;
+}
+
+/** The seat's current claim and the signed launch record it names, as `team up` leaves them: the
+ *  record lands at the id the claim expects. */
+function plantCurrentBrief(seat = 'lead'): RecordPayload {
+  mkdirSync(dropDir, { recursive: true });
+  const incarnation = 'inc_000000000012';
+  const record = generalBriefRecord({
+    to: seat,
+    root,
+    session: 'acme',
+    at: '2026-10-19T09:00:00.000Z',
+    incarnation,
+  });
+  const wrote = writeRecord(dropDir, signRecord(record, home));
+  if (!wrote.ok) throw new Error(wrote.reason);
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme,
+      briefs: {
+        [seat]: {
+          id: record.id,
+          at: record.at,
+          incarnation,
+          epoch: 'run_000000000012',
+          sha256: GENERAL_BRIEF_SHA256,
+          attempt: 0,
+          stage: 'ready' as const,
+          superseded: [],
+        },
+      },
+    } as never;
+  });
+  return record;
 }
 
 async function run(
@@ -495,6 +529,47 @@ describe('team drops --read', () => {
     // The receipt is what says it was handed over: the next turn finds nothing waiting.
     const second = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
     expect(second).toEqual({ code: 0, out: '', err: '' });
+  });
+
+  test('a receipt that does not bind the current claim does not hide the brief’s delivery', async () => {
+    const record = plantCurrentBrief();
+    // A signed read receipt for the message that does not bind the claim: an ordinary read of the
+    // file, not of this delivery. It proves the file was seen, never that this brief was served.
+    const occupying = writeReceipt(dropDir, signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: record.id,
+      to: 'lead',
+      root,
+      session: 'acme',
+      at: '2026-10-19T09:05:00.000Z',
+    }, home), home);
+    expect(occupying.ok).toBe(true);
+    const at = receiptPath(dropDir, record.id);
+    const before = readFileSync(at, 'utf8');
+    // The listing still offers the delivery the claim names, and the read refuses the occupied
+    // name with no body. The receipt and the drop are left exactly as they were.
+    const context = { to: 'lead', root, session: 'acme' };
+    expect(listUnread(dropDir, context, home).map((message) => message.id)).toEqual([record.id]);
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: 'team drops: the read receipt name is held by a file that does not verify for this brief\n',
+    });
+    expect(readFileSync(at, 'utf8')).toBe(before);
+    expect(existsSync(join(dropDir, record.id))).toBe(true);
+  });
+
+  test('a receipt bound to the current claim still marks the brief read', async () => {
+    const record = plantCurrentBrief();
+    const claimOf = () => currentBriefClaim(readState(join(root, '.agents')).sessions.acme?.briefs?.lead);
+    const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, record.id, home, { claim: claimOf });
+    expect(read.ok).toBe(true);
+    const context = { to: 'lead', root, session: 'acme' };
+    expect(listUnread(dropDir, context, home)).toEqual([]);
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({ code: 0, out: '', err: '' });
   });
 
   test('--read is an invocation of the launch line, never a placed caller', async () => {

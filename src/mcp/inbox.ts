@@ -17,6 +17,7 @@
 import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  briefBindingOf,
   currentBriefClaim,
   GENERAL_BRIEF_FROM,
   GENERAL_BRIEF_RULE,
@@ -253,7 +254,10 @@ export function currentClaimIn(root: string, session: string, seat: string): Cur
  * receipt beside it. Oldest first. Anything else in the folder — a link, a marker, a directory —
  * is not a message and is skipped; a receipt the message key did not sign proves nothing, so the
  * message still waits. An earlier delivery of the seat's general seat brief is not waiting mail:
- * the claim names the ids it replaced, and a read could only refuse them as superseded.
+ * the claim names the ids it replaced, and a read could only refuse them as superseded. A receipt
+ * at the current claim's own id counts only when it binds that claim, so a read of an earlier
+ * delivery — or an ordinary one — never hides the delivery the claim names: the drop is listed,
+ * and the read refuses the occupied name with no body.
  */
 export function listUnread(dropDir: string, context: StatusContext, home: string): InboxMessage[] {
   let names: string[];
@@ -263,14 +267,16 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
     return [];
   }
   const key = messageKeyState(home);
-  const superseded = new Set(currentClaimIn(context.root, context.session, context.to)?.superseded ?? []);
+  const claim = currentClaimIn(context.root, context.session, context.to);
+  const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];
   for (const name of names) {
     if (!MESSAGE_ID.test(name)) continue;
     if (superseded.has(name)) continue;
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
-    if (key.kind === 'key' && isRead(dropDir, name, context, key.key)) continue;
+    const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
+    if (key.kind === 'key' && isRead(dropDir, name, context, key.key, binding)) continue;
     let size = 0;
     let mtime: number;
     try {

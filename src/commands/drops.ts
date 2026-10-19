@@ -29,7 +29,7 @@ import {
 import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
-import { currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
+import { briefBindingOf, currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { currentClaimIn, listUnread, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -199,7 +199,8 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
  * exist is an empty one: no send has written here yet. With a context, a listing omits a delivery
  * of the general seat brief that cannot be served: the current claim's superseded ids are skipped
  * by name, and a launch record whose digest or incarnation is not the claim's is not shown — an
- * earlier brief is not waiting mail.
+ * earlier brief is not waiting mail. A receipt at the current claim's own id counts only when it
+ * binds that claim, so a read of another delivery never hides the delivery the claim names.
  */
 export function listDrops(dropDir: string, key?: KeyObject, context?: StatusContext): DropListing {
   let names: string[];
@@ -229,7 +230,10 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     // A verified read receipt means the drop was handed over: it is read, and this reading is
     // done with it. The receipt is the signed `<id>.read.json` the inbox and `team messages` write;
     // a file there that the message key did not sign proves nothing and leaves the drop waiting.
-    if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key)) continue;
+    // At the current claim's id the receipt must bind that claim too: a read of an earlier
+    // delivery does not count for this one.
+    const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
+    if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key, binding)) continue;
     let from: string | null = null;
     let fromId: string | null = null;
     let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
