@@ -3,7 +3,7 @@
 // not stop it. A lead, a dialog and unsent text are not targets.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
@@ -11,8 +11,9 @@ import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { emptySession, type PauseRecord } from '../src/state.ts';
+import { emptySession, updateState, type PauseRecord } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
+import type { WorkPush, WorkPushRequest } from '../src/watch/dispatch.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -256,30 +257,37 @@ describe('team watch writes the drop', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('an unapproved file still drops the prompt, and never into the owner pane', async () => {
+  test('an unapproved file routes the work directly, and types nothing into any pane', async () => {
     file = join(dir, '.agents', 'team.yaml');
     writeFileSync(file, raw.replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`));
+    writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
+    // Truthful idle clocks: without one the dispatcher asks nothing of anybody.
+    updateState(join(dir, '.agents'), (state) => {
+      const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
+      for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
+        seats[seat] = { stage: 'ready', last_active: '2026-10-03T13:00:00.000Z' };
+      }
+    });
     typed = [];
     screenNow = idle;
     clock = Date.parse('2026-10-03T14:00:00Z');
+    const pushed: WorkPushRequest[] = [];
+    const pushWork: WorkPush = async (request) => {
+      pushed.push(request);
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources({
       ownPane: () => ({ pane: 'first:pane', workspace: 'first' }),
+      pushWork,
     }));
     expect(code).toBe(0);
-    const triggers = typed.filter((line) => line.includes(' and do that.'));
-    expect(triggers).toHaveLength(1);
-    expect(triggers[0]).toMatch(/^second:pane Read .+ and do that\.$/);
-    expect(typed.some((line) => line.startsWith('first:pane '))).toBe(false);
-    expect(typed.some((line) => line.startsWith('lead:pane '))).toBe(false);
-    const path = triggers[0]?.match(/^second:pane Read (.+) and do that\.$/)?.[1];
-    expect(path).toBeTruthy();
-    expect(path).toContain(join('send-drops', 'acme-web', 'deepseek-acme-2'));
-    expect(readFileSync(path!, 'utf8')).toBe(PROMPT);
-    expect(statSync(path!).mode & 0o777).toBe(0o600);
-    expect(statSync(join(dir, '.agents', 'send-drops')).mode & 0o777).toBe(0o700);
-    expect(io.out).toContain(`nudged deepseek-acme-2: ${PROMPT}`);
-    expect(io.out).not.toContain('nudged claude-coordinator-acme');
+    // The unapproved file still reaches its idle worker, through the dispatcher's direct route;
+    // no automatic work nudge is typed at all, the watch's own pane included.
+    expect(pushed.map((one) => one.seat)).toContain('deepseek-acme-2');
+    expect(pushed.every((one) => one.body === PROMPT)).toBe(true);
+    expect(typed).toEqual([]);
+    expect(existsSync(join(dir, '.agents', 'send-drops'))).toBe(false);
   });
 
   test('a human seat gets no typed line and no drop', async () => {

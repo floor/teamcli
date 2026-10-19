@@ -831,11 +831,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const waiting = new Set(queuedSwaps(readState(dir)).map(([seat]) => seat));
         // The dispatcher: the watch's one path to an idle seat with takeable work. It reads the
         // same snapshot `status` prints (no picker of its own, no claim) and calls the direct
-        // route when the sources wire one. Every episode it owns is dropped from the legacy typed
-        // work nudge, whether the route exists or not: with no route the seat is not typed at,
-        // and the pass says the one fallback line instead. `--no-nudge` is the watch that types
-        // nothing: it dispatches nothing at all rather than spending an episode on a route it was
-        // told not to use.
+        // route when the sources wire one. Every automatic work request is decided here and
+        // nowhere else: the legacy typed work nudge is retired below, so a seat the reading
+        // cannot prove idle is typed at by nobody. `--no-nudge` is the watch that types nothing:
+        // it dispatches nothing at all rather than spending an episode on a route it was told
+        // not to use.
         const idleDispatch: IdleDispatchResult = foreign || args.flags.has('no-nudge')
           ? { pushed: [], suppressed: [] }
           : await dispatchIdleWork({
@@ -846,14 +846,23 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             body: (seat) => (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', seat),
             push: sources.pushWork,
           });
-        const suppressed = new Set(idleDispatch.suppressed ?? []);
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;
           tell(`${item.seat}: its work was not dispatched directly (${item.refused}); nothing was typed for it this episode`, false);
         }
         for (const line of idleDispatch.fallback?.failed ?? []) tell(line, true);
         for (const line of idleDispatch.fallback?.missing ?? []) say(line, false);
-        if (suppressed.size > 0) result.work = result.work.filter((item) => !suppressed.has(item.seat));
+        // The seats whose idle episode the dispatcher owns. The ring guard below reads it, so a
+        // mail notification is never a second typed path into an episode already delivered (or
+        // reported undelivered) by the dispatcher.
+        const suppressed = new Set(idleDispatch.suppressed ?? []);
+        // The legacy automatic work typing is retired: every automatic work request goes through
+        // the shared dispatcher reading above. A seat the reading cannot prove idle (no truthful
+        // stamp, unknown window, unreadable source) or cannot offer work to (an empty source) is
+        // typed at by nobody: absence of evidence is silence, never a guess. The pause's own
+        // drops are not work requests and stay, and `--no-nudge` still names what it would not
+        // type.
+        if (!foreign && !args.flags.has('no-nudge') && whole.pause == null) result.work = [];
         // A liveness word the chain set aside: said once per process, as a line, never typed
         // into a seat and never a desktop notice. The value in force stands.
         for (const refusal of result.refusals) {
@@ -898,23 +907,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           }
         }
         if (!foreign && statusEngine !== undefined) {
-          for (const nudgedSeat of statusEngine.drainNudges()) {
-            if (result.work.some((item) => item.seat === nudgedSeat)) continue;
-            // The dispatcher owns this seat's idle episode: the status nudge is not a second
-            // typed path into it, exactly as the pass's own work drop is dropped above.
-            if (suppressed.has(nudgedSeat)) continue;
-            if (waiting.has(nudgedSeat)) continue;
-            const fileSeat = team.seats.find((item) => item.name === nudgedSeat);
-            const agent = live.agents.find((item) => item.name === nudgedSeat);
-            if (!fileSeat || !agent || fileSeat.human === true || fileSeat.parked || fileSeat.stopped) continue;
-            const body = (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', nudgedSeat);
-            result.work.push({
-              pane: agent.pane,
-              seat: nudgedSeat,
-              cli: fileSeat.cli,
-              body,
-            });
-          }
+          // The status engine's automatic work nudge is retired with the pass's own: draining
+          // clears its memory, and nothing is typed into a seat from here. Every automatic work
+          // request is the dispatcher's decision above.
+          statusEngine.drainNudges();
         }
         const delivered = new Set<string>();
         if (!foreign) {
@@ -942,7 +938,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             delivered.add(item.pane);
           }
         }
-        if (result.ring && delivered.size === 0) {
+        // The ring is a typed path of its own. A seat whose idle episode the dispatcher owns is
+        // not typed at by it either (B7's finding): that episode is delivered, or reported
+        // undelivered, by the dispatcher, and a stored signed copy waiting unread is not a wake.
+        if (result.ring && delivered.size === 0 && !suppressed.has(result.ring.to)) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${result.ring.text}`, false);
           else await deliver({
             pane: result.ring.pane,

@@ -132,6 +132,10 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
 
   if (report.takeable === 0) {
     endEpisodes(scope, new Set());
+    // A paused team has no takeable work by rule, not because the source is empty: the pause's
+    // own drops say what is happening, and "nothing queued" would be a claim about a queue the
+    // pause itself has withdrawn.
+    if (input.pause != null) return result;
     if (report.idle.length === 0) {
       emptyNotices.delete(scope);
       return result;
