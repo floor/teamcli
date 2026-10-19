@@ -453,13 +453,13 @@ seats:
     expect(landing(run(command))).toBe(`${body}\nsecond line`);
   }, 30_000);
 
-  test('two messages land as two paragraphs, oldest first', () => {
+  test('two messages land as two paragraphs, newest first', () => {
     const one = plant(ID1, 'first');
     plant(ID2, 'second');
     utimesSync(one, new Date(NOW.getTime() - 2_000), new Date(NOW.getTime() - 2_000));
     utimesSync(join(dropsAt(), ID2), new Date(NOW.getTime() - 1_000), new Date(NOW.getTime() - 1_000));
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe('first\n\nsecond');
+    expect(landing(run(command))).toBe('second\n\nfirst');
   }, 30_000);
 
   test('one turn reads ten messages at most, and the rest wait for the next', () => {

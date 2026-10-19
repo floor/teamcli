@@ -10,8 +10,10 @@
 // record spine gives a read receipt — means the drop was read, and it is not listed.
 //
 // `team drops --read` is the same folder, served to the launch's turn-start hook: the launch
-// names the seat and session, each waiting record is verified and receipted through the inbox's
-// own read (`readMessage`), and only then is its body printed. The hook takes no placed caller.
+// names the seat and session, the newest waiting records are verified and receipted through the
+// inbox's own read (`readMessage`), and only then are their bodies printed. A file an earlier
+// build wrote is plain text no key can verify: it is skipped and counted, never served, and the
+// signed records around it are read as usual. The hook takes no placed caller.
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -65,12 +67,14 @@ Options:
   --read     hand the seat's waiting messages to a turn: each record is
              verified with the message key, its signed <id>.read.json receipt
              is written before its body is printed, and at most ten bodies are
-             read a run. The seat and session are the launch's, as with
-             \`team mcp serve\`: --seat is required and --session, when given,
-             must be the team file's. A record the launch wrote is served only
-             as the seat's current general brief; an earlier delivery is
-             skipped, never shown. The launch's turn-start hook runs this, so
-             it takes no placed caller.
+             read a run, newest first. A plain-text file an earlier build wrote
+             is not a signed record: it is skipped and counted, never served,
+             and the records around it are still read. The seat and session are
+             the launch's, as with \`team mcp serve\`: --seat is required and
+             --session, when given, must be the team file's. A record the
+             launch wrote is served only as the seat's current general brief;
+             an earlier delivery is skipped, never shown. The launch's
+             turn-start hook runs this, so it takes no placed caller.
   --seat     the seat whose folder --read serves
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
@@ -130,10 +134,11 @@ function defaultPoll(): Promise<boolean> {
 
 export const realSources: DropsSources = { home: homedir(), poll: () => defaultPoll() };
 
-/** How many bodies one `--read` hands over. A bounded batch keeps a turn from carrying an
- *  unbounded folder; whatever is left waits for the next turn, oldest first. A record that is
- *  malformed, or an earlier delivery of the general seat brief, is not a body and does not use
- *  one of the ten. */
+/** How many bodies one `--read` hands over. The newest are read first: a bounded batch keeps a
+ *  turn from carrying an unbounded folder, and the newest mail is the mail the turn is for.
+ *  Whatever is left waits for the next turn. A plain-text drop an earlier build wrote, a record
+ *  that is otherwise malformed, or an earlier delivery of the general seat brief is not a body
+ *  and does not use one of the ten. */
 export const DROP_READ_BATCH = 10;
 
 /** Whether every step down to the seat's drop folder is a real folder of this user's. A step
@@ -184,6 +189,23 @@ function parsedJson(text: string): unknown {
     return JSON.parse(text) as unknown;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether the file at `path` is a drop an earlier build wrote: plain text, not JSON at all. This
+ * version can never serve one — it is unsigned, and nothing in it can be verified — so `--read`
+ * skips it and counts it, and the signed records around it are still read. Only a regular file of
+ * this user's is read: a link, a FIFO or another user's file is not classified here and keeps the
+ * refusal the record reader gave it.
+ */
+function legacyDropAt(path: string): boolean {
+  const held = heldAt(path);
+  if (held.kind !== 'file' || (process.getuid !== undefined && held.uid !== process.getuid())) return false;
+  try {
+    return parsedJson(readFileSync(path, 'utf8')) === undefined;
+  } catch {
+    return false;
   }
 }
 
@@ -396,8 +418,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const waiting = listUnread(dropDir, context, sources.home);
     const bodies: string[] = [];
     let superseded = 0;
+    let legacy = 0;
     let refusal: string | null = null;
-    for (const message of waiting) {
+    // Newest first: the turn reads what has just landed, and the tail of a backlog waits for the
+    // next turn. A file that is not a signed record never uses one of the ten: a plain-text drop
+    // an earlier build wrote is counted and skipped, and the signed records around it are read.
+    for (const message of [...waiting].reverse()) {
       if (bodies.length >= DROP_READ_BATCH) break;
       const got = readMessage({ dropDir, root: loaded.root, seat: seatName, session: readSession }, message.id, sources.home, brief);
       if (got.ok) {
@@ -406,6 +432,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         // An earlier delivery of the general seat brief: not a body, not a refusal, and it does
         // not use one of the ten this run hands over.
         superseded += 1;
+      } else if (got.refusal !== undefined && got.refusal.rule === 'shape' && legacyDropAt(got.refusal.path)) {
+        // A drop an earlier build wrote is plain text no key can verify. Refusing the turn over
+        // old mail would wedge the hook, and serving it would accept an unsigned body: it is
+        // skipped, counted, and reported once below — never shown, never receipted.
+        legacy += 1;
       } else {
         if (got.refusal !== undefined) {
           // The owner hears the rule and the object — the record's id, its seat and its path —
@@ -424,6 +455,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     }
     if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
+    if (legacy > 0) {
+      // Old drops are reported by count: a file no key can verify is never served, and its
+      // content never reaches the turn.
+      io.stderr(`team drops: ${String(legacy)} drop(s) are not signed records and are not served\n`);
+    }
     if (bodies.length === 0 && refusal !== null) {
       // A message is waiting and none could be verified and receipted: the read leaves no
       // unproven body behind, and says why. With at least one body printed the run served the
