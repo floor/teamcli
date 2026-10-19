@@ -2,7 +2,8 @@
 // the sender, the receiver's lead and the addressed recipient — the bus matches `to`); persistent
 // dedup in the marker, not the rotating event log; every attempt kept in the durable ledger while
 // the marker carries a bounded summary; deterministic ids from the canonical recipient as well as
-// the message id; event intents retried after a crash on either side of the append; the policy-
+// the message id; event intents retried after a crash on either side of the append, with the
+// publication ledger keeping replay dedup across event-log rotation; the policy-
 // delayed main escalation fired once and resumed after a restart, and its delay re-resolved by a
 // later pass after an unreadable policy; recovery cancellation; the digest as a checked value; and
 // typed transport receipts where a missing one is explicit.
@@ -29,6 +30,7 @@ import {
   MARKER_ATTEMPT_LIMIT,
   markerPathOf,
   noteTransport,
+  publicationLedgerFileName,
   type CanonicalRecipient,
   type FallbackContext,
   type FallbackMarker,
@@ -157,6 +159,13 @@ function delayMs(world: World): number {
 
 function readMarker(world: World, messageId = 'm-001'): FallbackMarker {
   return JSON.parse(readFileSync(markerPathOf(world.recipient, messageId), 'utf8')) as FallbackMarker;
+}
+
+function publicationPath(world: World, messageId = 'm-001'): string {
+  return join(
+    dirname(historyPath(world.team.project, world.root, world.home)),
+    publicationLedgerFileName(world.recipient, messageId),
+  );
 }
 
 function verifiedLog(world: World): SignedEventRecord[] {
@@ -527,6 +536,8 @@ describe('the fallback episode', () => {
     };
     writeFileSync(markerPathOf(world.recipient, 'm-001'), `${JSON.stringify(marker)}\n`);
     unlinkSync(eventLogPath(world.team.project, world.root, world.home));
+    // No publication happened before the crash, so the episode's publication ledger is empty.
+    unlinkSync(publicationPath(world));
 
     const resumed = noteTransport(world.ctx, fact(world, { at: '2026-10-20T10:00:05.000Z' }));
     if (!resumed.ok) throw new Error(resumed.reason);
@@ -593,6 +604,103 @@ describe('the fallback episode', () => {
     expect(readMarker(world).outbox).toBeUndefined();
     expect(verifiedLog(world)).toHaveLength(2);
     expect(readdirSync(join(world.entityRoot, '.agents', 'messages', 'entity-lead'))).toHaveLength(1);
+  });
+
+  test('a delivery keeps the fixed all-failed event but cancels a pending escalation intent', () => {
+    const world = makeWorld();
+    const first = noteTransport(world.ctx, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+
+    // Crash before the immediate event's append, then the message arrives: the all-failed event
+    // is an invariant of the episode and is still emitted by the delivery's own call.
+    const marker = readMarker(world);
+    marker.outbox = {
+      kind: 'all-failed',
+      recordId: allFailedRecordId(world.recipient, 'm-001'),
+      at: AT,
+      route: 'socket',
+    };
+    writeFileSync(markerPathOf(world.recipient, 'm-001'), `${JSON.stringify(marker)}\n`);
+    unlinkSync(eventLogPath(world.team.project, world.root, world.home));
+    // No publication happened before the crash, so the episode's publication ledger is empty.
+    unlinkSync(publicationPath(world));
+
+    const delivered = noteTransport(world.ctx, fact(world, {
+      outcome: 'delivered',
+      route: 'native',
+      at: '2026-10-20T10:00:05.000Z',
+    }));
+    if (!delivered.ok) throw new Error(delivered.reason);
+    expect(delivered.state).toBe('delivered');
+    expect(delivered.eventDuplicate).toBe(false);
+    expect(delivered.event!.payload.record_id).toBe(allFailedRecordId(world.recipient, 'm-001'));
+    expect(verifiedLog(world)).toHaveLength(1);
+    expect(readMarker(world).status).toBe('delivered');
+    expect(readMarker(world).outbox).toBeUndefined();
+
+    // An escalation intent decided but never appended is cancelled by a later delivery, and a
+    // pass afterwards raises nothing.
+    const world2 = makeWorld();
+    const exhausted = noteTransport(world2.ctx, fact(world2));
+    if (!exhausted.ok) throw new Error(exhausted.reason);
+    const pending = readMarker(world2);
+    pending.escalatedAt = AT;
+    pending.escalatedTo = { seat: 'entity-lead', team: 'floor', root: world2.entityRoot, session: 'floor-hq' };
+    pending.outbox = {
+      kind: 'escalated',
+      recordId: escalatedRecordId(world2.recipient, 'm-001'),
+      at: AT,
+      reason: 'still undelivered after 0s: all live routes failed',
+    };
+    writeFileSync(markerPathOf(world2.recipient, 'm-001'), `${JSON.stringify(pending)}\n`);
+
+    const arrived = noteTransport(world2.ctx, fact(world2, {
+      outcome: 'delivered',
+      route: 'native',
+      at: '2026-10-20T10:00:05.000Z',
+    }));
+    if (!arrived.ok) throw new Error(arrived.reason);
+    expect(arrived.state).toBe('delivered');
+    expect(readMarker(world2).outbox).toBeUndefined();
+    expect(verifiedLog(world2)).toHaveLength(1);
+    expect(existsSync(join(world2.entityRoot, '.agents', 'messages', 'entity-lead'))).toBe(false);
+    const after = escalateDue(world2.ctx, { at: new Date(Date.parse(AT) + 10 * 60_000) });
+    expect(after.escalated).toHaveLength(0);
+    expect(verifiedLog(world2)).toHaveLength(1);
+  });
+
+  test('a crash after the append loses no event to rotation and adds no second one', () => {
+    const world = makeWorld();
+    const first = noteTransport(world.ctx, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+
+    // The publication is durable in the episode's own ledger, with the signed record itself.
+    expect(readFileSync(publicationPath(world), 'utf8').trim().split('\n')).toHaveLength(1);
+
+    // Crash after the append and before the marker cleared its intent, then retention drops the
+    // segment that held the event before recovery runs.
+    const marker = readMarker(world);
+    marker.outbox = {
+      kind: 'all-failed',
+      recordId: allFailedRecordId(world.recipient, 'm-001'),
+      at: AT,
+      route: 'socket',
+    };
+    writeFileSync(markerPathOf(world.recipient, 'm-001'), `${JSON.stringify(marker)}\n`);
+    unlinkSync(eventLogPath(world.team.project, world.root, world.home));
+
+    const recovered = noteTransport(world.ctx, fact(world, { at: '2026-10-20T10:00:05.000Z' }));
+    if (!recovered.ok) throw new Error(recovered.reason);
+    expect(recovered.state).toBe('duplicate');
+    expect(recovered.eventDuplicate).toBe(true);
+    expect(recovered.event!.payload.record_id).toBe(allFailedRecordId(world.recipient, 'm-001'));
+
+    // Nothing was appended into the retained log; the publication ledger still holds one record.
+    const retained = readEvents(world.team.project, world.root, world.home);
+    if (!retained.ok) throw new Error(retained.reason);
+    expect(retained.events).toHaveLength(0);
+    expect(readFileSync(publicationPath(world), 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(readMarker(world).outbox).toBeUndefined();
   });
 
   test('an unreadable policy leaves the escalation unscheduled until a later pass resolves it', () => {

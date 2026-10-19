@@ -24,6 +24,14 @@
 // lifetime proof: the log rotates and `appendEvent`'s dedup index is rebuilt from whatever
 // segments survived, so a second process or a restart could otherwise see an empty index.
 //
+// Each event this module emits is also recorded, with its signed record, in the episode's
+// publication ledger (`fallback-published-<key>.jsonl`, append-only) immediately after the append
+// and before the marker's intent clears. That record is what keeps replay dedup alive when the
+// event-log segments holding the event are dropped by retention: recovery finds the published
+// record and appends nothing. The ledger and the event log are separate writes, so this is
+// at-least-once publication deduplicated for the episode's lifetime, not a claim of global
+// exactly-once.
+//
 // A call takes a lock on the episode's canonical key (a directory under the store's `locks/`,
 // held by `withLock`), so attempts, a due escalation and a delivery cannot interleave their
 // read-modify-write. The event is emitted through an outbox intent written to the marker first:
@@ -54,7 +62,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
-import { appendEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
+import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator, type EntityOrchestrator } from '../bus/seats.ts';
 import { recordDir } from '../commands/messages.ts';
@@ -233,6 +241,12 @@ export function attemptLedgerFileName(recipient: CanonicalRecipient, messageId: 
   return `fallback-attempts-${episodeHash(recipient, messageId)}.jsonl`;
 }
 
+/** The episode's publication ledger: each event confirmed appended is recorded here with its
+ *  signed record, so replay dedup outlives the event log's retention. Append-only, never rotated. */
+export function publicationLedgerFileName(recipient: CanonicalRecipient, messageId: string): string {
+  return `fallback-published-${episodeHash(recipient, messageId)}.jsonl`;
+}
+
 /** The event record id of the immediate all-failed event: deterministic per episode, and derived
  *  from the canonical recipient as well as the message id, so two recipients of one message id in
  *  one session never share an event key. */
@@ -252,11 +266,11 @@ export function escalationMailboxId(recipient: CanonicalRecipient, messageId: st
 }
 
 /** The canonical policy name for the main-escalation delay: the design round's
- *  `delivery-escalation` (delays). Until B5's shared resolver and catalogue land, the delay is
- *  read through the one compatibility mapping below to the existing
- *  `event-unreachable-threshold-seconds`, whose release default is 600 s. The resolver owns the
- *  compatibility rule — when both names are enforced the effective delay respects both shorten-
- *  only caps — and this module duplicates none of it: it consumes the resolved number and
+ *  `delivery-escalation` (delays), whose decided default is 300 s. Until B5's shared resolver and
+ *  catalogue land, the delay is read through the one compatibility mapping below to the legacy
+ *  `event-unreachable-threshold-seconds`; an explicit legacy value shorter than the canonical one
+ *  remains a constraint, never a reversion to its own release default. The resolver owns the
+ *  compatibility rule, and this module duplicates none of it: it consumes the resolved number and
  *  implements no route timing. `delivery-order` (the route sequence) and per-route
  *  `delivery-timeout` stay the transport's; the immediate all-failed event is a fixed invariant,
  *  not a policy. */
@@ -264,11 +278,12 @@ export const ESCALATION_DELAY_POLICY = 'event-unreachable-threshold-seconds';
 
 /**
  * Resolve the main-escalation delay through the signed chain in force. The canonical name is
- * `delivery-escalation`; the compatibility mapping is `unreachable_threshold_seconds` (600 s
- * release default, shorten-only), and B5's shared resolver will be swapped in here when it is
- * green, with both caps honoured there. An unreadable or invalid chain schedules nothing and says
- * why — never a fallback delay — and the episode is still recorded; a later pass under a readable
- * chain schedules it from the original failure time.
+ * `delivery-escalation` (300 s main default); the compatibility mapping is the legacy
+ * `unreachable_threshold_seconds` (explicit shorter values remain a constraint; no reversion to
+ * its own release default), and B5's shared resolver will be swapped in here when it is green.
+ * An unreadable or invalid chain schedules nothing and says why — never a fallback delay — and
+ * the episode is still recorded; a later pass under a readable chain schedules it from the
+ * original failure time.
  */
 export function escalationDelayOf(
   ctx: FallbackContext,
@@ -395,18 +410,28 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
   if (fact.outcome === 'delivered') {
     if (!wasDelivered) {
       marker.status = 'delivered';
-      // Recovery cancels a pending escalation, including one a restart had already scheduled,
-      // and an event intent formed before it: the message is not undelivered after all.
       delete marker.dueAt;
-      delete marker.outbox;
     }
+    // Recovery cancels a pending escalation — one a restart had already scheduled included —
+    // because the message is not undelivered after all. The immediate all-failed event is an
+    // invariant of the episode, not a prediction: an intent a crash left is still drained, even
+    // though the message has now arrived.
+    if (marker.outbox?.kind === 'escalated') delete marker.outbox;
+    let flushed: FlushResult;
+    try {
+      flushed = flushOutbox(ctx, marker, path);
+    } catch (error) {
+      return { ok: false, kind: 'marker', reason: errorMessage(error) };
+    }
+    if (!flushed.ok) return { ok: false, kind: 'marker', reason: flushed.reason };
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
     return {
       ok: true,
       state: wasDelivered ? 'duplicate' : 'delivered',
       marker,
-      eventDuplicate: false,
+      ...(flushed.event !== null ? { event: flushed.event } : {}),
+      eventDuplicate: flushed.duplicate,
       dueAt: marker.dueAt ?? null,
     };
   }
@@ -560,6 +585,13 @@ function escalateOne(
   }
 
   // A pending intent comes first, whatever the state: a crash before an event is retried here.
+  // An escalation intent on an already-delivered episode is cancelled instead: the delivery came
+  // first, so the escalation never went out and must not now.
+  if (marker.status === 'delivered' && marker.outbox?.kind === 'escalated') {
+    delete marker.outbox;
+    const cancelled = writeMarker(path, marker);
+    if (!cancelled.ok) return { kind: 'refused', reason: cancelled.reason };
+  }
   const drained = flushOutbox(ctx, marker, path);
   if (!drained.ok) return { kind: 'refused', reason: drained.reason };
   if (drained.kind === 'escalated' && drained.event !== null) {
@@ -627,10 +659,13 @@ type FlushResult =
   | { ok: false; reason: string };
 
 /**
- * Emit the marker's pending intent, then clear it. Called under the episode's key lock. The
- * deterministic record id makes a retry an `appendEvent` duplicate rather than a second event; the
- * mailbox is `once`, so a retry after a mailbox failure finds the first record. The intent stays
- * in the marker until both writes return, so a crash in this function is retried next pass.
+ * Emit the marker's pending intent, then clear it. Called under the episode's key lock. A
+ * confirmed append is first recorded with its signed record in the episode's publication ledger,
+ * which retention never removes, so a retry finds the published record even after the event log's
+ * segments rotated and appends nothing. The deterministic record id makes a retry within retained
+ * history an `appendEvent` duplicate; the mailbox is `once`, so a retry after a mailbox failure
+ * finds the first record. The intent stays in the marker until both writes return, so a crash in
+ * this function is retried next pass.
  */
 function flushOutbox(ctx: FallbackContext, marker: FallbackMarker, path: string): FlushResult {
   const intent = marker.outbox;
@@ -670,8 +705,24 @@ function flushOutbox(ctx: FallbackContext, marker: FallbackMarker, path: string)
     };
   }
 
-  const appended = appendEvent(ctx.team.project, marker.recipient.root, ctx.home, input);
-  if (!appended.ok) return { ok: false, reason: appended.reason };
+  // A confirmed append is recorded with its signed record in the episode's publication ledger
+  // before the marker changes. The event log's own dedup only sees the segments retention kept;
+  // this ledger outlives them, so a recovery after rotation appends nothing and reuses the record.
+  const published = publicationOf(ctx, marker.recipient, marker.messageId, intent.recordId);
+  if (published.kind === 'unreadable') return { ok: false, reason: published.reason };
+  let appendedRecord: SignedEventRecord;
+  let duplicate: boolean;
+  if (published.kind === 'ok') {
+    appendedRecord = published.record;
+    duplicate = true;
+  } else {
+    const result = appendEvent(ctx.team.project, marker.recipient.root, ctx.home, input);
+    if (!result.ok) return { ok: false, reason: result.reason };
+    appendedRecord = result.record;
+    duplicate = result.duplicate;
+    const recorded = recordPublication(ctx, marker, intent, result.record);
+    if (!recorded.ok) return { ok: false, reason: recorded.reason };
+  }
 
   if (intent.kind === 'escalated') {
     const target = marker.escalatedTo!;
@@ -699,7 +750,87 @@ function flushOutbox(ctx: FallbackContext, marker: FallbackMarker, path: string)
   delete marker.outbox;
   const wrote = writeMarker(path, marker);
   if (!wrote.ok) return { ok: false, reason: wrote.reason };
-  return { ok: true, kind: intent.kind, event: appended.record, duplicate: appended.duplicate, mailbox };
+  return { ok: true, kind: intent.kind, event: appendedRecord, duplicate, mailbox };
+}
+
+type PublicationRead =
+  | { kind: 'ok'; record: SignedEventRecord }
+  | { kind: 'none' }
+  | { kind: 'unreadable'; reason: string };
+
+function publicationPathOf(ctx: FallbackContext, recipient: CanonicalRecipient, messageId: string): string {
+  return join(
+    dirname(historyPath(ctx.team.project, recipient.root, ctx.home)),
+    publicationLedgerFileName(recipient, messageId),
+  );
+}
+
+/** Find the signed record this episode already published under `recordId`. A ledger that exists
+ *  but cannot be read stops the caller: re-appending from a guess could duplicate the event. */
+function publicationOf(
+  ctx: FallbackContext,
+  recipient: CanonicalRecipient,
+  messageId: string,
+  recordId: string,
+): PublicationRead {
+  const path = publicationPathOf(ctx, recipient, messageId);
+  const text = readNoFollow(path);
+  if (text === null) return { kind: 'unreadable', reason: `${path}: the publication ledger could not be read` };
+  let found: SignedEventRecord | null = null;
+  for (const line of text.split('\n')) {
+    if (line === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return { kind: 'unreadable', reason: `${path}: the publication ledger is not JSON lines` };
+    }
+    if (parsed === null || typeof parsed !== 'object') {
+      return { kind: 'unreadable', reason: `${path}: a publication line has an unknown shape` };
+    }
+    const entry = parsed as Record<string, unknown>;
+    if (entry.recordId !== recordId) continue;
+    const record = signedRecordOf(entry.record);
+    if (record === null || !verifies(record, ctx.home)) {
+      return { kind: 'unreadable', reason: `${path}: the published record is not a verified event` };
+    }
+    found = record;
+  }
+  return found === null ? { kind: 'none' } : { kind: 'ok', record: found };
+}
+
+function recordPublication(
+  ctx: FallbackContext,
+  marker: FallbackMarker,
+  intent: EventIntent,
+  record: SignedEventRecord,
+): { ok: true } | { ok: false; reason: string } {
+  const wrote = appendStoreLine(
+    ctx.team.project,
+    marker.recipient.root,
+    ctx.home,
+    publicationLedgerFileName(marker.recipient, marker.messageId),
+    { ts: intent.at, recordId: intent.recordId, kind: intent.kind, record },
+    { rotate: false, label: 'the fallback publication ledger' },
+  );
+  if (!wrote.ok) return { ok: false, reason: `the published event was not recorded: ${wrote.reason}` };
+  return { ok: true };
+}
+
+function signedRecordOf(value: unknown): SignedEventRecord | null {
+  if (value === null || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.signature !== 'string' || raw.signature === '') return null;
+  if (raw.payload === null || typeof raw.payload !== 'object') return null;
+  return raw as unknown as SignedEventRecord;
+}
+
+function verifies(record: SignedEventRecord, home: string): boolean {
+  try {
+    return verifySignedEvent(record, home);
+  } catch {
+    return false;
+  }
 }
 
 /** The lock's directory, unique per canonical episode key, under the project's state store. */
