@@ -23,6 +23,17 @@ exit: /exit
 # "Press Ctrl+C again to exit" row, so it is not named. Used only to clear an exit
 # text that did not read back as typed, and only when the box holds exactly that text.
 exit_clear: ctrl+u
+# The measured way into the input box (2026-10-19, herdr 0.7.1, a 54-column pane, cursor-agent
+# 2026.10.16-e3cb207): ctrl+u deleted from the end of the draft, word or row at a time, and
+# repeated presses emptied the box, ending on the readable idle screen (five presses for a
+# three-line draft). ctrl+c emptied it in one press but left a `Press Ctrl+C again to exit` row,
+# so it is not named here; [ctrl+a, ctrl+k] stalled after one pass and was dropped. A bracketed
+# paste drew the lines back exactly. mid_turn stays false: no working-turn keys were measured.
+input:
+  clear:
+    - ctrl+u
+  paste: bracketed
+  mid_turn: false
 # No `exit_confirm`: not observed. A 2026-10-06 run asked cursor-agent 2026.10.01-14929f9 to
 # background a shell and never got past its own permission dialogs for the command, so no
 # exit question with background work was ever on its pane; the CLI's /exit pair is captured
