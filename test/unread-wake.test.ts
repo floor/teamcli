@@ -266,6 +266,29 @@ describe('wakeUnreadDrops', () => {
     expect(one.enters).toBe(1);
   });
 
+  test('an old unsigned marker does not make a fresh verified message due for a wake or a report', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nfresh, marked old', new Date(NOW.getTime() - 4 * MIN));
+    // The `.pending` marker is unsigned; only the record's own signed `at` dates it.
+    writeFileSync(
+      join(dropDir, `${UNREAD_A}.pending`),
+      JSON.stringify({ id: UNREAD_A, from: 'owner', ts: new Date(NOW.getTime() - 40 * MIN).toISOString() }),
+    );
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const scene = sceneOf(made, team, one, said);
+
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    reportUnreadDrops(scene, { unreadAfter: N });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(said).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
+  });
+
   test('a receipt that does not bind the seat\'s current claim is no read, and does not hide the wake', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

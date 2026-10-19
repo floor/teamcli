@@ -211,6 +211,53 @@ describe('unread work in team check', () => {
     expect(code).toBe(1);
   });
 
+  test("a verified record's own signed time wins over the marker's unsigned age", () => {
+    const at = place();
+    seed(at, 'lead', ID_A, 1);
+    // The marker beside the drop is unsigned: its age is a word this pass may not believe for a
+    // record the key did sign. The record's own `at` is one minute old, so nothing is due.
+    writeFileSync(
+      join(at.dir, 'send-drops', at.session, 'lead', `${ID_A}.pending`),
+      JSON.stringify({ id: ID_A, from: 'owner', ts: new Date(NOW.getTime() - 40 * MIN).toISOString() }),
+    );
+
+    const { code, out } = check(at);
+
+    expect(out).not.toContain('has been unread');
+    expect(out).toContain('no differences');
+    expect(code).toBe(0);
+  });
+
+  test('an unverified record is dated by the file, never by the time its payload claims', () => {
+    const at = place();
+    // A fresh `at` inside a body whose signature does not verify is no claim at all: the file's
+    // own age still names the unread message, and says it is unverified.
+    const ts = new Date(NOW.getTime() - 1 * MIN);
+    const dropDir = join(at.dir, 'send-drops', at.session, 'lead');
+    const record = signRecord({
+      kind: 'message',
+      id: ID_A,
+      to: 'lead',
+      to_id: null,
+      root: realpathSync(at.root),
+      session: at.session,
+      at: ts.toISOString(),
+      body: `work ${ID_A}`,
+      from: 'owner',
+      from_id: null,
+      rule: 'the owner',
+      thread: ID_A,
+    }, at.home);
+    record.signature = `${record.signature.slice(0, -4)}AAAA`;
+    dropMessage(dropDir, ID_A, `${JSON.stringify(record, null, 2)}\n`);
+    utimesSync(join(dropDir, ID_A), new Date(), new Date(NOW.getTime() - 11 * MIN));
+
+    const { code, out } = check(at);
+
+    expect(out).toContain(`difference: lead: an unverified message has been unread for 11 min (id ${ID_A})`);
+    expect(code).toBe(1);
+  });
+
   test('an unverified record never lends its marker word a sender', () => {
     const at = place();
     const ts = new Date(NOW.getTime() - 11 * MIN);

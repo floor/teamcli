@@ -14,6 +14,7 @@
 // argument's; the folder is checked step by step so a link at `.agents`, `send-drops`, the
 // session or the seat refuses service; an id is a lowercase UUID and nothing else, so no id can
 // name a path; a drop or receipt that is a link is refused, never followed.
+import type { KeyObject } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -240,6 +241,17 @@ function markerOf(dropDir: string, id: string): { from?: string; ts?: string } {
   }
 }
 
+/** The time a message's own record names when that record verifies with this checkout's key, and
+ *  null otherwise. The `.pending` marker beside a message is unsigned, and a file's mtime is the
+ *  filesystem's: neither may date a record the key signed, so a listing counts from this when it
+ *  is there and falls back only for a record this key cannot vouch for. */
+function signedTimeOf(path: string, id: string, key: KeyObject): string | null {
+  const looked = readRecord(path, id);
+  if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key)) return null;
+  const at = looked.record.payload.at;
+  return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? at : null;
+}
+
 /** The current claim of one seat's general seat brief, read from the checkout's state; null when
  *  the state cannot be read or holds no current claim. */
 export function currentClaimIn(root: string, session: string, seat: string): CurrentBriefClaim | null {
@@ -259,6 +271,10 @@ export function currentClaimIn(root: string, session: string, seat: string): Cur
  * at the current claim's own id counts only when it binds that claim, so a read of an earlier
  * delivery — or an ordinary one — never hides the delivery the claim names: the drop is listed,
  * and the read refuses the occupied name with no body.
+ *
+ * A message whose record verifies is dated by the record's own signed `at`. The `.pending` marker
+ * beside it is unsigned, and the file's mtime is the filesystem's; neither can age a record this
+ * checkout's key signed, so a planted marker cannot make a message due for a wake or a report.
  */
 export function listUnread(dropDir: string, context: StatusContext, home: string): InboxMessage[] {
   let names: string[];
@@ -289,10 +305,13 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
       continue;
     }
     const marker = markerOf(dropDir, name);
+    // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
+    // dates only a record the key cannot vouch for.
+    const signed = key.kind === 'key' ? signedTimeOf(at, name, key.key) : null;
     messages.push({
       id: name,
       ...(marker.from !== undefined ? { from: marker.from } : {}),
-      ts: marker.ts ?? new Date(mtime).toISOString(),
+      ts: signed ?? marker.ts ?? new Date(mtime).toISOString(),
       bytes: size,
     });
   }
