@@ -487,6 +487,38 @@ describe('the watch gives an idle worker its queued work', () => {
     expect(leases()).toEqual([]);
   });
 
+  test('a worker with no idle stamp is never pushed or typed at', async () => {
+    // No truthful idle evidence: the persisted activity clock is absent, and the watch is not
+    // allowed to guess it (no synthetic stamp is written here). The dispatcher cannot prove the
+    // seat waited the threshold, so no request is pushed; the retired legacy paths type no work
+    // either. The direct route is fully available, so a push is possible — it must not happen.
+    updateState(join(root, '.agents'), (state) => {
+      const seat = state.sessions[SESSION]?.seats[SEAT];
+      if (seat !== undefined) delete seat.last_active;
+    });
+    directRoute();
+    const io = testIo(root, { kind: 'owner' });
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    const { sources, typed, paneRuns } = watchSources({
+      workerStatus: 'idle',
+      passes: 13,
+      onPass: runtime.pump,
+      pushWork: sent.push,
+    });
+    const code = await runWatch(['--file', file], io, sources);
+    expect(code).toBe(0);
+    expect(sent.pushed).toEqual([]);
+    expect(sent.frames).toEqual([]);
+    expect(sent.typed).toEqual([]);
+    expect(typed).toEqual([]);
+    expect(paneRuns).toEqual([]);
+    expect(workerInbox()).toEqual([]);
+    expect(dropNames().filter((name) => name.startsWith('work-'))).toEqual([]);
+    expect(runtime.claims).toEqual([]);
+    expect(leases()).toEqual([]);
+  });
+
   test('an empty queue claims nothing and never nudges twice', async () => {
     writeFileSync(join(root, '.agents', 'tasks.yaml'), '[]\n');
     directRoute();
