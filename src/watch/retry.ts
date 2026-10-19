@@ -33,7 +33,7 @@ import {
   recordPendingTry,
   type PendingDrop,
 } from '../send/pending.ts';
-import { deliverTrigger, draftNote, TAKEN_REASON, type DeliverHost } from '../send/deliver.ts';
+import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { triggerLine } from '../send/native.ts';
 import { markTaken } from '../send/taken.ts';
@@ -157,16 +157,18 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, { submitHeld: true });
     if (result.outcome === 'delivered') {
       clearPending(dropDir, drop.id);
-      // A taken retry is a delivery too: its box cleared with no proof yet, and it is never typed
-      // again — the marker is gone, and the history says how the delivery stands.
+      // A retry that took the line is a trigger sent, never a message read: no signed receipt has
+      // come back, and it is never typed again — the marker is gone, and the history says how the
+      // send stands.
       const taken = result.evidence === 'taken';
       // The retry moved an unsent draft out of the box and back (or kept its copy): the receipt
       // the sender would have had travels with the retry's line and its history entry too.
       const draft = result.draft === undefined ? undefined : draftNote(result.draft);
-      const note = [taken ? TAKEN_REASON : undefined, draft].filter((one): one is string => one !== undefined).join('; ');
+      const note = [TRIGGER_TAKEN_NOTE, draft].filter((one): one is string => one !== undefined).join('; ');
       if (taken) {
-        // The retry itself became a taken delivery: the same marker the send writes, so the
-        // watch's later passes confirm it — and this drops out of the retry records for good.
+        // The retry left a taken line: the same marker the send writes, so the watch's later
+        // passes look for the sign the retry's own window missed — and this drops out of the
+        // retry records for good.
         markTaken(dropDir, {
           id: drop.id,
           from: drop.from,
@@ -183,20 +185,15 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
           to: drop.to,
           body: drop.body,
           id: drop.id,
-          outcome: 'delivered',
-          ...(note === '' ? {} : { note }),
+          outcome: 'sent (unconfirmed)',
+          note,
           via: 'typed',
           // A typed fall-through is the inbox leg's own bound ending: the history line says why
           // the same drop file was typed after the seat's client left it unread.
           ...(drop.leg === 'mcp-inbox' ? { failed: [INBOX_FALLBACK_REASON] } : {}),
         });
       }
-      scene.say(
-        taken
-          ? `${drop.to}: ${heldWords(drop)} was delivered on retry (${TAKEN_REASON}${draft === undefined ? '' : `; ${draft}`})`
-          : `${drop.to}: ${heldWords(drop)} was delivered on retry${draft === undefined ? '' : `; ${draft}`}`,
-        false,
-      );
+      scene.say(`${drop.to}: ${heldWords(drop)} was sent on retry (${note})`, false);
       return;
     }
     if (result.outcome === 'not-submitted') {

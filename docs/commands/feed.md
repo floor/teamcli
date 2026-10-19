@@ -32,10 +32,10 @@ out of legs — `native` (recorded `unavailable` while no socket write is made) 
 within 10m` on the watch's later typed line for a message the seat's client left unread past the
 fallback window) in this build. It is absent when no leg failed, and a line that has none of
 these fields, from a build older than them, carries the six required fields alone. `note` is the
-short qualifier the outcome word cannot carry alone: a delivered send whose box cleared before
-herdr's status or the transcript showed the seat act reads `taken, not yet confirmed`, and the
-sign that the seat acted is read later — a later line for the same id reads `taken but never
-acted on` when that sign
+short qualifier the outcome word cannot carry alone: a typed send whose trigger left the box, or
+whose box cleared before herdr's status or the transcript showed the seat act, reads
+`sent (unconfirmed)` with `trigger taken, no read receipt yet`, and the sign that the seat acted
+is read later — a later line for the same id reads `taken but never acted on` when that sign
 never came. The table shows `ms` and `via` with the outcome in the KIND column, `delivered (via
 socket in 812 ms)`, and carries `spec`, `resolved`, `failed`, `note`, `thread` and `in_reply_to`
 in the `--json` event, since the plain row keeps the channel that took the send.

@@ -39,7 +39,7 @@ import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
-import { bindPane, deliverTrigger, draftNote, TAKEN_REASON } from './deliver.ts';
+import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
@@ -121,10 +121,12 @@ export type DaemonSendResponse =
       ok: true;
       id: string;
       seat: string;
+      /** The daemon's word for a trigger the seat took; the CLI reports it to the sender as
+       *  `sent (unconfirmed)`, because no signed read receipt has come back. */
       outcome: 'delivered';
       status: string;
       /** `taken` when the box cleared with no status or transcript evidence inside the window:
-       *  a delivery whose confirmation is still to come, and which is never typed again. */
+       *  the line left the composer, no receipt followed, and it is never typed again. */
       evidence?: 'taken';
       /** What became of unsent text the delivery moved out of the box, when it moved any. */
       draft?: string;
@@ -1052,7 +1054,8 @@ async function executeQueuedSend(
     }
 
     // The last mile is the one `team send` itself takes: the box read with its styling, the line
-    // typed, and `delivered` only once the trigger has left the box and the seat is working.
+    // typed, and a success only once the trigger has left the box and the seat is working. That
+    // success is a trigger sent; the caller words it `sent (unconfirmed)` until a receipt comes.
     const result = await deliverTrigger(bindPane(host.native, team.session), pane, trigger, configured.cli);
     const where = `the drop file is at ${dropPath}`;
     // The draft's receipt travels with every exit that moved an unsent text: the caller, the log
@@ -1093,13 +1096,15 @@ async function executeQueuedSend(
     }
     const submittedStatus = result.status ?? 'working';
     const taken = result.evidence === 'taken';
-    const note = [taken ? TAKEN_REASON : undefined, draft].filter((one): one is string => one !== undefined).join('; ');
+    // A trigger the seat took is a trigger sent, never a message read: no signed receipt has
+    // come back. The note says so in every typed success, whatever evidence showed the take.
+    const note = [TRIGGER_TAKEN_NOTE, draft].filter((one): one is string => one !== undefined).join('; ');
 
     logLine(
       dir,
       'send',
       who,
-      `${seatName}: delivered (drop ${String(body.length)} characters, ${taken ? TAKEN_REASON : result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`}${draft === undefined ? '' : `; ${draft}`})`,
+      `${seatName}: sent (unconfirmed) (drop ${String(body.length)} characters, typed, ${taken ? TRIGGER_TAKEN_NOTE : result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${submittedStatus}`}${draft === undefined ? '' : `; ${draft}`})`,
       host.now(),
     );
     appendHistory(team.project, root, host.home, {
@@ -1109,8 +1114,8 @@ async function executeQueuedSend(
       ...sentAs,
       body,
       id: msgId,
-      outcome: 'delivered',
-      ...(note === '' ? {} : { note }),
+      outcome: 'sent (unconfirmed)',
+      note,
       ms: Date.now() - startedAt,
       via: 'typed',
       failed: request.failed,

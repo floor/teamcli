@@ -182,7 +182,9 @@ describe('team send: the plain send is the typed trigger again', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
@@ -193,6 +195,12 @@ describe('team send: the plain send is the typed trigger again', () => {
     const read = readHistory('acme', root, host.home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.entries[0]).toMatchObject({ to: 'lead', outcome: 'delivered', ms: 0, via: 'typed' });
+    expect(read.entries[0]).toMatchObject({
+      to: 'lead',
+      outcome: 'sent (unconfirmed)',
+      note: 'trigger taken, no read receipt yet',
+      ms: 0,
+      via: 'typed',
+    });
   });
 });

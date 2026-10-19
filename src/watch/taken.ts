@@ -1,12 +1,12 @@
 // Confirming the sends a seat took without showing it, and the one word when it never acted.
 //
-// A send whose box cleared with no status or transcript evidence is delivered as `taken, not yet
-// confirmed`, and leaves a marker beside its drop. The watch is the one reader with a live view of
-// every seat, so its later passes look for the sign the send's own window missed: a transcript row
-// naming the drop, or a status that moved from the one read before Enter. The marker goes once
-// either is seen. A seat that sits free past the grace with no sign, or a record the age bound runs
-// out on, is the last case: the sender is told the line was taken but never acted on, one history
-// line keeps it, and the line is still never typed again.
+// A send whose box cleared with no status or transcript evidence is `sent (unconfirmed)` with the
+// note `trigger taken, no read receipt yet`, and leaves a marker beside its drop. The watch is the
+// one reader with a live view of every seat, so its later passes look for the sign the send's own
+// window missed: a transcript row naming the drop, or a status that moved from the one read before
+// Enter. The marker goes once either is seen. A seat that sits free past the grace with no sign,
+// or a record the age bound runs out on, is the last case: the sender is told the line was taken
+// but never acted on, one history line keeps it, and the line is still never typed again.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { showsDrop } from '../send/deliver.ts';
@@ -59,7 +59,7 @@ function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string
       to: drop.to,
       body: drop.body,
       id: drop.id,
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       note: NEVER_ACTED_ON,
     });
   }

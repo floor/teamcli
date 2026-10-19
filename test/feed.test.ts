@@ -200,7 +200,7 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'note', 'outcome', 'thread', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the seat's readable name, and the rule.
     const seatHeader = 'from helper — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
@@ -210,7 +210,8 @@ describe('team send history log & team feed', () => {
       from_team: teamIdOf(root),
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
+      note: 'trigger taken, no read receipt yet',
       // The thread is the first message's id; a first message is its own thread's id.
       thread: sentDoc.ids.sent,
       ms: 0,
@@ -235,8 +236,8 @@ describe('team send history log & team feed', () => {
     expect(await runFeed([], feedIo, { home })).toBe(0);
     expect(feedIo.out).toBe(
       'team acme, session "acme"\n' +
-        '  TIME      KIND                           SEAT            DETAIL\n' +
-        `  15:30:00  delivered (via typed in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
+        '  TIME      KIND                                    SEAT            DETAIL\n' +
+        `  15:30:00  sent (unconfirmed) (via typed in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
         '1 event\n',
     );
 
@@ -252,7 +253,8 @@ describe('team send history log & team feed', () => {
       from: 'helper',
       to: 'lead',
       id: sentDoc.ids.sent,
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
+      note: 'trigger taken, no read receipt yet',
       ms: 0,
       via: 'typed',
     });
@@ -271,7 +273,7 @@ describe('team send history log & team feed', () => {
       resolved: 'agt_0123456789ab',
       body: `${OWNER_HEADER}addressed`,
       id: 'seed-addressed',
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       via: 'typed',
     });
     expect(wrote.ok).toBe(true);
@@ -294,7 +296,7 @@ describe('team send history log & team feed', () => {
       to: 'lead',
       body: `${OWNER_HEADER}plain`,
       id: 'seed-plain',
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
       via: 'typed',
     });
     const plainIo = testIo(root);
@@ -487,7 +489,7 @@ describe('team send history log & team feed', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.entries.map((e) => ({ from: e.from, to: e.to, body: e.body, outcome: e.outcome }))).toEqual([
-      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-delivered`, outcome: 'delivered' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-delivered`, outcome: 'sent (unconfirmed)' },
       { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-unreachable`, outcome: 'unreachable' },
       { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-answered`, outcome: 'answered' },
       { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-timeout`, outcome: 'timeout' },

@@ -64,13 +64,13 @@ nothing. Fields (`src/send/history.ts`):
 | `to` | string | yes | — | 0.4.x | the recipient seat |
 | `body` | string | yes | — | 0.4.x | the message body, whole |
 | `id` | string | yes | — | 0.4.x | the drop's id |
-| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `held`, `not-submitted`, `unreachable`, `answered`, `timeout` |
+| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `sent (unconfirmed)`, `held`, `not-submitted`, `unreachable`, `answered`, `timeout` |
 | `spec` | string | no | absent | 0.5.0 | the address the caller wrote, when not the resolved seat's own name |
 | `resolved` | string | no | absent | 0.5.0 | the agent id the spec resolved to, written with `spec` |
 | `ms` | number | no | absent | 0.5.0 | send to outcome in whole milliseconds, when measured |
 | `via` | string | no | absent | 0.5.0 | the path the message travelled: `typed` or `socket` |
 | `failed` | string[] | no | absent | 0.5.0 | the legs that did not take the send, each `<leg>: <reason>`, in the order tried |
-| `note` | string | no | absent | 0.5.0 | a qualifier the outcome cannot carry: `taken, not yet confirmed`, `taken but never acted on` |
+| `note` | string | no | absent | 0.5.0 | a qualifier the outcome cannot carry: `trigger taken, no read receipt yet`, `taken but never acted on`, and `the unsent text was pasted back` beside either |
 
 ### The message record
 
@@ -327,13 +327,18 @@ it, and the header says the record is missing; it is never granted. Every other 
 
 ### What `delivered` means
 
-`delivered` means the line left the seat's input box after that one line and Enter — the pane's
-status reported the seat working (or done or blocked, and not the status read before Enter), or
-the transcript shows the drop being read — not that its agent read the message
-(`src/send/deliver.ts`). A line that left the box with no status or transcript evidence inside the
-window is reported `taken, not yet confirmed`. A seat whose CLI builds its own work item from its
-screens gets the drop file but the body typed through those screens; `delivered` there means the
-CLI printed the line that creates the item. A hold on the receiver's side — a message that reached
+`delivered` means the message reached the seat by a path that reports its own receipt: the
+socket frame was written, or a `--confirm` run found the handoff's nonce in the recipient's
+transcript. The typed leg never claims it. There the trigger line left the seat's input box
+after that one line and Enter — the pane's status reported the seat working (or done or blocked,
+and not the status read before Enter), or the transcript shows the drop being read — and that is
+a trigger sent, reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a
+message read (`src/send/deliver.ts`). A line that left the box with no status or transcript
+evidence inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed
+send, and never a read. Only a signed read receipt makes a message `delivered (read)`. A seat
+whose CLI builds its own work item from its screens gets the drop file but the body typed
+through those screens; `delivered` there means the CLI printed the line that creates the item. A
+hold on the receiver's side — a message that reached
 a session but sits in a dialog the sender cannot see — is `held`, with the side named, never
 `delivered`. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
 further window for a cleared box to show the seat took the line. The whole verify window is

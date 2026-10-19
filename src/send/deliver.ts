@@ -1,9 +1,11 @@
 // Verified delivery of one trigger line into a seat's input box.
 //
-// `delivered` means the seat began processing the line, not that the line was typed: the box was
-// read with its ANSI styling after Enter, the trigger had left it, and herdr reported the seat
-// working. A review brief once sat typed and never submitted in a Codex reviewer's box for hours;
-// a typed line that nobody submitted must never read as a success.
+// The seam's word is `delivered`: the seat began processing the line, not that the line was
+// typed — the box was read with its ANSI styling after Enter, the trigger had left it, and herdr
+// reported the seat working. Every caller reports that to a person as `sent (unconfirmed)`: a
+// trigger sent, never a message read, because only a signed read receipt is a read. A review
+// brief once sat typed and never submitted in a Codex reviewer's box for hours; a typed line that
+// nobody submitted must never read as a success.
 //
 // The box is read the way the rest of the program reads a composer (`readScreen`, `readBox`): a
 // greyed suggestion or placeholder is faint (SGR 2), the screen reads it `idle`, and so it counts
@@ -31,9 +33,10 @@ export const VERIFY_TOTAL_MS = 20_000;
 /** The transcript is read once a second, not at every status poll. */
 const TRANSCRIPT_EVERY = Math.ceil(1000 / POLL_MS);
 
-/** The words a `taken` delivery wears, in the history, the sender's line and the watch's log: the
- *  line left the box, and nothing in the window showed the seat acting on it yet. */
-export const TAKEN_REASON = 'taken, not yet confirmed';
+/** The words a typed delivery wears, in the history, the sender's line and the watch's log: the
+ *  line left the composer, and no signed read receipt has come back. Only a receipt earns
+ *  `delivered (read)`; a trigger that was typed is never reported as a read. */
+export const TRIGGER_TAKEN_NOTE = 'trigger taken, no read receipt yet';
 
 /** What a delivery needs from the pane: one seat's pane, the session already bound. */
 export type DeliverHost = {
@@ -76,8 +79,8 @@ export type DeliverResult = {
   /** One line saying why, for a log or a receipt. */
   reason?: string;
   /** What showed the seat took the line, with `delivered`: herdr's status or the transcript — or
-   *  `taken`, a line that left the box with no status or transcript evidence inside the window:
-   *  taken, not yet confirmed. */
+   *  `taken`, a line that left the box with no status or transcript evidence inside the window.
+   *  Every one of them is a trigger sent, not a message read: no signed receipt came back. */
   status?: string;
   evidence?: 'status' | 'transcript' | 'taken';
   /** The status herdr read before Enter, with `taken` when the box cleared: a later reader (the
@@ -694,7 +697,7 @@ export async function deliverTrigger(
   // the status-alone judgement the window already made: nothing shows the line was taken.
   if (seen.state === 'empty' || seen.state === 'other') {
     await restoreOnDelivered();
-    return { outcome: 'delivered', tries, evidence: 'taken', prior: before, reason: TAKEN_REASON, ...(draft === undefined ? {} : { draft }) };
+    return { outcome: 'delivered', tries, evidence: 'taken', prior: before, reason: TRIGGER_TAKEN_NOTE, ...(draft === undefined ? {} : { draft }) };
   }
   if (draftText !== undefined && copyPath !== undefined && input !== null && !restored) {
     restored = true;

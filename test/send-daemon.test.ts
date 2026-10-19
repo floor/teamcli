@@ -282,15 +282,15 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     const [c1, c2] = await Promise.all([p1, p2]);
     expect(c1).toBe(0);
     expect(c2).toBe(0);
-    expect(io1.out).toBe('team acme, session "acme"\nnative: delivered\n');
-    expect(io2.out).toBe('team acme, session "acme"\nnative: delivered\n');
+    expect(io1.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    expect(io2.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
     expect(hist.entries.map((e) => ({ body: e.body, outcome: e.outcome }))).toEqual([
-      { body: filed('first message'), outcome: 'delivered' },
-      { body: filed('second message'), outcome: 'delivered' },
+      { body: filed('first message'), outcome: 'sent (unconfirmed)' },
+      { body: filed('second message'), outcome: 'sent (unconfirmed)' },
     ]);
 
     const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'native');
@@ -431,7 +431,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io = ownerIo(w.root);
     const code = await runSend(['native', 'deliver after turn'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
     expect(polls).toBeGreaterThanOrEqual(3);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
@@ -515,7 +515,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io1 = ownerIo(w.root);
     expect(await runSend(['native', 'waited for seat lock'], io1, host)).toBe(0);
-    expect(io1.out).toBe('team acme, session "acme"\nnative: delivered\n');
+    expect(io1.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
 
     // Now hold seat lock past deliverWaitMs: daemon must return held without typing.
     host.typed.length = 0;
@@ -553,7 +553,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io = ownerIo(w.root);
     expect(await runSend(['native', 'reclaim stale seat-lock'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
   });
 });
 
@@ -641,12 +641,16 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'take the box'], io, host)).toBe(0);
     // The queue's own delivery says what became of the owner's text: the draft receipt travels
-    // with the delivered line, its history entry and the response, as it does on the direct leg.
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered (the unsent text was pasted back)\n');
+    // with the sent line, its history entry and the response, as it does on the direct leg.
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet; the unsent text was pasted back)\n');
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
-    expect(hist.entries.at(-1)).toMatchObject({ outcome: 'delivered', via: 'typed', note: 'the unsent text was pasted back' });
+    expect(hist.entries.at(-1)).toMatchObject({
+      outcome: 'sent (unconfirmed)',
+      via: 'typed',
+      note: 'trigger taken, no read receipt yet; the unsent text was pasted back',
+    });
     // claude-code's idle clear is ctrl+c; the trigger was typed, submitted, and the draft
     // redrawn by a bracketed paste, with no literal typing of the draft.
     expect(keys).toEqual(['ctrl+c']);
@@ -667,7 +671,8 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const code = await runSend(['lead', 'send into an empty working box'], io, host);
     if (code !== 0) console.log('DEBUG', JSON.stringify(io.err), JSON.stringify(host.typed.length), JSON.stringify(host.enters.length));
     expect(code).toBe(0);
-    expect(io.out).toContain('lead: delivered');
+    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
+    expect(io.out).toContain('trigger taken, no read receipt yet');
     expect(host.typed.length).toBe(1);
     expect(host.enters).toEqual(['pane-lead']);
   });
@@ -721,10 +726,11 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     });
 
     // Direct: the screen is not an unsent box and never holds the trigger, so the box the
-    // delivery sees is empty after Enter — the line left it, taken but not yet confirmed.
+    // delivery sees is empty after Enter — the line left it, and no read receipt followed.
     const directIo = ownerIo(w.root);
     expect(await runSend(['lead', 'single enter direct'], directIo, host)).toBe(0);
-    expect(directIo.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(directIo.out).toContain('lead: sent (unconfirmed) (typed, ');
+    expect(directIo.out).toContain('trigger taken, no read receipt yet');
     expect(directIo.err).toBe('');
     expect(host.enters.length).toBe(1);
 
@@ -735,7 +741,8 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io = ownerIo(w.root);
     expect(await runSend(['lead', 'single enter test'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
+    expect(io.out).toContain('trigger taken, no read receipt yet');
     expect(host.enters.length).toBe(2);
   });
 
@@ -949,7 +956,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
-    expect(io2.out).toBe('team acme, session "acme"\nnative: delivered\n');
+    expect(io2.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
   });
 
   test('a nickname sent through the daemon keeps the spec and the id it resolved to in history', async () => {
@@ -990,13 +997,13 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io = ownerIo(w.root);
     expect(await runSend(['zeus', 'by the human name'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
     expect(hist.entries).toEqual([
-      expect.objectContaining({ to: 'lead', spec: 'zeus', resolved: lead.id, outcome: 'delivered' }),
+      expect.objectContaining({ to: 'lead', spec: 'zeus', resolved: lead.id, outcome: 'sent (unconfirmed)' }),
     ]);
   });
 });

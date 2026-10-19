@@ -4158,7 +4158,12 @@ scene('send.not-submitted', async (place) => {
 });
 scene('send.delivered', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
+  // The typed leg took the trigger line: a trigger sent, and no signed receipt, so the words say
+  // `sent (unconfirmed)` and never claim a read. The contract row's own meaning is unchanged.
+  return show(
+    await sent(place, ['lead', 'hello'], owner, sendHost(place)),
+    'lead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)',
+  );
 });
 scene('send.sent-unconfirmed', async (place) => {
   write(place, TEAM);

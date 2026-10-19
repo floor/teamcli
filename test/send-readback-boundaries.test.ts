@@ -180,7 +180,7 @@ describe('the composer read-back at its boundaries', () => {
     expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
   });
 
-  test('a box that stops holding the trigger after the first Enter is delivered as taken, and gets no second Enter', async () => {
+  test('a box that stops holding the trigger after the first Enter is sent with the trigger note, and gets no second Enter', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The first Enter is taken but herdr never reports the seat working, and the composer now
@@ -201,18 +201,19 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'never submitted'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
+    expect(io.out).toContain('trigger taken, no read receipt yet');
     expect(host.enters.length).toBe(1);
     const history = readHistory('acme', world.root, world.home);
     if (!history.ok) throw new Error('history could not be read');
-    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['delivered', 'taken, not yet confirmed']]);
+    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['sent (unconfirmed)', 'trigger taken, no read receipt yet']]);
 
     // A taken line is never retyped: no retry record is left beside the drop.
     const drops = join(world.dir, 'send-drops', 'acme', 'lead');
     expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(0);
   });
 
-  test('the same box through the daemon: one Enter, and the same taken word', async () => {
+  test('the same box through the daemon: one Enter, and the same sent word', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     host.native.pressEnter = (_session, pane) => {
@@ -235,12 +236,13 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
+    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
+    expect(io.out).toContain('trigger taken, no read receipt yet');
     expect(io.err).not.toContain('not-submitted');
     expect(host.enters.length).toBe(1);
     const history = readHistory('acme', world.root, world.home);
     if (!history.ok) throw new Error('history could not be read');
-    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['delivered', 'taken, not yet confirmed']]);
+    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['sent (unconfirmed)', 'trigger taken, no read receipt yet']]);
 
     // The daemon keeps no retry record in the folder a watch scans — and a taken line is never
     // typed again either way.
@@ -267,7 +269,7 @@ describe('the composer read-back at its boundaries', () => {
     expect(outcomes(world)).toEqual(['unreachable']);
   });
 
-  test('a pane that cannot be read is judged by the status alone, and delivers', async () => {
+  test('a pane that cannot be read is judged by the status alone, and is sent', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     host.native.paneText = () => null;
@@ -276,6 +278,6 @@ describe('the composer read-back at its boundaries', () => {
     expect(await runSend(['lead', 'delivered unread'], io, host)).toBe(0);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['delivered']);
+    expect(outcomes(world)).toEqual(['sent (unconfirmed)']);
   });
 });

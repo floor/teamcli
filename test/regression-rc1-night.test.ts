@@ -218,7 +218,7 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     expect(readScreen('claude-code', QUOTE_ABOVE_BOX).kind).toBe('idle');
   });
 
-  test('a send to a live box under a quoted sentence is delivered, not taken for the dialog', async () => {
+  test('a send to a live box under a quoted sentence is sent, not taken for the dialog', async () => {
     const w = world();
     const typed = (line: string) => [QUOTE_ABOVE_BOX.split('\n')[0] as string, claudeBox(line)].join('\n');
     const host = fake(w, { idle: QUOTE_ABOVE_BOX, typed, after: 'working' });
@@ -227,7 +227,9 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     expect(host.typed).toHaveLength(1);
     expect(host.typed[0]?.pane).toBe('w1:p1');
     expect(host.typed[0]?.text).toContain('send-drops');
@@ -260,7 +262,9 @@ describe('no send path dials a session socket', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     expect(host.typed).toHaveLength(1);
@@ -283,7 +287,7 @@ describe('no send path dials a session socket', () => {
 });
 
 describe('a provider error in the scrollback does not make an idle seat unreachable', () => {
-  test('the send types the trigger and delivers; the old error is not the live screen', async () => {
+  test('the send types the trigger and is reported sent; the old error is not the live screen', async () => {
     const w = world();
     const host = fake(w, {
       idle: OLD_ERROR,
@@ -295,7 +299,9 @@ describe('a provider error in the scrollback does not make an idle seat unreacha
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     expect(io.err).toBe('');
     expect(host.typed).toHaveLength(1);
   });
@@ -423,6 +429,6 @@ describe('a registry record binds a caller only where the call stands as it', ()
     // The trigger is the drop's own line, never the body.
     expect(host.typed[0]?.text).toContain(' and do that.');
     expect(host.typed[0]?.text).not.toContain('hello');
-    expect(lastOutcome(w, 'helper')).toBe('delivered');
+    expect(lastOutcome(w, 'helper')).toBe('sent (unconfirmed)');
   });
 });

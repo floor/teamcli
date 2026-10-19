@@ -27,7 +27,7 @@ import type { PaneProcesses } from '../herdr.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
-import { deliverTrigger, TAKEN_REASON, type DeliverHost } from '../send/deliver.ts';
+import { deliverTrigger, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { triggerLine } from '../send/native.ts';
 import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
@@ -348,15 +348,15 @@ async function expireOne(
                 body: record.body,
                 id: record.id,
                 thread: record.thread ?? record.id,
-                outcome: 'delivered',
+                outcome: 'sent (unconfirmed)',
+                note: TRIGGER_TAKEN_NOTE,
                 ms: elapsedMs,
-                ...(isTaken ? { note: TAKEN_REASON } : {}),
                 via: 'typed',
                 failed: [...failures],
               });
               dropTaken(taken.taken);
               scene.say(
-                `${record.to}: a native handoff from ${record.from} was unconfirmed after 10m; delivered on fallback`,
+                `${record.to}: a native handoff from ${record.from} was unconfirmed after 10m; sent on fallback (${TRIGGER_TAKEN_NOTE})`,
                 false,
               );
               return;

@@ -287,11 +287,12 @@ describe('retryHeldDrops', () => {
         to: 'lead',
         body: 'from the owner\n\nhello',
         id: 'drop-1',
-        outcome: 'delivered',
+        outcome: 'sent (unconfirmed)',
+        note: 'trigger taken, no read receipt yet',
         via: 'typed',
       },
     ]);
-    expect(said).toEqual(['lead: a held send from owner was delivered on retry']);
+    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
   });
 
   test('a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
@@ -323,7 +324,7 @@ describe('retryHeldDrops', () => {
     expect(readPending(dropDir)).toEqual([]);
     expect(existsSync(join(dropDir, 'drop-draft.draft'))).toBe(false);
     // The retry's receipt names where the text went, as the send's own line would have.
-    expect(said).toEqual(['lead: a held send from owner was delivered on retry; the unsent text was pasted back']);
+    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet; the unsent text was pasted back)']);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
@@ -334,8 +335,8 @@ describe('retryHeldDrops', () => {
         to: 'lead',
         body: 'from the owner\n\nhello',
         id: 'drop-draft',
-        outcome: 'delivered',
-        note: 'the unsent text was pasted back',
+        outcome: 'sent (unconfirmed)',
+        note: 'trigger taken, no read receipt yet; the unsent text was pasted back',
         via: 'typed',
       },
     ]);
@@ -409,7 +410,7 @@ describe('retryHeldDrops', () => {
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
-    expect(said).toEqual(['lead: a held send from owner was delivered on retry']);
+    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
   });
 
   test('is bounded: after three tries the drop path is said and the record is gone', async () => {
@@ -775,12 +776,13 @@ describe('an inbox send past its fallback window', () => {
         to: 'lead',
         body,
         id: INBOX_C,
-        outcome: 'delivered',
+        outcome: 'sent (unconfirmed)',
+        note: 'trigger taken, no read receipt yet',
         via: 'typed',
         failed: [INBOX_FALLBACK_REASON],
       },
     ]);
-    expect(said).toEqual(['lead: an inbox send from owner was delivered on retry']);
+    expect(said).toEqual(['lead: an inbox send from owner was sent on retry (trigger taken, no read receipt yet)']);
   });
 
   test('a typed marker goes before an inbox marker that is already due', async () => {
@@ -893,14 +895,14 @@ describe('a retry that ends taken', () => {
     expect(taken).toHaveLength(1);
     expect(taken[0]?.id).toBe(id);
     expect(taken[0]?.before).toBe('idle');
-    expect(said).toEqual(['lead: a held send from owner was delivered on retry (taken, not yet confirmed)']);
+    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
 
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.note])).toEqual([
       [id, 'not-submitted', undefined],
-      [id, 'delivered', 'taken, not yet confirmed'],
+      [id, 'sent (unconfirmed)', 'trigger taken, no read receipt yet'],
     ]);
 
     // Later, the confirmation reports the never-acted line once — and types nothing, ever.
@@ -975,7 +977,7 @@ describe('team send leaves the record the retry reads', () => {
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
-    expect(history.entries.map((entry) => entry.outcome)).toEqual(['held', 'delivered']);
+    expect(history.entries.map((entry) => entry.outcome)).toEqual(['held', 'sent (unconfirmed)']);
     expect(history.entries[1]?.id).toBe(drop.id);
   });
 
@@ -1076,8 +1078,8 @@ describe('team send leaves the record the retry reads', () => {
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
-    expect(history.entries.map((entry) => entry.outcome)).toEqual(['unreachable', 'delivered']);
-    expect(said).toEqual(['lead: a held send from owner was delivered on retry']);
+    expect(history.entries.map((entry) => entry.outcome)).toEqual(['unreachable', 'sent (unconfirmed)']);
+    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
   });
 });
 
@@ -1123,11 +1125,16 @@ describe('team watch retries a held drop', () => {
     expect(typed).toEqual([line]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: a held send from owner was delivered on retry');
+    expect(io.out).toContain('deepseek-acme: a held send from owner was sent on retry (trigger taken, no read receipt yet)');
     const history = readHistory('acme-web', directory, directory);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
-    expect(history.entries.at(-1)).toMatchObject({ id: 'drop-5', outcome: 'delivered', via: 'typed' });
+    expect(history.entries.at(-1)).toMatchObject({
+      id: 'drop-5',
+      outcome: 'sent (unconfirmed)',
+      note: 'trigger taken, no read receipt yet',
+      via: 'typed',
+    });
   });
 });
 

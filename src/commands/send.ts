@@ -32,7 +32,7 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor } from '../send/names.ts';
-import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TAKEN_REASON, type DeliverResult } from '../send/deliver.ts';
+import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { markTaken } from '../send/taken.ts';
@@ -58,13 +58,14 @@ handoff below instead. The body is never split across several writes. A seat who
 CLI builds its own work item from its screens — a profile with a compose module —
 still gets the drop file, but the body is typed through those screens and never
 becomes a trigger line; delivered there means the CLI printed the line that creates
-the item. delivered means herdr reported
-the seat working — or done or blocked, changed from the status read before Enter —
-after that line and Enter, or the transcript shows the drop being read, and the line has
-left the seat's input box, and the pane is not a dialog this command already classifies
-(question, permission, trust, vendor notice, provider error, rate limit). A screen that
-is one of those is not reached: the kind and the drop path are named, and nothing
-further is pressed. Who may call it is the registry's decision, default deny: the
+the item. On the typed leg the run is sent (unconfirmed): the line left the seat's
+input box after that trigger line and Enter, and herdr reported the seat working — or
+done or blocked, changed from the status read before Enter — or the transcript shows
+the drop being read; no signed receipt has come back, so the message is never called
+read. The pane must not be a dialog this command already classifies (question,
+permission, trust, vendor notice, provider error, rate limit). A screen that is one of
+those is not reached: the kind and the drop path are named, and nothing further is
+pressed. Who may call it is the registry's decision, default deny: the
 owner; an orchestrator to an orchestrator of its own team or entity; an orchestrator
 or operator to a seat of its own team; a seat whose role is operator to another such
 seat of its own team; an assistant seat to its entity's coordinator; any seat to its
@@ -101,16 +102,15 @@ it — and its absence is \`sent (unconfirmed)\`, exit 0: the file is safe on di
 and the walk ends rather than typing into a pane the inbox was chosen over.
 
 The outcome is one of eight, and none of them is silent:
-  delivered    the drop path (exit 0): herdr reported the seat working — or done or
-               blocked, changed from the status read before Enter — or the transcript
-               showed the drop read, the line had left the input box, and the pane
-               was not one of the dialogs listed above; \`delivered (read)\` when the
-               mcp-inbox leg's receipt came back inside its grace — the seat read the
-               message, which is not a claim that it acted on it
-  sent         the mcp-inbox or drop leg's own success (exit 0): the message is the
-               0600 record in the seat's inbox or drop folder, no receipt came back
-               inside the grace, and the line says \`sent (unconfirmed)\`. Nothing was
-               typed
+  delivered    the socket path (exit 0): the frame was taken, or herdr reported the
+               seat working; \`delivered (read)\` when the mcp-inbox leg's receipt came
+               back inside its grace — the seat read the message, which is not a claim
+               that it acted on it. A trigger typed into a composer is never delivered:
+               it is \`sent (unconfirmed)\`
+  sent         a leg's success with no signed read receipt (exit 0). The mcp-inbox and
+               drop legs left the 0600 record in the seat's inbox or drop folder and
+               typed nothing; the typed leg wrote the same record and the trigger left
+               the composer, and its line says \`trigger taken, no read receipt yet\`
   answered     --wait: a reply record on the thread arrived within the window; the
                reply follows on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
@@ -805,7 +805,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       ? null
       : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
-      return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, socketNote ?? undefined);
+      return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, startedAt, socketNote ?? undefined);
     }
     // The pane is read live, by the seat's name: a record's recorded pane may have been closed or
     // reused since it was written, and a trigger typed into a pane another seat now holds would
@@ -1361,15 +1361,18 @@ function finishDaemonSend(
   host: SendHost,
   report: Report,
   res: DaemonSendResponse,
+  startedAt: number,
   /** How the send reached the seat, for the outcome line (the fallback's own reason). */
   note?: string,
 ): number {
   report.sent = res.id;
   if (res.outcome === 'delivered') {
-    const taken = res.evidence === 'taken' ? TAKEN_REASON : undefined;
+    // The daemon's own word for a trigger the seat took. It is a trigger sent, not a message
+    // read: no signed receipt has come back, so the sender's line says `sent (unconfirmed)`.
     // The daemon's typed leg moved any unsent text too: its receipt belongs on the same line.
-    const notes = [taken, note, res.draft].filter((one): one is string => one !== undefined);
-    return delivered(io, seatName, report, notes.length === 0 ? undefined : notes.join('; '));
+    const notes = [TRIGGER_TAKEN_NOTE, note, res.draft].filter((one): one is string => one !== undefined);
+    const ms = host.now().getTime() - startedAt;
+    return sentUnconfirmed(io, seatName, report, ms, 'typed', notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
@@ -1663,13 +1666,14 @@ async function deliverDropped(
 }
 
 /**
- * Writes the drop file under the seat lock, types the one trigger, and reports delivered only
- * when the seat is verified to have taken it: the trigger left the box and herdr reports the seat
- * working (`deliverTrigger`). A line that was typed but not taken is `not-submitted`, never a
- * success. A line that left the box with no status or transcript evidence inside the window is
- * delivered as `taken, not yet confirmed`: the seat took it, and the watch confirms it later — it
- * is never typed again, and no pending record is left beside the drop. The lock is held across the
- * typing so a second send cannot append into the same composer.
+ * Writes the drop file under the seat lock, types the one trigger, and reports what it knows: the
+ * trigger left the box (`deliverTrigger`), so the message is `sent (unconfirmed)`, never
+ * `delivered` — no signed read receipt has come back, and only a receipt earns that word. A line
+ * that was typed but not taken is `not-submitted`, never a success. A line that left the box with
+ * no status or transcript evidence inside the window is `sent (unconfirmed)` with the trigger note
+ * `trigger taken, no read receipt yet`: the seat took it, the watch looks for the later sign, and
+ * the line is never typed again. The lock is held across the typing so a second send cannot append
+ * into the same composer.
  */
 async function deliverNative(
   io: Io,
@@ -1749,7 +1753,7 @@ async function deliverNative(
       return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}${draft === undefined ? '' : `; ${draft}`}`, host, report);
     }
     taken = result.evidence === 'taken';
-    logLine(dir, 'send', who, `${seatName}: delivered (drop ${String(body.length)} characters, ${evidenceOf(result)}${draft === undefined ? '' : `; ${draft}`})`, host.now());
+    logLine(dir, 'send', who, `${seatName}: sent (unconfirmed) (drop ${String(body.length)} characters, typed, ${evidenceOf(result)}${draft === undefined ? '' : `; ${draft}`})`, host.now());
     if (taken) {
       markTaken(dropDir, {
         id: msgId,
@@ -1763,13 +1767,16 @@ async function deliverNative(
   } finally {
     lock.release();
   }
-  if (wait) {
-    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'typed', timeoutS, host, report, startedAt, failures, sentAs, taken ? TAKEN_REASON : undefined, extraRoot);
-  }
-  // A taken send is a delivery with its confirmation still to come: the history says so, and a
-  // record beside the drop lets a running watch look for the later sign. It is never a retry
+  // Every successful typed delivery is a trigger sent, never a message read: the drop is on disk
+  // and the line left the box, and no signed receipt has come back. The note says exactly that.
+  // A record beside a taken drop lets a running watch look for the later sign; it is never a retry
   // record — a taken line is never typed again.
-  const outcomeNote = [taken ? TAKEN_REASON : undefined, draft].filter((one): one is string => one !== undefined).join('; ');
+  const notes = [TRIGGER_TAKEN_NOTE, note, draft].filter((one): one is string => one !== undefined);
+  const noteLine = notes.join('; ');
+  if (wait) {
+    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'typed', timeoutS, host, report, startedAt, failures, sentAs, noteLine, extraRoot);
+  }
+  const ms = host.now().getTime() - startedAt;
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from,
@@ -1779,14 +1786,13 @@ async function deliverNative(
     body,
     id: msgId,
     thread: payload.thread,
-    outcome: 'delivered',
-    ...(outcomeNote === '' ? {} : { note: outcomeNote }),
-    ms: host.now().getTime() - startedAt,
+    outcome: 'sent (unconfirmed)',
+    note: noteLine,
+    ms,
     via: 'typed',
     ...failed,
   });
-  const takenNote = taken ? (note === undefined ? TAKEN_REASON : `${TAKEN_REASON}; ${note}`) : note;
-  return delivered(io, seatName, report, draft === undefined ? takenNote : takenNote === undefined ? draft : `${takenNote}; ${draft}`);
+  return sentUnconfirmed(io, seatName, report, ms, 'typed', noteLine);
 }
 
 /**
@@ -2564,11 +2570,11 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** Herdr reported the seat took the trigger, and the pane was not a known dialog, or the seat's
- *  inbox server returned the message. Exit 0, always. The note names the path the send went by —
- *  `socket`, or `typed, socket <reason>` after the frame was not taken — and `read` for the
- *  mcp-inbox leg's receipt, whose own words are `delivered (read)`: the seat read the message,
- *  which is not a claim that it acted on it. The drop leg has its own word, `sent (unconfirmed)`. */
+/** The socket frame was taken, or the seat's inbox server returned the message. Exit 0, always.
+ *  The note names the path — `socket` — and `read` for the mcp-inbox leg's receipt, whose own
+ *  words are `delivered (read)`: the seat read the message, which is not a claim that it acted on
+ *  it. A trigger typed into a composer is never this word: it is `sent (unconfirmed)`, and only a
+ *  signed receipt makes it `delivered (read)`. */
 function delivered(io: Io, seat: string, report: Report, note?: string): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   const read = note === 'read';
@@ -2585,11 +2591,12 @@ function delivered(io: Io, seat: string, report: Report, note?: string): number 
   return 0; // exit: send.delivered
 }
 
-/** A leg's own success with no receipt: the message is the 0600 drop file in the seat's folder —
- *  its own inbox on the mcp-inbox leg, its drop folder on the drop leg — and no read receipt
- *  came back. Nothing was typed, and the file is safe on disk. Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop'): number {
-  const summary = `${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms)`;
+/** A leg's success with no read receipt: on the mcp-inbox and drop legs the message is the 0600
+ *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
+ *  composer and the drop is still the message. The `note` says which — a typed send's names the
+ *  trigger and the receipt that has not come back. Exit 0, always. */
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed', note?: string): number {
+  const summary = `${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`;
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
   } else {
@@ -2639,11 +2646,11 @@ function held(io: Io, dir: string, who: string, seat: string, reason: string, ho
   return 1; // exit: send.held
 }
 
-/** What showed a delivered seat took the line, as the log words it. A box that cleared with no
- *  status or transcript evidence is `taken, not yet confirmed`: a delivery, with its confirmation
- *  still to come. */
+/** What showed the seat took the line, as the log words it. A box that cleared with no status or
+ *  transcript evidence reads `trigger taken, no read receipt yet`: the line left the composer,
+ *  and the only proof of a read is a receipt that has not come. */
 function evidenceOf(result: DeliverResult): string {
-  if (result.evidence === 'taken') return TAKEN_REASON;
+  if (result.evidence === 'taken') return TRIGGER_TAKEN_NOTE;
   return result.evidence === 'transcript' ? 'the transcript shows the drop read' : `herdr status ${result.status ?? 'working'}`;
 }
 

@@ -339,7 +339,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
   const code = await runSend(['lead', 'hello'], io, host);
 
   expect(code).toBe(0);
-  expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
   expect(pane.typed.length).toBe(1);
   expect(readdirSync(dropDir(made.dir, 'lead')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
@@ -353,7 +353,8 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       body: HELPER_BODY,
       id: expect.any(String),
       thread: expect.any(String),
-      outcome: 'delivered',
+      outcome: 'sent (unconfirmed)',
+      note: 'trigger taken, no read receipt yet',
       ms: 0,
       via: 'typed',
       failed: [
@@ -885,7 +886,7 @@ test('cross-team expiry binds typing and read-back to record.session and verifie
   expect(enterSessions).toEqual(['other']);
   expect(statusSessions.every((s) => s === 'other')).toBe(true);
   expect(screenSessions.every((s) => s === 'other')).toBe(true);
-  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; delivered on fallback']);
+  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; sent on fallback (trigger taken, no read receipt yet)']);
 });
 
 test('expiry typed leg refuses to type when the recipient pane process identity was replaced', async () => {

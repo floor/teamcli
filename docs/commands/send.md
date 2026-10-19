@@ -59,7 +59,7 @@ than typing into a pane the inbox was chosen over. A record beside the drop says
 it. A receipt that lands after the sender has gone is promoted by the watch — one
 `delivered (read)` history line, nothing typed — and a message still unread ten minutes after
 the send is the fallback the wait promised: the watch types its trigger line, and that history
-line's `delivered` carries `failed: mcp-inbox: no receipt within 10m`. Ten minutes is the window
+line's `sent (unconfirmed)` carries `failed: mcp-inbox: no receipt within 10m`. Ten minutes is the window
 the native leg allows for a confirmation, so a live inbox never delays a message longer than the
 frame path does. This build makes no socket write — a frame can land at a
 busy session's held-message dialog, where the box is blocked — so a walk that reaches `native`
@@ -67,21 +67,24 @@ records it `unavailable`. The native leg is a call the sender's own process make
 from the owner, or from a sender whose own file does not declare `cli: claude-code`, records it
 `unavailable` too; a sender whose own file does declare it gets [the native
 handoff](#the-native-channel) instead — one pending record, the exact target, the body and the
-`--confirm` line — and makes the call itself. `delivered` means the
-line had left the seat's input box after that one line and Enter — either herdr reported the seat
-`working` (or `done` or `blocked`, and not the status read before Enter), or the transcript shows
-the drop being read (a CLI's status can lag while it works) — and the pane was not a dialog this
-command already classifies: question, permission, trust, vendor notice, provider error, or
-rate limit. A box that cleared with no status or transcript evidence inside the window is
-`delivered (taken, not yet confirmed)`: the seat took the line, and the transcript or the status
-is read for the sign that it acted on it — a taken line is never typed again. A screen that is
-one of those dialogs is not reached. The report names the kind and the drop path, and nothing
-further is pressed. The exit code of the typing commands is not the evidence. On herdr 0.7.1 the
-working status is the pane hint `ctrl+c to stop` for cursor, a spinner in the terminal title for
-codex, and the `esc to cancel` footer for agy. A cursor pane narrow enough to wrap the hint can
-submit while herdr stays idle; that run is delivered as taken, never a failed send. The drop leg
-never types: there the run ends `sent (unconfirmed)` once the signed record and its marker are
-in place, and no box, status or transcript is read.
+`--confirm` line — and makes the call itself. A typed send ends
+`sent (unconfirmed)` when the line has left the seat's input box after that one trigger line and
+Enter — either herdr reported the seat `working` (or `done` or `blocked`, and not the status read
+before Enter), or the transcript shows the drop being read (a CLI's status can lag while it
+works) — and the pane was not a dialog this command already classifies: question, permission,
+trust, vendor notice, provider error, or rate limit. The console line carries
+`trigger taken, no read receipt yet`, and the history line records the leg `typed` with the same
+note: the trigger was sent, and no signed receipt has come back, so the message is never called
+read. A box that cleared with no status or transcript evidence inside the window is also
+`sent (unconfirmed)`, with the same note: the seat took the line, and the transcript or the
+status is read for the sign that it acted on it — a taken line is never typed again. A screen
+that is one of those dialogs is not reached. The report names the kind and the drop path, and
+nothing further is pressed. The exit code of the typing commands is not the evidence. On herdr
+0.7.1 the working status is the pane hint `ctrl+c to stop` for cursor, a spinner in the terminal
+title for codex, and the `esc to cancel` footer for agy. A cursor pane narrow enough to wrap the
+hint can submit while herdr stays idle; that run is reported sent as taken, never a failed send.
+The drop leg never types: there the run ends `sent (unconfirmed)` once the signed record and its
+marker are in place, and no box, status or transcript is read.
 
 A seat the team file marks `human: true` walks the drop leg alone, whatever its delivery order or
 the default says: every other leg — the typed trigger, the native frame, the seat's own inbox — is
@@ -388,10 +391,11 @@ line on stderr and has none.
 
 | Outcome | Exit | Printed |
 | --- | --- | --- |
-| delivered | 0 | `<seat>: delivered` on stdout, `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript, or `<seat>: delivered (taken, not yet confirmed)` when the box cleared before the seat showed it acted |
+| delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
 | delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for the mcp-inbox leg's receipt: the seat read the message, which is not a claim that it acted on it |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms)` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms)` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
+| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (typed, <n> ms; trigger taken, no read receipt yet)` on stdout, for the typed leg: the trigger line left the seat's input box, and no signed receipt has come back, so the message is not called read |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
@@ -416,9 +420,9 @@ handed to the same retry, which types its trigger and says on the history line w
 ended (`failed: mcp-inbox: no receipt within 10m`). A message the `drop` leg left is never
 typed, on that schedule or any other: its marker waits for the seat's own signed receipt, and
 thirty minutes after the send it is given up on with the drop file's path, so a message no
-watcher read is never silently lost. A `delivered (taken, not yet confirmed)` send is never
-retried: the seat took the line, and a running watch reads the transcript and the status on its
-later passes for the sign that it acted on it. A sign confirms the delivery silently; a seat that
+watcher read is never silently lost. A typed `sent (unconfirmed)` send is never retried: the
+seat took the trigger line, and a running watch reads the transcript and the status on its later
+passes for the sign that it acted on it. A sign confirms the delivery silently; a seat that
 sits free for a minute past the send, or a record thirty minutes old, with no sign at all, is said
 once — `<seat>: a send from <sender> was taken but never acted on`, with the record's path —
 and one more history line keeps it. Even then the line is never typed again.
@@ -455,7 +459,7 @@ reader cannot read), the mid-turn key
 is missing, or the box will not empty, the run holds before typing anything (`the composer
 already holds unsent text…`), and the reason says why. The run's receipt says where the text went
 (`the unsent text was pasted back`, or `...; its copy is at <path>`), and a not-submitted run puts
-the text back before saying so. A delivered run puts it back too, even when the box empties only
+the text back before saying so. A typed run that took the line puts it back too, even when the box empties only
 after the Enter's 400 ms leave check — or when that one read fails: the restore is attempted
 before the run reports the delivery, and a box that cannot be read then is given the paste's
 two-second window first. The trigger line is what the composer
@@ -478,9 +482,10 @@ line — never to an empty one, to one that holds something else, or to a dialog
 Enters in all, waiting 1, 3 and then 9 seconds for the seat to show it. After the last Enter the
 box itself decides: a trigger still in it was not taken, and the run is `not-submitted`; a box
 that no longer holds the trigger — empty, or holding other text — took the line, and the run is
-delivered as `taken, not yet confirmed`. A box that cannot be read keeps the first Enter and is
-judged by herdr's status alone, and no other Enter goes to it: with no evidence and no box to
-show the line left, that run is `not-submitted`. A seat that was already working before Enter
+`sent (unconfirmed)` with `trigger taken, no read receipt yet`. A box that cannot be read keeps
+the first Enter and is judged by herdr's status alone, and no other Enter goes to it: with no
+evidence and no box to show the line left, that run is `not-submitted`. A seat that was already
+working before Enter
 proves nothing by its status, and a status that moved under a dialog counts for nothing: only the
 transcript can show that seat took this line. An unverified send writes one line to `team.log`
 for the orchestrator.

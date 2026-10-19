@@ -349,7 +349,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
-    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'from_team', 'id', 'ms', 'note', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
   test('a codex seat walks the default order: the inbox is skipped, the drop file takes it', async () => {
@@ -555,11 +555,12 @@ describe('the chain is read from the files when the host hands none in', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
     // The order in force holds the one leg, so the send goes by it and neither skip a default
     // walk records is walked: the history line has no `failed` at all.
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
+    expect(entry.outcome).toBe('sent (unconfirmed)');
     expect('failed' in entry).toBe(false);
     expect(entry.body).toBe(`${HEADER}hello`);
     expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
