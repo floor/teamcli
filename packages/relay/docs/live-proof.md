@@ -1,12 +1,16 @@
-# Live proof at the extraction commit
+# Live proof: extraction and correction
 
-Commit: `0635fd0d5313561066034e87adfda1bb239aa92b` — `feat(send): extract the socket and
-durable-copy transport into @teamcli/relay`.
+This page records runs against two commits:
 
-This page records what was run against this commit and what those runs showed. It distinguishes
-measured results from unproven behavior and from plans for the next change. Nothing here is a
-claim about a runtime reading a message, and nothing here validates a release beyond the runs
-written down.
+- `0635fd0d5313561066034e87adfda1bb239aa92b` — `feat(send): extract the socket and
+  durable-copy transport into @teamcli/relay`. Its sections are historical: they keep what that
+  commit did, including an existing-file limitation that the correction removed.
+- `585791b3ca679b5006754697b3239e09f7f664cd` — `fix(relay): publish the durable copy with
+  create-or-match`. Its section records the correction's own runs.
+
+This page distinguishes measured results from unproven behavior and from plans for the next
+change. Nothing here is a claim about a runtime reading a message, and nothing here validates a
+release beyond the runs written down.
 
 ## What was run
 
@@ -19,7 +23,7 @@ Two kinds of run, both local and synthetic:
   into a fresh scratch prefix. The installed `team` command was run read-only, and the relay files
   in the installed tree and in the tarball were compared by SHA-256 with the commit's files.
 
-## Transport results
+## Transport results at the extraction commit (historical)
 
 | Run | Result |
 |---|---|
@@ -40,6 +44,10 @@ Two kinds of run, both local and synthetic:
 | `stage`, injected clock | the receipt carries the injected time |
 | `deliver`, injected dial | the injected dial is called once; its `ok: true` yields `delivered` |
 
+The third row is the extraction's limitation, kept as recorded: a regular file at the name was
+reported `existing` without being read, so different bytes were accepted and left in place. The
+correction section below records the create-or-match behavior that replaced it.
+
 What the socket row proves is the write: the frame left the client and the peer received those
 bytes. It does not prove that a runtime read the record; this build returns no read receipt and
 the socket carries no acknowledgement.
@@ -48,7 +56,7 @@ One receipt detail belongs with the results: on the socket route the receipt's `
 copy target the caller declared. The package does not stage it there, so that field is not
 evidence the copy exists. `stage` first is the caller's contract.
 
-## Packed install
+## Packed install at the extraction commit (historical)
 
 The extraction run's tarball contains `package/packages/relay/` with `README.md`, `index.d.ts`,
 `index.js` and `package.json`. In a fresh scratch prefix, the installed `team` command answered:
@@ -76,6 +84,48 @@ Before the documentation followup, the installed tree's copies and the tarball's
 these digests byte for byte. The followup changes this page and the package README; it does not
 touch `index.js`, `index.d.ts` or `package.json`.
 
+## Correction at `585791b3ca679b5006754697b3239e09f7f664cd`
+
+`fix(relay): publish the durable copy with create-or-match`. The correction publishes the copy
+through an exclusive hard link, so an existing name is never replaced; a regular file at the name
+is read without following a link, identical bytes are `existing`, and different bytes are
+refused with the holder untouched.
+
+The package files at this commit have these SHA-256 digests:
+
+```
+dbcb2630c40962184e9a3c2a2822046ea3b286eeaac9a247fe35b4aac2398876  index.js
+c854be0bbbfb3a4d74f293573cc8ba4c1f951621e6f656d572c20fa1ea7304fd  index.d.ts
+1f2aca2e3d717d2447cc018c685a9e615c8e6636e7be31aa1cab6ce3efd76869  package.json
+```
+
+`index.d.ts` and `package.json` are byte-identical to the extraction commit's. `index.js` is not:
+it is the corrected publisher. This documentation commit adds no package code.
+
+### Copy-collision and identity results
+
+Run: one measuring script against the package entry at this commit, in one synthetic scratch
+folder. For the races, two separate operating-system processes each waited on one shared
+barrier time and then called `stage` at the same name; the two stages in a round started within
+the same millisecond.
+
+| Run | Result |
+|---|---|
+| `stage`, fresh name | `outcome: 'stored'`, no `existing`; file mode `600` in a folder at mode `700`; file bytes equal the record's |
+| `stage`, same record at that name | `outcome: 'stored'`, `existing: true`; the file's inode and mtime are unchanged across the call; bytes still the record's |
+| `stage`, different record at that name | `refused`, `a different record already holds that id`, with a receipt naming the copy and the time; the holder's inode, mtime, mode and bytes are unchanged |
+| two processes, different records, 3 rounds | each round: one `stored` with no `existing` and one `refused` as above; the final file holds exactly one of the two records, never a mixture or a partial; no temporary file left |
+| two processes, same record | both `stored`; exactly one carries `existing: true`; the file bytes are the whole record; no temporary file left |
+| symbolic link at the name | `refused`, `a file that is not a record already holds that id`; the name is still a link and the target's bytes are unchanged |
+| folder at the name | `refused`, same reason |
+| unreadable holder at the name | `refused`, `the file that already holds that id could not be read`; the holder's bytes are unchanged |
+
+What these runs show is the copy rule on this machine: a name is published whole without
+replacing a holder, identical bytes match, and conflicting bytes are refused without a write.
+They do not show a signature check — the package compares bytes and never checks what the record
+means — and they do not show a distributed or durable-storage guarantee beyond the file being
+written and read back in these runs.
+
 ## Fixed invariants and this version's scope
 
 The policies are configurable: delivery order, a delivery timeout per route, and
@@ -87,13 +137,30 @@ This version makes the copy-before-attempt rule the caller's contract and perfor
 without falling back. Receiver de-duplication, the attempt record, escalation and fallback are
 the next change. No server, listener or delivery queue exists in this version.
 
+## Reviewed next behavior (not in this build, not measured)
+
+The timing values reviewed for the next change, kept under the three policy names
+`delivery-order`, `delivery-timeout` and `delivery-escalation`. They are recorded here as
+direction only: nothing on this page measures them, and no code in this version implements them.
+
+- attempt: 15s per route, until the receiver takes it;
+- post-submit READ receipt: 120s, never shorter than the attempt;
+- preprobe: 400ms;
+- held reminder: 600s;
+- MAIN escalation: 300s; an immediate sender-and-lead all-live-failed event at 0;
+- escalation levels: entity, project, team — a lower level shortens only;
+- tombstones live while any copy or retry is replayable.
+
+A read receipt is not transport: an ordinary dial is not turned into a synchronous 120s wait.
+
 ## Not measured, and not claimed
 
 - A runtime reading a delivered frame. No read receipt is returned by this build.
 - Any wake, read or delivery of a durable copy.
 - Receiver de-duplication, attempt recording, fallback or escalation — none is active here.
 - Any server, listener or queue.
-- Any behavior at a commit other than the extraction commit above.
+- Exactly-once delivery, or any timing value in the reviewed-next section above.
+- Any behavior beyond the commits and runs written down on this page.
 
 Plans for the next change — a route that is held continuing to the next allowed route,
 cross-route de-duplication, an attempt record, an ambiguous-receipt case and escalation — are

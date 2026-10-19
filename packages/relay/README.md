@@ -25,9 +25,9 @@ behind its own exports, without importing TeamCLI.
 
 ## Policies and invariants
 
-The delivery policies are configurable: delivery order, a delivery timeout per route, and
-delivery-escalation delays. The caller resolves them; this package makes one attempt in the
-order it is given.
+The delivery policies are configurable and keep three names: `delivery-order`,
+`delivery-timeout` (per route) and `delivery-escalation` (delays). The caller resolves them; this
+package makes one attempt in the order it is given.
 
 Four rules are fixed, not configurable:
 
@@ -39,6 +39,9 @@ Four rules are fixed, not configurable:
 In this version the copy-before-attempt rule is the caller's contract: `stage` first, then one
 `deliver`. The package makes no fallback decision and keeps no attempt record; receiver
 de-duplication, the attempt record, escalation and fallback are the next change, not this one.
+The timing values reviewed for that next change are listed in
+`packages/relay/docs/live-proof.md` under "Reviewed next behavior"; they are not in this build
+and are not measured here.
 
 ## API
 
@@ -84,11 +87,13 @@ deadline when supplied; `timeoutMs` applies to the package's default dial.
 ## Proof
 
 `packages/relay/docs/live-proof.md` in the repository records the transport and packed-install
-runs at the extraction commit, with the exact outputs and file hashes. In short: the staged copy's
-mode and bytes, the existing-copy answer, durable `held`, one complete frame taken by a local
-fixture peer, the refusals, and a packed tarball and installed build whose relay files are
-byte-identical to the commit's. No run shows a runtime reading a delivered frame, and no run wakes
-or reads a durable copy. Those remain unproven, and the next change is not measured here.
+runs at the extraction commit, and the copy-collision and identity runs at the correction commit
+that made `stage` create-or-match, with the exact outputs and file hashes. In short: the staged
+copy's mode and bytes, the extraction's existing-file answer kept as history, the correction's
+byte match and refusal with the holder untouched, one complete frame taken by a local fixture
+peer, the refusals, and a packed tarball and installed build whose relay files are byte-identical
+to the extraction commit's. No run shows a runtime reading a delivered frame, and no run wakes or
+reads a durable copy. Those remain unproven, and the next change is not measured here.
 
 ## Compatibility
 
