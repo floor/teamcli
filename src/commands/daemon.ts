@@ -128,6 +128,15 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.verb === 'uninstall' && parsed.dryRun) return '--dry-run belongs to install';
   if (parsed.verb === 'uninstall' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'uninstall' && parsed.startedBy !== undefined) return '--started-by belongs to run';
+  if (
+    parsed.verb === 'run' &&
+    parsed.startedBy !== undefined &&
+    parsed.startedBy !== 'service-manager' &&
+    parsed.startedBy !== 'manual' &&
+    parsed.startedBy !== 'team-up'
+  ) {
+    return '--started-by takes service-manager, manual or team-up';
+  }
   return null;
 }
 

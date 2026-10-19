@@ -281,6 +281,21 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(run.err).toContain('only the owner or the system service manager');
   });
 
+  test('run only accepts the three startedBy sources', async () => {
+    const { root, home } = scratch();
+    const started: string[] = [];
+    const io = testIo(root, owner);
+    const code = await runDaemon(['run', '--started-by', 'elsewhere'], io, sourcesOf(home, {
+      start: async () => {
+        started.push('start');
+        return { kind: 'already-running', pid: 42 };
+      },
+    }));
+    expect(code).toBe(2);
+    expect(io.err).toContain('--started-by takes service-manager, manual or team-up');
+    expect(started).toEqual([]);
+  });
+
   test('run starts one daemon, prints its line, and stops cleanly', async () => {
     const { root, home } = scratch();
     const io = testIo(root, owner);
