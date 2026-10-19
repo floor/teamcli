@@ -1310,6 +1310,29 @@ Usage:
 | `seat` | yes | no |
 | `message` | yes | no |
 
+## `sessions`
+
+Hidden: no
+
+Usage:
+
+    team sessions [<seat>] [--by <model|team|entity>] [--json]
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--by` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+
 ## `status`
 
 Hidden: no

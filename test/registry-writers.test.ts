@@ -297,7 +297,9 @@ describe('registry writers: the shared register-or-repoint rule', () => {
     writeFileSync(join(fixture.home, '.config', 'team'), 'not a folder');
     const made = registerLaunch(input, worker, 'pane-1');
     expect('note' in made && made.note.length > 0).toBe(true);
-    expect(registerEnd(input, 'worker', 'stopped')).toBeNull();
+    // The session registry lives under the same broken folder, so its end is a note too.
+    const ended = registerEnd(input, 'worker', 'stopped');
+    expect(ended !== null && ended.note.length > 0).toBe(true);
   });
 });
 
