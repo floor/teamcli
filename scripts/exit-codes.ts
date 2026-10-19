@@ -11,7 +11,10 @@
 // one return, and every path through it must end in a return or a throw. Type assertions and
 // non-null assertions are looked through. The callee is the nearest binding walking outward
 // from the call. Only a function declaration, a `const` initialised with a function, or an
-// import is followed. A `const { name } = await import('literal')` is that module's export.
+// import is followed. A relative import whose specifier ends `.js` is a plain-JS module outside
+// the exit contract (`packages/relay`): the gate neither reads nor follows it, and a return
+// through it is refused like any other call it cannot read.
+// A `const { name } = await import('literal')` is that module's export.
 // A parameter, a `let` or `var`, any other `const`, any other destructured binding, a
 // catch or loop binding, a class, an enum or a namespace is refused, and so is a binding that
 // hides a function or an import further out. The same name in two functions is the one in
@@ -296,6 +299,9 @@ function insideCatchingTry(node: ts.Node): boolean {
 
 function resolveSpec(from: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
+  // A `.js` specifier is a plain-JS module — the relay package's entry. The contract covers the
+  // TypeScript sources; the gate does not read this file, so an import of it is not followed.
+  if (spec.endsWith('.js')) return null;
   const base = join(dirname(from), spec).replaceAll('\\', '/');
   return base.endsWith('.ts') ? base : `${base}.ts`;
 }
