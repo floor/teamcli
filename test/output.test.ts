@@ -876,6 +876,38 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           counts: { messages: 0, shown: 0, refused: 0 },
         }),
       ],
+      'team.messages.client': [
+        jsonEnvelope('team.messages.client', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          client: 'grok-bot',
+          rows: [
+            {
+              id: 'm-1',
+              from: 'lead',
+              to: 'grok-bot',
+              sent: '2026-10-19T14:03:00Z',
+              sent_display: '0s ago',
+              status: 'shown' as const,
+              body: 'the relay is ready',
+            },
+            {
+              id: 'm-2',
+              from: 'lead',
+              to: 'grok-bot',
+              sent: '2026-10-19T14:03:00Z',
+              sent_display: '0s ago',
+              status: 'refused' as const,
+            },
+          ],
+          notes: [],
+          differences: [],
+          summary: { differences: 0, owner_differences: 0 },
+          counts: { messages: 2, shown: 1, refused: 1 },
+          key_isolation: 'key isolation: not enforced (pane guard pending)',
+        }),
+      ],
       'team.next': [
         jsonEnvelope('team.next', {
           format: 1 as const,
