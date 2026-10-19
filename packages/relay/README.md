@@ -22,6 +22,23 @@ a signature. The listener belongs to the receiving session's host — this packa
 and starts no service. A future relay-host (server, queue, health) lives in this same package,
 behind its own exports, without importing TeamCLI.
 
+## Policies and invariants
+
+The delivery policies are configurable: delivery order, a delivery timeout per route, and
+delivery-escalation delays. The caller resolves them; this package makes one attempt in the
+order it is given.
+
+Four rules are fixed, not configurable:
+
+- a signed durable copy is written before any attempt;
+- a route that would hold or block is never chosen;
+- one message ID, with de-duplication at the receiver;
+- every attempt is recorded.
+
+In this version the copy-before-attempt rule is the caller's contract: `stage` first, then one
+`deliver`. The package makes no fallback decision and keeps no attempt record; receiver
+de-duplication, the attempt record, escalation and fallback are the next change, not this one.
+
 ## API
 
 ```js
@@ -61,9 +78,18 @@ their own transport pass it as `options.dial`; that keeps an injected host's dia
 package's client the same code path from the caller's point of view. A dial owns its own
 deadline when supplied; `timeoutMs` applies to the package's default dial.
 
+## Proof
+
+`packages/relay/docs/live-proof.md` in the repository records the transport and packed-install
+runs at the extraction commit, with the exact outputs and file hashes. In short: the staged copy's
+mode and bytes, the existing-copy answer, durable `held`, one complete frame taken by a local
+fixture peer, the refusals, and a packed tarball and installed build whose relay files are
+byte-identical to the commit's. No run shows a runtime reading a delivered frame, and no run wakes
+or reads a durable copy. Those remain unproven, and the next change is not measured here.
+
 ## Compatibility
 
 The frame bytes and the drop names and contents are frozen in this extraction: TeamCLI still
 builds the frame line and signs the record, and this package writes those bytes unchanged. The
-owner fallback contract — durable sign before any attempt, a held live route continuing to the
-next allowed route, cross-route dedup, recorded attempts — is a later, explicit change.
+fallback change — a held route continuing to the next allowed route, cross-route de-duplication,
+recorded attempts and escalation — is a later, explicit change.
