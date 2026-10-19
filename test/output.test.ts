@@ -1027,6 +1027,22 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           ],
         }),
       ],
+      'team.settings-change': [
+        jsonEnvelope('team.settings-change', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'updated' as const,
+          action_summary: 'settings: set nickname=Atlas at seat (claude-keeper)',
+          project: 'beacon',
+          session: 'beacon',
+          level: 'seat' as const,
+          target: 'agt_000000000000',
+          seat: 'claude-keeper',
+          settings: [
+            { key: 'nickname', value: 'Atlas', old: null, applies: 'at-once' },
+          ],
+        }),
+      ],
       'team.config-keys': [
         jsonEnvelope('team.config-keys', {
           format: 1 as const,

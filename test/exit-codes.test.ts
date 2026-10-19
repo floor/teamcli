@@ -1827,9 +1827,9 @@ scene('seats.not-yours', async (place) => {
   scene('config.shown', async (place) => show(await configRun(place, ['keys']), 'delivery_order'));
 }
 
-/** A home whose registry holds one signed seat setting for `lead`, tampered so the record no
- *  longer verifies: the settings reads must refuse it rather than fall back to the file. */
-function tamperedSeatSetting(place: Place): void {
+/** A home whose registry holds the owner's key and one registered `lead` agent in the roster,
+ *  so a settings write has a record to land in. */
+function registeredSeat(place: Place): string {
   installKey(place.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
   const agentId = registerAgent(place.home, {
     name: 'Lead One',
@@ -1851,6 +1851,13 @@ function tamperedSeatSetting(place: Place): void {
     lobby: '',
     roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
   });
+  return agentId;
+}
+
+/** A home whose registry holds one signed seat setting for `lead`, tampered so the record no
+ *  longer verifies: the settings reads must refuse it rather than fall back to the file. */
+function tamperedSeatSetting(place: Place): void {
+  const agentId = registeredSeat(place);
   const plan = planConfigSet(place.home, {
     level: 'seat',
     target: agentId,
@@ -1910,6 +1917,58 @@ function tamperedSeatSetting(place: Place): void {
     write(place, TEAM);
     tamperedSeatSetting(place);
     return show(await settingsRun(place, ['lead']), 'signature verification failed for setting "model"');
+  });
+  scene('settings.set', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'settings: set nickname=Atlas at seat (lead)');
+  });
+  scene('settings.unset', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    const set = await settingsRun(place, ['set', 'lead', 'nickname=Atlas']);
+    if (set.code !== 0) throw new Error(`the set before the unset failed: ${set.err}`);
+    return show(await settingsRun(place, ['unset', 'lead', 'nickname']), 'settings: unset nickname at seat (lead)');
+  });
+  scene('settings.dry-run', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(
+      await settingsRun(place, ['set', 'lead', 'nickname=Atlas', '--dry-run']),
+      'settings: would set nickname=Atlas at seat (lead)',
+    );
+  });
+  scene('settings.key', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nope=1']), 'unknown setting "nope"');
+  });
+  scene('settings.value', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'model=nope']), 'unknown model "nope" for claude-code');
+  });
+  scene('settings.policy', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(
+      await settingsRun(place, ['set', 'lead', 'delivery_order=drop']),
+      'loosens policy "delivery-order"',
+    );
+  });
+  scene('settings.not-owner', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas'], other), 'only the owner sets a seat');
+  });
+  scene('settings.no-agent', async (place) => {
+    write(place, TEAM);
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'has no registered agent record');
+  });
+  scene('settings.not-set', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['unset', 'lead', 'model']), 'is not set at level seat');
   });
 }
 
@@ -4657,7 +4716,7 @@ for (const [name, command, args, invalidArgs] of [
   scene('reply.usage', async (place) => show(await replied(place, []), '<id> is required'));
 }
 
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
+const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
 
 const contract = loadContract();
 if (wanted !== null) {

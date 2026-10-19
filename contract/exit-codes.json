@@ -3476,9 +3476,30 @@
     {
       "code": 0,
       "command": "settings",
+      "id": "settings.dry-run",
+      "meaning": "the change a write would make is printed and nothing is written",
+      "trigger": "team settings set lead nickname=Atlas --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "settings",
+      "id": "settings.set",
+      "meaning": "the setting is signed into the seat's record and logged",
+      "trigger": "team settings set lead nickname=Atlas"
+    },
+    {
+      "code": 0,
+      "command": "settings",
       "id": "settings.shown",
       "meaning": "the seat's settings are printed",
       "trigger": "team settings lead"
+    },
+    {
+      "code": 0,
+      "command": "settings",
+      "id": "settings.unset",
+      "meaning": "the setting is removed from the seat's record and logged",
+      "trigger": "team settings unset lead nickname"
     },
     {
       "code": 1,
@@ -3490,9 +3511,37 @@
     {
       "code": 1,
       "command": "settings",
+      "id": "settings.no-agent",
+      "meaning": "the seat has no registered agent record to hold its settings",
+      "trigger": "team settings set lead nickname=Atlas"
+    },
+    {
+      "code": 1,
+      "command": "settings",
       "id": "settings.no-seat",
       "meaning": "the team file declares no seat of that name",
       "trigger": "team settings ghost"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.not-owner",
+      "meaning": "only the owner sets a seat's settings",
+      "trigger": "team settings set lead nickname=Atlas"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.not-set",
+      "meaning": "an unset names a setting that is not set on the seat",
+      "trigger": "team settings unset lead model"
+    },
+    {
+      "code": 1,
+      "command": "settings",
+      "id": "settings.policy",
+      "meaning": "a policy in force over the seat does not admit the value",
+      "trigger": "team settings set lead delivery_order=typed"
     },
     {
       "code": 2,
@@ -3518,6 +3567,13 @@
     {
       "code": 2,
       "command": "settings",
+      "id": "settings.key",
+      "meaning": "a setting key is unknown or is not one a seat holds",
+      "trigger": "team settings set lead nope=1"
+    },
+    {
+      "code": 2,
+      "command": "settings",
       "id": "settings.not-a-repo",
       "meaning": "the directory is not inside a git repository",
       "trigger": "team settings lead"
@@ -3535,6 +3591,20 @@
       "id": "settings.source",
       "meaning": "a signed settings record can't be read or does not verify",
       "trigger": "team settings lead"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.value",
+      "meaning": "a value is outside what the seat's profile or the key's shape accepts",
+      "trigger": "team settings set lead model=nope"
+    },
+    {
+      "code": 2,
+      "command": "settings",
+      "id": "settings.write",
+      "meaning": "the seat's record can't be replaced",
+      "trigger": "team settings set lead nickname=Atlas"
     },
     {
       "code": 0,

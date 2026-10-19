@@ -1495,6 +1495,9 @@ Hidden: no
 Usage:
 
     team settings <seat> [--file <path>] [--json]
+    team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]
+    team settings set <seat> <key=value> [--dry-run] [--json]
+    team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]
 
 ### Flags
 
@@ -1510,6 +1513,59 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | no | no |
+
+### `set`
+
+Hidden: no
+
+Usage:
+
+    team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]
+    team settings set <seat> <key=value> [--dry-run] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+| `key` | yes | no |
+| `value` | yes | no |
+| `key=value` | yes | no |
+
+### `unset`
+
+Hidden: no
+
+Usage:
+
+    team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+| `key` | no | no |
 
 ## `status`
 

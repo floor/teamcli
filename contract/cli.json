@@ -2750,9 +2750,128 @@
           "repeatable": false
         }
       ],
-      "subcommands": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "key",
+              "optional": true,
+              "repeatable": false
+            },
+            {
+              "name": "value",
+              "optional": true,
+              "repeatable": false
+            },
+            {
+              "name": "key=value",
+              "optional": true,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]",
+            "team settings set <seat> <key=value> [--dry-run] [--json]"
+          ]
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "unset",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "key",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]"
+          ]
+        }
+      ],
       "usage": [
-        "team settings <seat> [--file <path>] [--json]"
+        "team settings <seat> [--file <path>] [--json]",
+        "team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]",
+        "team settings set <seat> <key=value> [--dry-run] [--json]",
+        "team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]"
       ]
     },
     {

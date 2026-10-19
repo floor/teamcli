@@ -1959,6 +1959,41 @@ export const SETTINGS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team settings set|unset` (`schema/settings-change.schema.json`):
+ *  the setting a write records or removes, at the seat it lands on. */
+export const SETTINGS_CHANGE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.settings-change',
+  fileName: 'settings-change.schema.json',
+  title: 'team settings set|unset --json output',
+  statuses: ['dry-run', 'updated', 'unset'],
+  required: ['level', 'target', 'seat', 'settings'],
+  properties: {
+    level: { type: 'string', enum: [...CONFIG_LEVELS] },
+    target: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    settings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'value', 'old', 'applies'],
+        properties: {
+          key: { type: 'string', enum: [...CONFIG_KEYS] },
+          value: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          old: {
+            type: ['string', 'boolean', 'array', 'null'],
+            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+          },
+          applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
+        },
+      },
+    },
+  },
+});
+
 /** Published `--json` output schema for `team config keys` (`schema/config-keys.schema.json`):
  *  the registry as the command lists it, one entry per key. */
 export const CONFIG_KEYS_OUTPUT_SCHEMA: CommandSchemaSpec = {
@@ -2140,6 +2175,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   PR_OUTPUT_SCHEMA,
   USAGE_OUTPUT_SCHEMA,
   SETTINGS_OUTPUT_SCHEMA,
+  SETTINGS_CHANGE_OUTPUT_SCHEMA,
   CONFIG_KEYS_OUTPUT_SCHEMA,
   SEAT_OUTPUT_SCHEMA,
 ];

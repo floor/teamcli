@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSettings, USAGE } from '../src/commands/settings.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
+import { SETTINGS_CHANGE_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { agentsDir, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { installKey } from '../src/store/keys.ts';
@@ -74,6 +75,36 @@ async function run(
   const io = testIo(root, caller);
   const code = await runSettings(argv, io, { home, now: new Date('2026-10-19T10:00:00Z') });
   return { code, out: io.out, err: io.err };
+}
+
+function agentInit(): AgentInit {
+  return {
+    name: 'Lead One',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'w3:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  };
+}
+
+/** The owner's key, a registered `lead` agent and its roster line: the record a write lands in. */
+function registerLead(): string {
+  installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const agentId = registerAgent(home, agentInit()).id;
+  upsertTeam(home, teamIdOf(root), {
+    project: 'acme',
+    session: 'acme',
+    root,
+    lobby: '',
+    roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
+  });
+  return agentId;
 }
 
 describe('a seat the launcher selects the model for', () => {
@@ -215,33 +246,9 @@ describe('refusals', () => {
 });
 
 describe('signed seat records', () => {
-  function agentInit(): AgentInit {
-    return {
-      name: 'Lead One',
-      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
-      lab: 'anthropic',
-      cli: 'claude-code',
-      launcher: null,
-      launch: 'claude --model claude-opus-5-5',
-      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'w3:p1', address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'team up',
-    };
-  }
-
   /** Signs one seat setting and returns the file it landed in. */
   function signedSeatSetting(value = 'claude-opus-5-5'): string {
-    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
-    const agentId = registerAgent(home, agentInit()).id;
-    upsertTeam(home, teamIdOf(root), {
-      project: 'acme',
-      session: 'acme',
-      root,
-      lobby: '',
-      roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
-    });
+    const agentId = registerLead();
     const plan = planConfigSet(home, {
       level: 'seat',
       target: agentId,
@@ -310,5 +317,153 @@ describe('signed seat records', () => {
     const result = await run(['lead', '--json']);
     expect(result.code).toBe(2);
     assertJsonErrorShape(result.out, { id: 'settings.source', messageContains: 'signature verification failed' });
+  });
+});
+
+describe('the write verbs', () => {
+  test('set records a signed setting and the read names the seat record', async () => {
+    const agentId = registerLead();
+    const set = await run(['set', 'lead', 'nickname=Hera']);
+    expect(set.code).toBe(0);
+    expect(set.out).toBe('settings: set nickname=Hera at seat (lead)\n');
+    expect(set.err).toBe('');
+
+    const read = await run(['lead', '--json']);
+    expect(read.code).toBe(0);
+    const doc = JSON.parse(read.out) as { settings: { key: string; value: unknown; source: string; applies: string; source_file?: string }[] };
+    expect(doc.settings.find((entry) => entry.key === 'nickname')).toEqual({
+      key: 'nickname',
+      value: 'Hera',
+      source: 'seat record',
+      applies: 'at-once',
+      source_file: join(agentsDir(home), `${agentId}.yaml`),
+    });
+  });
+
+  test('a model word is recorded as the launch id it names', async () => {
+    registerLead();
+    const set = await run(['set', 'lead', 'model=claude-haiku-5-5']);
+    expect(set.code).toBe(0);
+
+    const read = await run(['lead', '--json']);
+    const doc = JSON.parse(read.out) as { settings: { key: string; value: unknown; source: string; applies: string; source_file?: string }[] };
+    expect(doc.settings.find((entry) => entry.key === 'model')).toEqual({
+      key: 'model',
+      value: 'claude-haiku-5-5',
+      source: 'seat record',
+      applies: 'restart-resume',
+      source_file: expect.any(String),
+    });
+  });
+
+  test('key=value words set several settings in one record', async () => {
+    registerLead();
+    const set = await run(['set', 'lead', 'effort=high', 'human=true']);
+    expect(set.code).toBe(0);
+    expect(set.out).toBe('settings: set effort=high, human=true at seat (lead)\n');
+
+    const read = await run(['lead', '--json']);
+    const doc = JSON.parse(read.out) as { settings: { key: string; value: unknown; source: string; applies: string; source_file?: string }[] };
+    expect(doc.settings.find((entry) => entry.key === 'effort')).toMatchObject({ value: 'high', source: 'seat record' });
+    expect(doc.settings.find((entry) => entry.key === 'human')).toMatchObject({ value: true, source: 'seat record' });
+  });
+
+  test('unset removes the record and the team file shows through again', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'nickname=Hera'])).code).toBe(0);
+    const unset = await run(['unset', 'lead', 'nickname']);
+    expect(unset.code).toBe(0);
+    expect(unset.out).toBe('settings: unset nickname at seat (lead)\n');
+
+    const read = await run(['lead', '--json']);
+    const doc = JSON.parse(read.out) as { settings: { key: string; value: unknown; source: string; applies: string; source_file?: string }[] };
+    expect(doc.settings.find((entry) => entry.key === 'nickname')).toEqual({
+      key: 'nickname',
+      value: 'Atlas',
+      source: 'team file',
+      applies: 'at-once',
+    });
+  });
+
+  test('--dry-run prints the change and leaves the record bytes alone', async () => {
+    const agentId = registerLead();
+    const path = join(agentsDir(home), `${agentId}.yaml`);
+    const before = readFileSync(path, 'utf8');
+    const dry = await run(['set', 'lead', 'nickname=Hera', '--dry-run']);
+    expect(dry.code).toBe(0);
+    expect(dry.out).toBe('settings: would set nickname=Hera at seat (lead)\n');
+    expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  test('--json validates against the published schema', async () => {
+    registerLead();
+    const set = await run(['set', 'lead', 'nickname=Hera', '--json']);
+    expect(set.code).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      status: string;
+      dry_run: boolean;
+      settings: Record<string, unknown>[];
+    }>(set.out, SETTINGS_CHANGE_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('updated');
+    expect(doc.dry_run).toBe(false);
+    expect(doc.settings).toEqual([{ key: 'nickname', value: 'Hera', old: null, applies: 'at-once' }]);
+  });
+
+  test('a key the seat does not hold is refused before anything is written', async () => {
+    const agentId = registerLead();
+    const path = join(agentsDir(home), `${agentId}.yaml`);
+    const before = readFileSync(path, 'utf8');
+    const result = await run(['set', 'lead', 'nope=1']);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('unknown setting "nope"');
+    expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  test('a model the seat profile does not know is refused', async () => {
+    registerLead();
+    const result = await run(['set', 'lead', 'model=nope']);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('unknown model "nope" for claude-code');
+  });
+
+  test('a value that loosens the delivery order policy is refused', async () => {
+    registerLead();
+    const result = await run(['set', 'lead', 'delivery_order=drop']);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('loosens policy "delivery-order"');
+  });
+
+  test('a seat with no agent record is refused', async () => {
+    const result = await run(['set', 'lead', 'nickname=Hera']);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('has no registered agent record');
+  });
+
+  test('unsetting a setting that is not set is refused', async () => {
+    registerLead();
+    const result = await run(['unset', 'lead', 'model']);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('nothing to unset');
+  });
+
+  test('a caller that is not the owner is refused', async () => {
+    registerLead();
+    const result = await run(['set', 'lead', 'nickname=Hera'], { kind: 'seat', name: 'other', pane: 'w9:p1' });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('only the owner sets a seat');
+  });
+
+  test('the set and unset forms refuse what they cannot parse, and --dry-run stays with the writes', async () => {
+    const missingValue = await run(['set', 'lead', 'model']);
+    expect(missingValue.code).toBe(2);
+    expect(missingValue.err).toContain('needs a value');
+
+    const noKey = await run(['unset', 'lead']);
+    expect(noKey.code).toBe(2);
+    expect(noKey.err).toContain('a setting key is required');
+
+    const readDry = await run(['lead', '--dry-run']);
+    expect(readDry.code).toBe(2);
+    expect(readDry.err).toContain('--dry-run is for the write forms');
   });
 });

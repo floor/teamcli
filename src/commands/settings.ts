@@ -1,28 +1,47 @@
-// `team settings <seat>` — one seat's settings and where each value comes from. It reads the
-// live team file and the registry and writes nothing: the write verbs (`set`, `unset`) arrive
-// with the signed-record store the decision leaves open.
+// `team settings` — one seat's settings and where each value comes from, and the two write verbs
+// that record one. The read composes the live team file with the signed settings records in the
+// registry (`src/config/compose.ts`); `set` and `unset` sign a record into the seat's agent file,
+// raise `config.changed`, and log the change. Only the owner writes: a lead's write within its
+// team waits for the role policy the approved minimum leaves out, and this build refuses rather
+// than admit a write no policy authorized.
 //
-// The read is the composition in `src/config/compose.ts`; this module only decides who may read
-// it, which team file it reads, and how the rows print.
+// The write guard runs in three layers, each refusing in its own terms: the store plan
+// (`settings.key`, `settings.value`, `settings.source`), the per-seat check in
+// `src/config/value.ts` (the seat's launch profile and the roster) and the policy guard in
+// `src/config/guard.ts` (`settings.policy`).
 
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
-import { readSeatSettings } from '../config/read.ts';
+import { describeCaller, fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
+import { appendConfigChanged } from '../config/events.ts';
+import { agentIdOf, readSeatSettings } from '../config/read.ts';
+import { CONFIG_KEYS, getConfigSpec } from '../config/registry.ts';
+import type { ApplyKind, ConfigKey } from '../config/registry.ts';
+import { planConfigSet, planConfigUnset, writeConfigSet, writeConfigUnset } from '../config/sources.ts';
+import type { SignedConfigRecord } from '../config/record.ts';
+import type { PlannedConfigSetting } from '../config/sources.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
+import { checkSeatSetting } from '../config/value.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
+import type { Current } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { logLine } from '../log.ts';
 import { hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 
 export const USAGE = `Usage: team settings <seat> [--file <path>] [--json]
+       team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]
+       team settings set <seat> <key=value> [--dry-run] [--json]
+       team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]
 
-Prints the seat's settings and where each value comes from: the team file, the team's own order, the release default, or unset. Reads the live team file and changes nothing.
+Prints the seat's settings and where each value comes from: a signed record at the seat, team, project or entity level, the team file, the team's own order, the release default, or unset. The write forms record a signed setting for one seat, one key and value or several key=value words; only the owner runs them, and a change is signed, logged and raised as config.changed. A model is recorded as the launch id it names in the seat's profile, so a later launch reads the same model.
 
-Exits 0 when the settings are printed, 1 when the seat is not declared or the file is the owner's, 2 when the invocation or the team file is invalid.
+Exits 0 when the settings are printed or the change is written, 1 when the seat is not declared or has no agent record, the caller is not the owner, a policy forbids the value, or an unset names a setting that is not set, 2 when the invocation, the team file, or a signed record cannot be read, a value is outside what the seat's profile accepts, or the record cannot be written.
 `;
 
 export type SettingsCommandOptions = {
@@ -43,33 +62,48 @@ export async function runSettings(
 ): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['file'], ['json']);
-  if (args.error !== undefined || args.rest.length !== 1) {
-    const why = args.error
-      ?? (args.rest.length === 0 ? 'a seat name is required' : `unexpected "${args.rest[1]}"`);
-    if (json) {
-      writeJsonError(io, 'settings.invocation', why, null);
-    } else {
-      io.stderr(`team settings: ${why}\n${USAGE}`);
-    }
-    // exit: settings.invocation
-    return 2;
+  const args = readArgs(argv, ['file'], ['json', 'dry-run']);
+  if (args.error !== undefined) {
+    return invocation(io, json, args.error);
   }
+  const verb = args.rest[0];
+  if (verb === 'set' || verb === 'unset') {
+    return executeWrite(verb, args.rest.slice(1), args.flags, args.values.file, io, json, options);
+  }
+  if (args.flags.has('dry-run')) {
+    return invocation(io, json, '--dry-run is for the write forms (set, unset)');
+  }
+  if (args.rest.length !== 1) {
+    const why = args.rest.length === 0 ? 'a seat name is required' : `unexpected "${args.rest[1]}"`;
+    return invocation(io, json, why);
+  }
+  return executeRead(args, io, json, options);
+}
+
+function invocation(io: Io, json: boolean, why: string): number {
+  if (json) {
+    writeJsonError(io, 'settings.invocation', why, null);
+  } else {
+    io.stderr(`team settings: ${why}\n${USAGE}`);
+  }
+  // exit: settings.invocation
+  return 2;
+}
+
+/** The read form: the team file and the four signed records, composed, with each value's source. */
+function executeRead(
+  args: ReturnType<typeof readArgs>,
+  io: Io,
+  json: boolean,
+  options: SettingsCommandOptions,
+): number {
   const seatName = args.rest[0] as string;
 
   const walked = walkCaller(io);
   const owner = isOwner(walked);
   if (args.values.file !== undefined) {
     const refusal = fileOwnerRefusal(io, args.values.file);
-    if (refusal !== undefined) {
-      if (json) {
-        writeJsonError(io, 'settings.file-owner', refusal, 'the owner runs `team settings <seat> --file <path>` from a terminal outside herdr', 1, 'owner-only');
-      } else {
-        io.stderr(`team settings: ${refusal}\n`);
-      }
-      // exit: settings.file-owner
-      return 1;
-    }
+    if (refusal !== undefined) return fileOwnerExit(io, json, refusal);
   }
 
   const home = options.home ?? homedir();
@@ -86,35 +120,12 @@ export async function runSettings(
       return 2;
     }
   } else if (!current.ok) {
-    const id = current.errors[0]?.message.includes('not inside a git repository')
-      ? 'settings.not-a-repo'
-      : current.errors.some(isParseError)
-        ? 'settings.file-invalid'
-        : 'settings.file';
-    if (json) {
-      const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; ');
-      writeJsonError(io, id, msg, null);
-    } else {
-      printProblems(io, current.errors);
-    }
-    // exit: settings.not-a-repo
-    // exit: settings.file
-    // exit: settings.file-invalid
-    return 2;
+    return refuseFile(io, json, current);
   }
 
   const { team } = current;
   const seat = team.seats.find((one) => one.name === seatName);
-  if (seat === undefined) {
-    const message = `no seat "${seatName}" is declared in ${team.project}`;
-    if (json) {
-      writeJsonError(io, 'settings.no-seat', message, null);
-    } else {
-      io.stderr(`team settings: ${message}\n`);
-    }
-    // exit: settings.no-seat
-    return 1;
-  }
+  if (seat === undefined) return noSeatExit(io, json, seatName, team.project);
 
   if (!json && current.notice !== undefined) io.stdout(`${current.notice}\n`);
 
@@ -125,15 +136,7 @@ export async function runSettings(
     seat,
     teamDeliveryOrder: team.deliveryOrder,
   });
-  if (!read.ok) {
-    if (json) {
-      writeJsonError(io, 'settings.source', read.refusals.map((one) => one.why).join('; '), null);
-    } else {
-      for (const refusal of read.refusals) io.stderr(`team settings: ${refusal.why}\n`);
-    }
-    // exit: settings.source
-    return 2;
-  }
+  if (!read.ok) return sourceExit(io, json, read.refusals.map((one) => one.why));
   const rows = read.rows;
   if (json) {
     writeJson(io, 'team.settings', {
@@ -159,6 +162,441 @@ export async function runSettings(
   }
   // exit: settings.shown
   return 0;
+}
+
+/** The team file's refusal, shared by the read and the writes: the id names the failure, the
+ *  lines print it. */
+function refuseFile(io: Io, json: boolean, current: Extract<Current, { ok: false }>): number {
+  const id = current.errors[0]?.message.includes('not inside a git repository')
+    ? 'settings.not-a-repo'
+    : current.errors.some(isParseError)
+      ? 'settings.file-invalid'
+      : 'settings.file';
+  if (json) {
+    const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; ');
+    writeJsonError(io, id, msg, null);
+  } else {
+    printProblems(io, current.errors);
+  }
+  // exit: settings.not-a-repo
+  // exit: settings.file
+  // exit: settings.file-invalid
+  return 2;
+}
+
+const PLAN_IDS: Record<'key' | 'value' | 'source' | 'write', string> = {
+  key: 'settings.key',
+  value: 'settings.value',
+  source: 'settings.source',
+  write: 'settings.write',
+};
+
+function printRefusal(io: Io, json: boolean, id: string, why: string): void {
+  if (json) writeJsonError(io, id, why, null);
+  else io.stderr(`team settings: ${why}\n`);
+}
+
+// The refusals and successes both verbs share. The exit-code contract allows an id on one site
+// only, so each answer prints and returns from here whichever caller met it.
+
+function fileOwnerExit(io: Io, json: boolean, refusal: string): number {
+  if (json) {
+    writeJsonError(io, 'settings.file-owner', refusal, 'the owner runs `team settings --file <path>` from a terminal outside herdr', 1, 'owner-only');
+  } else {
+    io.stderr(`team settings: ${refusal}\n`);
+  }
+  // exit: settings.file-owner
+  return 1;
+}
+
+function noSeatExit(io: Io, json: boolean, seatName: string, project: string): number {
+  const message = `no seat "${seatName}" is declared in ${project}`;
+  if (json) {
+    writeJsonError(io, 'settings.no-seat', message, null);
+  } else {
+    io.stderr(`team settings: ${message}\n`);
+  }
+  // exit: settings.no-seat
+  return 1;
+}
+
+function sourceExit(io: Io, json: boolean, why: string | readonly string[]): number {
+  const lines = typeof why === 'string' ? [why] : why;
+  if (json) {
+    writeJsonError(io, 'settings.source', lines.join('; '), null);
+  } else {
+    for (const line of lines) io.stderr(`team settings: ${line}\n`);
+  }
+  // exit: settings.source
+  return 2;
+}
+
+function planExit(io: Io, json: boolean, kind: 'key' | 'value' | 'source' | 'write', why: string): number {
+  if (kind === 'source') return sourceExit(io, json, why);
+  printRefusal(io, json, PLAN_IDS[kind], why);
+  // exit: settings.key
+  // exit: settings.value
+  // exit: settings.write
+  return 2;
+}
+
+function policyExit(io: Io, json: boolean, why: string): number {
+  printRefusal(io, json, 'settings.policy', why);
+  // exit: settings.policy
+  return 1;
+}
+
+function notSetExit(io: Io, json: boolean, why: string): number {
+  printRefusal(io, json, 'settings.not-set', why);
+  // exit: settings.not-set
+  return 1;
+}
+
+function dryRunExit(): number {
+  // exit: settings.dry-run
+  return 0;
+}
+
+function setExit(): number {
+  // exit: settings.set
+  return 0;
+}
+
+function unsetExit(): number {
+  // exit: settings.unset
+  return 0;
+}
+
+/** One `<key> <value>` pair, or `key=value` words, or the one key an unset names. */
+type ParsedWrite =
+  | { ok: true; seat: string; pairs: { key: string; value: string }[] }
+  | { ok: true; seat: string; keys: string[] }
+  | { ok: false; why: string };
+
+function parseSetWords(words: readonly string[]): ParsedWrite {
+  const seat = words[0];
+  if (seat === undefined) return { ok: false, why: 'usage: team settings set <seat> <key> <value> | <key>=<value> …' };
+  const rest = words.slice(1);
+  if (rest.length === 0) return { ok: false, why: 'a setting is required after the seat name' };
+  if (!(rest[0] as string).includes('=')) {
+    if (rest.length === 1) return { ok: false, why: `setting "${rest[0]}" needs a value` };
+    if (rest.length > 2) return { ok: false, why: `unexpected "${rest[2]}"` };
+    return { ok: true, seat, pairs: [{ key: rest[0] as string, value: rest[1] as string }] };
+  }
+  const pairs: { key: string; value: string }[] = [];
+  for (const word of rest) {
+    const at = word.indexOf('=');
+    if (at <= 0) return { ok: false, why: `setting "${word}" needs <key>=<value>` };
+    pairs.push({ key: word.slice(0, at), value: word.slice(at + 1) });
+  }
+  return { ok: true, seat, pairs };
+}
+
+function parseUnsetWords(words: readonly string[]): ParsedWrite {
+  const seat = words[0];
+  if (seat === undefined) return { ok: false, why: 'usage: team settings unset <seat> <key>' };
+  const key = words[1];
+  if (key === undefined) return { ok: false, why: 'a setting key is required' };
+  if (words.length > 2) return { ok: false, why: `unexpected "${words[2]}"` };
+  return { ok: true, seat, keys: [key] };
+}
+
+function appliesOf(key: ConfigKey): ApplyKind {
+  return getConfigSpec(key)?.applies ?? 'at-once';
+}
+
+function orderedSettings(settings: readonly PlannedConfigSetting[]): PlannedConfigSetting[] {
+  return [...settings].sort((a, b) => CONFIG_KEYS.indexOf(a.key) - CONFIG_KEYS.indexOf(b.key));
+}
+
+function pairsWord(settings: readonly PlannedConfigSetting[]): string {
+  return settings.map((setting) => `${setting.key}=${sayConfigValue(setting.value)}`).join(', ');
+}
+
+/**
+ * `set` and `unset` in one body: both walk the same gate (owner, file, team, seat, agent record)
+ * and differ only in what they plan and record. Every exit is a literal of its own so the
+ * exit-code contract can check each id against its row.
+ */
+function executeWrite(
+  verb: 'set' | 'unset',
+  words: readonly string[],
+  flags: ReadonlySet<string>,
+  file: string | undefined,
+  io: Io,
+  json: boolean,
+  options: SettingsCommandOptions,
+): number {
+  const parsed = verb === 'set' ? parseSetWords(words) : parseUnsetWords(words);
+  if (!parsed.ok) return invocation(io, json, parsed.why);
+
+  const walked = walkCaller(io);
+  if (!isOwner(walked)) {
+    const message = `only the owner sets a seat's settings, from a terminal outside herdr; this call is ${describeCaller(walked)}`;
+    if (json) {
+      writeJsonError(io, 'settings.not-owner', message, 'the owner runs `team settings set` from a terminal outside herdr', 1, 'owner-only');
+    } else {
+      io.stderr(`team settings: ${message}\n`);
+    }
+    // exit: settings.not-owner
+    return 1;
+  }
+  if (file !== undefined) {
+    const refusal = fileOwnerRefusal(io, file);
+    if (refusal !== undefined) return fileOwnerExit(io, json, refusal);
+  }
+
+  const home = options.home ?? homedir();
+  const now = options.now ?? new Date();
+  const current = currentTeam(io.cwd, file, now, home, true);
+  if (!current.ok) return refuseFile(io, json, current);
+  const { team } = current;
+  const seat = team.seats.find((one) => one.name === parsed.seat);
+  if (seat === undefined) return noSeatExit(io, json, parsed.seat, team.project);
+  const found = agentIdOf(home, current.root, team.project, seat.name);
+  if (found.agentId === null) {
+    const message = `seat "${seat.name}" has no registered agent record to hold its settings; run \`team up\` first`;
+    if (json) {
+      writeJsonError(io, 'settings.no-agent', message, 'run `team up` to register the seat');
+    } else {
+      io.stderr(`team settings: ${message}\n`);
+    }
+    // exit: settings.no-agent
+    return 1;
+  }
+  const agentId = found.agentId;
+  const dryRun = flags.has('dry-run');
+
+  if (verb === 'set') {
+    const pairs = (parsed as { pairs: { key: string; value: string }[] }).pairs;
+    const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: pairs });
+    if (!plan.ok) return planExit(io, json, plan.kind, plan.why);
+    const chain = loadAndResolvePolicyChain({
+      home,
+      entity: team.entity ?? found.entity,
+      projectId: found.projectId,
+      teamRoot: current.root,
+      team,
+      agentId,
+      seat,
+    });
+    const checked: PlannedConfigSetting[] = [];
+    for (const setting of plan.settings) {
+      const check = checkSeatSetting(setting.key, setting.value, seat, team.seats, chain);
+      if (!check.ok) {
+        if (check.refusal.id === 'settings.policy') return policyExit(io, json, check.refusal.why);
+        return planExit(io, json, 'value', check.refusal.why);
+      }
+      checked.push({ ...setting, value: check.value });
+    }
+    const settings = orderedSettings(checked);
+    const summary = `settings: ${dryRun ? 'would set' : 'set'} ${pairsWord(settings)} at seat (${seat.name})`;
+
+    if (dryRun) {
+      if (json) {
+        writeJson(io, 'team.settings-change', {
+          format: 1 as const,
+          dry_run: true,
+          status: 'dry-run',
+          action_summary: summary,
+          project: team.project,
+          session: team.session,
+          level: 'seat' as const,
+          target: agentId,
+          seat: seat.name,
+          settings: settings.map((setting) => ({
+            key: setting.key,
+            value: setting.value,
+            old: setting.previous?.value ?? null,
+            applies: appliesOf(setting.key),
+          })),
+          plan: settings.map((setting) => ({
+            step: 'setting',
+            detail: `${setting.key}=${sayConfigValue(setting.value)}`,
+            seat: seat.name,
+            prefix: '+' as const,
+          })),
+        });
+      } else {
+        io.stdout(`${summary}\n`);
+      }
+      return dryRunExit();
+    }
+
+    const written = writeConfigSet(home, { ...plan, settings: checked }, { now });
+    if (!written.ok) return planExit(io, json, written.kind, written.why);
+    const notice = recordChanges(current, home, seat.name, agentId, settings, written.written);
+    logLine(
+      join(current.root, '.agents'),
+      'settings',
+      'owner',
+      `seat ${seat.name} (${agentId}) ${settings.map((setting) => `${setting.key}: ${sayConfigValue(setting.previous?.value ?? null)} -> ${sayConfigValue(setting.value)}`).join('; ')}`,
+      now,
+    );
+    if (json) {
+      writeJson(io, 'team.settings-change', {
+        format: 1 as const,
+        dry_run: false,
+        status: 'updated',
+        action_summary: summary,
+        project: team.project,
+        session: team.session,
+        level: 'seat' as const,
+        target: agentId,
+        seat: seat.name,
+        settings: settings.map((setting) => ({
+          key: setting.key,
+          value: setting.value,
+          old: setting.previous?.value ?? null,
+          applies: appliesOf(setting.key),
+        })),
+        ...(notice !== null ? { notice } : {}),
+      });
+    } else {
+      io.stdout(`${summary}\n`);
+      if (notice !== null) io.stderr(`team settings: ${notice}\n`);
+    }
+    return setExit();
+  }
+
+  const keys = (parsed as { keys: string[] }).keys;
+  const request = { level: 'seat' as const, target: agentId, keys };
+  const plan = planConfigUnset(home, request);
+  if (!plan.ok) {
+    if (plan.kind === 'value') return notSetExit(io, json, plan.why);
+    return planExit(io, json, plan.kind, plan.why);
+  }
+  const removed = orderedSettings(plan.removed);
+  const summary = `settings: ${dryRun ? 'would unset' : 'unset'} ${removed.map((setting) => setting.key).join(', ')} at seat (${seat.name})`;
+
+  if (dryRun) {
+    if (json) {
+      writeJson(io, 'team.settings-change', {
+        format: 1 as const,
+        dry_run: true,
+        status: 'dry-run',
+        action_summary: summary,
+        project: team.project,
+        session: team.session,
+        level: 'seat' as const,
+        target: agentId,
+        seat: seat.name,
+        settings: removed.map((setting) => ({
+          key: setting.key,
+          value: null,
+          old: setting.previous?.value ?? setting.value,
+          applies: appliesOf(setting.key),
+        })),
+        plan: removed.map((setting) => ({
+          step: 'setting',
+          detail: setting.key,
+          seat: seat.name,
+          prefix: '+' as const,
+        })),
+      });
+    } else {
+      io.stdout(`${summary}\n`);
+    }
+    return dryRunExit();
+  }
+
+  const written = writeConfigUnset(home, request);
+  if (!written.ok) {
+    if (written.kind === 'value') return notSetExit(io, json, written.why);
+    return planExit(io, json, written.kind, written.why);
+  }
+  const notice = recordRemovals(current, home, seat.name, agentId, removed);
+  logLine(
+    join(current.root, '.agents'),
+    'settings',
+    'owner',
+    `seat ${seat.name} (${agentId}) ${removed.map((setting) => `${setting.key}: ${sayConfigValue(setting.previous?.value ?? setting.value)} -> unset`).join('; ')}`,
+    now,
+  );
+  if (json) {
+    writeJson(io, 'team.settings-change', {
+      format: 1 as const,
+      dry_run: false,
+      status: 'unset',
+      action_summary: summary,
+      project: team.project,
+      session: team.session,
+      level: 'seat' as const,
+      target: agentId,
+      seat: seat.name,
+      settings: removed.map((setting) => ({
+        key: setting.key,
+        value: null,
+        old: setting.previous?.value ?? setting.value,
+        applies: appliesOf(setting.key),
+      })),
+      ...(notice !== null ? { notice } : {}),
+    });
+  } else {
+    io.stdout(`${summary}\n`);
+    if (notice !== null) io.stderr(`team settings: ${notice}\n`);
+  }
+  return unsetExit();
+}
+
+/** Appends one config.changed per signed record; returns the notice for a failure, or null. A
+ *  failed append leaves the written record in place — the reconcile pass adds the missing event. */
+function recordChanges(
+  current: Extract<Current, { ok: true }>,
+  home: string,
+  seatName: string,
+  agentId: string,
+  settings: readonly PlannedConfigSetting[],
+  written: readonly SignedConfigRecord[],
+): string | null {
+  const failures: string[] = [];
+  for (const record of written) {
+    const previous = settings.find((setting) => setting.key === record.key)?.previous ?? null;
+    const appended = appendConfigChanged(current.team.project, current.root, home, {
+      ts: record.date,
+      session: current.team.session,
+      level: 'seat',
+      target: agentId,
+      key: record.key,
+      old: previous?.value ?? null,
+      value: record.value,
+      generation: record.generation,
+      from: 'owner',
+      seat: seatName,
+      subject: seatName,
+    });
+    if (!appended.ok) failures.push(`${record.key}: ${appended.reason}`);
+  }
+  if (failures.length === 0) return null;
+  return `the change was written; its config.changed event could not be appended (${failures.join('; ')}); the reconcile pass adds it`;
+}
+
+function recordRemovals(
+  current: Extract<Current, { ok: true }>,
+  home: string,
+  seatName: string,
+  agentId: string,
+  removed: readonly PlannedConfigSetting[],
+): string | null {
+  const failures: string[] = [];
+  for (const setting of removed) {
+    const appended = appendConfigChanged(current.team.project, current.root, home, {
+      ts: setting.previous?.date ?? new Date().toISOString(),
+      session: current.team.session,
+      level: 'seat',
+      target: agentId,
+      key: setting.key,
+      old: setting.previous?.value ?? setting.value,
+      value: null,
+      generation: setting.previous?.generation ?? 0,
+      from: 'owner',
+      seat: seatName,
+      subject: seatName,
+    });
+    if (!appended.ok) failures.push(`${setting.key}: ${appended.reason}`);
+  }
+  if (failures.length === 0) return null;
+  return `the change was written; its config.changed event could not be appended (${failures.join('; ')}); the reconcile pass adds it`;
 }
 
 function printProblems(io: Io, problems: Problem[]): void {

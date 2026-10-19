@@ -41,7 +41,7 @@ export type SeatSettingsInput = {
 
 /** The agent id the team record's roster gives the seat, or the registry's newest agent of that
  *  team and seat; null when neither knows one. */
-function agentIdOf(home: string, root: string, project: string, seatName: string): { agentId: string | null; entity: string | null; projectId: string | null } {
+export function agentIdOf(home: string, root: string, project: string, seatName: string): { agentId: string | null; entity: string | null; projectId: string | null } {
   let entity: string | null = null;
   let projectId: string | null = null;
   try {
