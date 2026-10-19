@@ -26,6 +26,7 @@ import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
+import { hostedWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -420,6 +421,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // The daemon's reading: a note only when there is something to act on. A daemon that is
     // simply not installed is the ordinary state and is said in `status`, not counted here.
     ...(sources.daemon !== undefined ? daemonProblemNotes(sources.daemon) : []),
+    // A hosted watch the daemon carries, notes only: a standing-down or stopped watch, a failed
+    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing.
+    ...(sources.daemon !== undefined ? hostedWatchCheckNotes(sources.daemon, sources.now()) : []),
   ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.

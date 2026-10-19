@@ -13,6 +13,8 @@ import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonRootState } from '../src/daemon/state.ts';
 import { daemonHealthy, daemonNotes, daemonProblemNotes, daemonReading } from '../src/daemon/health_display.ts';
+import { hostedWatchCheckNotes, hostedWatchNotes } from '../src/daemon/watch_display.ts';
+import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { updateState } from '../src/state.ts';
@@ -48,6 +50,29 @@ function health(over: Partial<DaemonHealth> = {}): DaemonHealth {
 
 function root(over: Partial<DaemonRootState> = {}): DaemonRootState {
   return { root: '/work/acme', team: 'acme', send: 'serving', bus: 'serving', why: null, ...over };
+}
+
+function watch(over: Partial<HostedWatchState> = {}): HostedWatchState {
+  return {
+    routeId: 'route-acme',
+    root: '/work/acme',
+    team: 'acme',
+    session: 'acme',
+    phase: 'running',
+    startedAt: '2026-10-19T08:00:00.000Z',
+    lastCycleAt: '2026-10-19T08:57:00.000Z',
+    lastCycleOutcome: 'pass',
+    cycles: 12,
+    failures: 0,
+    effects: 'open',
+    required: true,
+    why: null,
+    ...over,
+  };
+}
+
+function watched(over: Partial<HostedWatchState> = {}): DaemonHealth {
+  return health({ roots: [root({ watch: watch(over) })] });
 }
 
 function notRunning(): DaemonHealth {
@@ -406,4 +431,155 @@ test('a hosted endpoint that did not start is a check note, and machine health a
   expect(io.out).toContain('roots 1 (send 0, bus 1)');
   expect(io.out).toContain('1 endpoint did not start here (send for /work/acme: address in use)');
   expect(io.out).toContain('no differences');
+});
+
+const BLOCKED =
+  'watch: outbound effects blocked (no verified admitted sender is injected); it is not enforcing anything';
+
+test('a hosted watch is silent when the record carries none, and says its own phase when it does', () => {
+  expect(hostedWatchNotes(health(), NOW)).toEqual([]);
+  expect(hostedWatchNotes(watched(), NOW)).toEqual(['watch: in daemon, last cycle 3m ago']);
+  // A running watch with no completed pass never borrows a last-cycle time.
+  expect(hostedWatchNotes(watched({ lastCycleAt: null, lastCycleOutcome: null, cycles: 0 }), NOW)).toEqual([
+    'watch: in daemon, not yet cycled',
+  ]);
+  expect(hostedWatchNotes(watched({ phase: 'starting', lastCycleAt: null }), NOW)).toEqual([
+    'watch: starting in the daemon, not yet cycled',
+  ]);
+  expect(hostedWatchNotes(watched({ phase: 'stopping' }), NOW)).toEqual(['watch: stopping in the daemon']);
+  expect(hostedWatchNotes(watched({ phase: 'stopped', why: 'the daemon is closing' }), NOW)).toEqual([
+    'watch: stopped in the daemon (the daemon is closing)',
+  ]);
+  expect(hostedWatchNotes(watched({ phase: 'stopped', why: null }), NOW)).toEqual([
+    'watch: stopped in the daemon (no reason recorded)',
+  ]);
+  expect(hostedWatchNotes(watched({ phase: 'failed', why: 'the first pass threw' }), NOW)).toEqual([
+    'watch: failed in the daemon (the first pass threw)',
+  ]);
+});
+
+test('a standing-down watch names the pane watch and claims no daemon cycle', () => {
+  const lines = hostedWatchNotes(
+    watched({ phase: 'standby', lastCycleAt: null, lastCycleOutcome: null, why: 'the session is watched from a pane' }),
+    NOW,
+  );
+  expect(lines).toEqual([
+    'watch: standing by; a live pane watch owns this session (the session is watched from a pane)',
+  ]);
+  expect(lines[0]).not.toContain('last cycle');
+  expect(lines[0]).not.toContain('not yet cycled');
+  expect(lines[0]).not.toContain('in daemon');
+});
+
+test('a closed outbound gate is said as blocked, never as enforcing', () => {
+  expect(hostedWatchNotes(watched({ effects: 'blocked' }), NOW)).toEqual([
+    'watch: in daemon, last cycle 3m ago',
+    BLOCKED,
+  ]);
+  expect(BLOCKED).toContain('not enforcing anything');
+  expect(BLOCKED).not.toContain('in daemon,');
+});
+
+test('several watched routes each name their own root, so one failure reads beside a good one', () => {
+  const two = health({
+    roots: [
+      root({ watch: watch() }),
+      root({
+        root: '/work/beta',
+        team: 'beta',
+        watch: watch({
+          routeId: 'route-beta',
+          root: '/work/beta',
+          team: 'beta',
+          session: 'beta',
+          phase: 'failed',
+          why: 'the send endpoint failed',
+        }),
+      }),
+    ],
+  });
+  expect(hostedWatchNotes(two, NOW)).toEqual([
+    'watch: in daemon, last cycle 3m ago (/work/acme)',
+    'watch: failed in the daemon (the send endpoint failed) (/work/beta)',
+  ]);
+});
+
+test('check hears a running watch only when its last cycle failed', () => {
+  expect(hostedWatchCheckNotes(health({ roots: [root()] }), NOW)).toEqual([]);
+  expect(hostedWatchCheckNotes(watched(), NOW)).toEqual([]);
+  expect(hostedWatchCheckNotes(watched({ lastCycleOutcome: 'failed', failures: 1 }), NOW)).toEqual([
+    'watch: the last cycle failed 3m ago',
+  ]);
+  expect(hostedWatchCheckNotes(watched({ lastCycleAt: null, lastCycleOutcome: 'failed', failures: 1 }), NOW)).toEqual([
+    'watch: the last cycle failed',
+  ]);
+  // Starting and stopping are transient, not something to act on.
+  expect(hostedWatchCheckNotes(watched({ phase: 'starting', lastCycleAt: null }), NOW)).toEqual([]);
+  expect(hostedWatchCheckNotes(watched({ phase: 'stopping' }), NOW)).toEqual([]);
+});
+
+test('check names a required stopped or failed watch, and stays quiet for one never required', () => {
+  expect(hostedWatchCheckNotes(watched({ phase: 'stopped', why: 'the daemon is closing' }), NOW)).toEqual([
+    'watch: stopped in the daemon (the daemon is closing)',
+  ]);
+  expect(hostedWatchCheckNotes(watched({ phase: 'failed', why: 'the first pass threw' }), NOW)).toEqual([
+    'watch: failed in the daemon (the first pass threw)',
+  ]);
+  expect(
+    hostedWatchCheckNotes(watched({ phase: 'stopped', required: false, why: 'the daemon is closing' }), NOW),
+  ).toEqual([]);
+});
+
+test('check says standing by and a blocked gate as quiet honest notes', () => {
+  expect(
+    hostedWatchCheckNotes(
+      watched({ phase: 'standby', lastCycleAt: null, why: 'the session is watched from a pane' }),
+      NOW,
+    ),
+  ).toEqual(['watch: standing by; a live pane watch owns this session (the session is watched from a pane)']);
+  expect(hostedWatchCheckNotes(watched({ effects: 'blocked' }), NOW)).toEqual([BLOCKED]);
+});
+
+test('status prints a watched route beside the daemon line, and the document carries the watch', async () => {
+  const at = place();
+  const io = testIo(at.root, { kind: 'owner' });
+  await runStatus(
+    ['--json'],
+    io,
+    statusSources(at, async () => health({ roots: [root({ watch: watch() })] })),
+  );
+  const doc = JSON.parse(io.out) as {
+    notes: string[];
+    daemon: { roots: Array<{ watch?: { phase: string; lastCycleAt: string | null } }> };
+  };
+  expect(doc.notes).toContain('watch: in daemon, last cycle 3m ago');
+  expect(doc.daemon.roots[0]?.watch?.phase).toBe('running');
+  expect(doc.daemon.roots[0]?.watch?.lastCycleAt).toBe('2026-10-19T08:57:00.000Z');
+
+  const text = testIo(at.root, { kind: 'owner' });
+  expect(
+    await runStatus([], text, statusSources(at, async () => health({ roots: [root({ watch: watch() })] }))),
+  ).toBe(0);
+  expect(text.out).toContain('watch: in daemon, last cycle 3m ago');
+});
+
+test('a failed required watch is a check note, and a healthy one leaves no trace', () => {
+  const at = place();
+  const io = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    ...checkSources(at, undefined),
+    daemon: watched({ phase: 'failed', why: 'the first pass threw' }),
+  });
+  expect(code).toBe(0);
+  expect(io.out).toContain('watch: failed in the daemon (the first pass threw)');
+  expect(io.out).toContain('no differences');
+
+  const quiet = testIo(at.root, { kind: 'owner' });
+  expect(
+    runTeamCheck({ file: '.agents/team.yaml' }, quiet, {
+      ...checkSources(at, undefined),
+      daemon: watched(),
+    }),
+  ).toBe(0);
+  expect(quiet.out).not.toContain('watch:');
 });

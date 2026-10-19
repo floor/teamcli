@@ -16,6 +16,7 @@ import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_w
 import { daemonHealth } from '../daemon/health.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonNotes, daemonReading } from '../daemon/health_display.ts';
+import { hostedWatchNotes } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
 import { currentTeam } from '../file/current.ts';
@@ -438,7 +439,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const health = sources.daemonHealth === undefined
     ? null
     : await sources.daemonHealth(sources.home ?? homedir());
-  if (health !== null) comparison.notes.push(...daemonNotes(health));
+  if (health !== null) {
+    comparison.notes.push(...daemonNotes(health));
+    // The hosted watches that same reading carries: one plain line per watched route, and a
+    // blocked outbound gate said as blocked — never as enforcing.
+    comparison.notes.push(...hostedWatchNotes(health, now));
+  }
   const record = approvalAndOverrideRows(
     standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
     overrides,
