@@ -77,8 +77,12 @@ sessions and a session id is recorded; otherwise the old conversation is asked, 
 to write a handover the new one reads. Once the pane is ready the run reads the model back: the
 profile's own reading first, then the launch wrapper's `· API Usage Billing` banner. A screen that
 shows neither is reported as `read-back: unread`, and unread never claims a match. The record is
-removed when the pane is ready, whichever the read-back says; a different model is reported as a
-failed swap.
+removed once the pane is ready, the file's declaration was written and the read-back agrees or is
+unread; a declaration write that failed or a different model is reported as a failed swap, and the
+record stands for the next pass. `now` writes `forced` before it runs the record: when the run
+cannot start — herdr cannot be read, a busy turn, a refused stop — the exit code reports the run's
+own failure and the forced record stays in the queue for the watch or a later `--run`; the refusal
+is not a rollback.
 
 ## Who may run it
 
