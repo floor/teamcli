@@ -150,6 +150,7 @@ describe('project admission: the project decides its own pairs', () => {
       'builder-1@cli may not send to builder-2@site: no rule admits it (the project lead and the leads of its teams; ' +
         'team leads within one project to each other; seats crossing teams within one project, where the project allows it; ' +
         "the owner; an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; " +
+        "an operator to another operator of its own team; " +
         "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
     );
   });
