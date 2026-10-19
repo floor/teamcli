@@ -31,7 +31,7 @@ import type { TeamFile } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { callerOf, callerVerdict, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
-import { loadTeamFile } from './file/load.ts';
+import { loadTeamFile, findRoot } from './file/load.ts';
 import { dirname } from 'node:path';
 import {
   DEV_MODE_OPERATIONS,
@@ -254,6 +254,24 @@ export function devModeOwnerLiftAtCwd(
 ): DevModeOwnerLift | null {
   const walked = walkCaller(io);
   if (walked.kind !== 'seat' && !(walked.kind === 'unplaced' && walked.reason === 'it runs under herdr')) return null;
+  // A caller the walk cannot place is the usual refusal, and it may not pay for a team-file
+  // read. Before the file is read, dev mode has to be on by something the cwd itself names: the
+  // variable, or the policy chain at the root the cwd walks up to. Only then is the file read
+  // for the session and the lead's name. A handed-in seat has already answered the walk, so the
+  // full admission below decides once.
+  if (walked.kind === 'unplaced') {
+    if (io.env.TEAMCLI_DEV_MODE !== '1') {
+      if (options.home === undefined) return null;
+      const root = findRoot(io.cwd);
+      if (root === null) return null;
+      const early = devModeState(io, {
+        home: options.home,
+        root,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+      });
+      if (!early.on) return null;
+    }
+  }
   let loaded: ReturnType<typeof loadTeamFile>;
   try {
     loaded = loadTeamFile(io.cwd, { ...(options.home !== undefined ? { home: options.home } : {}) });
