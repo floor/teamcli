@@ -136,7 +136,7 @@ $ team settings claude-keeper ; echo "exit $?"
   model           Claude Opus             team file  restart that resumes
   effort          max                     team file  restart that resumes
   nickname        agamemnon               team file  at once
-  delivery_order  mcp-inbox, drop, typed  default    at once
+  delivery_order  mcp-inbox, typed, drop  default    at once
   human           false                   default    at once
 exit 0
 ```
@@ -150,7 +150,7 @@ $ team settings claude-beacon ; echo "exit $?"
   model           Claude Opus             team file  restart that resumes
   effort          -                       unset      restart that resumes
   nickname        -                       unset      at once
-  delivery_order  mcp-inbox, drop, typed  default    at once
+  delivery_order  mcp-inbox, typed, drop  default    at once
   human           false                   default    at once
 exit 0
 ```

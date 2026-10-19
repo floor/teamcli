@@ -193,7 +193,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     const delivery = resolvePolicy('delivery-order', []);
     expect(delivery.ok).toBe(true);
     if (delivery.ok) {
-      expect(delivery.effective.value).toEqual(['mcp-inbox', 'drop', 'typed']);
+      expect(delivery.effective.value).toEqual(['mcp-inbox', 'typed', 'drop']);
       expect(delivery.effective.level).toBe('default');
     }
 
@@ -1399,7 +1399,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(await runPolicy(['--seat', 'worker', '--file', '.agents/team.yaml'], seatIo, { home: fx.home, now: () => NOW })).toBe(0);
       expect(seatIo.out).toContain('team beacon, session "beacon" · seat worker');
       expect(seatIo.out).toMatch(
-        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: mcp-inbox, drop, typed\)/,
+        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: mcp-inbox, typed, drop\)/,
       );
       expect(seatIo.out).not.toContain('same as the team');
     } finally {

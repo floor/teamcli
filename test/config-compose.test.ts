@@ -79,7 +79,7 @@ describe('a seat that writes none of them', () => {
   test('the order falls back to the release order when the file writes none', () => {
     expect(row(BARE, null, 'delivery_order')).toEqual({
       key: 'delivery_order',
-      value: ['mcp-inbox', 'drop', 'typed'],
+      value: ['mcp-inbox', 'typed', 'drop'],
       origin: 'default',
       applies: 'at-once',
     });

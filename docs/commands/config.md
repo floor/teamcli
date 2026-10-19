@@ -20,7 +20,7 @@ order in force. The registry names the policy on each row so the two can be told
 | `model` | seat | a model the seat's profile and the `allowed-models` policy accept | unset | `allowed-models` | the CLI's next start: a restart that resumes |
 | `effort` | seat | one of the CLI profile's effort levels | unset | — | the CLI's next start: a restart that resumes |
 | `nickname` | seat | unique in the team, never `lead` | unset | — | at once |
-| `delivery_order` | seat | delivery legs, tighten only | the team's order, else `mcp-inbox, drop, typed` | `delivery-order` | at once |
+| `delivery_order` | seat | delivery legs, tighten only | the team's order, else `mcp-inbox, typed, drop` | `delivery-order` | at once |
 | `human` | seat | true or false | false | — | at once |
 
 `restart that resumes` is what `team restart` does for a CLI that keeps its session: the value is
@@ -50,7 +50,7 @@ $ team config keys ; echo "exit $?"
   model           seat    a model the seat's profile and the allowed-models policy accept  -                       allowed-models  restart that resumes
   effort          seat    one of the CLI profile's effort levels                           -                       -               restart that resumes
   nickname        seat    unique in the team, never lead                                   -                       -               at once
-  delivery_order  seat    delivery legs, tighten only                                      mcp-inbox, drop, typed  delivery-order  at once
+  delivery_order  seat    delivery legs, tighten only                                      mcp-inbox, typed, drop  delivery-order  at once
   human           seat    true or false                                                    false                   -               at once
 exit 0
 ```

@@ -282,13 +282,15 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'ty
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: mcp-inbox,
- * then drop, then typed. The mcp-inbox leg takes a send only while the seat's own inbox server is
+ * then typed, then drop. The mcp-inbox leg takes a send only while the seat's own inbox server is
  * listening, and writes the message to that inbox without typing; otherwise it is skipped as
- * `no live inbox listener` and the walk moves on. The drop leg writes the same 0600 file and
- * types nothing at all: a receiver that watches its folder — the inbox server where its CLI has
- * an MCP front, the launch's start-of-turn read where it has a hook — takes the message there,
- * and a seat that watches nothing never walks this leg (`src/send/delivery.ts` leaves it out of
- * that seat's order). The typed leg stays the last fallback. The `native` leg is not in the
+ * `no live inbox listener` and the walk moves on. The typed leg is next because it is the leg
+ * that wakes an idle seat: one trigger line, the seat's own drop read, and its signed receipt is
+ * what makes the send `delivered (read)`. The drop leg is last: it writes the same 0600 file and
+ * types nothing at all, so a receiver that watches its folder — the inbox server where its CLI
+ * has an MCP front, the launch's start-of-turn read where it has a hook — takes the message
+ * there, but nothing wakes a seat that is idle. A seat that watches nothing never walks this leg
+ * (`src/send/delivery.ts` leaves it out of that seat's order). The `native` leg is not in the
  * default: a level that names it is the sender choosing the cross-session SendMessage and
  * recording the delivery itself, so `native` is the one leg a declared word may add
  * (`src/policy/types.ts`). The chain is the receiving seat's own — entity, project, team, seat —
@@ -297,7 +299,7 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'ty
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',
   policy: 'delivery-order',
-  fallback: ['mcp-inbox', 'drop', 'typed'],
+  fallback: ['mcp-inbox', 'typed', 'drop'],
 };
 
 /**

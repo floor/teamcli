@@ -78,7 +78,7 @@ and needs no caller check. --dry-run resolves the seat and the
 legs the run would walk, writes no drop file, and types nothing. It appends one
 line to the team log.
 
-A send walks the receiving seat's delivery order — mcp-inbox, drop, typed by
+A send walks the receiving seat's delivery order — mcp-inbox, typed, drop by
 default. A level of that seat's own chain, entity, project, team, seat, may drop
 legs from the order or put the legs it keeps in a different order, and may add
 only native, the sender's own frame: a word naming a leg the order does not have,
@@ -659,7 +659,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
-  // walks; nothing declared leaves mcp-inbox, drop, typed. The words are the receiving team
+  // walks; nothing declared leaves mcp-inbox, typed, drop. The words are the receiving team
   // file's (its own key and the seat's) and the registry project's, read here, and the seat's
   // signed settings say `delivery_order` and `human` in the file's place; a host that hands in a
   // chain decides instead, which is how a test picks an order without a file to write. A record
@@ -850,8 +850,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
  *  only for a sender whose own file declares Claude Code, since only that sender makes the call
  *  the leg is. The mcp-inbox leg is a channel: it writes the seat's inbox drop and waits for its
  *  receipt, and the legs behind it are named as the fallbacks. The where-nothing-is-carried
- *  phrase is unreachable by the default order of any seat — its legs are mcp-inbox, drop,
- *  typed, and each is either named or passed over for a reason — and only an order that holds
+ *  phrase is unreachable by the default order of any seat — its legs are mcp-inbox, typed,
+ *  drop, and each is either named or passed over for a reason — and only an order that holds
  *  none of them prints it. */
 function walkPhrase(order: readonly DeliveryLeg[], cli: string, callerNative: boolean): string {
   const nativeWalkable = cli === 'claude-code' && (SOCKET_SEND || callerNative);

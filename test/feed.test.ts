@@ -217,7 +217,7 @@ describe('team send history log & team feed', () => {
       ms: 0,
       via: 'typed',
       // The walk landed on the typed leg through the inbox ahead of it: no server was listening.
-      // The native leg is not in the order in force — the default is mcp-inbox, drop, typed — so
+      // The native leg is not in the order in force — the default is mcp-inbox, typed, drop — so
       // it is not walked, and nothing about it is recorded.
       failed: [
         'mcp-inbox: no live inbox listener',

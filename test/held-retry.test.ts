@@ -1297,10 +1297,11 @@ describe('team watch promotes an inbox send its seat has read', () => {
 describe('the turn-start read, end to end', () => {
   test('a plain send lands by drop, the installed hook reads it, and its receipt promotes the send', async () => {
     const made = world();
-    // The default order — mcp-inbox, drop, typed — with no inbox listener, so drop takes it.
+    // The default order — mcp-inbox, typed, drop — with no inbox listener would type; the team's
+    // word keeps the typed leg out, so the drop file takes the send and nothing wakes the seat.
     const text = teamText(made.root, lobbyDir(made.home)).replace(
       "# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,\n# then the line is typed. The team's word keeps the default's drop step out.\ndelivery_order: [mcp-inbox, typed]\n",
-      '',
+      "# This scene walks the drop leg: the inbox is tried and skipped for want of a listener, and\n# the team's word keeps the typed step out so the drop file takes the send.\ndelivery_order: [mcp-inbox, drop]\n",
     );
     writeFileSync(join(made.root, '.agents', 'team.yaml'), text);
     const dialled: string[] = [];
