@@ -4124,6 +4124,20 @@ scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
 });
+scene('send.brief-memory', async (place) => {
+  // The fixture's worker is stopped, which is its own refusal; the lead is open, and the
+  // transport is read before the draft or any drop is touched.
+  write(place, TEAM);
+  const path = join(place.root, 'brief.md');
+  writeFileSync(path, 'the whole brief\n');
+  const wrote = writePolicySet(
+    place.home,
+    { level: 'team', target: place.root, teamRoot: place.root, name: 'brief-transport', value: 'memory' },
+    { now: NOW },
+  );
+  expect(wrote.ok).toBe(true);
+  return show(await sent(place, ['lead', '--brief', path], owner, sendHost(place)), 'brief-transport is memory');
+});
 scene('send.held', async (place) => {
   write(place, TEAM);
   // No socket file: a held message is the typed path's own refusal, and a taken frame on a

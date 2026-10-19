@@ -686,7 +686,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       now: host.now(),
     });
     if (transport.transport === 'memory') {
-      return refusedLine(io, MEMORY_TRANSPORT_UNSUPPORTED, report);
+      if (report.json) writeJsonError(io, 'send.brief-memory', `refused: ${MEMORY_TRANSPORT_UNSUPPORTED}`);
+      else io.stderr(`team send: refused: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`);
+      return 1; // exit: send.brief-memory
     }
   }
   let body: string;
@@ -2987,12 +2989,6 @@ function notSubmitted(io: Io, dir: string, who: string, seat: string, result: De
  *  and not written down. */
 function refuse(io: Io, dir: string | null, who: string, reason: string, host: SendHost, report: Report): number {
   if (dir !== null) logLine(dir, 'send', who, `refused: ${reason}`, host.now());
-  return refusedLine(io, reason, report);
-}
-
-/** The refusal line alone, for a refusal that leaves the tree as it found it: the brief
- *  transport's memory refusal writes no log line, and the contract keeps one site for the id. */
-function refusedLine(io: Io, reason: string, report: Report): number {
   if (report.json) writeJsonError(io, 'send.refused', `refused: ${reason}`);
   else io.stderr(`team send: refused: ${reason}\n`);
   return 1; // exit: send.refused

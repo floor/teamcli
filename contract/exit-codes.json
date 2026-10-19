@@ -3553,6 +3553,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.brief-memory",
+      "meaning": "a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback",
+      "trigger": "team send worker --brief brief.md"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.client-refused",
       "meaning": "a client grant invocation was refused before any record was written",
       "trigger": "team send --client missing.json --key client.key orchestrator@floor hello"
