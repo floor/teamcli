@@ -233,12 +233,22 @@ The watch types fixed lines and never a report.
   marker beside the drop is its ownership evidence: a trigger another sender process left may be
   submitted, and another person's draft is never typed. The retry is bounded, and giving up says
   the drop's path. The default nudge body `NUDGE_TEXT` is never typed.
+- **The unread wake**: the same line, `Run team drops --read --seat <seat> --session
+  <session> and do that.`, typed once for a seat whose message has had no signed receipt for
+  `watch.unread_after` seconds (600 when the file omits it) and whose box is free. It is the
+  same delivery the retry makes, with the same status, screen, seat-lock and human-pane rules,
+  and it skips a message a held send's retry owns (a `.pending` marker). One line serves every
+  message due for that seat at that instant; the history records `sent (unconfirmed)` until a
+  signed receipt verifies, then `delivered (read)`. At twice the window a message still unread
+  is reported once to its sender and to the team's lead as a signed Runtime mailbox record —
+  never by typing into a pane — and `--no-nudge` skips the wake but still writes the report.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
 orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that
 holds the watch's own typed line is sent, not typed into twice, and only by the process that
-typed it; the held-send retry is the exception, proved by its marker above. `--no-nudge` types
-nothing, the retry included, and writes no drop; `--no-notify` drops the operator's desktop
+typed it; the held-send retry and the unread wake are the exceptions, proved by their markers
+above. `--no-nudge` types nothing, the retry and the unread wake included, and writes no drop;
+`--no-notify` drops the operator's desktop
 notification alone. Neither flag removes a log line or a report from `team status`.
 
 ### 3.7 The watch's record
@@ -339,14 +349,16 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    (`CheckContext`), `src/watch/checks/idle.ts`. *Proof:* `test/watch.test.ts` (a condition said
    once, and again only after two passes that cleared), `test/watch-idle-once.test.ts` (the
    repeat and the owner once).
-9. **The watch MUST type only its fixed lines and a held send's exact trigger, and MUST NOT type
-   into a dialog or a box that holds unsent text.** The nudge, the ring and the held-send retry
-   are the only delivery paths; the retry MUST use the persisted marker as its ownership
-   evidence, MUST require an idle or done status and a readable idle or exact-trigger screen, and
-   MUST hold the seat lock; `--no-nudge` MUST suppress it too. *Source:* `src/watch/pass.ts`
-   (`NUDGE_TEXT`, `RING_TEXT`), `src/watch/retry.ts`, `src/send/native.ts` (`triggerLine`), the
-   watch command. *Proof:* `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`,
-   `test/held-retry.test.ts`.
+9. **The watch MUST type only its fixed lines and the seat's own drop read (a held send's retry
+   or the unread wake), and MUST NOT type into a dialog or a box that holds unsent text.** The
+   nudge, the ring, the held-send retry and the unread wake are the only delivery paths; the
+   retry MUST use the persisted marker as its ownership evidence, and the wake MUST leave a
+   message a retry marker owns alone; both MUST require an idle or done status and a readable
+   idle or exact-trigger screen, and MUST hold the seat lock; `--no-nudge` MUST suppress the
+   wake too. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `RING_TEXT`), `src/watch/retry.ts`,
+   `src/watch/unread.ts`, `src/send/native.ts` (`triggerLine`), the watch command. *Proof:*
+   `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`, `test/held-retry.test.ts`,
+   `test/unread-wake.test.ts`.
 10. **A second watch MUST refuse while the first is alive.** The recorded pane, a heartbeat no
     older than two in-force intervals, or a live pid is what counts. *Source:*
     `src/commands/watch.ts`. *Proof:* `test/watch-nudge-boundaries.test.ts` (the second-watch

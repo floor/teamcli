@@ -6,8 +6,9 @@ whose end holds. A temporary seat is left as it is: the owner removes it.
 
 A report is never typed into a seat. It goes to `.agents/team.log` and to the desktop
 notification; the operator reads the log. The watch types two fixed lines of its own — the ring
-and a work drop's line — and neither carries a report's text; a held send's retry types the
-sender's own trigger line, which names the drop and carries no report either. A message already waiting under
+and a work drop's line — and neither carries a report's text; a held send's retry and the wake of
+a seat whose message has gone unread type the sender's own trigger line, which names the drop and
+carries no report either. A message already waiting under
 `.agents/messages/<seat>/` is the ring: when that seat's box is an empty idle prompt, the watch
 types `Team: run team messages` — and not the body — so the seat reads its messages. The work
 drop reaches each idle worker once `idle_first` has passed and again every `idle_repeat` when
@@ -263,7 +264,8 @@ the one in the mailbox.
 The watch types two fixed lines, and never a report: the ring, when a message waits for a seat,
 and a work drop's line, when an idle worker is due one. A retry types a third, the seat's own
 drop read — `Run team drops --read --seat <seat> --session <session> and do that.` — for a drop
-this watch is delivering. The lines around them:
+this watch is delivering, and the unread wake types that same line for a seat whose message has
+been unread for `watch.unread_after` (ten minutes by default). The lines around them:
 
 | Line | Made when |
 | --- | --- |
@@ -288,6 +290,8 @@ this watch is delivering. The lines around them:
 | `<seat>: a dropped send from <from> was not read (no receipt within 30m); the drop file is at <path>` | thirty minutes passed with no signed receipt on a `drop`-leg marker: the marker is cleared, the record stays in the folder, and nothing is ever typed for it |
 | `<seat>: a held send from <from> was sent on retry (trigger taken, no read receipt yet)` / `<seat>: an inbox send from <from> was sent on retry (trigger taken, no read receipt yet)` | this pass typed the drop's trigger line and sent it: a held send once the box was free, or an inbox message still unread past its ten-minute fallback window; the history records `sent (unconfirmed)`, never a read; when the retry moved an unsent draft, its receipt follows on the same line (`; the unsent text was pasted back`, or `; the unsent text could not be put back; its copy is at <path>`) and in the history note |
 | `<seat>: a held send from <from> was read on retry (receipt)` / `<seat>: an inbox send from <from> was read on retry (receipt)` | the retry's line is the seat's own `team drops --read`, and its signed receipt landed inside the retry's window: the history records `delivered (read)`, the marker is cleared, and nothing is ever typed again |
+| `<seat>: a message from <from> was unread and one wake line was sent (trigger taken, no read receipt yet)` / `<seat>: a message from <from> was unread and was read on the wake (receipt)` | a message still without a signed receipt `watch.unread_after` after it landed (ten minutes by default): the pass typed the seat's own drop read — the same `Run team drops --read --seat <seat> --session <session> and do that.` a retry types — into a free box; the history records `sent (unconfirmed)` with `trigger taken, no read receipt yet`, or `delivered (read)` when the signed receipt verifies; a draft the wake moved is pasted back, as a retry's is |
+| `<seat>: a message from <from> was still unread after <n> min; reported to <sender> and <lead>` | the message is still unread at twice `watch.unread_after`: one signed Runtime mailbox record per target — its sender's own when this team holds that seat (the owner's own for the owner's messages) and the team's lead — is written under `.agents/messages/`, and `team messages` lists it; nothing is typed, so `--no-nudge` writes it too |
 | `<seat>: a held send from <from> was not delivered (<why>); the drop file is at <path>; send it again` (the word is `an inbox send` for the fallback) | the retry's bound ended — three typed tries, thirty minutes, a trigger that would not fit in a pane, or a drop file moved away — and the message waits where the line names it |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
@@ -296,6 +300,18 @@ A message already waiting under `.agents/messages/<seat>/` is not a report. When
 mailbox is the one the Runtime writes. A report is never typed. A seat the team file marks `human: true` is never typed into: a work drop or ring addressed there is not typed, and the report says whose pane was spared; a held send's retry is given up on with the reason, and its message waits in the drop file.
 
 A held send is not a report either. When `team send` found the box busy — a draft, a dialog, a trigger the seat did not take — it ended `held`, `not-submitted` or `unreachable` and left the drop and a record beside it. Each pass delivers one such drop per seat once that seat's box is free — an empty idle prompt, the same trigger still in it unsent, or text its owner left, which the pass copies beside the drop, clears with the profile's measured keys and pastes back exactly as `team send` does; a box it can neither claim nor copy faithfully is left alone — bounded at three typed tries and thirty minutes from the send, and a drop that runs out is named by its path so the message can be sent again. A message the delivery order's `mcp-inbox` leg left is not typed while the seat's own client may still read it: the watch promotes a receipt once — one `delivered (read)` history line, nothing typed — and a message still unread ten minutes after the send is handed to the same retry, whose history line records `failed: mcp-inbox: no receipt within 10m`. A message the delivery order's `drop` leg left is never typed, on that schedule or any other: its marker waits for the seat's own signed receipt, and thirty minutes after the send it is given up on with the drop file's path. A typed record always goes before an inbox one, so an inbox message never delays a held send's retry. `--no-nudge` types nothing, so it retries nothing; the promotion types nothing either way and runs in that watch too.
+
+A delivery that found no busy box is watched the same way. A message still without a signed
+receipt `watch.unread_after` after it landed — ten minutes by default — gets one wake: the same
+`team drops --read` line a retry types, under the retry's rules (a readable idle prompt or that
+line itself unsent, status `idle` or `done`, the seat lock taken, never a human's pane, a draft
+copied and pasted back). One wake line serves every message due for that seat, and a message a
+held send's retry owns is not woken twice: the retry's marker is the claim. The wake records
+`sent (unconfirmed)` until a signed receipt verifies, never a read before one. At twice
+`watch.unread_after` a message still unread is reported once to its sender and to the team's lead
+as a signed Runtime mailbox record — never by typing into a pane — and the words keep the states
+apart: a message with a wake marker says when its wake line was sent, one without says no wake
+line was typed. `--no-nudge` skips the wake but still writes the report.
 
 ## Budgets
 

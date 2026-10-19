@@ -32,6 +32,7 @@ import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
+import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
@@ -898,6 +899,19 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           confirmTakenDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
+          // A delivery is a deposit until the seat's signed receipt follows: a message still
+          // unread `watch.unread_after` after it landed gets one typed wake, and one still unread
+          // at twice that window is reported to its sender and the team's lead. The report is a
+          // mailbox record, so a watch without nudges keeps that word; the wake is typing, and
+          // `--no-nudge` leaves it out.
+          await wakeUnreadDrops(
+            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
+            { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') ? { noNudge: true } : {}) },
+          );
+          reportUnreadDrops(
+            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
+            { unreadAfter: inForce.unreadAfter },
+          );
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
