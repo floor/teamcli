@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { describeCaller, fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
 import { appendConfigChanged } from '../config/events.ts';
+import { seatOverridesOf } from '../config/apply.ts';
 import { agentIdOf, readSeatSettings } from '../config/read.ts';
 import { CONFIG_KEYS, getConfigSpec } from '../config/registry.ts';
 import type { ApplyKind, ConfigKey } from '../config/registry.ts';
@@ -27,7 +28,7 @@ import type { DelegateSources } from '../delegate.ts';
 import { currentTeam } from '../file/current.ts';
 import type { Current } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
-import type { Problem } from '../file/types.ts';
+import type { Problem, Seat } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
@@ -309,6 +310,20 @@ function orderedSettings(settings: readonly PlannedConfigSetting[]): PlannedConf
   return [...settings].sort((a, b) => CONFIG_KEYS.indexOf(a.key) - CONFIG_KEYS.indexOf(b.key));
 }
 
+/**
+ * The file's seats with each seat's signed nickname standing where the file's word did. A
+ * nickname write is checked against the roster, and the roster a send addresses is the
+ * composed one: a word another seat signed must collide with the new word here, or two seats
+ * would answer one address. A record that does not verify signs no word, as it reads nowhere
+ * else, so a broken record never blocks a write the file's own rules admit.
+ */
+function addressedRoster(home: string, root: string, seats: readonly Seat[]): Seat[] {
+  return seats.map((seat) => {
+    const signed = seatOverridesOf({ home, root, seat: seat.name }).nickname;
+    return signed === undefined ? seat : { ...seat, nickname: signed };
+  });
+}
+
 function pairsWord(settings: readonly PlannedConfigSetting[]): string {
   return settings.map((setting) => `${setting.key}=${sayConfigValue(setting.value)}`).join(', ');
 }
@@ -380,9 +395,10 @@ function executeWrite(
       agentId,
       seat,
     });
+    const roster = addressedRoster(home, current.root, team.seats);
     const checked: PlannedConfigSetting[] = [];
     for (const setting of plan.settings) {
-      const check = checkSeatSetting(setting.key, setting.value, seat, team.seats, chain);
+      const check = checkSeatSetting(setting.key, setting.value, seat, roster, chain);
       if (!check.ok) {
         if (check.refusal.id === 'settings.policy') return policyExit(io, json, check.refusal.why);
         return planExit(io, json, 'value', check.refusal.why);

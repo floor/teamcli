@@ -340,6 +340,26 @@ describe('the write verbs', () => {
     });
   });
 
+  test('a nickname another seat signed collides, even when the file does not carry it', async () => {
+    registerLead();
+    const worker = registerAgent(home, {
+      ...agentInit(),
+      name: 'Worker One',
+      reach: { team: teamIdOf(root), seat: 'worker', session: 'acme', pane: 'w3:p2', address: null },
+    }).id;
+    const plan = planConfigSet(home, { level: 'seat', target: worker, settings: [{ key: 'nickname', value: 'Hera' }] });
+    if (!plan.ok) throw new Error(plan.why);
+    const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T10:00:00Z') });
+    if (!written.ok) throw new Error(written.why);
+
+    const set = await run(['set', 'lead', 'nickname=Hera']);
+
+    // The roster a send addresses is the composed one: the worker's signed word is already
+    // "Hera", so the write would make @Hera reach two seats and is refused before it is signed.
+    expect(set.code).toBe(2);
+    expect(set.err).toContain('seat "lead": the nickname "Hera" is also on seat "worker"');
+  });
+
   test('a model word is recorded as the launch id it names', async () => {
     registerLead();
     const set = await run(['set', 'lead', 'model=claude-haiku-5-5']);
