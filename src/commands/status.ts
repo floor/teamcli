@@ -10,6 +10,7 @@ import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive } from '../dev_mode.ts';
+import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -378,7 +379,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   }
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides rows fold into quiet notes — a team running so does not take the owner step they
-  // name — and the policy, not the variable, decides once a value governs.
+  // name — and the policy, not the variable, decides once a value governs. A machine record
+  // stands above both, and its own line names the mode, the moment and the owner provenance.
+  const machineMode = sources.home !== undefined ? readDevelopmentMode(sources.home) : null;
+  const machineNote = machineMode === null ? null : developmentModeNote(machineMode);
+  if (machineNote !== null) comparison.notes.push(machineNote);
   const record = approvalAndOverrideRows(
     standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
     overrides,
