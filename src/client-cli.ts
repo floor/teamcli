@@ -118,6 +118,7 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean)
     keyId: key.key.keyId,
     keyDir: key.key.keyDir,
     ...(args.values.expires !== undefined ? { expires: args.values.expires } : {}),
+    ...(args.flags.has('inbox') ? { inbox: true } : {}),
   });
   if (!result.ok) {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(result.why), null);

@@ -31,8 +31,18 @@ import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/k
 /** The domain tag client-grant and client-revocation signatures carry. */
 export const CLIENT_GRANT_DOMAIN = 'team-client-grant-v1\n';
 
-/** The only vocabulary version this build writes and honors. */
+/** The send-only vocabulary this build writes by default and honors. */
 export const CLIENT_GRANT_VOCABULARY_VERSION = 1;
+
+/** The vocabulary that also admits the client's own inbox: `send` and `messages`, exactly. It is
+ *  written only when the owner asks for it (`--inbox`); a v1 grant is never widened in place. */
+export const CLIENT_INBOX_VOCABULARY_VERSION = 2;
+
+/** The ops a vocabulary-2 grant carries, exactly, in this order. */
+export const CLIENT_INBOX_ALLOWED_OPS = ['send', 'messages'] as const;
+
+/** One operation a client grant can admit. */
+export type ClientOp = 'send' | 'messages';
 
 /** The owner-directed runtime line. It states the limit; it is not a claim of isolation. */
 export const KEY_ISOLATION_LINE = 'key isolation: not enforced (pane guard pending)';
@@ -108,11 +118,12 @@ export type ClientGrantRecord = {
   teamId: string;
   recipientId: string;
   recipientSeat: string;
-  allowedOps: ['send'];
+  /** `['send']` on vocabulary 1, `['send','messages']` on vocabulary 2. */
+  allowedOps: ClientOp[];
   allowedRoles: ['orchestrator'];
   issued: string;
   expires: string;
-  vocabulary: 1;
+  vocabulary: 1 | 2;
 };
 
 /** One verified appended revocation. */
@@ -130,6 +141,9 @@ export type ClientGrantRequest = {
   keyDir: string;
   /** Absent means the 7-day default; anything past the 7-day cap is refused. */
   expires?: string;
+  /** When true, the grant is vocabulary 2 and carries `send` and `messages`; omitted or false
+   *  writes the shipped vocabulary 1, send only, byte-shape unchanged. */
+  inbox?: boolean;
 };
 
 export type ClientGrantOptions = { now?: Date; key?: KeyObject };
@@ -517,7 +531,7 @@ function onDiskGrant(grant: ClientGrantRecord): Record<string, Json> {
     allowed_roles: [...grant.allowedRoles],
     issued: grant.issued,
     expires: grant.expires,
-    vocabulary: CLIENT_GRANT_VOCABULARY_VERSION,
+    vocabulary: grant.vocabulary,
   };
 }
 
@@ -603,6 +617,7 @@ export type ClientGrantPlan = { ok: true; grant: ClientGrantRecord } | { ok: fal
 export function planClientGrant(home: string, request: ClientGrantRequest, options: ClientGrantOptions = {}): ClientGrantPlan {
   const now = options.now ?? new Date();
   const nowMs = now.getTime();
+  const inbox = request.inbox === true;
   if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
   if (request.clientId !== CLIENT_SLICE_CLIENT_ID) {
     return refusal(`this build admits one client principal, "${CLIENT_SLICE_CLIENT_ID}", not "${request.clientId}"`);
@@ -645,11 +660,11 @@ export function planClientGrant(home: string, request: ClientGrantRequest, optio
       teamId: coordinator.coordinator.teamId,
       recipientId: coordinator.coordinator.recipientId,
       recipientSeat: coordinator.coordinator.recipientSeat,
-      allowedOps: [...CLIENT_ALLOWED_OPS],
+      allowedOps: inbox ? [...CLIENT_INBOX_ALLOWED_OPS] : [...CLIENT_ALLOWED_OPS],
       allowedRoles: [...CLIENT_ALLOWED_ROLES],
       issued: now.toISOString(),
       expires,
-      vocabulary: CLIENT_GRANT_VOCABULARY_VERSION,
+      vocabulary: inbox ? CLIENT_INBOX_VOCABULARY_VERSION : CLIENT_GRANT_VOCABULARY_VERSION,
     },
   };
 }
@@ -724,9 +739,16 @@ export function readClientGrant(home: string, grantId: string): ClientGrantRead 
 export function canonicalClientGrant(home: string, presented: { grant: ClientGrantRecord; signature: string }): ClientGrantRead {
   const canonical = readClientGrant(home, presented.grant.grantId);
   if (!canonical.ok) return canonical;
-  const fields: (keyof ClientGrantRecord)[] = ['grantId', 'clientId', 'entity', 'publicKey', 'keyId', 'keyDir', 'teamId', 'recipientId', 'recipientSeat', 'issued', 'expires'];
+  const fields: (keyof ClientGrantRecord)[] = ['grantId', 'clientId', 'entity', 'publicKey', 'keyId', 'keyDir', 'teamId', 'recipientId', 'recipientSeat', 'issued', 'expires', 'vocabulary'];
   for (const field of fields) {
     if (canonical.grant[field] !== presented.grant[field]) {
+      return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (${field} differs)`);
+    }
+  }
+  // The op list and the role list are signed fields too: a presented copy that adds or drops an
+  // op, or names another role, is not the canonical record even when every scalar matches.
+  for (const field of ['allowedOps', 'allowedRoles'] as const) {
+    if (canonical.grant[field].join(',') !== presented.grant[field].join(',')) {
       return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (${field} differs)`);
     }
   }
@@ -1006,13 +1028,24 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
   if (typeof fields.team_id !== 'string' || !CLIENT_TEAM_ID_PATTERN.test(fields.team_id)) return null;
   if (typeof fields.recipient_id !== 'string' || !CLIENT_AGENT_ID_PATTERN.test(fields.recipient_id)) return null;
   if (fields.recipient_seat !== CLIENT_SLICE_SEAT) return null;
-  if (!Array.isArray(fields.allowed_ops) || fields.allowed_ops.length !== 1 || fields.allowed_ops[0] !== 'send') return null;
+  if (!Array.isArray(fields.allowed_ops)) return null;
+  const ops = fields.allowed_ops as unknown[];
   if (!Array.isArray(fields.allowed_roles) || fields.allowed_roles.length !== 1 || fields.allowed_roles[0] !== 'orchestrator') return null;
   if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
   if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
   if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
   if (Date.parse(fields.expires) > Date.parse(fields.issued) + CLIENT_EXPIRY_MAX_MS) return null;
-  if (fields.vocabulary !== CLIENT_GRANT_VOCABULARY_VERSION) return null;
+  // The vocabulary is exact: 1 is send only, 2 is send and messages. Any other value, and any
+  // op list that is not exactly its own shape, is not a grant this build honors — so a crafted
+  // v2 record missing `messages` is refused, and an old build refuses a v2 record whole.
+  let allowedOps: ClientOp[];
+  if (fields.vocabulary === CLIENT_GRANT_VOCABULARY_VERSION) {
+    if (ops.length !== 1 || ops[0] !== 'send') return null;
+    allowedOps = ['send'];
+  } else if (fields.vocabulary === CLIENT_INBOX_VOCABULARY_VERSION) {
+    if (ops.length !== 2 || ops[0] !== 'send' || ops[1] !== 'messages') return null;
+    allowedOps = ['send', 'messages'];
+  } else return null;
   if (typeof envelope.signature !== 'string') return null;
   if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw as Json), envelope.signature, key)) return null;
   return {
@@ -1026,11 +1059,11 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
       teamId: fields.team_id,
       recipientId: fields.recipient_id,
       recipientSeat: fields.recipient_seat,
-      allowedOps: ['send'],
+      allowedOps,
       allowedRoles: ['orchestrator'],
       issued: fields.issued,
       expires: fields.expires,
-      vocabulary: 1,
+      vocabulary: fields.vocabulary as 1 | 2,
     },
     signature: envelope.signature,
   };

@@ -39,6 +39,9 @@ const BRIEF_SHA256 = /^[0-9a-f]{64}$/;
 /** The `kind` a thread's close carries. A close is not a message and never carries a body. */
 export const CLOSE_KIND = 'thread-close';
 
+/** The rule line a seat's reply onto a client thread carries: evidence text, not authority. */
+export const CLIENT_REPLY_RULE = 'a reply on a client thread, to the client that opened it';
+
 /**
  * One message record's signed payload. The two registry ids are `null` only where the registry
  * holds none — the owner, or a seat the store has no record for yet; the rule that admitted the
@@ -74,6 +77,10 @@ export type RecordPayload = {
   /** The external client principal that wrote the record, when one did: its client id and the
    *  grant id that admitted it. A record from a seat or the owner carries none. */
   from_client?: { client_id: string; grant_id: string };
+  /** The external client principal a record is written to, on a reply onto a client thread: the
+   *  immutable client id and the grant that opened the thread. A record carries `from_client` or
+   *  `to_client`, never both. */
+  to_client?: { client_id: string; grant_id: string };
 };
 
 export type SignedRecord = { payload: RecordPayload; signature: string };
@@ -179,19 +186,40 @@ export function recordPayloadOf(value: unknown): RecordPayload | null {
     thread: value.thread as string,
   };
   if (value.in_reply_to !== undefined) payload.in_reply_to = value.in_reply_to as string;
+  // A record is one side of a client exchange, never both: the writer and the addressee are
+  // different principals, and a payload claiming both is not one this version writes. The two
+  // maps have exactly the same strict shape.
+  if (value.from_client !== undefined && value.to_client !== undefined) return null;
   if (brief) {
     payload.brief_sha256 = value.brief_sha256 as string;
     payload.incarnation = value.incarnation as string;
   }
   if (value.from_client !== undefined) {
-    if (!isRecordValue(value.from_client)) return null;
-    const fromClient = value.from_client;
-    if (typeof fromClient.client_id !== 'string' || !nonEmpty(fromClient.client_id)) return null;
-    if (typeof fromClient.grant_id !== 'string' || !nonEmpty(fromClient.grant_id)) return null;
-    if (Object.keys(fromClient).some((key) => key !== 'client_id' && key !== 'grant_id')) return null;
-    payload.from_client = { client_id: fromClient.client_id, grant_id: fromClient.grant_id };
+    const fromClient = clientMapOf(value.from_client);
+    if (fromClient === null) return null;
+    // The only principal shape a client record has: the client address and no agent id. A
+    // payload with `from: owner` or a non-null `from_id` beside `from_client` is not one this
+    // version writes, and is refused whole rather than read as a client record.
+    if (payload.from !== `client:${fromClient.client_id}` || payload.from_id !== null) return null;
+    payload.from_client = fromClient;
+  }
+  if (value.to_client !== undefined) {
+    const toClient = clientMapOf(value.to_client);
+    if (toClient === null) return null;
+    // A reply onto a client thread is always addressed to the client address with no seat id.
+    if (payload.to !== `client:${toClient.client_id}` || payload.to_id !== null) return null;
+    payload.to_client = toClient;
   }
   return payload;
+}
+
+/** The `{client_id, grant_id}` map a client record carries, or null when it is not exactly one. */
+function clientMapOf(value: unknown): { client_id: string; grant_id: string } | null {
+  if (!isRecordValue(value)) return null;
+  if (typeof value.client_id !== 'string' || !nonEmpty(value.client_id)) return null;
+  if (typeof value.grant_id !== 'string' || !nonEmpty(value.grant_id)) return null;
+  if (Object.keys(value).some((key) => key !== 'client_id' && key !== 'grant_id')) return null;
+  return { client_id: value.client_id, grant_id: value.grant_id };
 }
 
 /** The whole signed envelope: `{payload, signature}` and nothing else. */
@@ -420,6 +448,7 @@ export function recordHolds(path: string, expected: RecordPayload, home: string,
     if (held[field] !== expected[field]) return false;
   }
   if (JSON.stringify(held.from_client) !== JSON.stringify(expected.from_client)) return false;
+  if (JSON.stringify(held.to_client) !== JSON.stringify(expected.to_client)) return false;
   if (!sameFolder(held.root, expected.root)) return false;
   return verifyRecord(read.record, key.key);
 }

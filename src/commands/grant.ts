@@ -8,7 +8,7 @@ import { runStandingGrant } from '../permissions/manage.ts';
 
 export const USAGE = `Usage: team grant <seat> --scope <act,...> [--dry-run] [--json]
        team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
-       team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--json]
+       team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--inbox] [--json]
 
 Exits 0 when the grant is written or the dry-run plan is printed, 1 when it is refused, 2 when the invocation or team file is invalid.
 `;
@@ -25,7 +25,7 @@ export default grant;
 export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEditOptions = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name', 'client', 'entity', 'public-key'], ['dry-run', 'json']);
+  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name', 'client', 'entity', 'public-key'], ['dry-run', 'inbox', 'json']);
   const dryRun = args.flags.has('dry-run');
   let result: 'ok' | 'refused' | 'invalid';
   if (args.values.client !== undefined) {
@@ -67,6 +67,7 @@ export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEdit
  */
 function invocationProblem(args: Args): string | null {
   if (args.error !== undefined) return args.error;
+  if (args.flags.has('inbox')) return '--inbox belongs to the --client form: a grant that reads the client inbox';
   if (args.rest.length !== 1) {
     return args.values.capabilities === undefined ? 'a seat and --scope are required' : 'one seat or @team is required';
   }
