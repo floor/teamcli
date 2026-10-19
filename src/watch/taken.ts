@@ -11,7 +11,7 @@
 // again.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, receiptHeld } from '../mcp/inbox.ts';
 import { showsDrop } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { sawSubmission, triggerLine } from '../send/native.ts';
@@ -35,7 +35,7 @@ function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string
   // The read itself: the trigger the send typed is the seat's own drop read, so a signed receipt
   // that verifies for this message, seat, checkout and session is the sign the send's window
   // missed. It needs no pane — a seat that already ran the read is done, not unconfirmed.
-  if (scene.home !== undefined && receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, scene.home)) {
+  if (scene.home !== undefined && receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, scene.home, claimBindingIn(scene.root, scene.session, drop.to, drop.id))) {
     clearTaken(dropDir, drop.id);
     appendHistory(scene.team.project, scene.root, scene.home, {
       ts: scene.now.toISOString(),

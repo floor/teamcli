@@ -24,7 +24,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
-import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
 import {
   clearPending,
   PENDING_MAX_AGE_MS,
@@ -157,7 +157,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
     const home = scene.home;
     const receipt = home === undefined
       ? undefined
-      : (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home);
+      : (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
@@ -259,7 +259,7 @@ export function promoteInboxDrops(scene: RetryScene): void {
       // send's proof and never this one's.
       if (drop.leg === undefined) continue;
       if (scene.home === undefined) continue;
-      if (!receiptHeld(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session }, scene.home)) continue;
+      if (!receiptHeld(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session }, scene.home, claimBindingIn(scene.root, scene.session, seat.name, drop.id))) continue;
       clearPending(dropDir, drop.id);
       if (scene.home !== undefined) {
         appendHistory(scene.team.project, scene.root, scene.home, {

@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { listUnacked } from '../src/commands/messages.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { generalBriefRecord } from '../src/launch/general-brief.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -23,8 +24,9 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
 import { dropMessage, readTriggerLine } from '../src/send/native.ts';
 import { markPending, pendingDropPath } from '../src/send/pending.ts';
-import { signRecord } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, writeReceipt } from '../src/send/record.ts';
 import { takenDropPath } from '../src/send/taken.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { reportUnreadDrops, reportedPath, wakePath, wakeUnreadDrops } from '../src/watch/unread.ts';
@@ -262,6 +264,60 @@ describe('wakeUnreadDrops', () => {
     await wakeUnreadDrops(scene, { unreadAfter: N });
     expect(one.typed).toEqual([line]);
     expect(one.enters).toBe(1);
+  });
+
+  test('a receipt that does not bind the seat\'s current claim is no read, and does not hide the wake', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const incarnation = 'inc_aaaaaaaaaaaa';
+    const record = generalBriefRecord({
+      to: 'lead',
+      root: realpathSync(made.root),
+      session: 'acme',
+      at: new Date(NOW.getTime() - 11 * MIN).toISOString(),
+      incarnation,
+    });
+    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    dropMessage(dropDir, record.id, `${JSON.stringify(signRecord(record, made.home), null, 2)}\n`);
+    utimesSync(join(dropDir, record.id), new Date(), new Date(NOW.getTime() - 11 * MIN));
+    updateState(made.dir, (state) => {
+      const one = (state.sessions['acme'] ??= emptySession());
+      (one.briefs ??= {})['lead'] = {
+        id: record.id,
+        at: record.at,
+        incarnation,
+        epoch: 'run_bbbbbbbbbbbb',
+        sha256: record.brief_sha256 as string,
+        attempt: 0,
+        stage: 'ready',
+        superseded: [],
+      };
+    });
+    // A read of an earlier delivery: it verifies for this message, seat, checkout and session,
+    // but it was written under no claim, so it is not a read of the delivery the claim names.
+    const stale = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: record.id,
+      to: 'lead',
+      root: realpathSync(made.root),
+      session: 'acme',
+      at: NOW.toISOString(),
+    }, made.home);
+    writeReceipt(dropDir, stale, made.home);
+
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const scene = sceneOf(made, team, one, said);
+
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+
+    // The claim-bound reading still lists the delivery as unread, and the wake's own receipt
+    // check agrees: the stale file is not promoted into `delivered (read)`.
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+    expect(one.enters).toBe(1);
+    expect(said).toEqual(['lead: a message from the launch was unread and one wake line was sent (trigger taken, no read receipt yet)']);
+    expect(existsSync(wakePath(dropDir, record.id))).toBe(true);
   });
 
   test('a wake whose trigger writes the read receipt is delivered (read), never merely sent', async () => {

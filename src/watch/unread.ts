@@ -40,7 +40,7 @@ import {
 import { dirname, join } from 'node:path';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { isBareShellPane } from '../send/daemon.ts';
@@ -250,7 +250,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         if (one.id !== audited.message.id) take(one.id);
       }
       const { message, payload } = audited;
-      const receipt = (): boolean => receiptHeld(dropDir, message.id, context, home);
+      // A receipt for the seat's current brief counts only under that claim: the reading that
+      // found this message unread applied the same binding, so a stale receipt of an earlier
+      // delivery cannot become the wake's read here.
+      const binding = claimBindingIn(scene.root, scene.session, seat.name, message.id);
+      const receipt = (): boolean => receiptHeld(dropDir, message.id, context, home, binding);
       const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
         submitHeld: true,
         dropPath: join(dropDir, message.id),

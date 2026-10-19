@@ -22,7 +22,7 @@
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadTeamFile } from '../file/load.ts';
-import { inboxLive, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, inboxLive, receiptHeld } from '../mcp/inbox.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -327,7 +327,7 @@ async function expireOne(
             (status === 'idle' || status === 'done') &&
             (kind === 'idle' || kind === 'unsent');
           if (free) {
-            const receipt = (): boolean => receiptHeld(dropDir, record.id, { to: record.to, root: record.root, session: record.session }, home);
+            const receipt = (): boolean => receiptHeld(dropDir, record.id, { to: record.to, root: record.root, session: record.session }, home, claimBindingIn(record.root, record.session, record.to, record.id));
             const result = await deliverTrigger(hostOf(scene, record.session), pane, line, record.cli, { receipt, dropPath: recordPath });
             if (result.outcome === 'delivered') {
               // The fallback's trigger is the seat's own receipt-writing read. A receipt that

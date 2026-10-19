@@ -23,6 +23,7 @@ import {
   GENERAL_BRIEF_RULE,
   type CurrentBriefClaim,
 } from '../launch/general-brief.ts';
+import type { BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
@@ -437,11 +438,27 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
  * message key: the one proof an `inbox_read` or a `team messages` read leaves before the body is
  * shown. A file at a receipt's name that does not parse, that was not signed by this key, or that
  * names another message, seat, checkout or session proves nothing — the send must not report a
- * read it cannot point at.
+ * read it cannot point at. When `id` names the seat's current general-brief claim, `brief`
+ * narrows the receipt to that claim — a read of an earlier delivery is not a read of this one —
+ * and every other message passes none.
  */
-export function receiptHeld(dropDir: string, id: string, context: StatusContext, home: string): boolean {
+export function receiptHeld(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  home: string,
+  brief?: BriefBinding,
+): boolean {
   const key = messageKeyState(home);
-  return key.kind === 'key' && isRead(dropDir, id, context, key.key);
+  return key.kind === 'key' && isRead(dropDir, id, context, key.key, brief);
+}
+
+/** The claim binding a receipt must carry when `id` names the seat's current brief; undefined for
+ *  every other message. This is the same binding `listUnread` applies when it decides what waits,
+ *  so a reader that calls it cannot promote a stale receipt the reading already refused. */
+export function claimBindingIn(root: string, session: string, seat: string, id: string): BriefBinding | undefined {
+  const claim = currentClaimIn(root, session, seat);
+  return claim !== null && claim.id === id ? briefBindingOf(claim) : undefined;
 }
 
 /**
