@@ -29,9 +29,9 @@ describe('Codex launch and captured screens', () => {
     expect(codex.mcpInbox).toEqual({
       launchArgs: [
         '-c',
-        'mcp_servers.team_inbox.command="{command}"',
+        'mcp_servers.team_inbox.command="{command_json}"',
         '-c',
-        'mcp_servers.team_inbox.args=["{entry}","mcp","serve","--seat","{seat}"{file_args}]',
+        'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}]',
       ],
       add: null,
       target: null,
@@ -48,6 +48,20 @@ describe('Codex launch and captured screens', () => {
       'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
       + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper"]\'',
+    );
+  });
+  test('a quote or backslash in a structured value is escaped inside the TOML string', () => {
+    expect(
+      launchCommand(codex, 'codex', 'Rules.', undefined, {
+        seat: 'helper',
+        session: 'acme',
+        command: '/opt/my "bun"',
+        entry: '/src/with \\ backslash/cli.ts',
+      }),
+    ).toBe(
+      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-daemon --no-alt-screen'
+      + ' -c \'mcp_servers.team_inbox.command="/opt/my \\"bun\\""\''
+      + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper"]\'',
     );
   });
   test('a launch that read a team file names it to the server, inside the -c array', () => {

@@ -8,7 +8,7 @@ import { standingOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
-import { runRestart, USAGE, type RestartSources } from '../src/commands/restart.ts';
+import { realSources as restartRealSources, runRestart, USAGE, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -84,6 +84,14 @@ type Fixture = {
 const made: string[] = [];
 afterEach(() => {
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('the real restart launch', () => {
+  test('registers a seat inbox with the team file the run read', () => {
+    // Without this, a real restart leaves every file-route CLI unregistered: the launch host
+    // forwards `registerInbox` only when the launch object defines it.
+    expect(typeof restartRealSources.upLaunch.registerInbox).toBe('function');
+  });
 });
 
 function makeFixture(rawYaml = TEAM_YAML): Fixture {
