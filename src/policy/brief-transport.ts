@@ -16,6 +16,14 @@ import type { PolicyLevel } from './types.ts';
  *  in-memory experiment that never writes the body on either side. */
 export type BriefTransport = 'file' | 'message' | 'memory';
 
+/** Why a `brief-transport: memory` brief writes nothing: no runtime in this build can prove the
+ *  whole path is memory-only. The refusal is the transport's whole behaviour — the brief is not
+ *  delivered by a fallback, and no claim, record, drop, inbox entry or history line is made on
+ *  either side. `<id>` and the other three fields of an outcome are all a memory run may ever
+ *  keep; this build keeps none of them because no run is attempted. */
+export const MEMORY_TRANSPORT_UNSUPPORTED =
+  'brief-transport is memory, which no runtime in this build proves to be zero-persistence; nothing was written and there is no fallback';
+
 /** One resolution: the word in force, the level it came from, and why a fallback happened. */
 export type BriefTransportReading = {
   transport: BriefTransport;

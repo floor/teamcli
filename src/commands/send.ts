@@ -15,6 +15,7 @@ import type { Command, Io } from '../io.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
@@ -669,6 +670,26 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const receiving = to.cross ? loadTeamFile(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
+  // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
+  // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
+  // send — the walk is the same one — while `memory` is refused with nothing written on either
+  // side: no drop, no frame, no inbox entry, no history line, and no fallback to `file`. The
+  // draft is not read when the policy refuses it, and no state or log line records the refusal,
+  // so the refusal itself leaves the tree as it found it. An ordinary send names no brief and
+  // never reads this policy.
+  if (brief !== undefined) {
+    const transport = briefTransportOf({
+      home: host.home,
+      root: to.root,
+      ...(receiving.ok && receiving.team.entity !== null ? { entity: receiving.team.entity } : {}),
+      now: host.now(),
+    });
+    if (transport.transport === 'memory') {
+      if (report.json) writeJsonError(io, 'send.refused', `refused: ${MEMORY_TRANSPORT_UNSUPPORTED}`);
+      else io.stderr(`team send: refused: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`);
+      return 1; // exit: send.refused
+    }
+  }
   let body: string;
   const source = brief ?? file;
   if (source !== undefined) {

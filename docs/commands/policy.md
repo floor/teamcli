@@ -50,8 +50,9 @@ swaps at once.
 claim and the signed drop and nothing else; `message` sends the whole brief as a real send body
 through the seat's own delivery legs, so its receipt, history line and outcome are an ordinary
 send's; `memory` is an experiment no runtime in this build proves zero-persistence for, so a
-`memory` policy delivers nothing and refuses every seat. `message` is within `file`; `memory` is
-comparable only to itself. It takes the entity, project and team levels.
+`memory` policy delivers nothing, refuses every seat and every `team send --brief`, and falls
+back to nothing. `message` is within `file`; `memory` is comparable only to itself. It takes the
+entity, project and team levels.
 
 ## Who may run it
 

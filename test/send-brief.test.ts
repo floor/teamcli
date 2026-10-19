@@ -4,12 +4,13 @@
 // record and types nothing; the record's body is what the seat would read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
+import { readHistory } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { testIo, type TestIo } from './helpers.ts';
 
@@ -210,10 +211,10 @@ describe('a body that only points at a brief is warned about', () => {
     expect(on.err).toBe('');
   });
 
-  // `brief-transport` governs the general seat brief a launch delivers, not an ordinary send.
-  // A `--brief` send is an ordinary send: it never reads the policy, so a team that chose
-  // `memory` for launches still sends this draft through its own legs and writes the record.
-  test('a memory brief-transport does not change an ordinary --brief send', async () => {
+  // `brief-transport` governs how a brief travels, and `--brief` is the explicit brief form. A
+  // `memory` team refuses it before the draft is read or any durable write is made: no fallback
+  // to `file`, so no drop, state line, history line or log line exists after the refusal.
+  test('a memory brief-transport refuses --brief with nothing written', async () => {
     const w = world();
     const wrote = writePolicySet(
       w.home,
@@ -226,7 +227,13 @@ describe('a body that only points at a brief is warned about', () => {
 
     const code = await runSend([SEAT, '--brief', path], on, fake(w));
 
-    expect(code, on.err).toBe(0);
-    expect(record(w).body).toBe(`${HEADER}\n\nFirst line.\nSecond line.\n`);
+    expect(code, on.err).toBe(1);
+    expect(on.err).toContain('refused: brief-transport is memory');
+    expect(existsSync(join(w.dir, 'send-drops'))).toBe(false);
+    expect(existsSync(join(w.dir, 'team.state.json'))).toBe(false);
+    expect(existsSync(join(w.dir, 'team.log'))).toBe(false);
+    const history = readHistory('acme', w.root, w.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) expect(history.entries).toEqual([]);
   });
 });

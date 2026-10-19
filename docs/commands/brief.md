@@ -35,8 +35,8 @@ and the same signed record, then sends the whole brief through the seat's own de
 the send command's own walk: the seat gets the whole body — never a pointer — and the send's
 receipt, history line and outcome are an ordinary send's. `memory` is an experiment that no
 runtime in this build proves zero-persistence for: a `memory` policy delivers nothing, refuses
-every seat, and falls back to neither of the other two transports. A launch reads the same policy
-and delivers the same way.
+every seat and every `team send --brief`, and falls back to neither of the other two transports.
+A launch reads the same policy and delivers the same way.
 
 ## Synopsis
 

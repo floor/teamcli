@@ -16,7 +16,7 @@
 // at the next attempt, leaving the foreign file byte for byte as it was.
 import { join } from 'node:path';
 import type { Io } from '../io.ts';
-import { briefTransportOf } from '../policy/brief-transport.ts';
+import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { recordFile, recordHolds, readRecord, signRecord, writeRecord, type RecordPayload } from '../send/record.ts';
@@ -162,6 +162,17 @@ export function currentBriefEpochs(dir: string, session: string): Record<string,
   return epochs;
 }
 
+/** How one `message` walk ended: the leg that took the record, whether the walk ran at all, its
+ *  exit, and the reasons legs did not take it. The caller reports a walk that lost every leg as
+ *  the failure it is; nothing here is swallowed. */
+export type BriefWalkOutcome = {
+  via: string | null;
+  walked: boolean;
+  exit: number;
+  failures: string[];
+  text: string;
+};
+
 export type BriefDelivery =
   | {
       seat: string;
@@ -173,9 +184,16 @@ export type BriefDelivery =
       existing?: true;
       recoveredFrom?: string;
       /** Present when `brief-transport` is `message`: how the seat's own delivery walk ended. */
-      message?: { via: string | null; walked: boolean; exit: number; text: string };
+      message?: BriefWalkOutcome;
     }
-  | { seat: string; ok: false; reason: string; blocked?: 'file' | 'nonfile' };
+  | {
+      seat: string;
+      ok: false;
+      reason: string;
+      blocked?: 'file' | 'nonfile';
+      /** The walk's own ending, when the failure is a `message` walk that took no leg. */
+      message?: BriefWalkOutcome;
+    };
 
 /** One planned `message` walk: the seat, its declared CLI, and the exact record the launch wrote.
  *  The walk reuses the send command's legs and never re-mints the record's identity. */
@@ -198,13 +216,9 @@ export type BriefDeliveryReport = {
 /** The declared-seat fields this module needs; a validated team file is assignable. */
 export type BriefSeat = { name: string; human?: boolean; cli?: string };
 
-/** Why a `brief-transport: memory` delivery writes nothing: no runtime in this build can prove
- *  the whole path is memory-only. The refusal is the transport's whole behaviour — the brief is
- *  not delivered by a fallback, and no claim, record, drop, inbox entry or history line is made
- *  on either side. `<id>` and the other three fields of an outcome are all a memory run may ever
- *  keep; this build keeps none of them because no run is attempted. */
-export const MEMORY_TRANSPORT_UNSUPPORTED =
-  'brief-transport is memory, which no runtime in this build proves to be zero-persistence; nothing was written and there is no fallback';
+/** Why a `brief-transport: memory` delivery writes nothing; re-exported from the policy reader,
+ *  which the `--brief` send also reads before it writes anything. */
+export { MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 
 /** Why a name cannot be used, or null when the kind is a regular file or missing. */
 function heldReason(kind: ReturnType<typeof heldAt>['kind']): string | null {
@@ -434,7 +448,7 @@ export function deliverBriefForAttribution(input: {
       continue;
     }
     const toId = findAgent(input.home, { team, seat })?.id ?? null;
-    const delivery = deliverGeneralBrief({
+    let delivery: BriefDelivery = deliverGeneralBrief({
       dir: input.dir,
       root: input.root,
       session: input.session,
@@ -460,7 +474,14 @@ export function deliverBriefForAttribution(input: {
         ...(handover === undefined ? {} : { handover }),
       });
       if (payload.id !== delivery.id) {
-        delivery.message = { via: null, walked: false, exit: 0, text: 'the record rebuilt for the walk does not match the delivered one; no leg was walked\n' };
+        const outcome: BriefWalkOutcome = {
+          via: null,
+          walked: false,
+          exit: 0,
+          failures: ['the record rebuilt for the walk does not match the delivered one'],
+          text: 'the record rebuilt for the walk does not match the delivered one; no leg was walked\n',
+        };
+        delivery = { seat, ok: false, reason: walkFailureReason(outcome), message: outcome };
       } else {
         const cli = input.team.seats.find((one) => one.name === seat)?.cli ?? '';
         walks.push({
@@ -489,9 +510,11 @@ export async function walkBriefDeliveries(
   input: { dir: string; home: string; io?: Io; sendHost?: SendHost },
 ): Promise<BriefDeliveryReport> {
   for (const plan of report.walks ?? []) {
-    const delivery = report.deliveries.find((one) => one.ok && one.seat === plan.seat);
-    if (delivery === undefined || !delivery.ok) continue;
-    delivery.message = await walkMessageDelivery({
+    const index = report.deliveries.findIndex((one) => one.ok && one.seat === plan.seat);
+    if (index === -1) continue;
+    const delivery = report.deliveries[index]!;
+    if (!delivery.ok) continue;
+    const outcome = await walkMessageDelivery({
       dir: input.dir,
       root: plan.payload.root,
       session: plan.payload.session,
@@ -503,8 +526,37 @@ export async function walkBriefDeliveries(
       ...(input.io === undefined ? {} : { io: input.io }),
       ...(input.sendHost === undefined ? {} : { sendHost: input.sendHost }),
     });
+    // The walk's own lines went to the capture sink, so its ending is reported here: a walk that
+    // did not run, lost every leg, or ended without a leg is the caller's failure to print. The
+    // claim and the signed record stand — the seat's own read may still find the drop — but no
+    // leg took the brief this run, and `ok` must not say otherwise.
+    if (!outcome.walked || outcome.exit !== 0 || outcome.via === null) {
+      report.deliveries[index] = {
+        seat: delivery.seat,
+        ok: false,
+        reason: walkFailureReason(outcome),
+        message: outcome,
+      };
+      continue;
+    }
+    delivery.message = outcome;
   }
   return report;
+}
+
+/** The failure a walk that took no leg leaves the caller to print, in the walk's own words. The
+ *  legs that failed on the way are listed, and the leg that ended the walk often says its own
+ *  reason only to the capture sink — the last captured line carries it, so it is appended unless
+ *  a failure already says the same. */
+function walkFailureReason(outcome: BriefWalkOutcome): string {
+  const why = outcome.failures.length === 0 ? 'no leg was walked' : outcome.failures.join('; ');
+  const said = outcome.text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .at(-1);
+  const tail = said === undefined || outcome.failures.some((failure) => said.includes(failure)) ? '' : `; ${said}`;
+  return `the signed record stands, but no delivery leg took the brief (${why}${tail})`;
 }
 
 /**
@@ -524,7 +576,7 @@ async function walkMessageDelivery(input: {
   payload: RecordPayload;
   io?: Io;
   sendHost?: SendHost;
-}): Promise<{ via: string | null; walked: boolean; exit: number; text: string }> {
+}): Promise<BriefWalkOutcome> {
   const captured: string[] = [];
   const base: Io = input.io ?? { stdout: () => {}, stderr: () => {}, cwd: input.root, env: {}, stdinIsTTY: false };
   const sink: Io = {
@@ -549,7 +601,7 @@ async function walkMessageDelivery(input: {
     cli: input.cli,
     payload: input.payload,
   });
-  return { via: result.via, walked: result.walked, exit: result.exit, text: captured.join('') };
+  return { via: result.via, walked: result.walked, exit: result.exit, failures: [...result.failures], text: captured.join('') };
 }
 
 /**

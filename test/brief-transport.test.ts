@@ -22,6 +22,7 @@ import {
   type CurrentBriefClaim,
 } from '../src/launch/general-brief.ts';
 import { mintBriefEpoch, mintBriefIncarnation } from '../src/launch/brief-id.ts';
+import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { briefTransportOf } from '../src/policy/brief-transport.ts';
 import { POLICY_CATALOGUE } from '../src/policy/types.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
@@ -225,6 +226,37 @@ describe('the message walk', () => {
     expect(names.filter((name) => name.includes('pending'))).toEqual([]);
     const history = readHistory(PROJECT, w.root, w.home);
     if (history.ok) expect(history.entries.at(-1)).toMatchObject({ via: 'drop', id: delivery.id });
+  });
+
+  test('a walk that loses every leg is reported as a failure, not swallowed', async () => {
+    const w = world();
+    setTransport(w, 'message');
+    const report = deliver(w, { cli: 'codex' });
+    const delivery = report.deliveries[0];
+    if (delivery === undefined || !delivery.ok) throw new Error(JSON.stringify(report));
+
+    // Another command holds the seat: the inbox is not live, no pane answers the typed leg, and
+    // the drop leg refuses at the lock. The claim and record stand; the walk's ending is the
+    // caller's failure, with the legs' own reasons, not an `ok` delivery that says nothing.
+    const lock = acquireSeatLock(w.dir, SESSION, SEAT);
+    if (!('release' in lock)) throw new Error(`the seat lock was not taken (pid ${String(lock.held)})`);
+    try {
+      await walkBriefDeliveries(report, { dir: w.dir, home: w.home, sendHost: fake(w) });
+    } finally {
+      lock.release();
+    }
+
+    const ended = report.deliveries[0];
+    if (ended === undefined || ended.ok) throw new Error(JSON.stringify(report));
+    expect(ended.ok).toBe(false);
+    expect(ended.reason).toContain('the signed record stands, but no delivery leg took the brief');
+    expect(ended.reason).toContain('another command holds it');
+    expect(ended.message).toMatchObject({ walked: true, exit: 1 });
+    expect(ended.message?.failures.join(' ')).toContain('mcp-inbox:');
+    expect(ended.message?.failures.join(' ')).toContain('typed:');
+    // The leg that ended the walk said its own reason only to the capture sink; the caller's
+    // failure line carries it too, so the reason for the ending is never swallowed.
+    expect(ended.message?.text).toContain('another command holds it');
   });
 
   test('file transport plans no walk and leaves the delivery untouched', () => {
