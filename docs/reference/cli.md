@@ -33,7 +33,7 @@ Hidden: no
 
 Usage:
 
-    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 ### Who may run it
@@ -606,7 +606,7 @@ Usage:
 
     team mcp status [--json]
     team mcp doctor [--json]
-    team mcp serve --seat <seat> [--session <session>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>]
 
 ### Who may run it
 
@@ -653,7 +653,7 @@ Hidden: no
 
 Usage:
 
-    team mcp serve --seat <seat> [--session <session>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>]
 
 #### Who may run it
 
@@ -663,6 +663,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
@@ -746,6 +747,36 @@ Usage:
 ### Positionals
 
 None.
+
+## `pause`
+
+Hidden: no
+
+Usage:
+
+    team pause [<team>] [--reason <text>] [--all] [--json]
+
+### Who may run it
+
+`team-pause` — a pause stops every seat's intake of new work, the orchestrator's own lever on the team: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`
+
+A run with no terminal is refused: only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--reason` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `team` | yes | no |
 
 ## `plan`
 
@@ -1304,6 +1335,35 @@ Usage:
 | --- | --- | --- |
 | `seat` | no | no |
 
+## `resume`
+
+Hidden: no
+
+Usage:
+
+    team resume [<team>] [--all] [--json]
+
+### Who may run it
+
+`team-pause` — a resume reopens the intake a pause closed, by the same gate: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted
+
+A run with no terminal is refused: only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `team` | yes | no |
+
 ## `revoke`
 
 Hidden: no
@@ -1480,6 +1540,33 @@ Usage:
 | --- | --- | --- |
 | `seat` | yes | no |
 | `message` | yes | no |
+
+## `sessions`
+
+Hidden: no
+
+Usage:
+
+    team sessions [<seat>] [--by <model|team|entity>] [--json]
+
+### Who may run it
+
+`any-caller` — it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--by` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
 
 ## `status`
 

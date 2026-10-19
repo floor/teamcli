@@ -45,6 +45,28 @@ checkout's message key and the brief's text. A record that is missing, unsigned,
 key or holding another body is `<seat>: the general seat brief's delivery record does not verify`,
 with the same repair.
 
+A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
+state records for it through the watch's own screen reader. A pane that no longer holds the
+process team launched — back at its shell, or replaced by one the state's stored session does not
+vouch for — is not read for a prompt: the check's own process line already says what the pane is,
+and a dialog left in its scrollback is not a seat held at one. The line names the seat, the prompt's
+kind — a permission prompt, a trust prompt, a quota prompt (a usage limit, with the reset time the
+screen shows), a confirm prompt (the CLI's own exit question), or an unrecognised prompt — the
+command the screen shows when the profile's trace reader finds one, and the age the state's clock
+gives it: `<seat>: stuck at a permission prompt (last active 4m ago): Write(note.txt)`. The age is
+the seat's last active moment, the only instant its record carries: the prompt stood up after it,
+and the line never claims the prompt itself has waited that long. An unrecognised prompt is a
+screen no profile reads whose safety floor carries a prompt row; the line quotes that row —
+`matched "Do you want to continue?"` — and a screen the floor did not catch keeps the watch's
+`blocked` line instead. A permission prompt is its lead's to answer; a trust prompt, a quota
+screen, a confirm prompt or an unrecognised one is the owner's, and a confirm prompt also closes
+with `team down --abandon`, a quota screen with the reset it names. The check never answers, types
+or nudges: the line names the act, and the pane's own reader takes it. Where `compare()` already
+printed its plain permission or trust row for the seat (`status`'s wording), the check replaces it
+with this one line, so a held seat is named once. A temporary seat — one `team add --temporary`
+recorded and the file never names — is read the same way, from its record, with its like-seat's
+CLI.
+
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
 the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane

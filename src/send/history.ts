@@ -138,13 +138,13 @@ function ladderProblem(at: string): string | null {
  * Checks what stands at a history file path (`messages.jsonl`, `.1`, `.2`) with `lstat`.
  * Anything other than a regular file owned by this user is refused and never followed.
  */
-function fileProblem(at: string): string | null {
+function fileProblem(at: string, label = 'history log'): string | null {
   const held = heldAt(at);
   if (held.kind === 'missing') return null;
   if (held.kind === 'link') return 'a symbolic link was found and not followed';
   if (held.kind === 'fifo') return 'a FIFO was found and not followed';
-  if (held.kind === 'folder') return 'the history log path is a directory';
-  if (held.kind !== 'file') return 'the history log path is not a regular file';
+  if (held.kind === 'folder') return `the ${label} path is a directory`;
+  if (held.kind !== 'file') return `the ${label} path is not a regular file`;
   if (process.getuid !== undefined && held.uid !== process.getuid()) return "another user's file";
   return null;
 }
@@ -258,13 +258,14 @@ export function appendStoreLine(
   home: string,
   fileName: string,
   record: Record<string, unknown>,
+  options: { rotate?: boolean; label?: string } = {},
 ): HistoryWrite {
   const storeDir = storePath(project, root, home);
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };
 
   const path = join(storeDir, fileName);
-  const targetErr = fileProblem(path);
+  const targetErr = fileProblem(path, options.label);
   if (targetErr !== null) return { ok: false, reason: targetErr };
 
   const line = `${JSON.stringify(record)}\n`;
@@ -272,7 +273,9 @@ export function appendStoreLine(
 
   try {
     const current = heldAt(path);
-    if (current.kind === 'file') {
+    // A registry that is append-only (`sessions.jsonl`) passes `rotate: false`: the history's
+    // rotation would drop its oldest lines, and its lines are records, not a feed.
+    if (options.rotate !== false && current.kind === 'file') {
       const size = statSync(path).size;
       if (size > 0 && size + bytes.length > MAX_HISTORY_BYTES) {
         const rotateErr = rotateHistory(path);
@@ -429,6 +432,68 @@ export function readStoreHistory(storeDir: string, home: string): HistoryRead {
  */
 export function readHistory(project: string, root: string, home: string): HistoryRead {
   return readStoreHistory(storePath(project, root, home), home);
+}
+
+export type StoreLinesRead =
+  | { ok: true; lines: string[] }
+  | { ok: false; reason: string };
+
+/**
+ * Reads one JSONL stream beside `messages.jsonl` in a project state folder, with the same
+ * ladder and `lstat` guards, without following a link and without rotating anything. A missing
+ * file is no lines. `label` names the stream in a refusal ("the session registry path ...").
+ */
+export function readStoreLines(
+  storeDir: string,
+  fileName: string,
+  home: string,
+  label = 'history log',
+): StoreLinesRead {
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot, storeDir]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+  const path = join(storeDir, fileName);
+  const problem = fileProblem(path, label);
+  if (problem !== null) return { ok: false, reason: problem };
+  if (heldAt(path).kind === 'missing') return { ok: true, lines: [] };
+  const text = readNoFollow(path);
+  if (text === null) return { ok: false, reason: `the ${label} could not be read` };
+  return { ok: true, lines: text.split('\n') };
+}
+
+/**
+ * Every project state folder under `<home>/.config/team`, in name order, never `lobby` or
+ * `lobbies` and never a symbolic link. A folder the machine cannot read refuses the whole
+ * listing rather than answering with a partial one.
+ */
+export function listStoreDirs(home: string): { ok: true; dirs: string[] } | { ok: false; reason: string } {
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+  if (heldAt(stateRoot).kind === 'missing') return { ok: true, dirs: [] };
+
+  let names: string[];
+  try {
+    names = readdirSync(stateRoot).sort();
+  } catch {
+    return { ok: false, reason: 'the state folder could not be read' };
+  }
+  const dirs: string[] = [];
+  for (const name of names) {
+    if (name === 'lobby' || name === 'lobbies') continue;
+    if (!STORE_DIR_NAME.test(name)) continue;
+    const dir = join(stateRoot, name);
+    if (ladderProblem(dir) !== null) continue;
+    if (heldAt(dir).kind !== 'folder') continue;
+    dirs.push(dir);
+  }
+  return { ok: true, dirs };
 }
 
 const STORE_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{12}$/;

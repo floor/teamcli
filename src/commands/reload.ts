@@ -57,6 +57,7 @@ import { emptySession, readState, updateState, type SeatState } from '../state.t
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -99,7 +100,8 @@ const realLaunch: Launch = {
   sessionUp: () => null,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd) => registerInbox({ cli, seat, cwd }),
+  registerInbox: (cli, seat, cwd, teamFile) =>
+    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -551,6 +553,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       seats: [planned],
       sessionRunning: true,
       startWatch: false,
+      teamFile: loaded.path,
       cliHooks: installed,
       watchLabel: watchLabel(team.project),
     });
@@ -576,7 +579,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       createWorkspace: (current, cwd, label) => launch.createWorkspace(current, cwd, label),
       paneRun: (current, pane, command) => launch.paneRun(current, pane, command),
       ...(launch.registerInbox
-        ? { registerInbox: (cli: string, seat: string, cwd: string) => launch.registerInbox!(cli, seat, cwd) }
+        ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
         : {}),
       renameAgent: (current, pane, next) => launch.renameAgent(current, pane, next),
       reportDisplayAgent: (current, pane, text) => launch.reportDisplayAgent?.(current, pane, text) ?? true,
@@ -632,6 +635,23 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       kill: () => false,
       allow: () => null,
       running: () => {},
+      // The new session's start. The swapped-out record ended as `swap` before the close.
+      sessionStarted: (next, started) => {
+        const at = sources.home;
+        if (next !== seat.name || at === undefined) return;
+        const began = beginSession({
+          home: at,
+          root,
+          team,
+          session,
+          seat,
+          pane: started.pane,
+          ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
+          ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+          now: now(),
+        });
+        if ('note' in began) logLine(dir, 'reload', describeCaller(caller), began.note, now());
+      },
       drop(next) {
         updateState(dir, (file) => {
           const seats = file.sessions[session]?.seats;
@@ -639,7 +659,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         });
         // The registry: a reload whose seat was dropped leaves its agent stopped.
         if (next === seat.name && sources.home) {
-          const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, next, 'stopped');
+          const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, next, 'stopped', 'swap');
           if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
         }
       },
@@ -732,7 +752,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // registry records the seat as down. `stopped` keeps the same agent for the next launch and
     // clears its pane; a record left `running` would describe a seat no pane holds.
     if (sources.home) {
-      const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, seat.name, 'stopped');
+      const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, seat.name, 'stopped', 'swap');
       if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
     }
     refuse(io, json, 'reload', {

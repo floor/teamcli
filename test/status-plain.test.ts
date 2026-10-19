@@ -64,3 +64,29 @@ test('a child of a plain folder does not read the parent file', async () => {
   expect(io.err).toContain(NOT_A_REPO);
   expect(io.out).toBe('');
 });
+
+test('a pause reads as the first note, above a hold', async () => {
+  const dir = plainProject();
+  const pause = { by: 'owner', at: '2026-10-12T19:00:00.000Z', stops: [{ seat: 'claude-coordinator-acme' }] };
+  updateState(join(dir, '.agents'), (state) => {
+    state.pause = pause;
+    state.hold = { reason: 'freeze deploys', by: 'owner', at: '2026-10-12T18:00:00.000Z' };
+  });
+  const io = testIo(dir, { kind: 'owner' });
+  const code = await runStatus([], io, { ...sources, home: dir });
+  expect(code).not.toBe(2);
+  expect(io.out).toContain('paused since 2026-10-12T19:00:00.000Z by owner');
+  expect(io.out.indexOf('paused since')).toBeLessThan(io.out.indexOf('hold: freeze deploys'));
+});
+
+test('--json carries the pause record', async () => {
+  const dir = plainProject();
+  const pause = { by: 'owner', at: '2026-10-12T19:00:00.000Z', stops: [{ seat: 'claude-coordinator-acme' }] };
+  updateState(join(dir, '.agents'), (state) => {
+    state.pause = pause;
+  });
+  const io = testIo(dir, { kind: 'owner' });
+  const code = await runStatus(['--json'], io, { ...sources, home: dir });
+  expect(code).not.toBe(2);
+  expect((JSON.parse(io.out) as { pause?: unknown }).pause).toEqual(pause);
+});

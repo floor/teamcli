@@ -135,6 +135,33 @@ export type SwapRecord = { by: string; at: string };
 export type HoldRecord = { reason: string; by: string; at: string; until?: string };
 
 /**
+ * One seat's place when the team was paused: the stage its record held, the branch and folder of
+ * the worktree it was given, and when it was last active. The pause writes a stop point for every
+ * seat the file declares that is not a human's, so the lead restarts from what the tool recorded
+ * rather than from memory. Human seats are never recorded: a pause does not touch them.
+ */
+export type PauseStop = {
+  seat: string;
+  stage?: SeatState['stage'];
+  branch?: string;
+  path?: string;
+  last_active?: string;
+};
+
+/**
+ * The team's pause: when it was placed, by whom, the reason when one was given, and the stop
+ * points it recorded. A pause stands until `team resume` clears it; unlike a hold it names no
+ * end, because the resume is the owner's next act, not a clock. A pause is the project's, not one
+ * session's.
+ */
+export type PauseRecord = {
+  by: string;
+  at: string;
+  reason?: string;
+  stops: PauseStop[];
+};
+
+/**
  * One process a seat started, recorded by `team proc add`: who recorded it, when, the pid to
  * watch, and what it is. Nothing here launches or signals a process — a record is a seat's
  * note that something of its own is running, and a pid is how the note goes out on its own.
@@ -219,6 +246,12 @@ export type State = {
    */
   hold?: HoldRecord;
   /**
+   * The team's pause: `team pause`'s one record, cleared by `team resume`. While it stands, the
+   * watch types no work nudge, `team next` claims nothing, and `status` and `seats` show it. Like
+   * the hold it is the project's, not one session's.
+   */
+  pause?: PauseRecord;
+  /**
    * Unsigned markers of expired policy declarations whose expiry reading has already been logged
    * to `team.log`, so the expiry reading is logged at most once per expired entry while leaving
    * the signed policy file untouched.
@@ -265,6 +298,46 @@ export function holdText(hold: HoldRecord): string {
   return hold.until === undefined ? `hold: ${hold.reason}` : `hold until ${hold.until}: ${hold.reason}`;
 }
 
+/** Whether a value from the state file is the record `team pause` writes: who placed it, an
+ *  instant that parses, a reason with text when one is there, and stop points whose every field
+ *  is the shape the command writes. Anything else is dropped at the read door, so a hand-edited
+ *  file can never print what it made up. */
+function isPauseRecord(value: unknown): value is PauseRecord {
+  if (value === null || typeof value !== 'object') return false;
+  const pause = value as Partial<PauseRecord>;
+  if (typeof pause.by !== 'string' || pause.by === '') return false;
+  if (typeof pause.at !== 'string' || Number.isNaN(Date.parse(pause.at))) return false;
+  if (pause.reason !== undefined && (typeof pause.reason !== 'string' || pause.reason === '')) return false;
+  if (!Array.isArray(pause.stops)) return false;
+  for (const stop of pause.stops) {
+    if (stop === null || typeof stop !== 'object') return false;
+    const entry = stop as Partial<PauseStop>;
+    if (typeof entry.seat !== 'string' || entry.seat === '') return false;
+    if (entry.stage !== undefined && entry.stage !== 'launched' && entry.stage !== 'named' && entry.stage !== 'ready') return false;
+    if (entry.branch !== undefined && typeof entry.branch !== 'string') return false;
+    if (entry.path !== undefined && typeof entry.path !== 'string') return false;
+    if (entry.last_active !== undefined && (typeof entry.last_active !== 'string' || Number.isNaN(Date.parse(entry.last_active)))) return false;
+  }
+  return true;
+}
+
+/** The pause as its readers print it: `status`'s note and `seats`' header line, one shape for
+ *  both, so the two can never drift apart. */
+export function pauseText(pause: PauseRecord): string {
+  return `paused since ${pause.at} by ${pause.by}${pause.reason === undefined ? '' : `: ${pause.reason}`}`;
+}
+
+/** One stop point as `team pause` and `team resume` print it under the pause's own line: what the
+ *  seat's record held, and the worktree it was given when it had one. */
+export function stopText(stop: PauseStop): string {
+  const at: string[] = [];
+  if (stop.stage !== undefined) at.push(stop.stage);
+  if (stop.branch !== undefined) at.push(`branch ${stop.branch}`);
+  if (stop.path !== undefined) at.push(stop.path);
+  if (stop.last_active !== undefined) at.push(`last active ${stop.last_active}`);
+  return `stop ${stop.seat}: ${at.length > 0 ? at.join(', ') : 'no record'}`;
+}
+
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
 export function readState(dir: string): State {
@@ -284,6 +357,9 @@ export function readState(dir: string): State {
   // dropped here, so the reason, the name and the instants later readers print are the ones
   // the command wrote, never a hand-edited file's.
   if (state.hold !== undefined && !isHoldRecord(state.hold)) delete state.hold;
+  // The pause, cleaned at the same door and for the same reason: the line every reader prints
+  // is the record this command wrote, never a hand-edited file's.
+  if (state.pause !== undefined && !isPauseRecord(state.pause)) delete state.pause;
   if (Array.isArray(state.expired_policies)) {
     state.expired_policies = state.expired_policies.filter((item): item is string => typeof item === 'string');
   } else if (state.expired_policies !== undefined) {
