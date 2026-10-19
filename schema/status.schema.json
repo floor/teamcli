@@ -325,6 +325,9 @@
         },
         "green_notice": {
           "type": "string"
+        },
+        "daemon": {
+          "type": "object"
         }
       }
     },

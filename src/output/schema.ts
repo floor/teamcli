@@ -338,6 +338,9 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
         idle_work: IDLE_WORK_SCHEMA_FRAGMENT,
         green_slices: GREEN_SLICES_SCHEMA_FRAGMENT,
         green_notice: { type: 'string' },
+        // The machine daemon's one health reading: the same snapshot the note line prints,
+        // carried as one loose field like `hold` and `pause` above.
+        daemon: { type: 'object' },
       },
     },
     {
@@ -573,6 +576,8 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
     green_slices: GREEN_SLICES_SCHEMA_FRAGMENT,
     green_notice: { type: 'string' },
     hint: { type: 'string', minLength: 1 },
+    // The same daemon reading `status` carries: notes and document from one derivation.
+    daemon: { type: 'object' },
   },
 };
 /** Published `--json` output schema for `team client keygen` (`schema/client.schema.json`). */

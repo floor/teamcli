@@ -6,6 +6,7 @@
 // (`runCommits`), so the old name and the new ones run one code path and print one report.
 // A refused invocation keeps the bytes it always had — its own message over the old usage — and
 // takes no notice: an error already says what to fix.
+import { homedir } from 'node:os';
 import { loadConfig, type LoadConfig } from '../check/load.ts';
 import { realCheckSources, runTeamCheck, type CheckSources } from '../check/team.ts';
 import type { Io } from '../io.ts';
@@ -171,6 +172,13 @@ export async function check(argv: string[], io: Io, load: LoadConfig = loadConfi
   if (parsed.kind === 'team') {
     // The declared limitation is printed by the report itself, after the context line, so the
     // text and JSON forms cannot drift apart; JSON carries it as `key_isolation`.
+    // One daemon probe at this boundary: the report below is synchronous, so it takes the
+    // snapshot. A scene that hands its own snapshot is not probed again, and a run with no
+    // daemon source reads no socket and starts no server.
+    if (sources.daemon === undefined && sources.daemonHealth !== undefined) {
+      const daemon = await sources.daemonHealth(sources.home ?? homedir());
+      return runTeamCheck(parsed.args, io, { ...sources, daemon });
+    }
     return runTeamCheck(parsed.args, io, sources);
   }
   io.stderr('team check: `team check` is now `team commits check`, and is still read through 0.3.3\n');
