@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -302,8 +302,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   if (verdict.kind === 'refused' && delegatePane === null && !createGranted) {
     // The caller gate, the one dev mode lifts for this command (`dev_mode.ts`): on, the
     // refusal's own words print as a warning, the run goes on, and the audit log records the
-    // caller it admitted. Every later gate — the owner-only abandon, the lead's seat, the
-    // placement in the session — still refuses.
+    // caller it admitted. Every later gate — the lead's seat, the placement in the session —
+    // still refuses; the owner-only abandon below has its own dev-mode admission.
     const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`;
     const folded = devModeCallerGate(dev, said);
     if (folded === null) {
@@ -322,11 +322,23 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const abandon = args.flags.has('abandon');
   if (abandon && caller.kind !== 'owner') {
-    // Owner-only in every mode: abandoning is not the caller gate dev mode lifts, so the
-    // caller gate above may have been folded and this one still refuses.
-    refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null });
-    // exit: remove.abandon
-    return 1;
+    // The owner's dev-mode admission for exactly this gate (OD-20261019-49): a placed lead or
+    // orchestrator continues with the warning; every other caller keeps the refusal.
+    const lift = devModeOwnerLift(io, {
+      command: 'remove',
+      refusal: 'only the owner abandons a seat, from a terminal outside herdr',
+      ...(sources.home !== undefined ? { home: sources.home } : {}),
+      team,
+      root,
+      dir,
+      now: sources.now(),
+    });
+    if (!lift.lifted) {
+      refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null });
+      // exit: remove.abandon
+      return 1;
+    }
+    io.stderr(`${lift.warning}\n`);
   }
   // A lead is taken out of the file by the owner alone. Its swap — `--keep` — is the owner's,
   // the granted seat's when the grant lists `swap`, or an approved delegate's whose entry lists

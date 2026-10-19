@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import type { Args } from './args.ts';
 import { describeCaller, isOwner, walkCaller } from './caller.ts';
+import { devModeOwnerLiftAtCwd } from './dev_mode.ts';
 import {
   CLIENT_GRANT_ID_PATTERN,
   CLIENT_PUBLIC_KEY_PATTERN,
@@ -74,6 +75,12 @@ export function clientOwnerAllows(command: 'grant' | 'revoke', rawIo: Io, io: Io
   const caller = walkCaller(io);
   if (isOwner(caller)) return true;
   const message = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+  // The owner's dev-mode admission for exactly this gate (OD-20261019-49).
+  const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: message });
+  if (lift !== null && lift.lifted) {
+    io.stderr(`${lift.warning}\n`);
+    return true;
+  }
   if (json) {
     writeJsonError(rawIo, `${command}.refused`, plainText(message), `the owner runs \`team ${command}\` from a terminal outside herdr`, 1, 'owner-only');
   } else {

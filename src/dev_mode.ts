@@ -1,11 +1,19 @@
 // The dev-mode scope, in one place. Kernel amendment 02 (§2.7, catalogue `dev-mode`): the
 // `dev-mode` policy, set at entity, project or team and never at a seat, lifts the "who may run
-// it" gate of the eight everyday operations — up, down, remove of an ordinary seat, register,
-// add, restart, init and reload — while it is `on` for the caller's level. It lifts only that
-// gate: the placement, CLI, record and scope checks stay, and it never reaches `grant`,
-// `delegate`, `revoke`, `approve`, `create`, `agree`, `leads` or the machine-wide stop, nor the
-// owner's `--abandon` of a seat, nor a delegate's file-editing `add`. `broker` and `tempo` stay
-// owner-only in every mode.
+// it" gate of the `DEV_MODE_OPERATIONS` commands — up, down, remove of an ordinary seat,
+// register, add, restart, init and reload — while it is `on` for the caller's level. It lifts
+// only that gate: the placement, CLI, record and scope checks stay.
+//
+// The owner's urgent widening (OD-20261019-49) adds a second, narrower admission: while dev mode
+// is `on`, a placed seat that is the team's orchestrator — the file's resolved lead, whether it
+// was spelled by `coordinator:` or by `leads: true` — may run the owner-only authority edits —
+// grant, delegate, revoke, policy set/unset, `check --repair`, `remove --abandon`, `down
+// --abandon`, `broker` and `tempo` — and each admitted run prints the same `dev mode continues`
+// warning and writes the same audit line (the command, the caller, and dev mode's source). Every
+// team's own lead is admitted on its own team's commands, and the main orchestrator on the main
+// team's. The role alone is never the proof: the caller must be placed on its recorded pane in
+// the team's session. Swap guards, load guards, the public-action refusals and every other owner
+// gate are untouched; with dev mode `off` every one of these gates refuses exactly as before.
 //
 // The environment variable `TEAMCLI_DEV_MODE=1` stays for compatibility and is honoured only
 // while no `dev-mode` value is set anywhere in the chain (`devModeGoverned` false): the
@@ -22,6 +30,9 @@
 import type { TeamFile } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
+import { callerOf, callerVerdict, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
+import { loadTeamFile } from './file/load.ts';
+import { dirname } from 'node:path';
 import {
   DEV_MODE_OPERATIONS,
   loadAndResolvePolicyChain,
@@ -143,6 +154,122 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
     return { on, by: level, governed: true, ignored: envSet && !on, expired, refusals: [] };
   }
   return variableOnly(envSet && DEV_MODE_OPERATIONS.includes(command));
+}
+
+/**
+ * Dev mode's state at the caller's place, without the operation list: `on` here means dev mode
+ * itself is on (the effective policy is `on`, or the variable is in effect before any policy),
+ * which is what the owner-gate admission reads. The operation list is a separate question, asked
+ * by `resolveDevMode`; nothing here widens it.
+ */
+export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
+  const envSet = io.env.TEAMCLI_DEV_MODE === '1';
+  if (context.home === undefined) return variableOnly(envSet);
+  const chain = chainFor({ ...context, home: context.home });
+  if (!chain.ok) {
+    return { on: false, by: null, governed: chain.devModeGoverned, ignored: false, expired: null, refusals: chain.refusals };
+  }
+  if (chain.devModeGoverned) {
+    const effective = chain.policies['dev-mode'];
+    const on = effective !== undefined && effective.value === 'on';
+    const level = on && effective !== undefined && effective.level !== 'default' ? effective.level : null;
+    const expired = effective === undefined || effective.level === 'default' ? nearestExpiry(chain.expired) : null;
+    return { on, by: level, governed: true, ignored: envSet && !on, expired, refusals: [] };
+  }
+  return variableOnly(envSet);
+}
+
+/** The role that admits an owner-only command under dev mode: the team's resolved lead — the
+ *  file's `orchestrator`, whether it was spelled by `coordinator:` or by `leads: true`. That is
+ *  the team lead of this file; every team's own lead is admitted on its own team's commands, and
+ *  the main orchestrator on the main team's. Any other seat, the operator included, is no
+ *  admission: the file names exactly one lead, and the registry silently mirrors it, so the
+ *  approved file — not a possibly stale derived record — is what the gate reads. */
+export type DevModeOwnerRole = 'orchestrator';
+
+/** The role `name` holds in this team, or null. */
+export function devModeOwnerRoleOf(name: string, team: TeamFile): DevModeOwnerRole | null {
+  return name === team.orchestrator ? 'orchestrator' : null;
+}
+
+/** The result of asking whether dev mode admits this caller to an owner-only gate. */
+export type DevModeOwnerLift = {
+  lifted: boolean;
+  /** The line to print when `lifted`: `warning: <refusal>; dev mode continues<level note>`. */
+  warning: string | null;
+  /** The caller the walk placed (a seat only when the lift was asked with a session). */
+  caller: Caller;
+  role: DevModeOwnerRole | null;
+};
+
+const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning: null, caller, role: null });
+
+/**
+ * Whether dev mode admits `caller` to one owner-only command. The caller must be a placed seat in
+ * the team's own session, on the pane the state records for it; its name must be the team's
+ * resolved lead; and dev mode must be `on` for the caller's place. The owner is not this path's to admit — the command's own `isOwner` answers first — and
+ * a no-terminal or unplaced caller never is. An admitted run logs the same warning the folded
+ * caller gate logs, with the command and the caller, and the command prints it to stderr.
+ */
+export function devModeOwnerLift(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  options: {
+    command: string;
+    /** The command's owner-only refusal sentence, before dev mode's clause is added. */
+    refusal: string;
+    home?: string;
+    team: TeamFile;
+    root: string;
+    dir: string;
+    now?: Date;
+  },
+): DevModeOwnerLift {
+  const caller = callerOf(io, options.team.session);
+  if (caller.kind !== 'seat') return NO_LIFT(caller);
+  const state = devModeState(io, {
+    ...(options.home !== undefined ? { home: options.home } : {}),
+    team: options.team,
+    root: options.root,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
+  if (!state.on) return NO_LIFT(caller);
+  const role = devModeOwnerRoleOf(caller.name, options.team);
+  if (role === null) return NO_LIFT(caller);
+  const at = standingOf(options.dir, options.team.session, caller);
+  if (callerVerdict(caller, caller.name, at).kind !== 'ok') return NO_LIFT(caller);
+  const warning = `warning: ${options.refusal}; dev mode continues${devModeLevelNote(state)}`;
+  logLine(options.dir, options.command, logTag(caller), `${warning}; admitted as ${role}`, options.now);
+  return { lifted: true, warning, caller, role };
+}
+
+/**
+ * The same admission for a command that has not loaded its team file yet: it loads the file the
+ * command's own cwd names, and only for a caller the walk places under herdr or hands in as a
+ * seat. A no-terminal caller, a pane and every other placement answer null without a read, so
+ * the owner-only boundaries that refuse before any file is read keep that order exactly.
+ */
+export function devModeOwnerLiftAtCwd(
+  io: Io,
+  options: { command: string; refusal: string; home?: string; now?: Date },
+): DevModeOwnerLift | null {
+  const walked = walkCaller(io);
+  if (walked.kind !== 'seat' && !(walked.kind === 'unplaced' && walked.reason === 'it runs under herdr')) return null;
+  let loaded: ReturnType<typeof loadTeamFile>;
+  try {
+    loaded = loadTeamFile(io.cwd, { ...(options.home !== undefined ? { home: options.home } : {}) });
+  } catch {
+    return null;
+  }
+  if (!loaded.ok) return null;
+  return devModeOwnerLift(io, {
+    command: options.command,
+    refusal: options.refusal,
+    ...(options.home !== undefined ? { home: options.home } : {}),
+    team: loaded.team,
+    root: loaded.root,
+    dir: dirname(loaded.path),
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
 }
 
 /**

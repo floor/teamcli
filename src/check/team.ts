@@ -20,7 +20,7 @@ import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
 import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
-import { devModeActive } from '../dev_mode.ts';
+import { devModeActive, devModeOwnerLift } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -216,13 +216,27 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // `--repair` writes: the check's one act, and the owner's alone, as the two aimed flags are.
     if (args.repair === true) {
       const msg = "--repair is the owner's";
-      if (args.json) {
-        writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, fallbackNotice);
-      } else {
-        io.stderr(`team check: ${msg}\n`);
+      // The owner's dev-mode admission for exactly this gate (OD-20261019-49): a placed lead or
+      // orchestrator continues with the warning; the owner's own path above never reaches here.
+      const lift = devModeOwnerLift(io, {
+        command: 'check',
+        refusal: msg,
+        ...(sources.home !== undefined ? { home: sources.home } : {}),
+        team: current.team,
+        root: current.root,
+        dir: current.dir,
+        now: sources.now(),
+      });
+      if (!lift.lifted) {
+        if (args.json) {
+          writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, fallbackNotice);
+        } else {
+          io.stderr(`team check: ${msg}\n`);
+        }
+        // exit: check.repair-owner
+        return 1;
       }
-      // exit: check.repair-owner
-      return 1;
+      io.stderr(`${lift.warning}\n`);
     }
   }
   const { team, root, dir } = current;
