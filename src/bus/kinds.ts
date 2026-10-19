@@ -84,6 +84,10 @@ export const EVENT_KINDS = [
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
+  // A signed settings record changed (OD-20261018-08): one event per key, carrying the key, the
+  // level, and the value before and after. A change the bus's reconcile pass finds without one is
+  // appended by that pass, marked reconciled.
+  'config.changed',
   // The lead's own words to the owner (`team raise`): a release is ready, or a decision is
   // needed. Owner-routed by default and delivered at once; no seat is in the audience.
   'release.ready',

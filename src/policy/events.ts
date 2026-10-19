@@ -87,6 +87,9 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   'team.grant-revoked': ['lead', 'subject', 'owner'],
   'team.grant-expired': ['lead', 'subject', 'owner'],
   'team.policy-changed': ['lead', 'subject', 'owner'],
+  // A setting is a value, not a limit, so the audience is the same as a policy change's without
+  // the refusal's owner-only treatment: the lead, the seat it concerns and the owner.
+  'config.changed': ['lead', 'subject', 'owner'],
   // The one answer that moves a table default: a refusal names a rule, so the owner is the
   // audience; the operational log holds the same record for every reader.
   'team.policy-refused': ['owner'],
