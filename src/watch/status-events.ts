@@ -19,6 +19,8 @@
 // 2. Profiles with `herdr_status: unreliable` (`jules`) keep the screen module as their status
 //    source and are never handed to `herdr wait agent-status`.
 // 3. Status waiters are strictly read-only and never send text or keys into any pane.
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import {
   isHerdrAgentStatus,
@@ -31,13 +33,14 @@ import {
   type HerdrWaitOutcome,
 } from '../herdr.ts';
 import { leadSeatsOf, recipientsForEvent, type TeamRoutingRoles } from '../bus/kinds.ts';
-import { appendEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
+import { appendEvent, eventLogPath, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator } from '../bus/seats.ts';
 import type { BusPublishOutcome } from '../bus/server.ts';
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { readState } from '../state.ts';
 import { minutes } from './check.ts';
 import { notify as defaultNotify } from './notify.ts';
 import { readScreen, screenWord, type Screen, type ScreenOptions } from './screen.ts';
@@ -77,7 +80,6 @@ export type PromptKind =
   | 'login'
   | 'vendor notice'
   | 'rate limit'
-  | 'rate-limit'
   | 'unknown';
 
 /** Backend-neutral status-source contract (workspace-adapters §6).
@@ -92,7 +94,7 @@ export type StatusSource = {
   ): Promise<StatusWaitResult>;
   /** Reads the pane's screen once when a seat enters `blocked` to classify the prompt kind. */
   promptKind?(seat: StatusWaitSeat): PromptKind;
-  /** Reads the pane's screen for `herdr_status: unreliable` profiles (`jules`). */
+  /** Reads the pane's screen for `herdr_status: unreliable` profiles (`jules`) or screen-verified statuses. */
   readUnreliableScreen?(seat: StatusWaitSeat): Screen;
   /** Desktop notification when a prompt climbs to the owner. */
   notify?(title: string, body: string, sound?: string): void;
@@ -116,6 +118,47 @@ export function classifyPromptKind(
   return 'unknown';
 }
 
+/** Whether a CLI's herdr status requires screen verification (`practice/herdr.md` §"Herdr Agent Status Limitations"):
+ *  - `jules`: `herdr_status: unreliable`
+ *  - `antigravity` / `gemini`: can report `idle` while actually working
+ *  - `cursor`: can report `done` while actually still running */
+export function isScreenVerifiedStatusCli(cli: string): boolean {
+  if (herdrUnreliable(cli)) return true;
+  return cli === 'antigravity' || cli === 'gemini' || cli === 'cursor';
+}
+
+/** Reconciles herdr's `agent_status` with a visible screen reading where herdr's status can lie:
+ *  - any prompt screen (`permission`, `trust`, `question`, `exit question`, `vendor notice`, `rate limit`, `guard`, `login`) -> `'blocked'`
+ *  - `antigravity`/`gemini` reporting `'idle'` while the screen shows `'working'` -> `'working'`
+ *  - `cursor` reporting `'done'` while the screen shows `'working'` -> `'working'`
+ *  - empty/absent `rawScreen` preserves `status` unchanged. */
+export function reconcileStatusWithScreen(
+  cli: string,
+  status: HerdrAgentStatus,
+  rawScreen: string | undefined | null,
+  options?: ScreenOptions,
+): HerdrAgentStatus {
+  if (rawScreen === undefined || rawScreen === null || rawScreen === '') return status;
+  const screen = readScreen(cli, rawScreen, options);
+  if (
+    screen.kind === 'permission'
+    || screen.kind === 'trust'
+    || screen.kind === 'question'
+    || screen.kind === 'exit question'
+    || screen.kind === 'vendor notice'
+    || screen.kind === 'rate limit'
+  ) {
+    return 'blocked';
+  }
+  if (classifyPromptKind(cli, rawScreen, options) !== 'unknown') {
+    return 'blocked';
+  }
+  if (screen.kind === 'working' && (status === 'idle' || status === 'done')) {
+    return 'working';
+  }
+  return status;
+}
+
 /** Whether a seat is eligible for a `herdr wait agent-status` waiter:
  *  - `human: true` seats are NEVER waited on and NEVER typed into;
  *  - `stopped: true` seats are not running;
@@ -132,8 +175,12 @@ export function isStatusWaiterSeat(seat: {
 }
 
 /** Whether a periodic watch pass needs to read a seat's screen when status waiters are active:
- *  only at startup (before the sidebar label is painted), when `blocked` (to classify the prompt),
- *  or when `herdr`'s status for the CLI is unreliable (`jules`). */
+ *  - never for `human: true` or `stopped: true` seats;
+ *  - always for `herdrUnreliable(cli)` (`jules`);
+ *  - at startup before the sidebar label is painted (`!hasSidebarLabel`);
+ *  - when `status === 'blocked'` (to classify the prompt kind);
+ *  - when `antigravity`/`gemini` reports `'idle'` (can read `idle` while working) or `cursor`
+ *    reports `'done'` (can read `done` while running). */
 export function shouldReadScreenForStatus(
   seat: { cli: string; human?: boolean; stopped?: boolean },
   status: string,
@@ -142,7 +189,10 @@ export function shouldReadScreenForStatus(
   if (seat.human === true || seat.stopped === true) return false;
   if (herdrUnreliable(seat.cli)) return true;
   if (!hasSidebarLabel) return true;
-  return status === 'blocked';
+  if (status === 'blocked') return true;
+  if ((seat.cli === 'antigravity' || seat.cli === 'gemini') && status === 'idle') return true;
+  if (seat.cli === 'cursor' && status === 'done') return true;
+  return false;
 }
 
 export type HerdrStatusSourceOptions = {
@@ -306,13 +356,31 @@ export type SeatStatusEngineInput = {
   publish?: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>;
   /** Optional log callback for `unknown` statuses or waiter errors. */
   onLog?: (seat: string, message: string) => void;
+  /** Optional callback invoked when a worker seat's idle window elapses and a nudge is due. */
+  onNudge?: (seatName: string, pane: string) => void;
+  /** Optional assigned-work predicate overriding or supplementing disk checks. */
+  hasAssignedWork?: (seatName: string, atMs: number) => boolean;
+  /** Optional set/list of seats with assigned work in unit tests without disk state. */
+  assignedSeats?: ReadonlySet<string> | readonly string[];
 };
 
 export type SeatStatusEngine = {
   /** Synchronously records a status observation for `seatName` and emits any transition events. */
-  observeSync(seatName: string, status: HerdrAgentStatus, atMs?: number, pane?: string): SeatStatusStep;
+  observeSync(
+    seatName: string,
+    status: HerdrAgentStatus,
+    atMs?: number,
+    pane?: string,
+    rawScreen?: string,
+  ): SeatStatusStep;
   /** Records a status observation for `seatName`, appends to `events.jsonl`, and publishes to bus. */
-  observe(seatName: string, status: HerdrAgentStatus, atMs?: number, pane?: string): Promise<SeatStatusStep>;
+  observe(
+    seatName: string,
+    status: HerdrAgentStatus,
+    atMs?: number,
+    pane?: string,
+    rawScreen?: string,
+  ): Promise<SeatStatusStep>;
   /** Synchronously advances the clock to `atMs`, firing any due `seat.idle` or `seat.prompt-escalated` events. */
   tickSync(atMs?: number): EmittedStatusEvent[];
   /** Advances the clock to `atMs`, firing and publishing any due `seat.idle` or `seat.prompt-escalated` events. */
@@ -326,9 +394,127 @@ export type SeatStatusEngine = {
     panesBySeat: Readonly<Record<string, string>>,
     options?: { timeoutMs?: number; maxIterations?: number; errorBackoffMs?: number },
   ): { stop(): void; done: Promise<void> };
+  /** Drains worker seat names for which a nudge became due (`seat.idle`) since the last drain. */
+  drainNudges(): string[];
   /** Read-only snapshot of a seat's current tracked status. */
   statusOf(seatName: string): HerdrAgentStatus | undefined;
 };
+
+/** Checks whether `seatName` currently has assigned work on disk under `root` (`workspace-status` / F5):
+ *  1. Active lease in `.agents/leases/<id>.json` (`lease.seat === seatName && Date.parse(lease.until) > atMs`)
+ *  2. Assigned worktree (`worktrees[task].seat === seatName`) or temporary seat task in `.agents/state.json`
+ *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding startup brief, `work-*`, and sidecars)
+ *  4. Open `work.claimed` event for `seatName` in `.agents/events.jsonl` not yet closed by `work.done` or `work.released`. */
+export function seatHasAssignedWorkOnDisk(
+  root: string,
+  session: string,
+  seatName: string,
+  atMs: number,
+  options?: { project?: string; home?: string },
+): boolean {
+  const agentsDir = existsSync(join(root, '.agents')) ? join(root, '.agents') : root;
+
+  // 1. Live lease in `.agents/leases/*.json`.
+  const leasesDir = join(agentsDir, 'leases');
+  if (existsSync(leasesDir)) {
+    try {
+      for (const entry of readdirSync(leasesDir)) {
+        if (!entry.endsWith('.json')) continue;
+        try {
+          const parsed = JSON.parse(readFileSync(join(leasesDir, entry), 'utf8')) as {
+            seat?: unknown;
+            until?: unknown;
+          };
+          if (parsed.seat !== seatName) continue;
+          const untilMs = typeof parsed.until === 'string' ? Date.parse(parsed.until) : Number.POSITIVE_INFINITY;
+          if (!Number.isNaN(untilMs) && untilMs > atMs) return true;
+        } catch {
+          // Ignore malformed lease files.
+        }
+      }
+    } catch {
+      // Ignore unreadable directory.
+    }
+  }
+
+  // 2. Assigned worktree or temporary task in `state.json`.
+  let briefId: string | undefined;
+  try {
+    const state = readState(agentsDir);
+    const sessionState = state.sessions[session];
+    briefId = sessionState?.briefs?.[seatName]?.id;
+    if (sessionState?.seats?.[seatName]?.temporary?.task) return true;
+    for (const wt of Object.values(sessionState?.worktrees ?? {})) {
+      if (wt.seat === seatName) return true;
+    }
+  } catch {
+    // Ignore unreadable state.
+  }
+
+  // 3. Unacked message drop in `.agents/send-drops/<session>/<seatName>`.
+  const dropDir = join(agentsDir, 'send-drops', session, seatName);
+  if (existsSync(dropDir)) {
+    try {
+      for (const name of readdirSync(dropDir)) {
+        if (
+          name.startsWith('.')
+          || name.startsWith('work-')
+          || name.endsWith('.pending')
+          || name.endsWith('.delivered')
+          || name.endsWith('.closed.json')
+          || (briefId !== undefined && name === briefId)
+        ) {
+          continue;
+        }
+        return true;
+      }
+    } catch {
+      // Ignore unreadable directory.
+    }
+  }
+
+  // 4. Open `work.claimed` in `events.jsonl` (store or `.agents`) not yet closed by `work.done` or `work.released`.
+  const candidateEventPaths = [
+    join(agentsDir, 'events.jsonl'),
+    ...(options?.project !== undefined && options?.home !== undefined
+      ? [eventLogPath(options.project, root, options.home)]
+      : []),
+  ];
+  for (const eventsPath of candidateEventPaths) {
+    if (!existsSync(eventsPath)) continue;
+    try {
+      const raw = readFileSync(eventsPath, 'utf8');
+      let openClaims = 0;
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as {
+            payload?: { kind?: unknown; seat?: unknown; from?: unknown; subject?: unknown };
+            kind?: unknown;
+            seat?: unknown;
+            from?: unknown;
+            subject?: unknown;
+          };
+          const payload = parsed.payload ?? parsed;
+          const actor = payload.seat ?? payload.from ?? payload.subject;
+          if (actor !== seatName) continue;
+          if (payload.kind === 'work.claimed') openClaims += 1;
+          else if (payload.kind === 'work.done' || payload.kind === 'work.released') {
+            openClaims = Math.max(0, openClaims - 1);
+          }
+        } catch {
+          // Ignore malformed lines.
+        }
+      }
+      if (openClaims > 0) return true;
+    } catch {
+      // Ignore unreadable events log.
+    }
+  }
+
+  return false;
+}
 
 export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatusEngine {
   const { team } = input;
@@ -343,7 +529,26 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
   const escalationWindowMs = promptEscalationSeconds * 1000;
 
   const states = new Map<string, SeatTrackerState>();
+  const pendingNudges = new Set<string>();
   const leads = leadSeatsOf(team);
+  const assignedSeatSet = input.assignedSeats !== undefined
+    ? (input.assignedSeats instanceof Set ? input.assignedSeats : new Set(input.assignedSeats))
+    : undefined;
+
+  function hasAssignedWorkForSeat(seatName: string, atMs: number): boolean {
+    if (input.hasAssignedWork !== undefined && input.hasAssignedWork(seatName, atMs)) return true;
+    if (assignedSeatSet !== undefined && assignedSeatSet.has(seatName)) return true;
+    if (
+      input.root !== undefined
+      && seatHasAssignedWorkOnDisk(input.root, session, seatName, atMs, {
+        project: team.project,
+        home: input.home,
+      })
+    ) {
+      return true;
+    }
+    return false;
+  }
 
   function resolveEntityTarget(): { seat: string; root: string; session: string } | null {
     if (input.home !== undefined && input.root !== undefined) {
@@ -468,23 +673,49 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
 
   function applyStatusTransition(
     seatName: string,
-    status: HerdrAgentStatus,
+    rawStatus: HerdrAgentStatus,
     at: number,
     pane = `${seatName}:p1`,
     allowUnreliable = false,
+    rawScreen?: string,
   ): SeatStatusStep {
     const seat = team.seats.find((item) => item.name === seatName);
     if (!seat) {
-      return { seat: seatName, status, events: [], nudgeDue: false, skipped: 'missing' };
+      return { seat: seatName, status: rawStatus, events: [], nudgeDue: false, skipped: 'missing' };
     }
     if (seat.human === true) {
-      return { seat: seatName, status, events: [], nudgeDue: false, skipped: 'human' };
+      return { seat: seatName, status: rawStatus, events: [], nudgeDue: false, skipped: 'human' };
     }
     if (seat.stopped === true) {
-      return { seat: seatName, status, events: [], nudgeDue: false, skipped: 'stopped' };
+      return { seat: seatName, status: rawStatus, events: [], nudgeDue: false, skipped: 'stopped' };
     }
     if (!allowUnreliable && herdrUnreliable(seat.cli)) {
-      return { seat: seatName, status, events: [], nudgeDue: false, skipped: 'unreliable' };
+      return { seat: seatName, status: rawStatus, events: [], nudgeDue: false, skipped: 'unreliable' };
+    }
+
+    // Reconcile status with screen when herdr's status for the CLI can report `idle` while working
+    // (`antigravity`/`gemini`), `done` while running (`cursor`), or a prompt screen while `idle` (`F3`/`F4`).
+    let status: HerdrAgentStatus = reconcileStatusWithScreen(seat.cli, rawStatus, rawScreen);
+    if (
+      rawScreen === undefined
+      && status !== 'blocked'
+      && shouldReadScreenForStatus(seat, status, true)
+      && source.readUnreliableScreen !== undefined
+    ) {
+      const target = seatTargetOf(seatName, pane)!;
+      const screen = source.readUnreliableScreen(target);
+      if (
+        screen.kind === 'permission'
+        || screen.kind === 'trust'
+        || screen.kind === 'question'
+        || screen.kind === 'exit question'
+        || screen.kind === 'vendor notice'
+        || screen.kind === 'rate limit'
+      ) {
+        status = 'blocked';
+      } else if (screen.kind === 'working' && (status === 'idle' || status === 'done')) {
+        status = 'working';
+      }
     }
 
     let state = states.get(seatName);
@@ -566,7 +797,12 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
 
       // 3. Fresh transition into `blocked`: read the screen once via `promptKind`.
       const target = seatTargetOf(seatName, pane)!;
-      const prompt = source.promptKind ? source.promptKind(target) : 'unknown';
+      const fromScreen = rawScreen ? classifyPromptKind(seat.cli, rawScreen) : 'unknown';
+      const prompt = fromScreen !== 'unknown'
+        ? fromScreen
+        : source.promptKind
+          ? source.promptKind(target)
+          : 'unknown';
       state.status = 'blocked';
       state.promptSpell = {
         prompt,
@@ -695,12 +931,21 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     state.status = 'idle';
     const stretch = (state.idleStretch ??= { since: at, emitted: false, nudged: false });
     const idleWindowMs = idleWindowMsFor(seatName);
-    if (!stretch.emitted && at - stretch.since >= idleWindowMs) {
+    if (
+      !stretch.emitted
+      && !isLead
+      && !seat.parked
+      && !seat.stopped
+      && seat.human !== true
+      && at - stretch.since >= idleWindowMs
+      && hasAssignedWorkForSeat(seatName, at)
+    ) {
       stretch.emitted = true;
-      const canNudge = !isLead && !seat.parked && !seat.stopped && seat.human !== true && !stretch.nudged;
-      if (canNudge) {
+      if (!stretch.nudged) {
         stretch.nudged = true;
         nudgeDue = true;
+        pendingNudges.add(seatName);
+        input.onNudge?.(seatName, pane);
       }
       events.push(
         recordEvent({
@@ -759,11 +1004,16 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         (state.status === 'idle' || state.status === 'done')
         && state.idleStretch !== undefined
         && !state.idleStretch.emitted
+        && !isLead
+        && !seat.parked
         && atMs - state.idleStretch.since >= idleWindowMsFor(seatName)
+        && hasAssignedWorkForSeat(seatName, atMs)
       ) {
         state.idleStretch.emitted = true;
-        if (!isLead && !seat.parked && !seat.stopped && seat.human !== true && !state.idleStretch.nudged) {
+        if (!state.idleStretch.nudged) {
           state.idleStretch.nudged = true;
+          pendingNudges.add(seatName);
+          input.onNudge?.(seatName, `${seatName}:p1`);
         }
         emitted.push(
           recordEvent({
@@ -789,12 +1039,12 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
   }
 
   return {
-    observeSync(seatName, status, atMs = now(), pane) {
-      return applyStatusTransition(seatName, status, atMs, pane, false);
+    observeSync(seatName, status, atMs = now(), pane, rawScreen) {
+      return applyStatusTransition(seatName, status, atMs, pane, false, rawScreen);
     },
 
-    async observe(seatName, status, atMs = now(), pane) {
-      const step = applyStatusTransition(seatName, status, atMs, pane, false);
+    async observe(seatName, status, atMs = now(), pane, rawScreen) {
+      const step = applyStatusTransition(seatName, status, atMs, pane, false, rawScreen);
       await publishEmitted(step.events);
       return step;
     },
@@ -824,7 +1074,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
           ? source.readUnreliableScreen(target)
           : { kind: 'unknown' as const };
       const word = screenWord(screen);
-      const step = applyStatusTransition(seatName, word, atMs, target.pane, true);
+      const step = applyStatusTransition(seatName, word, atMs, target.pane, true, rawScreen);
       await publishEmitted(step.events);
       return step;
     },
@@ -897,7 +1147,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         return {
           seat: seatName,
           outcome: 'changed',
-          status: waited.status,
+          status: step.status,
           rearmed: true,
           events: step.events,
           nudgeDue: step.nudgeDue,
@@ -905,7 +1155,8 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       }
 
       if (waited.outcome === 'timeout') {
-        const dueEvents = await this.tick(waited.at);
+        const tickAt = waited.at > 0 ? waited.at : now();
+        const dueEvents = await this.tick(tickAt);
         const seatEvents = dueEvents.filter((ev) => ev.input.seat === seatName);
         return {
           seat: seatName,
@@ -934,6 +1185,23 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       const maxIterations = options.maxIterations ?? Number.POSITIVE_INFINITY;
       const errorBackoffMs = options.errorBackoffMs ?? 1_000;
 
+      const sleepOrAbort = (ms: number): Promise<void> =>
+        new Promise<void>((resolve) => {
+          if (controller.signal.aborted || ms <= 0) {
+            resolve();
+            return;
+          }
+          const timer = setTimeout(resolve, ms);
+          controller.signal.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+
       const loops: Promise<void>[] = [];
       for (const seat of team.seats) {
         const pane = panesBySeat[seat.name];
@@ -943,21 +1211,22 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
             let iterations = 0;
             while (!controller.signal.aborted && iterations < maxIterations) {
               iterations += 1;
+              const beforeMs = now();
               const step = await this.waitSeatOnce(seat.name, timeoutMs, pane, controller.signal);
               if (controller.signal.aborted || step.outcome === 'skipped') break;
               if (step.outcome === 'error') {
                 if (errorBackoffMs <= 0) break;
-                await new Promise<void>((resolve) => {
-                  const timer = setTimeout(resolve, errorBackoffMs);
-                  controller.signal.addEventListener(
-                    'abort',
-                    () => {
-                      clearTimeout(timer);
-                      resolve();
-                    },
-                    { once: true },
-                  );
-                });
+                await sleepOrAbort(errorBackoffMs);
+                continue;
+              }
+              if (
+                step.outcome === 'timeout'
+                && iterations < maxIterations
+                && now() <= beforeMs
+              ) {
+                // Synchronous stub in tests that returned timeout without advancing the clock:
+                // yield on an abortable timer so the background loop does not spin the event loop.
+                await sleepOrAbort(Math.min(timeoutMs, 50));
               }
             }
           })(),
@@ -970,6 +1239,12 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         },
         done: Promise.all(loops).then(() => {}),
       };
+    },
+
+    drainNudges() {
+      const nudged = [...pendingNudges];
+      pendingNudges.clear();
+      return nudged;
     },
 
     statusOf(seatName) {

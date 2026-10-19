@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isEventKind, EVENT_KINDS } from '../src/bus/kinds.ts';
-import { readEvents, verifySignedEvent, type SignedEventRecord } from '../src/bus/log.ts';
+import { verifiedOf } from '../src/approve/approval.ts';
+import { isEventKind, EVENT_KINDS, OWNER_PROMPT_KINDS } from '../src/bus/kinds.ts';
+import { appendEvent, readEvents, verifySignedEvent, type SignedEventRecord } from '../src/bus/log.ts';
+import { realWatchSources, runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { EVENT_ROUTING_DEFAULTS } from '../src/policy/events.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -13,16 +16,21 @@ import {
   waitAgentStatus,
 } from '../src/herdr.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import {
   classifyPromptKind,
   createSeatStatusEngine,
   herdrStatusSource,
+  isScreenVerifiedStatusCli,
   isStatusWaiterSeat,
+  reconcileStatusWithScreen,
+  seatHasAssignedWorkOnDisk,
   shouldReadScreenForStatus,
   type PromptKind,
   type StatusSource,
   type StatusTarget,
 } from '../src/watch/status-events.ts';
+import { testIo } from './helpers.ts';
 
 const dirs: string[] = [];
 
@@ -261,6 +269,7 @@ describe('status-to-event mapping table and screen-module boundaries', () => {
       idleThresholdSeconds: 300,
       promptEscalationSeconds: 300,
       graceMs: 120_000,
+      assignedSeats: ['worker-1'],
     });
 
     // 1. `working` initially -> no event, screen not read.
@@ -303,12 +312,13 @@ describe('status-to-event mapping table and screen-module boundaries', () => {
     expect(s5.events).toHaveLength(0);
     expect(s5.nudgeDue).toBe(false);
 
-    // 6. `idle` at N (300s since turn finished) -> `seat.idle` once + one nudge due.
+    // 6. `idle` at N (300s since turn finished) -> `seat.idle` once + one nudge due, routed to lead.
     clock += 240_000;
     const s6 = await engine.observe('worker-1', 'idle', clock);
     expect(s6.events).toHaveLength(1);
     expect(s6.events[0]!.input.kind).toBe('seat.idle');
     expect(s6.events[0]!.input.seat).toBe('worker-1');
+    expect(s6.events[0]!.recipients).toEqual(new Set(['crew-lead']));
     expect(s6.nudgeDue).toBe(true);
 
     // 7. Staying `idle` for another 300s in the SAME stretch -> never repeated!
@@ -711,6 +721,7 @@ describe('flicker grace, waiter timeout, unreliable herdr (jules), human seats, 
       root,
       home,
       idleThresholdSeconds: 60,
+      assignedSeats: ['worker-1'],
       source: {
         async waitStatus() {
           return { outcome: 'timeout', at: clock };
@@ -760,5 +771,333 @@ describe('flicker grace, waiter timeout, unreliable herdr (jules), human seats, 
 
     // No send-drops or messages were typed into any worker pane.
     expect(existsSync(join(root, '.agents', 'send-drops')) ? readdirSync(join(root, '.agents', 'send-drops')) : []).toEqual([]);
+  });
+});
+
+describe('production watch wiring, assigned-work gate, and screen verification (F1–F6)', () => {
+  test('F1: realWatchSources wires statusSource and runWatch starts/stops status waiters', async () => {
+    expect(realWatchSources.statusSource).toBeDefined();
+    expect(typeof realWatchSources.statusSource?.waitStatus).toBe('function');
+    expect(typeof realWatchSources.statusSource?.promptKind).toBe('function');
+
+    const { root, home } = makeScratch();
+    execSync('git init -q -b main', { cwd: root, stdio: 'ignore' });
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, TEAM_YAML);
+    const team = parseTeam();
+
+    let clock = Date.parse('2026-10-19T06:00:00Z');
+    const waitSeatCalls: string[] = [];
+    const abortedSeats: string[] = [];
+
+    const statusSource: StatusSource = {
+      async waitStatus(seat, _target, _timeoutMs, signal) {
+        waitSeatCalls.push(seat.name);
+        return await new Promise((resolve) => {
+          signal?.addEventListener(
+            'abort',
+            () => {
+              abortedSeats.push(seat.name);
+              resolve({ outcome: 'timeout', at: clock });
+            },
+            { once: true },
+          );
+        });
+      },
+      promptKind: () => 'permission',
+    };
+
+    const sources: WatchSources = {
+      live: () => ({
+        running: true,
+        agents: [
+          { name: 'crew-lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
+          { name: 'worker-1', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'blocked', cwd: null },
+          { name: 'jules-1', agent: 'jules', pane: 'w4:p1', workspace: 'w4', status: 'working', cwd: null },
+          { name: 'owner-pane', agent: 'claude', pane: 'w5:p1', workspace: 'w5', status: 'idle', cwd: null },
+        ],
+        workspaces: [
+          { id: 'w1', label: 'crew-lead' },
+          { id: 'w2', label: 'worker-1' },
+          { id: 'w4', label: 'jules-1' },
+          { id: 'w5', label: 'owner-pane' },
+        ],
+        screens: { 'w1:p1': '', 'w2:p1': '', 'w4:p1': '', 'w5:p1': '' },
+      }),
+      machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
+      standing: (r) => verifiedOf(team, TEAM_YAML, r),
+      readChecks: () => [],
+      screen: () => '',
+      status: () => 'idle',
+      foreground: () => ['claude'],
+      typeText: () => true,
+      pressEnter: () => true,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      notify: () => {},
+      now: () => new Date(clock),
+      wait: async () => false,
+      alive: () => false,
+      pid: 4242,
+      home,
+      statusSource,
+    };
+
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
+
+    // Waiters were started for eligible running seats (crew-lead, worker-1) and aborted cleanly on stop;
+    // jules-1 (unreliable) and owner-pane (human: true) were never waited on.
+    expect(waitSeatCalls.sort()).toEqual(['crew-lead', 'worker-1']);
+    expect(abortedSeats.sort()).toEqual(['crew-lead', 'worker-1']);
+  });
+
+  test('F2 & F5: seat.idle requires assigned work, is worker-only (not leads), routes to lead, and drains one nudge work drop', async () => {
+    const { root, home } = makeScratch();
+    execSync('git init -q -b main', { cwd: root, stdio: 'ignore' });
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, TEAM_YAML);
+    const team = parseTeam();
+
+    let clock = 1_700_000_000_000;
+    const engine = createSeatStatusEngine({
+      team,
+      session: 'acme-dev',
+      root,
+      home,
+      now: () => clock,
+      idleThresholdSeconds: 60,
+    });
+
+    // 1. Unassigned seats (no lease, no worktree, no message, no work.claimed) + lead seat -> no seat.idle.
+    engine.observeSync('crew-lead', 'idle', clock, 'w1:p1');
+    engine.observeSync('worker-1', 'idle', clock, 'w2:p1');
+    clock += 120_000;
+    expect(engine.tickSync(clock)).toEqual([]);
+    expect(engine.drainNudges()).toEqual([]);
+
+    // 2. Assign work to worker-1 via a live lease in `.agents/leases/workspace-status.json`.
+    const leasesDir = join(root, '.agents', 'leases');
+    mkdirSync(leasesDir, { recursive: true });
+    writeFileSync(
+      join(leasesDir, 'workspace-status.json'),
+      JSON.stringify({ id: 'workspace-status', seat: 'worker-1', until: new Date(clock + 3_600_000).toISOString() }),
+    );
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-1', clock)).toBe(true);
+
+    // Also assign work to crew-lead to prove leads NEVER emit `seat.idle` even with assigned work.
+    writeFileSync(
+      join(leasesDir, 'FLO-LEAD.json'),
+      JSON.stringify({ id: 'FLO-LEAD', seat: 'crew-lead', until: new Date(clock + 3_600_000).toISOString() }),
+    );
+
+    const due = engine.tickSync(clock);
+    const idleEvents = due.filter((ev) => ev.input.kind === 'seat.idle');
+    expect(idleEvents).toHaveLength(1);
+    expect(idleEvents[0]!.input.seat).toBe('worker-1');
+    expect(idleEvents[0]!.recipients).toEqual(new Set(['crew-lead']));
+    expect(engine.drainNudges()).toEqual(['worker-1']);
+    expect(engine.drainNudges()).toEqual([]);
+
+    // 3. Verify assigned-work detection via worktree in state.json and work.claimed in events.jsonl.
+    updateState(join(root, '.agents'), (state) => {
+      const current = (state.sessions['acme-dev'] ??= emptySession());
+      current.worktrees['feat-x'] = {
+        branch: 'feat/x',
+        path: '/tmp/feat-x',
+        seat: 'worker-2',
+        setup: 'ok',
+      };
+    });
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-2', clock)).toBe(true);
+
+    appendEvent('acme', root, home, {
+      ts: new Date(clock).toISOString(),
+      kind: 'work.claimed',
+      session: 'acme-dev',
+      record_id: 'claim-jules-1',
+      seat: 'jules-1',
+      subject: 'jules-1',
+    });
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'jules-1', clock, { project: 'acme', home })).toBe(true);
+    appendEvent('acme', root, home, {
+      ts: new Date(clock + 1_000).toISOString(),
+      kind: 'work.done',
+      session: 'acme-dev',
+      record_id: 'done-jules-1',
+      seat: 'jules-1',
+      subject: 'jules-1',
+    });
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'jules-1', clock + 1_000, { project: 'acme', home })).toBe(false);
+  });
+
+  test('F2: runWatch drains statusEngine nudges and writes a work drop when a worker seat with assigned work is idle past threshold', async () => {
+    const { root, home } = makeScratch();
+    execSync('git init -q -b main', { cwd: root, stdio: 'ignore' });
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, TEAM_YAML);
+    const team = parseTeam();
+
+    // Give worker-1 an active lease so `hasAssignedWorkForSeat` is true.
+    const leasesDir = join(root, '.agents', 'leases');
+    mkdirSync(leasesDir, { recursive: true });
+    let clock = Date.parse('2026-10-19T06:00:00Z');
+    writeFileSync(
+      join(leasesDir, 'workspace-status.json'),
+      JSON.stringify({ id: 'workspace-status', seat: 'worker-1', until: new Date(clock + 7_200_000).toISOString() }),
+    );
+
+    const statusSource: StatusSource = {
+      async waitStatus() {
+        return { outcome: 'timeout', at: 0 };
+      },
+      promptKind: () => 'unknown',
+    };
+
+    let passIdx = 0;
+    const scenes = [
+      { 'crew-lead': 'idle', 'worker-1': 'idle' },
+      { 'crew-lead': 'idle', 'worker-1': 'idle' },
+    ];
+    const sources: WatchSources = {
+      live: () => {
+        const current = scenes[Math.min(passIdx, scenes.length - 1)]!;
+        return {
+          running: true,
+          agents: Object.entries(current).map(([name, status], i) => ({
+            name,
+            agent: 'claude',
+            pane: `w${i + 1}:p1`,
+            workspace: `w${i + 1}`,
+            status,
+            cwd: null,
+          })),
+          workspaces: [
+            { id: 'w1', label: 'crew-lead' },
+            { id: 'w2', label: 'worker-1' },
+          ],
+          screens: { 'w1:p1': '', 'w2:p1': '' },
+        };
+      },
+      machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
+      standing: (r) => verifiedOf(team, TEAM_YAML, r),
+      readChecks: () => [],
+      screen: () => '',
+      status: () => 'idle',
+      foreground: () => ['claude'],
+      typeText: () => true,
+      pressEnter: () => true,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      notify: () => {},
+      now: () => new Date(clock),
+      wait: async () => {
+        clock += 600_000; // Advance 10 minutes (> 300s idle_first)
+        passIdx += 1;
+        return passIdx < scenes.length;
+      },
+      alive: () => false,
+      pid: 4242,
+      home,
+      statusSource,
+    };
+
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
+
+    const dropDir = join(root, '.agents', 'send-drops', 'acme-dev', 'worker-1');
+    const drops = existsSync(dropDir) ? readdirSync(dropDir).filter((n) => n.startsWith('work-')) : [];
+    expect(drops).toHaveLength(1);
+  });
+
+  test('F3, F4, F6: shouldReadScreenForStatus and reconcileStatusWithScreen handle Antigravity/Gemini idle-while-working and Cursor done-while-running, and OWNER_PROMPT_KINDS has no hyphenated rate-limit', async () => {
+    expect(OWNER_PROMPT_KINDS).toContain('rate limit');
+    expect(OWNER_PROMPT_KINDS as readonly string[]).not.toContain('rate-limit');
+
+    expect(isScreenVerifiedStatusCli('jules')).toBe(true);
+    expect(isScreenVerifiedStatusCli('antigravity')).toBe(true);
+    expect(isScreenVerifiedStatusCli('gemini')).toBe(true);
+    expect(isScreenVerifiedStatusCli('cursor')).toBe(true);
+    expect(isScreenVerifiedStatusCli('claude-code')).toBe(false);
+
+    expect(shouldReadScreenForStatus({ cli: 'antigravity' }, 'idle', true)).toBe(true);
+    expect(shouldReadScreenForStatus({ cli: 'gemini' }, 'idle', true)).toBe(true);
+    expect(shouldReadScreenForStatus({ cli: 'cursor' }, 'done', true)).toBe(true);
+    expect(shouldReadScreenForStatus({ cli: 'claude-code' }, 'idle', true)).toBe(false);
+    expect(shouldReadScreenForStatus({ cli: 'antigravity', human: true }, 'idle', false)).toBe(false);
+
+    // Antigravity screen showing active work ("Generating...") while herdr reports "idle":
+    const agWorkingScreen = [
+      '● Running command...',
+      '────────────────────────',
+      '> ',
+      '────────────────────────',
+      'esc to cancel  Gemini 4.0 Pro',
+    ].join('\n');
+    expect(reconcileStatusWithScreen('antigravity', 'idle', agWorkingScreen)).toBe('working');
+
+    // Cursor screen showing active work ("⠋ Generating..." + composer row) while herdr reports "done":
+    const cursorWorkingScreen = [
+      '  ⠋ Generating...',
+      '  → Plan, search, build anything  ctrl+c to stop',
+      '  Grok 4.7 High · 12%  Run Everything',
+      '  ~/Code/acme',
+    ].join('\n');
+    expect(reconcileStatusWithScreen('cursor', 'done', cursorWorkingScreen)).toBe('working');
+
+    // Verify engine does not emit false `seat.done` for Cursor when screen is working, nor false `seat.idle` for Antigravity when screen is working.
+    const multiCliTeam = validateTeamFile(`format: 1
+entity: floor
+project: acme
+session: acme-dev
+coordinator: crew-lead
+operator: crew-lead
+workspace:
+  mode: shared
+seats:
+  - name: crew-lead
+    role: coordinator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - name: ag-1
+    role: builder
+    cli: antigravity
+    vendor: google
+    model: Gemini Pro
+    version: "4.0"
+    launch: agy
+  - name: cur-1
+    role: builder
+    cli: cursor
+    vendor: cursor
+    model: Claude Opus
+    version: "5.5"
+    launch: agent
+`);
+    if (!multiCliTeam.ok) throw new Error(JSON.stringify(multiCliTeam.errors));
+
+    let clock = 1_000;
+    const engine = createSeatStatusEngine({
+      team: multiCliTeam.team,
+      now: () => clock,
+      idleThresholdSeconds: 60,
+      assignedSeats: ['ag-1', 'cur-1'],
+    });
+
+    const agStep1 = await engine.observe('ag-1', 'idle', clock, 'w2:p1', agWorkingScreen);
+    expect(agStep1.status).toBe('working');
+    clock += 120_000;
+    const agStep2 = await engine.observe('ag-1', 'idle', clock, 'w2:p1', agWorkingScreen);
+    expect(agStep2.status).toBe('working');
+    expect(agStep2.events).toHaveLength(0);
+
+    const curStep = await engine.observe('cur-1', 'done', clock, 'w3:p1', cursorWorkingScreen);
+    expect(curStep.status).toBe('working');
+    expect(curStep.events).toHaveLength(0);
   });
 });
