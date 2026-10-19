@@ -32,6 +32,9 @@ import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_F
 import { probeDaemonHealth } from './health.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './routes.ts';
+import { createHostedWatch, type HostedWatch } from './watch.ts';
+import { hostedWatchRun } from './watch-run.ts';
+import type { HostedLoop } from '../watch/hosted.ts';
 import {
   ensureMachineDir,
   writeDaemonState,
@@ -52,6 +55,16 @@ export type MachineDaemon = {
   close(): Promise<void>;
 };
 
+/** What a route's watch is built from. The host owns the tick and the cancellation; the run
+ *  is the shared watch loop, or a test's stand-in for it. */
+export type HostedWatchBuild = {
+  run(loop: HostedLoop): Promise<number>;
+  /** `open` only when the caller injected a verified admitted sender; closed otherwise. */
+  effects?: 'blocked' | 'open';
+  /** Defaults to true: a host is created only when the route was started to carry a watch. */
+  required?: boolean;
+};
+
 export type StartMachineDaemonInput = {
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
@@ -67,6 +80,17 @@ export type StartMachineDaemonInput = {
   features?: DaemonFeatures;
   /** Injected for a test that must not touch the real pane/herdr sources. */
   sendHost?: DaemonHost;
+  /**
+   * Whether each hosted route carries a watch on the daemon's heartbeat. Off by default: the
+   * quiet foundation lands before any activation, and a daemon started only to host endpoints
+   * carries none. A route with a watch records one; a route without was never started with
+   * one, and a reader must not treat its silence as a failed watch.
+   */
+  watchHosting?: boolean;
+  /** Builds one route's watch. The default runs the shared watch loop over the real read
+   *  sources with mutating sources closed and outbound effects blocked; a test injects its
+   *  own run and clock and, only with a verified admitted sender, `open` effects. */
+  hostedWatch?: (route: HostedRoute, log: (text: string) => void) => HostedWatchBuild;
 };
 
 export type StartMachineDaemonResult =
@@ -237,6 +261,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const connections = new Set<Socket>();
   const roots: MachineRootStatus[] = [];
   const routes: HostedRoute[] = [];
+  // Filled once the roots loop has resolved every route; a status entry gains its `watch`
+  // record on each state write, and only entries that actually got a host ever have one.
+  const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
   let heartbeatAt = since;
   let closed = false;
 
@@ -265,6 +292,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const writeState = (): void => {
     if (closed) return;
+    for (const one of hostedWatches) one.status.watch = one.watch.state();
     try {
       writeDaemonState(home, {
         format: 1,
@@ -468,6 +496,24 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     appendDaemonLog(home, `root ${rootArg}: send ${status.send}, bus ${status.bus}`, now());
   }
 
+  // One watch per hosted route, on the daemon's existing heartbeat. The run starts at once and
+  // performs its first pass; no second timer exists, and a pass that hangs holds nothing the
+  // heartbeat needs. A root that failed to load, or that duplicates a checkout already hosted,
+  // has no route and gets no watch; its status entry has no `watch` record either.
+  if (input.watchHosting === true) {
+    const log = (text: string): void => appendDaemonLog(home, text, now());
+    for (const status of roots) {
+      const route = routes.find((candidate) => candidate.root === status.root);
+      if (route === undefined) continue;
+      if (hostedWatches.some((one) => one.watch.route === route)) continue;
+      const build = input.hostedWatch?.(route, log) ?? { run: hostedWatchRun({ route, log }) };
+      hostedWatches.push({
+        status,
+        watch: createHostedWatch({ route, run: build.run, effects: build.effects, required: build.required, now }),
+      });
+    }
+  }
+
   // A socket file that stays behind after a crash, or a listener that stops answering, is not a
   // hosted endpoint. The heartbeat asks each hosted socket; an endpoint that stopped answering is
   // marked failed with its reason and logged once, and a later heartbeat never resurrects it.
@@ -511,6 +557,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const timer = setInterval(() => {
     heartbeatAt = now().toISOString();
+    // A tick releases only the waits whose own due instant has passed and returns at once: a
+    // pass that is still running is never awaited here, so one slow or hanging route cannot
+    // stop the daemon's liveness or another route's cycles. Each route is isolated.
+    for (const one of hostedWatches) {
+      try {
+        one.watch.tick(now());
+      } catch (error) {
+        appendDaemonLog(home, `root ${one.watch.route.root}: the hosted watch tick failed: ${(error as Error).message}`, now());
+      }
+    }
     writeState();
     void refreshHostedEndpoints();
   }, heartbeatMs);
@@ -520,6 +576,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed) return;
     closed = true;
     clearInterval(timer);
+    // Each watch leaves through its own loop: the stop resolves its wait false and awaits the
+    // pass in flight, so nothing is left half-written. The state record's last write keeps the
+    // stopped phase and its reason.
+    await Promise.all(hostedWatches.map(async (one) => {
+      try {
+        await one.watch.stop('the daemon is closing');
+      } catch {
+        // Closing is best effort; the process is ending.
+      }
+      one.status.watch = one.watch.state();
+    }));
     for (const handle of busHandles.splice(0)) {
       try {
         await handle.close();

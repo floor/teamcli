@@ -36,6 +36,7 @@ import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
 import { dispatchIdleWork, type IdleDispatchResult, type WorkPush, type WorkPushResult } from '../watch/dispatch.ts';
+import type { HostedLoop } from '../watch/hosted.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -197,6 +198,13 @@ export type WatchSources = {
    * stands in.
    */
   pushWork?: WorkPush;
+  /**
+   * Present when the machine daemon hosts this loop. The host owns the clock, the wait and the
+   * cancellation; this process has no pane and no terminal, and the front refusals that admit a
+   * human-started watch do not apply to it. Never settable from a command line: `runWatch`
+   * receives it only from the daemon's own source set.
+   */
+  hosted?: HostedLoop;
 };
 
 /** The streams a direct dispatch writes through: the watch process's own, with an optional copy
@@ -391,7 +399,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     if (json) writeJsonError(io, id, why, null);
     else io.stderr(`team watch: ${why}\n`);
   };
-  const detached = detachedRefusal(callerOf(io), { who: 'the owner or a placed seat', where: 'a terminal outside herdr or its own pane' });
+  const hosted = sources.hosted;
+  const detached = hosted === undefined
+    ? detachedRefusal(callerOf(io), { who: 'the owner or a placed seat', where: 'a terminal outside herdr or its own pane' })
+    : undefined;
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in
@@ -406,7 +417,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     return 1;
   }
   const caller = callerOf(io, args.values.session);
-  const grant = args.values.file ? undefined : await admittedWatchdog(io.cwd, args.values.session, caller);
+  // A hosted watch takes no grant and no `--file`: it reads the team of the route it was built
+  // for, and the watchdog file is the hand-over a pane makes, which a daemon pass never makes.
+  const grant = args.values.file || hosted !== undefined
+    ? undefined
+    : await admittedWatchdog(io.cwd, args.values.session, caller);
   // A run with no terminal is refused: the watch lives in a pane of its own now, so no process
   // outside a terminal is ever the watch and none has to be admitted to the file.
   if (detached !== undefined) {
@@ -448,7 +463,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // pane `up` starts the watch in — or when it is the watch this session recorded. A watch a
   // seat started in its own pane runs its passes and polls; it never subscribes with the
   // owner's identity.
-  const ownerPath = isOwner(placed) || placed.kind === 'pane' || grant !== undefined;
+  // A hosted watch is a new identity, not the owner's and not a seat's: whatever the daemon
+  // process's own caller happens to look like, it never owns the owner's delivery path, never
+  // creates a workspace and is never refused for being unplaced.
+  const ownerPath = hosted === undefined && (isOwner(placed) || placed.kind === 'pane' || grant !== undefined);
 
   // A seat that starts the session's only watch must not be able to drop the operator's nudge
   // or the operator's desktop notices. The owner's own `--no-notify` still cannot silence a
@@ -489,6 +507,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   });
   if (otherRunning) {
     const where = other.pid !== undefined ? `pid ${other.pid}` : `pane ${other.pane ?? 'not recorded'}`;
+    // A live pane watch owns the session. A hosted watch stands down and records that it did,
+    // instead of taking the record over or touching the pane: the transfer to a daemon-carried
+    // watch is a separate step with its own proof.
+    if (hosted !== undefined) {
+      hosted.standby(`a watch already runs for the session "${session}" (${where})`);
+      return 0;
+    }
     refuse('watch.already', `a watch already runs for the session "${session}" (${where})`);
     // exit: watch.already
     return 1;
@@ -506,7 +531,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // The hand-over is the file's own session only: a lone run aimed at another session (anyone
   // may watch one) would otherwise make the workspace in that session and write this team's
   // state before the foreign-session reading is even said. It reads and reports here instead.
-  if (isOwner(placed) && session === first.team.session && !args.flags.has('no-nudge') && !args.flags.has('no-notify')
+  if (hosted === undefined && isOwner(placed) && session === first.team.session && !args.flags.has('no-nudge') && !args.flags.has('no-notify')
     && sources.createWorkspace && sources.paneRun) {
     const label = watchLabel(first.team.project);
     const made = sources.createWorkspace(session, first.root, label);
@@ -574,6 +599,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let statusWaitersKey = '';
   try {
     for (;;) {
+      // A hosted pass starts only while the host still wants one.
+      if (hosted?.signal.aborted) break;
       // The file is read again on every pass, so a seat parked or stopped since is seen.
       const current = currentTeam(io.cwd, aimed, sources.now(), sources.home);
       const team = current.ok ? current.team : first.team;
@@ -629,7 +656,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // `owner`. No seat is in the path, so a held or unreachable liaison silences neither. The
       // subscription is the owner's delivery path's own, so a watch that is not that path stays a
       // reader of the file and the pass, and publishes what its checks see.
-      const owner = sources.home === undefined || foreign
+      const owner = sources.home === undefined || foreign || hosted !== undefined
         ? undefined
         : new OwnerDelivery({
             root,
@@ -817,7 +844,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The entity's model rule, carried out without a caller: a breaching seat the queue does
         // not hold yet is queued here. Only the file's own watch queues — a foreign session
         // writes nothing, and a watch with no home has no policy chain to read the wait from.
-        if (!foreign && sources.home !== undefined) {
+        if (!foreign && sources.home !== undefined && hosted === undefined) {
           try {
             for (const [breaching, swap] of queueRuleBreaches({
               dir, root, home: sources.home, team, rule: modelRule, by: 'the watch', now: sources.now,
@@ -837,6 +864,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // it dispatches nothing at all rather than spending an episode on a route it was told
         // not to use.
         const idleDispatch: IdleDispatchResult = foreign || args.flags.has('no-nudge')
+          || (hosted !== undefined && sources.pushWork === undefined)
           ? { pushed: [], suppressed: [] }
           : await dispatchIdleWork({
             root, team, state, live, now: sources.now(),
@@ -884,13 +912,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // What the pass saw goes on the bus whatever started this watch: a report is the watch's
         // contribution, not a privileged delivery, and a bus that is not running answers
         // `unavailable` without making the pass wait.
-        if (!foreign && sources.busPublish !== undefined) {
+        if (!foreign && sources.busPublish !== undefined && hosted === undefined) {
           await publishWatchReportsToBus(root, session, result.reports, reportTs, sources.busPublish);
         }
         // A prompt that is the lead's own, or one the lead has not cleared in time, climbs to the
         // entity's lead in that team's own mailbox. The registry names no entity lead: the climb
         // is still the event the line above published, whose routing always carries the owner.
-        if (!foreign && sources.home) {
+        if (!foreign && sources.home && hosted === undefined) {
           for (const line of escalatePromptReports(
             sources.home, root, team, session, result.reports, reportTs,
           ).failed) tell(line, true);
@@ -913,7 +941,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           statusEngine.drainNudges();
         }
         const delivered = new Set<string>();
-        if (!foreign) {
+        if (!foreign && hosted === undefined) {
           for (const item of result.work) {
             if (item.pane === ownPane) continue;
             // No work drop moves a seat a swap waits on: the seat is at its boundary, or close
@@ -941,7 +969,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The ring is a typed path of its own. A seat whose idle episode the dispatcher owns is
         // not typed at by it either (B7's finding): that episode is delivered, or reported
         // undelivered, by the dispatcher, and a stored signed copy waiting unread is not a wake.
-        if (result.ring && delivered.size === 0 && !suppressed.has(result.ring.to)) {
+        if (result.ring && delivered.size === 0 && !suppressed.has(result.ring.to) && hosted === undefined) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${result.ring.text}`, false);
           else await deliver({
             pane: result.ring.pane,
@@ -961,7 +989,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // A send held while a pane was busy leaves its drop and a record beside it: the pass
         // delivers one per seat once the box is free, bounded, and says the drop's path when it
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
-        if (!foreign && !args.flags.has('no-nudge')) {
+        if (!foreign && !args.flags.has('no-nudge') && hosted === undefined) {
           await retryHeldDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
@@ -984,7 +1012,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // `--no-nudge` leaves it out.
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
-            { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') ? { noNudge: true } : {}) },
+            { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') || hosted !== undefined ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
@@ -992,13 +1020,17 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           );
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
-        await closeEnded({ team, root, dir, session, live, sources, say, io, told });
+        // A hosted watch closes no seat, removes no worktree and runs no swap: those are
+        // destructive actions, and the quiet foundation leaves them to a watch whose effects
+        // are open. The reads that decide an end still happen where a caller asks for them.
+        if (hosted === undefined) await closeEnded({ team, root, dir, session, live, sources, say, io, told });
         // The queue is carried out here, after the pass typed everything it had to type, so a
         // run inspects the boundary it will act on. `--no-nudge` is the watch that types
         // nothing, and a run types (the exit, the launch): such a watch queues the rule's seats
         // and leaves the run to a watch that may. A foreign session already writes nothing.
         if (
-          !foreign
+          hosted === undefined
+          && !foreign
           && !args.flags.has('no-nudge')
           && sources.swapSources !== undefined
           && sources.home !== undefined
@@ -1060,17 +1092,30 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       if (flushed?.error !== undefined) {
         tellOnce(told, 'owner-record', `the owner's inbox was not written: ${flushed.error}`, tell);
       }
-      const place = placedWatch(dir, session, sources.pid, sources.ownPane ? () => own ?? null : undefined);
-      if (place === 'end' && paneGoneOnce) {
-        tell(`the watch's pane is gone; the watch ends with it`, true);
-        break;
+      if (hosted !== undefined) {
+        // One completed pass, on the pass's own clock. The host records liveness from this and
+        // nothing else. No pane record is written and no pane is read for one: a hosted watch
+        // never takes the session's live pane watch over.
+        hosted.cycled(sources.now());
+      } else {
+        const place = placedWatch(dir, session, sources.pid, sources.ownPane ? () => own ?? null : undefined);
+        if (place === 'end' && paneGoneOnce) {
+          tell(`the watch's pane is gone; the watch ends with it`, true);
+          break;
+        }
+        paneGoneOnce = place === 'end';
+        beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place);
       }
-      paneGoneOnce = place === 'end';
-      beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place);
       // The label sweep, inside the wait: a running seat's own status line reaches line 2 in
       // about five seconds, not a whole interval. It repeats the pass's own rule on the panes
       // the last live read named — the same memory, so the two cannot disagree — and the next
       // pass re-reads everything and stays the authority.
+      // A hosted watch has no sidebar and no pane line: the label sweep would only write
+      // refusals to the daemon's log, so its wait carries no sweep.
+      if (hosted !== undefined) {
+        if (!(await sources.wait(inForce.interval))) break;
+        continue;
+      }
       const sweep = () => {
         const last = lastLive;
         if (last === null) return;
@@ -1088,10 +1133,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   } finally {
     statusWaiters?.stop();
     await statusWaiters?.done;
-    updateState(dir, (state) => {
-      const record = state.sessions[session];
-      if (record?.watch?.pid === sources.pid) delete record.watch;
-    });
+    // A hosted watch never wrote the session's pane record, so it never deletes one either.
+    if (hosted === undefined) {
+      updateState(dir, (state) => {
+        const record = state.sessions[session];
+        if (record?.watch?.pid === sources.pid) delete record.watch;
+      });
+    }
     tell(`the watch of "${session}" stopped`, true);
   }
   // exit: watch.stopped
