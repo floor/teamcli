@@ -29,12 +29,18 @@ import { currentTeam } from '../file/current.ts';
 import type { Current } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
+import { defaultLabel } from '../file/validate.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { loadAndResolvePolicyChain, logExpiredPoliciesOnce } from '../policy/index.ts';
+import { labOfModel } from '../policy/model-rule.ts';
+import { profileFor, resolveModelOverride, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
+import { readState, type QueuedSwap } from '../state.ts';
+import { WAIT_FOR, waitSecondsFor } from '../swap/auto.ts';
+import { cancelSwap, enqueueSwap, swapModelOf } from '../swap/queue.ts';
 
 export const USAGE = `Usage: team settings <seat> [--file <path>] [--json]
        team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]
@@ -312,6 +318,143 @@ function orderedSettings(settings: readonly PlannedConfigSetting[]): PlannedConf
   return [...settings].sort((a, b) => CONFIG_KEYS.indexOf(a.key) - CONFIG_KEYS.indexOf(b.key));
 }
 
+/** What a model or effort set asks the queue for: the declaration the file would carry, or
+ *  nothing when the values are already in force — or already queued with the same words. */
+type ConfigSwapPlan = { kind: 'none' } | { kind: 'queue'; to: QueuedSwap['to'] };
+
+/** The two records' targets hold the same words. Optional fields compare as absent. */
+function sameTarget(left: QueuedSwap['to'], right: QueuedSwap['to']): boolean {
+  return left.cli === right.cli
+    && left.vendor === right.vendor
+    && left.model === right.model
+    && left.version === right.version
+    && left.display === right.display
+    && left.launch === right.launch
+    && left.modelFrom === right.modelFrom
+    && left.effort === right.effort
+    && left.account === right.account;
+}
+
+/**
+ * The config swap a real set of `model` and/or `effort` asks for. The change is judged against
+ * the file's declaration — the words the launch reads — and against the queue: a setting already
+ * in force, or one already queued with the same target, asks for no restart. The target recipe is
+ * the one `team add --model/--effort` builds: the declaration's fields with the checked values
+ * applied, the model's resolved lab as the vendor, and the account kept only when it names that
+ * lab. A human's pane is never launched over, so nothing is queued for it.
+ */
+function configSwapPlan(dir: string, seat: Seat, settings: readonly PlannedConfigSetting[]): ConfigSwapPlan {
+  const modelSetting = settings.find((setting) => setting.key === 'model');
+  const effortSetting = settings.find((setting) => setting.key === 'effort');
+  if (modelSetting === undefined && effortSetting === undefined) return { kind: 'none' };
+  if (seat.human) return { kind: 'none' };
+  const profile = profileFor(seat.cli);
+  if (profile === null) return { kind: 'none' };
+
+  const resolved = modelSetting === undefined
+    ? undefined
+    : resolveModelOverride(profile, String(modelSetting.value), seat.version);
+  if (resolved === null) return { kind: 'none' };
+  const current = resolveModelOverride(profile, `${seat.model} ${seat.version}`, seat.version);
+  // A model whose declaration this version cannot resolve cannot be proved unchanged, so the
+  // check treats it as a change; the target is then built from the resolved value.
+  const modelChanges = resolved !== undefined && resolved.id !== current?.id;
+  const effortChanges = effortSetting !== undefined && String(effortSetting.value) !== seat.effort;
+  if (!modelChanges && !effortChanges) return { kind: 'none' };
+
+  const model = modelChanges && resolved ? resolved.model : seat.model;
+  const version = modelChanges && resolved ? resolved.version : seat.version;
+  const display = modelChanges && resolved ? defaultLabel(resolved.model, resolved.version) : seat.display;
+  // The file's vendor is the lab the seat runs under; a model that moves lab moves it too.
+  const vendor = modelChanges ? labOfModel(model) ?? seat.vendor : seat.vendor;
+  const effort = effortSetting === undefined ? seat.effort : String(effortSetting.value);
+  const launch = withLaunchOverrides(profile, seat.launch, {
+    ...(modelChanges && resolved ? { modelId: resolved.id } : {}),
+    ...(effort !== undefined && supportsEffortLaunch(seat.cli) ? { effort } : {}),
+  });
+  // The account outlives only the lab it pays: a model that stays on the same lab keeps it, and
+  // one that moves drops it rather than spend a budget the new model's lab does not pay.
+  const account = modelChanges && seat.account !== vendor ? undefined : seat.account;
+  const to: QueuedSwap['to'] = {
+    cli: seat.cli,
+    vendor,
+    model,
+    version,
+    display,
+    launch,
+    ...(seat.modelFrom !== undefined ? { modelFrom: seat.modelFrom } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    ...(account !== undefined ? { account } : {}),
+  };
+  const held = readState(dir).swaps?.[seat.name];
+  const from = swapModelOf(seat);
+  if (held !== undefined
+    && held.from.cli === from.cli && held.from.vendor === from.vendor && held.from.model === from.model
+    && held.from.version === from.version && held.from.display === from.display
+    && sameTarget(held.to, to)) {
+    return { kind: 'none' };
+  }
+  return { kind: 'queue', to };
+}
+
+/**
+ * Queues the config swap a real model or effort change asks for, and logs it. Returns the notice
+ * for a queue that could not be written, or null. The record is written after the signed setting
+ * it applies, so a failure leaves the setting recorded and says so rather than claiming a restart
+ * that was never queued; nothing here launches or types.
+ */
+function queueConfigSwap(
+  dir: string,
+  seat: Seat,
+  to: QueuedSwap['to'],
+  waitSeconds: number,
+  now: Date,
+): string | null {
+  try {
+    const record = enqueueSwap(dir, {
+      seat: seat.name,
+      from: swapModelOf(seat),
+      to,
+      reason: 'config',
+      waitSeconds,
+      waitFor: WAIT_FOR,
+      now,
+    });
+    logLine(
+      dir,
+      'swap',
+      'owner',
+      `${seat.name}: queued by settings set: ${record.from.vendor} ${record.from.model} -> ${record.to.vendor} ${record.to.model} (runs by ${record.deadline})`,
+      now,
+    );
+    return null;
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    logLine(dir, 'settings', 'owner', `seat ${seat.name}: the restart swap could not be queued (${why})`, now);
+    return `the setting was written; the restart swap that applies it could not be queued (${why})`;
+  }
+}
+
+/**
+ * Takes back the config swap an unset withdrew the setting from. The record applied a signed
+ * model or effort value that is now gone, so it no longer speaks for one; a swap the entity rule
+ * queued stands, because the rule still asks for it. Returns the notice for a cancel that could
+ * not be written, or null.
+ */
+function cancelConfigSwap(dir: string, seat: Seat, now: Date): string | null {
+  const held = readState(dir).swaps?.[seat.name];
+  if (held === undefined || held.reason !== 'config') return null;
+  try {
+    cancelSwap(dir, seat.name);
+    logLine(dir, 'swap', 'owner', `${seat.name}: the queued config swap was cancelled because the setting it applied was unset`, now);
+    return null;
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    logLine(dir, 'settings', 'owner', `seat ${seat.name}: the queued config swap could not be cancelled (${why})`, now);
+    return `the setting was unset; the restart swap that applied it could not be cancelled (${why})`;
+  }
+}
+
 /**
  * The seats a nickname write collides with: the file's seats with each seat's effective signed
  * nickname standing where the file's word did, plus every roster seat the file no longer
@@ -461,6 +604,20 @@ function executeWrite(
       return dryRunExit();
     }
 
+    // A model or effort setting applies by restart, so a real change must be queueable before the
+    // record is signed: the swap is queued at the seat's boundary and the settings command never
+    // launches or types. A change already in force, or already queued with the same words, asks
+    // for nothing; a wait that cannot be resolved refuses the write before anything is recorded.
+    const swapPlan = configSwapPlan(current.dir, seat, settings);
+    let swapWait = 0;
+    if (swapPlan.kind === 'queue') {
+      const wait = waitSecondsFor(home, current.root, team, seat, now);
+      if ('why' in wait) {
+        return policyExit(io, json, `${seat.name}: the swap that applies this change cannot be given its wait: ${wait.why}`);
+      }
+      swapWait = wait.seconds;
+    }
+
     // Only a real write that passed every check reaches this point. The record a declared seat
     // never had is created here, before the generation is bumped and before any setting is signed:
     // a dry run, a refused key or value, a policy refusal and a collision all leave the registry
@@ -481,7 +638,7 @@ function executeWrite(
     }
     const written = writeConfigSet(home, { ...plan, target: agentId, settings: checked }, { now });
     if (!written.ok) return planExit(io, json, written.kind, written.why);
-    const notice = recordChanges(current, home, seat.name, agentId, settings, written.written);
+    const changesNotice = recordChanges(current, home, seat.name, agentId, settings, written.written);
     logLine(
       join(current.root, '.agents'),
       'settings',
@@ -489,6 +646,10 @@ function executeWrite(
       `seat ${seat.name} (${agentId}) ${settings.map((setting) => `${setting.key}: ${sayConfigValue(setting.previous?.value ?? null)} -> ${sayConfigValue(setting.value)}`).join('; ')}`,
       now,
     );
+    const queuedNotice = swapPlan.kind === 'queue'
+      ? queueConfigSwap(current.dir, seat, swapPlan.to, swapWait, now)
+      : null;
+    const notice = [changesNotice, queuedNotice].filter((entry): entry is string => entry !== null).join('; ') || null;
     if (json) {
       writeJson(io, 'team.settings-change', {
         format: 1 as const,
@@ -566,7 +727,7 @@ function executeWrite(
   }
   // A removal reports the record it removed from: the seat's agent id when it has one, and the
   // seat's name when the plan found nothing to remove under a declared name.
-  const notice = recordRemovals(current, home, seat.name, targetId, removed, now);
+  const changesNotice = recordRemovals(current, home, seat.name, targetId, removed, now);
   logLine(
     join(current.root, '.agents'),
     'settings',
@@ -574,6 +735,14 @@ function executeWrite(
     `seat ${seat.name} (${targetId}) ${removed.map((setting) => `${setting.key}: ${sayConfigValue(setting.previous?.value ?? setting.value)} -> unset`).join('; ')}`,
     now,
   );
+  // A withdrawn model or effort value leaves a queued config swap applying nothing signed, so
+  // the record is taken back with the setting.
+  const cancelledNotice = removed.some((setting) => setting.key === 'model' || setting.key === 'effort')
+    ? cancelConfigSwap(current.dir, seat, now)
+    : null;
+  const notice = [changesNotice, cancelledNotice]
+    .filter((entry): entry is string => entry !== null)
+    .join('; ') || null;
   if (json) {
     writeJson(io, 'team.settings-change', {
       format: 1 as const,
