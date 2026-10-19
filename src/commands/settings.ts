@@ -516,9 +516,10 @@ function configSwapPlan(input: {
 /**
  * Applies the queue action a written change asked for, atomically against the queue: a config
  * record may be queued, replaced or taken back, and a record another command queued (`owner` or
- * `model-rule`) is left in place. Runs only after the signed setting is replaced; a queue write
- * that fails here leaves that setting in force and is reported as a partial, never as a full
- * success. Nothing here launches or types.
+ * `model-rule`) is left in place. Runs only once the signed setting is in force — written by
+ * this command, or by the interrupted attempt whose retry repairs the queue; a queue write that
+ * fails here leaves that setting in force and is reported as a partial, never as a full success.
+ * Nothing here launches or types.
  */
 function applyConfigSwap(
   dir: string,
@@ -527,7 +528,7 @@ function applyConfigSwap(
   verb: 'set' | 'unset',
   waitSeconds: number,
   now: Date,
-): { ok: true } | { ok: false; why: string } {
+): { ok: true; action: 'cancel' | 'queue' } | { ok: false; why: string } {
   if (plan.kind === 'conflict') {
     logLine(dir, 'settings', 'owner', `seat ${seat.name}: ${plan.why}`, now);
     return { ok: false, why: plan.why };
@@ -550,7 +551,7 @@ function applyConfigSwap(
           now,
         );
       }
-      return { ok: true };
+      return { ok: true, action: 'cancel' };
     }
     const written = updateState(dir, (state) => {
       const held = state.swaps?.[seat.name];
@@ -582,7 +583,7 @@ function applyConfigSwap(
       `${seat.name}: queued by settings ${verb}: ${written.record.from.vendor} ${written.record.from.model} -> ${written.record.to.vendor} ${written.record.to.model} (runs by ${written.record.deadline})`,
       now,
     );
-    return { ok: true };
+    return { ok: true, action: 'queue' };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const why = plan.kind === 'cancel'
@@ -591,6 +592,64 @@ function applyConfigSwap(
     logLine(dir, 'settings', 'owner', `seat ${seat.name}: ${why}`, now);
     return { ok: false, why };
   }
+}
+
+/** What a repeated unset found with its key already gone: nothing to repair, the queue brought
+ *  back in line with the signed chain, a refusal before anything is written, or a queue write
+ *  that failed after the earlier removal stood. */
+type AbsentUnsetRepair =
+  | { kind: 'nothing' }
+  | { kind: 'repaired'; action: 'cancel' | 'queue' }
+  | { kind: 'refused'; exit: 'source' | 'value' | 'write'; why: string }
+  | { kind: 'partial'; why: string };
+
+/**
+ * An unset whose key is already gone still owns the restart record an interrupted predecessor
+ * left. The queue is judged against the whole signed chain AFTER the removal, exactly as a
+ * removal that signed here would judge it: a stale config record is taken back when nothing is
+ * left to apply, and updated when a remaining signed word still asks for a change. A record
+ * another command queued (`owner` or `model-rule`) is never replaced — a request that differs
+ * from the target the signed chain still needs is reported as a conflict and left in place —
+ * and a queue that already carries the exact target asks for nothing. Nothing here signs a
+ * setting, launches or types.
+ */
+function repairAbsentUnset(
+  home: string,
+  current: Extract<Current, { ok: true }>,
+  seat: Seat,
+  keys: readonly string[],
+  now: Date,
+): AbsentUnsetRepair {
+  const unset = new Set<ConfigKey>(keys.filter((key): key is ConfigKey => key === 'model' || key === 'effort'));
+  if (unset.size === 0) return { kind: 'nothing' };
+  const heldRead = heldSwap(current.dir, seat.name);
+  if (!heldRead.ok) return { kind: 'refused', exit: 'write', why: heldRead.why };
+  if (heldRead.held === undefined) return { kind: 'nothing' };
+  const rows = readSeatRows(home, current.root, current.team, seat);
+  if (!rows.ok) return { kind: 'refused', exit: 'source', why: rows.why };
+  const plan = configSwapPlan({
+    dir: current.dir,
+    seat,
+    rows: rows.rows,
+    change: { set: new Map(), unset },
+  });
+  if (plan.kind === 'none') return { kind: 'nothing' };
+  if (plan.kind === 'refuse') return { kind: 'refused', exit: plan.exit, why: plan.why };
+  let wait = 0;
+  if (plan.kind === 'queue') {
+    const seconds = waitSecondsFor(home, current.root, current.team, seat, now);
+    if ('why' in seconds) {
+      return {
+        kind: 'refused',
+        exit: 'write',
+        why: `${seat.name}: the restart swap the interrupted unset left cannot be updated because its wait cannot be resolved: ${seconds.why}`,
+      };
+    }
+    wait = seconds.seconds;
+  }
+  const applied = applyConfigSwap(current.dir, seat, plan, 'unset', wait, now);
+  if (!applied.ok) return { kind: 'partial', why: applied.why };
+  return { kind: 'repaired', action: applied.action };
 }
 
 /**
@@ -841,6 +900,41 @@ function executeWrite(
   const request = { level: 'seat' as const, target: targetId, keys };
   const plan = planConfigUnset(home, request);
   if (!plan.ok) {
+    // A key an interrupted unset already took away is still this command's to finish: the
+    // restart record its failed cancel or update left is judged against the whole signed chain
+    // after that removal, exactly as the first attempt judged it. A dry run writes nothing and
+    // still reports the key as not set.
+    if (plan.kind === 'value' && !dryRun) {
+      const repair = repairAbsentUnset(home, current, seat, keys, now);
+      if (repair.kind === 'refused') return planExit(io, json, repair.exit, repair.why);
+      if (repair.kind === 'partial') {
+        return planExit(io, json, 'write', `the setting is already unset; ${repair.why}`);
+      }
+      if (repair.kind === 'repaired') {
+        const word = repair.action === 'cancel'
+          ? 'the stale restart swap it left was taken back'
+          : 'the queued restart swap now applies the change that remains signed';
+        const summary = `settings: ${keys.join(', ')} already unset at seat (${seat.name}); ${word}`;
+        if (json) {
+          writeJson(io, 'team.settings-change', {
+            format: 1 as const,
+            dry_run: false,
+            status: 'unset',
+            action_summary: summary,
+            project: team.project,
+            session: team.session,
+            level: 'seat' as const,
+            target: targetId,
+            seat: seat.name,
+            settings: [],
+            notice: `${keys.join(', ')} was already unset; ${word}`,
+          });
+        } else {
+          io.stdout(`${summary}\n`);
+        }
+        return unsetExit();
+      }
+    }
     if (plan.kind === 'value') return notSetExit(io, json, plan.why);
     return planExit(io, json, plan.kind, plan.why);
   }

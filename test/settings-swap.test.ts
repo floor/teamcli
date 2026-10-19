@@ -623,6 +623,156 @@ describe('a queue write that fails after the signing is a partial', () => {
   });
 });
 
+describe('a repeated unset finishes the queue its interrupted predecessor left', () => {
+  test('retrying the same unset takes the stale config record back', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    const blocker = blockStateWrites();
+    try {
+      expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
+      expect(queue()['lead']).toMatchObject({ reason: 'config' });
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+
+    // The key is gone, but the restart record its failed cancel left is still the queue's to
+    // repair: the retry judges it against the whole signed chain after the removal.
+    const retry = await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:15:00Z'));
+    expect(retry.code).toBe(0);
+    expect(retry.out).toBe('settings: model already unset at seat (lead); the stale restart swap it left was taken back\n');
+    expect(queue()).toEqual({});
+  });
+
+  test('a retry keeps a remaining signed effort intent in the queue', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    const blocker = blockStateWrites();
+    try {
+      // The removal signs, and the queue update that would keep the effort intent fails.
+      expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+    expect(queue()['lead']).toMatchObject({ reason: 'config', to: { model: 'Claude Haiku', effort: 'low' } });
+
+    const later = new Date('2026-10-19T10:15:00Z');
+    const retry = await run(['unset', 'lead', 'model'], later);
+    expect(retry.code).toBe(0);
+    expect(queue()['lead']).toMatchObject({
+      reason: 'config',
+      to: { model: 'Claude Opus', effort: 'low', launch: 'claude --model claude-opus-5-5 --effort low' },
+      queuedAt: later.toISOString(),
+    });
+  });
+
+  test('a retry that still leaves a change reports a competing request instead of replacing it', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    const blocker = blockStateWrites();
+    try {
+      expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+    enqueueSwap(stateDir(), {
+      seat: 'lead',
+      from: declaration(),
+      to: {
+        cli: 'claude-code',
+        vendor: 'anthropic',
+        model: 'Claude Fable',
+        version: '5.5',
+        display: 'claude fable 5.5',
+        launch: 'claude --model claude-fable-5-5',
+      },
+      reason: 'owner',
+      waitSeconds: 1800,
+      waitFor: WAIT_FOR,
+      now: NOW,
+    });
+
+    // The signed effort still asks for a restart; the owner request is preserved and the
+    // conflict is reported, exactly as an unset that signed its removal here would report it.
+    const retry = await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:15:00Z'));
+    expect(retry.code).toBe(2);
+    expect(retry.err).toContain('the setting is already unset');
+    expect(retry.err).toContain('holds a request queued by owner');
+    expect(queue()['lead']).toMatchObject({ reason: 'owner', to: { model: 'Claude Fable' } });
+  });
+
+  test('a retry with nothing left to apply leaves another command request standing', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    const blocker = blockStateWrites();
+    try {
+      expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+    enqueueSwap(stateDir(), {
+      seat: 'lead',
+      from: declaration(),
+      to: {
+        cli: 'claude-code',
+        vendor: 'anthropic',
+        model: 'Claude Fable',
+        version: '5.5',
+        display: 'claude fable 5.5',
+        launch: 'claude --model claude-fable-5-5',
+      },
+      reason: 'owner',
+      waitSeconds: 1800,
+      waitFor: WAIT_FOR,
+      now: NOW,
+    });
+
+    // Nothing config-owned remains to repair; the request another command queued is not this
+    // command's to touch, and the key itself is still reported as not set.
+    const retry = await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:15:00Z'));
+    expect(retry.code).toBe(1);
+    expect(retry.err).toContain('nothing to unset');
+    expect(queue()['lead']).toMatchObject({ reason: 'owner', to: { model: 'Claude Fable' } });
+  });
+
+  test('a dry run of the repeated unset writes nothing', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    const blocker = blockStateWrites();
+    try {
+      expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+
+    const dry = await run(['unset', 'lead', 'model', '--dry-run'], new Date('2026-10-19T10:15:00Z'));
+    expect(dry.code).toBe(1);
+    expect(dry.err).toContain('nothing to unset');
+    expect(queue()['lead']).toMatchObject({ reason: 'config' });
+  });
+
+  test('the repaired retry answers --json with the unset result and its notice', async () => {
+    registerLead();
+    expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
+    const blocker = blockStateWrites();
+    try {
+      expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
+    } finally {
+      rmSync(blocker, { recursive: true, force: true });
+    }
+
+    const retry = await run(['unset', 'lead', 'model', '--json'], new Date('2026-10-19T10:15:00Z'));
+    expect(retry.code).toBe(0);
+    const doc = JSON.parse(retry.out) as { status: string; seat: string; settings: unknown[]; notice: string };
+    expect(doc.status).toBe('unset');
+    expect(doc.seat).toBe('lead');
+    expect(doc.settings).toEqual([]);
+    expect(doc.notice).toContain('already unset');
+    expect(queue()).toEqual({});
+  });
+});
+
 describe('a config write never replaces another command request', () => {
   test('an owner request is preserved and the conflict is reported', async () => {
     registerLead();
