@@ -3,6 +3,7 @@
 // `team check` and the daemon's own health answer read it through this module.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { pidAlive } from '../state.ts';
+import type { HostedWatchState } from '../watch/hosted.ts';
 import { daemonStatePath, machineConfigDir } from './paths.ts';
 
 /** Which features the running build actually carries. `absent` means the handler is not built;
@@ -20,6 +21,12 @@ export type DaemonRootState = {
   send: 'serving' | 'already-running' | 'failed';
   bus: 'serving' | 'failed';
   why: string | null;
+  /**
+   * The route's hosted watch, present only when the daemon was started to carry one. A reader
+   * may treat a stopped or failed phase as a check failure only when this field exists and
+   * says `required`; a route without it was never started to carry a watch.
+   */
+  watch?: HostedWatchState;
 };
 
 export type DaemonState = {
@@ -121,15 +128,55 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     if (!['serving', 'already-running', 'failed'].includes(entry.send as string)) return null;
     if (!['serving', 'failed'].includes(entry.bus as string)) return null;
     if (!(entry.why === null || typeof entry.why === 'string')) return null;
+    const watch = watchOf(entry.watch);
     roots.push({
       root: entry.root,
       team: entry.team as string | null,
       send: entry.send as DaemonRootState['send'],
       bus: entry.bus as DaemonRootState['bus'],
       why: entry.why as string | null,
+      ...(watch === null ? {} : { watch }),
     });
   }
   return roots;
+}
+
+/**
+ * A watch record is display data, not a hosting fact: a malformed one is left out rather than
+ * making the whole daemon record unreadable, and an absent one means the route was not started
+ * to carry a hosted watch.
+ */
+function watchOf(raw: unknown): HostedWatchState | null {
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.routeId !== 'string' || entry.routeId === '') return null;
+  if (typeof entry.root !== 'string' || entry.root === '') return null;
+  if (typeof entry.team !== 'string' || typeof entry.session !== 'string') return null;
+  if (!['starting', 'running', 'standby', 'stopping', 'stopped', 'failed'].includes(entry.phase as string)) return null;
+  if (typeof entry.startedAt !== 'string') return null;
+  if (!(entry.lastCycleAt === null || typeof entry.lastCycleAt === 'string')) return null;
+  if (![null, 'pass', 'failed'].includes(entry.lastCycleOutcome as string | null)) return null;
+  if (!Number.isInteger(entry.cycles) || (entry.cycles as number) < 0) return null;
+  if (!Number.isInteger(entry.failures) || (entry.failures as number) < 0) return null;
+  if (!['blocked', 'open'].includes(entry.effects as string)) return null;
+  if (typeof entry.required !== 'boolean') return null;
+  if (!(entry.why === null || typeof entry.why === 'string')) return null;
+  return {
+    routeId: entry.routeId,
+    root: entry.root,
+    team: entry.team,
+    session: entry.session,
+    phase: entry.phase as HostedWatchState['phase'],
+    startedAt: entry.startedAt,
+    lastCycleAt: entry.lastCycleAt as string | null,
+    lastCycleOutcome: entry.lastCycleOutcome as HostedWatchState['lastCycleOutcome'],
+    cycles: entry.cycles as number,
+    failures: entry.failures as number,
+    effects: entry.effects as HostedWatchState['effects'],
+    required: entry.required,
+    why: entry.why as string | null,
+  };
 }
 
 function positiveInt(value: unknown): boolean {
