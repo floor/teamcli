@@ -124,16 +124,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   live file writes it and the run writes that one entry, and a source the record does not hold, or
   holds differently, stays the owner's. `--until` and `--worktree` still need `--temporary`;
   `--like` alone is now a declared copy.
-- **Unsent text in a composer no longer holds a delivery.** A profile may now carry an `input`
+- **A one-row unsent draft no longer holds a delivery.** A profile may now carry an `input`
   block, declaring the measured way into its CLI's input box: the keys that empty an idle box
   (`clear`), optionally the keys that empty it mid-turn (`clear_working`), the paste surface
   (`paste: bracketed`, the one measured), and whether the CLI takes text while a turn runs
   (`mid_turn`). claude-code, codex and cursor carry one, each from a run recorded over its own
   pane; every other profile carries none, and a delivery that finds unsent text there holds as
-  it did. A typed delivery that finds a draft copies it beside the drop file (`<drop>.draft`),
-  clears the box with the profile's keys — the mid-turn key while the seat is working, never
-  the interrupt key — types the trigger and presses Enter, then pastes the text back exactly,
-  multi-line included, and removes the copy only once the box reads back as the same rows. A
+  it did. A typed delivery that finds a one-row draft copies it beside the drop file
+  (`<drop>.draft`), clears the box with the profile's keys — the mid-turn key while the seat is
+  working, never the interrupt key — types the trigger and presses Enter, then pastes the text
+  back exactly as it was read and removes the copy only once the box reads that text back. A
   copy already beside the drop holding different text is never overwritten: the run holds and
   names it. The direct leg, the daemon queue, the watch's held-send retry and the native
   handoff all carry the same keys, so every route makes the same delivery, while the watch's
@@ -141,11 +141,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unsent text was pasted back`, or `…; its copy is at <path>`); a delivered exit restores the
   draft after a late clear or a read that fails, a box that reads other text keeps its copy,
   and a not-submitted run puts the text back before saying so. `restart` restarts an idle seat
-  holding unsent text instead of leaving it: it copies the rows to
+  holding one row of unsent text instead of leaving it: it copies that row to
   `restart-drafts/<session>/<seat>.draft` under the session lock, prints the copy's path in the
   pre-close facts, closes the pane without typing over the text, and pastes it back into the
-  new pane once herdr reports it idle or done, removing the copy only after the box reads back
-  as the same rows; a different copy at the path refuses the restart and is never overwritten.
+  new pane once herdr reports it idle or done, removing the copy only after the box reads it
+  back; a different copy at the path refuses the restart and is never overwritten.
   A box drawn over more than one row is never copied — the composer word-wraps a long line over
   the same continuation rows a person's Enters draw, so a soft wrap cannot come back as a line
   break nobody typed — and that box, a profile with no measured keys, a missing mid-turn key, a
