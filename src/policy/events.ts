@@ -69,6 +69,9 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   // the event reaches the entity's own lead and the owner at once. The owner stands even when
   // the registry names no entity lead, so a climb is never silent.
   'seat.prompt-escalated': ['entity', 'owner'],
+  // A seat that was blocked at a prompt and is now working again: closes the open at-prompt
+  // notice for the lead and operator.
+  'seat.unblocked': ['lead', 'operator'],
   'seat.unreachable': ['lead', 'operator'],
   'seat.done': ['lead', 'operator'],
   'work.claimed': ['lead'],
