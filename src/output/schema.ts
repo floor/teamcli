@@ -213,6 +213,51 @@ export const ERROR_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** The idle-with-work reading as the producer writes it (`src/idle_work.ts`), shared by the two
+ *  commands that print it: a field added there without its schema fails the smoke check. */
+const IDLE_WORK_SCHEMA_FRAGMENT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['format', 'at', 'threshold_seconds', 'takeable', 'idle'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    at: { type: 'string', minLength: 1 },
+    threshold_seconds: { type: 'integer', minimum: 0 },
+    threshold_unknown: { type: 'string', minLength: 1 },
+    takeable: { type: ['integer', 'null'], minimum: 0 },
+    refused: { type: 'string', minLength: 1 },
+    idle: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seat'],
+        properties: {
+          seat: { type: 'string', minLength: 1 },
+          since: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+} as const;
+
+/** The green journal's ready-but-uninstalled metadata, as `status` and `check` print it. */
+const GREEN_SLICES_SCHEMA_FRAGMENT = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['task', 'seat', 'commit', 'version', 'readyAt'],
+    properties: {
+      task: { type: 'string', minLength: 1 },
+      seat: { type: 'string', minLength: 1 },
+      commit: { type: 'string', minLength: 1 },
+      version: { type: 'string', minLength: 1 },
+      readyAt: { type: 'string', minLength: 1 },
+    },
+  },
+} as const;
+
 /** Published `--json` output schema for the pilot `team status` command (`schema/status.schema.json`). */
 export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.status',
@@ -288,6 +333,11 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           type: 'array',
           items: { type: 'object' },
         },
+        // The idle-with-work reading and the green journal, read by the status slice: each is
+        // absent when the command did not read it.
+        idle_work: IDLE_WORK_SCHEMA_FRAGMENT,
+        green_slices: GREEN_SLICES_SCHEMA_FRAGMENT,
+        green_notice: { type: 'string' },
       },
     },
     {
@@ -518,6 +568,11 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: DIFFERENCE_SCHEMA_FRAGMENT,
     },
     summary: SUMMARY_SCHEMA_FRAGMENT,
+    // The same two readings `status` carries, and the rollout hint a stale brief leaves.
+    idle_work: IDLE_WORK_SCHEMA_FRAGMENT,
+    green_slices: GREEN_SLICES_SCHEMA_FRAGMENT,
+    green_notice: { type: 'string' },
+    hint: { type: 'string', minLength: 1 },
   },
 };
 /** Published `--json` output schema for `team client keygen` (`schema/client.schema.json`). */
@@ -1178,6 +1233,79 @@ export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team queue` (`schema/queue.schema.json`). */
+export const QUEUE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.queue',
+  fileName: 'queue.schema.json',
+  title: 'team queue --json output',
+  required: ['format', 'project', 'session', 'source', 'path', 'tasks'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    // `local` is the fallback queue; `file` is the path the owner's tasks section names.
+    source: { type: 'string', enum: ['local', 'file'] },
+    path: { type: 'string', minLength: 1 },
+    // Present on an add alone: `present` means the same record was already queued and nothing was written.
+    status: { type: 'string', enum: ['added', 'present'] },
+    task: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'title', 'assignee'],
+      properties: {
+        id: { type: 'string', minLength: 1 },
+        title: { type: 'string', minLength: 1 },
+        assignee: { type: ['string', 'null'] },
+        priority: { type: ['string', 'number'] },
+      },
+    },
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'title', 'assignee'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          title: { type: 'string', minLength: 1 },
+          assignee: { type: ['string', 'null'] },
+          priority: { type: ['string', 'number'] },
+        },
+      },
+    },
+  },
+};
+
+export const GREEN_SLICE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.green-slice',
+  fileName: 'green-slice.schema.json',
+  title: 'team queue ready|install --json output',
+  required: ['format', 'project', 'session', 'action', 'status', 'event'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    action: { type: 'string', enum: ['ready', 'install'] },
+    // `held` means the same task, commit and version was already recorded; nothing was written.
+    status: { type: 'string', enum: ['recorded', 'held'] },
+    event: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'task', 'commit', 'version', 'at'],
+      properties: {
+        kind: { type: 'string', enum: ['ready', 'install'] },
+        task: { type: 'string', minLength: 1 },
+        commit: { type: 'string', minLength: 7, maxLength: 40 },
+        version: { type: 'string', minLength: 1 },
+        // A ready event names the seat; an install event names the installer that acknowledged it.
+        seat: { type: 'string', minLength: 1 },
+        installedBy: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team feed` (`schema/feed.schema.json`). */
 export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.feed',
@@ -1730,7 +1858,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },
         seat: { type: 'string', minLength: 1 },
-        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', null] },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', null] },
         to: { type: 'string', minLength: 1 },
         confirm: { type: 'string', minLength: 1 },
         message: { type: 'string' },
@@ -2476,6 +2604,8 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SESSIONS_OUTPUT_SCHEMA,
   FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
+  QUEUE_OUTPUT_SCHEMA,
+  GREEN_SLICE_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,

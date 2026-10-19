@@ -1190,9 +1190,10 @@ describe('team send leaves the record the retry reads', () => {
     });
 
     expect(readPending(dropDir)).toEqual([]);
-    // The send's own typed leg (still the old form until its caller passes a sender) wrote the
-    // first line; the retry that finished the delivery names its sender.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string, readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    // The send's own typed leg named its sender; the retry that finished the delivery types the
+    // same named line, which is what the seat's box already holds.
+    const held = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+    expect(one.typed).toEqual([held, held]);
     expect(one.enters).toBe(1);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);

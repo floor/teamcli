@@ -15,6 +15,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { renderSenderLine, SENDER_LINE_DEFAULT } from '../settings/sender-line.ts';
 
 /** The longest trigger typed into a pane. Agy on a 13-column pane submitted 200 and collapsed at 400. */
 export const TRIGGER_MAX = 200;
@@ -52,8 +53,15 @@ export type NativePane = {
 };
 
 /** The sender a typed wake names, taken from the send's authenticated record — the seat that
- *  wrote it and the team it wrote from — never from the body or its first line. */
-export type TriggerSender = { seat: string; team: string };
+ *  wrote it and the team it wrote from — never from the body or its first line. `format` is the
+ *  receiving team's `sender-line` policy in force: the words ahead of the instruction, with
+ *  `{seat}` and `{team}` standing for this record's own. Absent, the shipped floor applies. */
+export type TriggerSender = { seat: string; team: string; format?: string };
+
+/** The line's opening: the team's format with this sender's signed identity in its slots. */
+function wakeHead(sender: TriggerSender): string {
+  return renderSenderLine(sender.format ?? SENDER_LINE_DEFAULT, sender);
+}
 
 /**
  * One line naming the drop file and, when the send knows it, the sender: `From
@@ -66,8 +74,8 @@ export type TriggerSender = { seat: string; team: string };
  */
 export function triggerLine(path: string, sender?: TriggerSender): string | null {
   if (sender !== undefined) {
-    const named = `From ${sender.seat}@${sender.team}: read ${path} and do that.`;
-    if (named.includes('\n') || named.length > TRIGGER_MAX) return null;
+    const named = `${wakeHead(sender)} read ${path} and do that.`;
+    if (/[\r\n]/.test(named) || named.length > TRIGGER_MAX) return null;
     return named;
   }
   const line = `Read ${path} and do that.`;
@@ -89,8 +97,8 @@ export function triggerLine(path: string, sender?: TriggerSender): string | null
  */
 export function readTriggerLine(seat: string, session: string, sender?: TriggerSender): string | null {
   if (sender !== undefined) {
-    const named = `From ${sender.seat}@${sender.team}: run team drops --read --seat ${seat} --session ${session} and do that.`;
-    if (named.includes('\n') || named.length > TRIGGER_MAX) return null;
+    const named = `${wakeHead(sender)} run team drops --read --seat ${seat} --session ${session} and do that.`;
+    if (/[\r\n]/.test(named) || named.length > TRIGGER_MAX) return null;
     return named;
   }
   const line = `Run team drops --read --seat ${seat} --session ${session} and do that.`;

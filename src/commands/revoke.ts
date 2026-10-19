@@ -56,7 +56,7 @@ export async function runRevoke(argv: string[], rawIo: Io, options: AuthorityEdi
   }
   const dryRun = args.flags.has('dry-run');
   const result = looksClient
-    ? runClientRevokeMode(rawIo, io, args.values.client ?? target!, json)
+    ? runClientRevokeMode(rawIo, io, args.values.client ?? target!, json, home)
     : edit !== undefined
       ? await runAuthorityEdit('revoke', edit, rawIo, { ...options, dryRun, json })
       : runStandingRevoke(rawIo, { name: standing!.name }, { ...options, dryRun, json });

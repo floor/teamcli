@@ -47,10 +47,12 @@ import { runHold } from '../src/commands/hold.ts';
 import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
+import { runDevelopmentMode } from '../src/commands/development-mode.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
 import { runPlan } from '../src/commands/plan.ts';
+import { runQueue } from '../src/commands/queue.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runProc, type ProcSources } from '../src/commands/proc.ts';
@@ -1230,6 +1232,28 @@ scene('conformance-adapter.finished', async () => {
   const code = await proc.exited;
   const out = await new Response(proc.stdout).text();
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
+});
+
+scene('development-mode.done', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--show'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'would set the machine development mode to local-fast',
+  );
+});
+scene('development-mode.refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'off'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'only the owner switches the machine development mode',
+  );
+});
+scene('development-mode.invocation', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'maybe'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'the mode must be one of local-fast|pr-per-change|off',
+  );
 });
 
 scene('doctor.invocation', async (place) => {
@@ -3932,6 +3956,100 @@ scene('plan.read', async (place) => {
   }
 });
 
+async function queued(place: Place, argv: string[], caller: Caller = leadSeat): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runQueue(argv, io, { home: place.home }), out: io.out, err: io.err };
+}
+
+/** A live lease on `id`, written with the machine's clock: the exit scenes run in real time. */
+function leaseFile(place: Place, id: string, seat = 'lead', pane = 'w1:p1'): void {
+  const at = new Date().toISOString();
+  const until = new Date(Date.now() + 60 * 60_000).toISOString();
+  mkdirSync(join(place.root, '.agents', 'leases'), { recursive: true });
+  writeFileSync(
+    join(place.root, '.agents', 'leases', `${id}.json`),
+    `${JSON.stringify({ format: 1, id, seat, pane, acquiredAt: at, renewedAt: at, until }, null, 2)}\n`,
+  );
+}
+
+/** A queue holding `q1`, written directly: these scenes test the producer, not the add. */
+function queueQ1(place: Place): void {
+  writeFileSync(join(place.root, '.agents', 'queue.yaml'), '- id: "q1"\n  title: "a leased task"\n');
+}
+
+scene('queue.added', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1']), 'queued q1 in .agents/queue.yaml');
+});
+scene('queue.present', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1']), 'q1 is already queued in .agents/queue.yaml');
+});
+scene('queue.none', async (place) => {
+  write(place, TEAM);
+  return show(await queued(place, ['list']), '0 tasks');
+});
+scene('queue.shown', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['list']), 'q1  a queued task');
+});
+scene('queue.caller', async (place) => {
+  write(place, TEAM);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1'], other), 'only the owner or a seat of this team adds to the queue; this call is other');
+});
+scene('queue.duplicate', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['add', 'another queued task', '--id', 'q1']), 'q1 is already queued with a different record');
+});
+scene('queue.file', async (place) => show(await queued(place, ['list']), 'no team file'));
+scene('queue.read', async (place) => {
+  write(place, TASKS);
+  return show(await queued(place, ['list']), 'the task file is not there');
+});
+scene('queue.source', async (place) => {
+  write(place, LINEAR);
+  return show(await queued(place, ['list']), 'declares a linear task source');
+});
+scene('queue.invocation', async (place) => show(await queued(place, ['bogus']), 'unexpected "bogus"'));
+scene('queue.not-a-repo', async (place) => show(await queued(place, ['list']), 'run team from a project\n'), false);
+scene('queue.ready', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  queueQ1(place);
+  leaseFile(place, 'q1');
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'ready q1 at abcdef1');
+});
+scene('queue.install', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['install', 'q1', '--commit', 'abcdef1'], { kind: 'owner' }), 'installed q1 at abcdef1');
+});
+scene('queue.lease', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'holds no live lease');
+});
+scene('queue.installer', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['install', 'q1', '--commit', 'abcdef1']), 'designates no installer');
+});
+scene('queue.record', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  queueQ1(place);
+  leaseFile(place, 'q1');
+  writeFileSync(join(place.root, '.agents', 'green-slices.json'), 'nope\n');
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'is not valid JSON');
+});
+
 /** `team send`'s fixtures: a fake seat of the fixture's own file, a sockets folder with a file
  *  at the pid the fake pane process reports, and a deliver that accepts — with `reply` set,
  *  the seat also answers at the sender's own pid path, as a session does. No path calls this
@@ -4287,6 +4405,20 @@ scene('send.configuration', async (place) =>
 scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
+});
+scene('send.brief-memory', async (place) => {
+  // The fixture's worker is stopped, which is its own refusal; the lead is open, and the
+  // transport is read before the draft or any drop is touched.
+  write(place, TEAM);
+  const path = join(place.root, 'brief.md');
+  writeFileSync(path, 'the whole brief\n');
+  const wrote = writePolicySet(
+    place.home,
+    { level: 'team', target: place.root, teamRoot: place.root, name: 'brief-transport', value: 'memory' },
+    { now: NOW },
+  );
+  expect(wrote.ok).toBe(true);
+  return show(await sent(place, ['lead', '--brief', path], owner, sendHost(place)), 'brief-transport is memory');
 });
 scene('send.held', async (place) => {
   write(place, TEAM);
@@ -5615,6 +5747,16 @@ analyzerTest('a throw in an imported helper is covered by team.command-threw', (
   files.set('src/commands/gate-throw.ts', "export function gateThrow(): void {\n  throw new Error('gate');\n}\n");
   expect(problems({ files })).toEqual([]);
   expect(analyze(files).coveredThrows.some((item) => item.file === 'src/commands/gate-throw.ts' && item.id === 'team.command-threw')).toBe(true);
+});
+
+analyzerTest('a plain-JS import is outside the contract: not read, and a return through it is refused', () => {
+  const files = withDoctor(
+    "  if (argv[0] === '--gate-plain') plainSignal();\n  if (argv[0] === '--gate-plain-code') return plainCode();\n",
+    "import { plainCode, plainSignal } from './plain-signal.js';\n",
+  );
+  const found = problems({ files });
+  expect(found.some((line) => line.includes("can't read this file"))).toBe(false);
+  expect(found.some((line) => line.includes(UNREADABLE))).toBe(true);
 });
 
 analyzerTest('a default-parameter call fails the check', () => {

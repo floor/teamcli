@@ -287,6 +287,12 @@ export type TeamFile = {
    */
   tempo: 'relaxed' | 'normal' | 'urgent';
   /**
+   * The one seat that may record a green-slice install beside the owner, or null when the file
+   * names none — then only the owner records an install. An owner section: naming or changing
+   * the seat needs a new approval, and an unapproved designation never admits an install.
+   */
+  installer: string | null;
+  /**
    * The orchestrator seat's grant, or null when the file has no `grant` section. An owner
    * section: changing it needs a new approval. `approve` in `scope` is an ordinary approval;
    * this section itself stays the owner's.

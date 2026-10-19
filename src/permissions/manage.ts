@@ -71,7 +71,7 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate (OD-20261019-49).
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, ...(options.home !== undefined ? { home: options.home } : {}) });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, home: options.home ?? homedir() });
     if (lift === null || !lift.lifted) {
       if (json) {
         writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant` from a terminal outside herdr', 1, 'owner-only');
@@ -180,7 +180,7 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate (OD-20261019-49).
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'revoke', refusal: msg, ...(options.home !== undefined ? { home: options.home } : {}) });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'revoke', refusal: msg, home: options.home ?? homedir() });
     if (lift === null || !lift.lifted) {
       if (json) {
         writeJsonError(rawIo, 'revoke.refused', plainText(msg), 'the owner runs `team revoke` from a terminal outside herdr', 1, 'owner-only');

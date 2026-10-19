@@ -34,7 +34,7 @@ test('control characters in the body are not typed into the pane', async () => {
   const names = readdirSync(drops);
   expect(names.length).toBe(1);
   const path = join(drops, names[0] as string);
-  const line = readTriggerLine('native', 'acme');
+  const line = readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' });
   if (line === null) throw new Error('the trigger line did not fit');
   expect(trigger).toBe(line);
   expect(recordBody(path)).toBe(filed(BODY));

@@ -21,6 +21,9 @@ import { blindDifferences } from '../commands/seats.ts';
 import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive, devModeOwnerLift } from '../dev_mode.ts';
+import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
+import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -102,6 +105,11 @@ export type CheckSources = {
    *  `--repair` re-applies the file's lines through them; the real ones when absent. */
   renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
   reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  /** The idle-with-work snapshot, from the watch. Read-only; absent when no producer is wired, and
+   *  a test stands in for it. */
+  idleWork?(input: IdleWorkInput): IdleWorkReport;
+  /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
+  pendingGreen?(dir: string): PendingGreenSlice[];
 };
 
 /**
@@ -155,6 +163,9 @@ export const realCheckSources: CheckSources = {
   standing: realSources.standing,
   now: realSources.now,
   home: realSources.home,
+  // The same snapshot and pending reader `status` uses, wired once: the commands cannot disagree.
+  idleWork: realSources.idleWork,
+  pendingGreen: realSources.pendingGreen,
 };
 
 /**
@@ -380,6 +391,24 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     })),
   ];
   const warnings = renderDeprecationWarnings(deprecationWarnings);
+  // Idle with work and ready-but-uninstalled slices: the same two reads and the same lines as
+  // `team status`, notes only — neither changes the total nor the exit. A green journal that
+  // cannot be read is named as such, never read as "no slice is ready".
+  const idleWork = sources.idleWork?.({
+    root,
+    team,
+    state,
+    live,
+    now: sources.now(),
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    pause: whole.pause ?? null,
+    swaps: Object.keys(whole.swaps ?? {}),
+  });
+  const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
+  const idleNotes = [
+    ...(idleWork !== undefined ? idleWorkNotes(idleWork) : []),
+    ...greenNotes(green),
+  ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   const notes = collapseNotes([
@@ -392,6 +421,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...unknownStatusNotes(team, state, live),
     ...record.notes,
     ...provenance.notes,
+    ...idleNotes,
   ]);
   if (args.json) {
     writeJson(io, 'team.check', {
@@ -405,6 +435,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       warnings,
       repaired,
       notes,
+      ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
+      ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
+      ...(green?.kind === 'refused' ? { green_notice: green.why } : {}),
       differences: differences.map(toJsonDifference),
       summary: summaryCounts(differences),
       ...(briefs.stale ? { hint: ROLLOUT_HINT } : {}),
@@ -1490,6 +1523,10 @@ function policyCheck(
     return { differences: [], notes };
   }
 
+  // The machine record stands above the chain and the variable; when it is present — verified
+  // or refused — the legacy dev-mode notes below describe a source no gate reads any more.
+  const machine = readDevelopmentMode(home);
+
   let projectId: string | null = null;
   let legacyProjectDeliveryOrder: readonly DeliveryLeg[] | undefined;
   try {
@@ -1511,6 +1548,8 @@ function policyCheck(
   const legacyDeliveryDiffs = deliveryOrderDifferences(team, root, home);
   const differences: Difference[] = [];
   const notes: string[] = [];
+  const machineNote = developmentModeNote(machine);
+  if (machineNote !== null) notes.push(machineNote);
 
   const projectSource = readProjectPolicySource(home, projectId);
   if (
@@ -1621,11 +1660,17 @@ function policyCheck(
   }
 
   const expiredDevMode = teamChain.expired.filter((exp) => exp.name === 'dev-mode').at(-1);
-  if (expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
+  if (machine.kind === 'absent' && expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
     notes.push(`dev-mode expired at ${expiredDevMode.expiry ?? 'now'} for ${expiredDevMode.level}; off since`);
   }
   if (env.TEAMCLI_DEV_MODE === '1') {
-    if (!teamChain.devModeGoverned) {
+    if (machine.kind === 'refused') {
+      logLine(stateDir, 'check', caller, 'dev-mode: TEAMCLI_DEV_MODE=1 ignored because the machine setting cannot be read', now);
+    } else if (machine.kind === 'set') {
+      if (machine.record.mode !== 'local-fast') {
+        logLine(stateDir, 'check', caller, `dev-mode: TEAMCLI_DEV_MODE=1 ignored because development-mode is ${machine.record.mode} at machine level`, now);
+      }
+    } else if (!teamChain.devModeGoverned) {
       notes.push(
         'dev-mode: no policy is set yet for this entity; TEAMCLI_DEV_MODE=1 still applies until the owner sets dev-mode',
       );

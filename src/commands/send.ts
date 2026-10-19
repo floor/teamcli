@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, extname, join, resolve, sep } from 'node:path';
+import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientSend } from '../client/send.ts';
@@ -36,13 +37,16 @@ import { namingFor } from '../send/names.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
+import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
+import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { frameFor, replyLine } from '../send/frame.ts';
+import { frameFor, frameReplyFor } from '../send/frame.ts';
 import { declaredInboundOf, inboundIsLive, inboundSkipReason, type InboundDeclaration } from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 
@@ -86,8 +90,9 @@ line to the team log.
 A send walks the receiving seat's delivery order — mcp-inbox, typed, drop by
 default. A level of that seat's own chain, entity, project, team, seat, may drop
 legs from the order or put the legs it keeps in a different order, and may add
-only native, the sender's own frame: a word naming a leg the order does not have,
-or naming one twice, is set aside and the order in force stands. Each leg in turn
+native, the sender's own frame, headless-resume, a headless runtime's own turn,
+or place socket anywhere: a word naming a leg the order does not have, or naming
+one twice, is set aside and the order in force stands. Each leg in turn
 either takes the send, which ends the walk, or definitely cannot take it, which
 hands the send to the next leg and is recorded as a failure. A typed leg that
 finds no live agent — no agent carries the seat's name in its session, or the
@@ -206,6 +211,32 @@ Exits 0 when delivered, answered, listed, recorded, or resolved by --dry-run,
 the invocation or team file can't be read.
 `;
 
+/** The walk's ending as a direct-only caller reads it: which route took the send or ended it,
+ *  the one message id every attempt carried, and the signed record's path when one was staged. */
+export type DirectSendResult = {
+  outcome: AttemptOutcome;
+  route: string;
+  id: string;
+  record: string | null;
+  reason?: string;
+};
+
+/**
+ * The watch's idle dispatch uses this hook. With it set, the send walks only routes that reach a
+ * live receiver without a keystroke — the typed and native legs type, and the drop and mcp-inbox
+ * legs are stored copies rather than wakes, so none of the four is attempted. The walk's ending is
+ * handed back as a result instead of only an exit code. Admission, the delivery order and every
+ * remaining route's rules are the same ones an ordinary send runs.
+ */
+export type DirectSendHook = {
+  /** The pane and CLI the caller's own pass saw for this seat: the send is bound to them, and a
+   *  seat the session no longer lists at that pane, or whose file names another CLI, is refused
+   *  before any route is attempted. */
+  expect?: { pane: string; cli: string };
+  /** Called once, when a route's ending closes the walk, before the command returns. */
+  ended(result: DirectSendResult): void;
+};
+
 export type SendHost = {
   /** The live agents of a session; null when herdr can't be reached. `cli` is the agent herdr
    *  reads on the pane (`claude`, `codex`, …), the process name a CLI profile names — null or
@@ -253,6 +284,9 @@ export type SendHost = {
   /** The build this process runs, compared against a live inbox listener's marker. Left out
    *  (a test's host), the mcp-inbox leg keeps the liveness-only check. */
   build?: () => BuildIdentity;
+  /** The direct-only ending hook: when set, the typed leg is never walked and the ending is
+   *  reported once. The watch's idle dispatch is its caller. */
+  direct?: DirectSendHook;
 };
 
 export const realHost: SendHost = {
@@ -686,7 +720,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       now: host.now(),
     });
     if (transport.transport === 'memory') {
-      return refusedLine(io, MEMORY_TRANSPORT_UNSUPPORTED, report);
+      if (report.json) writeJsonError(io, 'send.brief-memory', `refused: ${MEMORY_TRANSPORT_UNSUPPORTED}`);
+      else io.stderr(`team send: refused: ${MEMORY_TRANSPORT_UNSUPPORTED}\n`);
+      return 1; // exit: send.brief-memory
     }
   }
   let body: string;
@@ -733,13 +769,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
 
   const dry = args.flags.has('dry-run');
   // The receiving seat's own chain — entity, project, team, seat — decides the order the send
-  // walks; nothing declared leaves mcp-inbox, typed, drop. The words are the receiving team
-  // file's (its own key and the seat's) and the registry project's, read here, and the seat's
-  // signed settings say `delivery_order` and `human` in the file's place; a host that hands in a
-  // chain decides instead, which is how a test picks an order without a file to write. A record
-  // that exists and does not verify refuses the send: neither the order nor the human guard can
-  // be decided from a record the store disowns, and routing on the declaration would let a
-  // tampered `human` preference fall back to a typed pane.
+  // walks; nothing declared leaves mcp-inbox, typed, drop. Each level's word is the signed
+  // `delivery-order` policy its record holds, and the receiving team file's own keys, the
+  // seat's and the registry project's legacy words fill in where no signed record is held; the
+  // seat's signed settings say `delivery_order` and `human` in the file's place; a host that
+  // hands in a chain decides instead, which is how a test picks an order without a file to
+  // write. A record that exists and does not verify refuses the send: neither the order nor the
+  // human guard can be decided from a record the store disowns, and routing on the declaration
+  // would let a tampered `human` preference fall back to a typed pane.
   let overrides: SeatOverrides = {};
   if (!host.delivery) {
     const read = resolveSeatOverrides({ home: host.home, root: to.root, seat: to.seat });
@@ -757,6 +794,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     ...(to.cross ? {} : { file: team }),
     projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
     overrides,
+    now: host.now(),
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
   // A receiving Claude session that itself declares `crossSessionInbound: "accept"` takes the
@@ -784,7 +822,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
   // back.
   const human = overrides.human ?? (declared?.human === true);
-  const walk: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
+  const chosen: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
+  // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
+  // reaches a live receiver without a keystroke stays. The typed and native legs type, the drop
+  // leg is a stored copy and the mcp-inbox leg is the seat's own storage — none of them is a
+  // wake, so none is attempted. A functional headless route would stay if this build carried
+  // one. Every remaining leg keeps its own rules, and the order's own words decide whether the
+  // receiver offers it.
+  const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
+  const walk: readonly DeliveryLeg[] = host.direct ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
 
   // One signed record is written into the recipient's folder — the whole body, its thread, the
   // address it resolved to and the rule that admitted it — and the leg that takes the send
@@ -798,6 +844,23 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const callerRoot = { root, session: team.session };
   if (dry) {
     return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, SOCKET_SEND && inbound.policy === 'accept')}; nothing was written`, report);
+  }
+  // A direct-only caller hands in the pane and CLI its own pass saw for this seat: the send is
+  // bound to them, never re-aimed at a pane the caller did not read. A seat the session no longer
+  // lists at that pane, or whose file now names another CLI, is refused here — before any route
+  // is attempted, so the refusal stages nothing.
+  const bound = host.direct?.expect;
+  if (bound !== undefined) {
+    if (to.cli !== bound.cli) {
+      return refuse(io, dir, who, `${to.seat}: its CLI is ${to.cli}, not the ${bound.cli} the pass saw; nothing was sent`, host, report);
+    }
+    const here = findAgent(host, to.session, to.seat);
+    if (!here.ok) {
+      return refuse(io, dir, who, `${to.seat}: ${here.reason}; nothing was sent`, host, report);
+    }
+    if (here.pane !== bound.pane) {
+      return refuse(io, dir, who, `${to.seat}: its pane is now ${here.pane}, not the ${bound.pane} the pass saw; nothing was sent`, host, report);
+    }
   }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
@@ -823,6 +886,60 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
     }
   }
+  // The signed record is staged once, before the first route this process attempts: every
+  // attempt carries this same record and message id, and a route that fails leaves the durable
+  // copy behind. The native handoff is not such an attempt — its record is minted under the
+  // handoff's own id and staged by the handoff — so a walk that begins with it stages nothing
+  // here. A write that refuses is not this run's refusal — each leg reports its own ending — it
+  // only leaves the walk without an episode to record.
+  let stagedTried = false;
+  let stagedWalk: RecordWritten | null = null;
+  // A leg records through this; until a record is staged it is a no-op, so a walk that never
+  // began an episode records nothing, and a leg that began one records every attempt after it.
+  let note: WalkNote = (_attempt) => { /* no episode yet */ };
+  // Whether the walk's last route has already recorded its exhaustion, so the ending below
+  // records one only when no leg's own ending did.
+  let ended = false;
+  // The direct-only hook fires once, when a route's ending closes the walk.
+  let directEnded = false;
+  const ensureEpisode = async (): Promise<void> => {
+    if (stagedTried) return;
+    stagedTried = true;
+    stagedWalk = await writeSendRecord(dropDir, record, host.home, host.now);
+    if (!stagedWalk.ok) return;
+    const begun = beginFallbackWalk({
+      caller,
+      team,
+      root,
+      home: host.home,
+      now: host.now,
+      recipient: { team: to.project, seat: to.seat, toId: to.agentId, session: to.session, root: to.root },
+      messageId: msgId,
+      record: stagedWalk.record,
+      ...(to.cross && receiving.ok ? { recipientTeam: receiving.team } : {}),
+    });
+    note = (attempt) => {
+      if (!attempt.liveRoutesRemain) ended = true;
+      const noted = begun.note(attempt);
+      if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
+      // A direct-only caller hears the walk's ending here: the attempt that took the send, or
+      // the last route's failure. The record was staged before the first attempt, whatever it was.
+      if (host.direct !== undefined && !directEnded && (attempt.outcome === 'delivered' || !attempt.liveRoutesRemain)) {
+        directEnded = true;
+        host.direct.ended({
+          outcome: attempt.outcome,
+          route: attempt.route,
+          id: msgId,
+          record: stagedWalk?.ok === true ? stagedWalk.path : null,
+          ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
+        });
+      }
+    };
+  };
+  // A direct-only send stages its record before its first attempt: no route the watch can take
+  // asks anything of the receiver's pane, and the ending the caller reads names that record. An
+  // order with no direct route left attempts nothing, so it stages nothing and reports no ending.
+  if (host.direct !== undefined && walk.length > 0) await ensureEpisode();
   let socketNote: string | null = null;
   for (const [at, leg] of walk.entries()) {
     if (leg === 'mcp-inbox') {
@@ -834,9 +951,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       const live = inboxLive(dropDir, to.root, to.session, to.seat, host.build?.());
       if (!live.live) {
         failures.push(`mcp-inbox: ${live.reason}`);
+        note(walkAttempt('mcp-inbox', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: live.reason }));
         continue;
       }
-      return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot);
+      await ensureEpisode();
+      return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
     }
     if (leg === 'socket') {
       // The socket leg dials only a receiving Claude session that itself declares
@@ -848,25 +967,45 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // is transport, never a read.
       if (to.cli !== 'claude-code') {
         failures.push(`socket: ${to.cli} sessions have no cross-session socket`);
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: `${to.cli} sessions have no cross-session socket` }));
         continue;
       }
       if (!SOCKET_SEND) {
         failures.push('socket: this build does not carry the cross-session socket');
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: 'this build does not carry the cross-session socket' }));
         continue;
       }
       if (inbound.policy !== 'accept') {
         failures.push(`socket: ${inboundSkipReason(inbound.policy)}`);
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: inboundSkipReason(inbound.policy) }));
         continue;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound);
+      // The dial is the route attempt: the signed record is staged before the frame reaches the
+      // transport, so a connection that refuses or half-takes the frame still leaves a copy.
+      await ensureEpisode();
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root);
       if (attempt.kind === 'delivered') {
+        note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'socket', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
         }
         return delivered(io, to.seat, report, 'socket');
       }
-      if (attempt.kind === 'held') return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
+      if (attempt.kind === 'held') {
+        const remaining = liveRoutesAfter(walk, at);
+        note(walkAttempt('socket', 'held', remaining, host.now(), startedAt, { reason: attempt.reason }));
+        // A held frame is not a delivery, and a live route behind it may still take the send:
+        // the frame stays in the receiver's folder as its durable copy and the walk moves on.
+        if (remaining) {
+          failures.push(`socket: ${attempt.reason}`);
+          socketNote = `typed, socket ${attempt.reason}`;
+          logLine(dir, 'send', who, `${to.seat}: the socket held the frame (${attempt.reason}); falling back to the next route`, host.now());
+          continue;
+        }
+        return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
+      }
       failures.push(`socket: ${attempt.reason}`);
+      note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: attempt.reason }));
       socketNote = `typed, socket ${attempt.reason}`;
       // The fallback's own line, only where the typed leg is still ahead to take the send.
       if (walk.slice(at + 1).includes('typed')) {
@@ -886,13 +1025,31 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // it waits on the thread, so it skips the handoff and continues the walk.
       if (callerNative && !wait) {
         const fallback = fallbackAfterNative(walk, at);
-        const off = handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
-        if (off.kind === 'refused') return refuse(io, dir, who, off.why, host, report);
+        const off = await handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
+        if (off.kind === 'refused') {
+          await ensureEpisode();
+          note(walkAttempt('native', 'refused', false, host.now(), startedAt, { reason: off.why }));
+          return refuse(io, dir, who, off.why, host, report);
+        }
+        // A handoff is the sender's own pending call, not a transport this walk made: nothing is
+        // noted, so the episode never counts a delivery the sender has yet to make (or fail).
         if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
         failures.push(`native: ${off.reason}`);
+        await ensureEpisode();
+        note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: off.reason }));
         continue;
       }
       failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
+      await ensureEpisode();
+      note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: NATIVE_LEG_UNAVAILABLE }));
+      continue;
+    }
+    if (leg === 'headless-resume') {
+      // The seat's own CLI resumed headlessly for one turn: no TUI pane, so no keystroke. This
+      // build carries no headless runtime yet, so the declared leg is recorded as unavailable and
+      // the walk moves on; it never falls through to the typed leg in its place.
+      failures.push('headless-resume: this build carries no headless resume runtime');
+      note(walkAttempt('headless-resume', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: 'this build carries no headless resume runtime' }));
       continue;
     }
     // The drop leg: the same 0600 drop file the typed leg writes, and no keystroke at all — no
@@ -900,18 +1057,31 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // receiver watches its own drop folder, and for a pane that must never be typed into: a
     // file can wait where a keystroke cannot be taken back.
     if (leg === 'drop') {
-      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot);
+      await ensureEpisode();
+      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. The line is the seat's own
     // receipt-writing drop read, so the command that wakes it is the one that proves it read: the
     // signed `<id>.read.json` lands before the body is printed. A compose seat's typed leg is
     // its CLI's own screens instead: there is no drop-file trigger to build, and the walk is
-    // run in this process (below), not handed to the daemon.
+    // run in this process (below), not handed to the daemon. A refusal decided here — a trigger
+    // past the line, a name the session does not list — happens before any route attempt, so the
+    // walk stages nothing for it: a refusal leaves no record in the receiver's folder.
     const compose = profileFor(to.cli)?.compose ?? null;
-    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project });
+    // The receiving team's sender-line policy decides the words around the two names; a team
+    // file that did not read leaves the shipped floor format, never an unnamed wake.
+    const wakeFormat = senderLineFormatInForce({
+      home: host.home,
+      root: to.root,
+      team: receiving.ok ? receiving.team : null,
+      now: host.now(),
+    });
+    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project, format: wakeFormat });
     if (trigger === null && compose === null) {
-      return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
+      const why = `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`;
+      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent` }));
+      return refuse(io, dir, who, why, host, report);
     }
     // The daemon serves seats of the caller's own team; a seat in another team's record is
     // reached directly, under that team's folder. A compose seat is reached directly too: the
@@ -919,6 +1089,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // the signed record is written into the checkout's transport tree and the thread wait watches
     // that tree.
     const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
+    // A daemon dial is a route attempt: the record is staged before it, so a daemon that took the
+    // request and died before answering still leaves the walk a durable copy. No socket file at
+    // the path means no daemon to dial, so a send every leg will refuse stages nothing.
+    if (!to.cross && compose === null && !wait && existsSync(daemonSock)) await ensureEpisode();
     const viaDaemon = to.cross || compose !== null || wait
       ? null
       : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) });
@@ -928,8 +1102,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // history line for this ending — the leg that takes the send writes the one line.
       if (viaDaemon.outcome === 'unreachable' && viaDaemon.fall_through === true) {
         failures.push(`typed: ${viaDaemon.detail}`);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: viaDaemon.detail }));
         continue;
       }
+      noteDaemonOutcome(note, viaDaemon, host.now(), startedAt);
       return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, startedAt, socketNote ?? undefined);
     }
     // The pane is read live, by the seat's name: a record's recorded pane may have been closed or
@@ -938,18 +1114,24 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // behind the typed leg that is the walk's ending, and when one does the send goes on to it.
     const found: Found = findAgent(host, to.session, to.seat);
     if (!found.ok) {
-      if (found.kind === 'refused') return refuse(io, dir, who, found.reason, host, report);
+      if (found.kind === 'refused') {
+        note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: found.reason }));
+        return refuse(io, dir, who, found.reason, host, report);
+      }
       if (at + 1 < walk.length) {
         failures.push(`typed: ${found.reason}`);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: found.reason }));
         continue;
       }
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) };
       appendHistory(to.project, to.root, host.home, entry);
+      note(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: found.reason }));
       return unreachable(io, dir, who, to.seat, found.reason, host, report);
     }
     if (isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))) {
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) };
       appendHistory(to.project, to.root, host.home, entry);
+      note(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: 'the seat is back at its shell; nothing was typed' }));
       return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
     }
     report.sent = msgId;
@@ -957,17 +1139,27 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // The seat's own folder: the record's `cwd` under the receiving team's root, else the
       // folder this send already writes to.
       const seatCwd = declared === undefined ? to.dir : resolve(to.root, declared.cwd);
-      return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, seatCwd, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot);
+      await ensureEpisode();
+      return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, seatCwd, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
     }
     if (trigger === null) {
-      return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
+      const why = `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`;
+      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent` }));
+      return refuse(io, dir, who, why, host, report);
     }
-    return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, socketNote ?? undefined, failures, to.sentAs, wait, timeoutS, callerRoot);
+    // The typed trigger is the attempt: the signed record is on disk before the keys go out, so a
+    // trigger whose outcome is ambiguous still leaves the seat a record it can read.
+    await ensureEpisode();
+    return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, socketNote ?? undefined, failures, to.sentAs, wait, timeoutS, callerRoot, note);
   }
 
-  // No leg took the send: the walk ran out of legs with nothing written — the record is only
-  // written by a leg that is about to take the send — and every leg that fell is named.
+  // No leg took the send: the walk ran out of legs — the signed record is already staged, and
+  // every leg that fell is named. When no leg's own ending recorded the exhaustion (a leg that
+  // was passed over without an attempt), the episode hears the order itself as the last route.
   const why = `no leg of its delivery order took the send${failures.length === 0 ? '' : ` (${failures.join('; ')})`}`;
+  if (!ended && walk.length > 0) {
+    note(walkAttempt(walk[walk.length - 1] as string, 'unreachable', false, host.now(), startedAt, { reason: why }));
+  }
   appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
   return unreachable(io, dir, who, to.seat, why, host, report);
 }
@@ -1007,6 +1199,64 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
   // finds no live agent, so nothing after it is dropped from the walk's description.
   if (walkable.length === 1) return words(first);
   return `${words(first)}, falling back to ${walkable.slice(1).map(words).join(', then ')}`;
+}
+
+/** What a direct-only run reports: the command's own exit code and the walk's ending. A run
+ *  that refused before any direct route was attempted carries no result. */
+export type DirectSendRun = { code: number; result: DirectSendResult | null };
+
+/**
+ * Sends `body` to `seat` over wake routes only, through the same command an ordinary send runs:
+ * the same admission, the same delivery order, the same route rules. Only a route that reaches a
+ * live receiver without a keystroke is walked, so nothing is typed and no stored copy counts as a
+ * delivery, and the send is bound to the pane and CLI the caller's pass saw. The watch's idle
+ * dispatch calls this.
+ */
+export async function sendDirect(
+  io: Io,
+  host: SendHost,
+  input: { seat: string; pane: string; cli: string; body: string },
+): Promise<DirectSendRun> {
+  const captured: { result: DirectSendResult | null } = { result: null };
+  const code = await runSend([input.seat, input.body], io, {
+    ...host,
+    direct: {
+      expect: { pane: input.pane, cli: input.cli },
+      ended: (ending) => { captured.result = ending; },
+    },
+  });
+  return { code, result: captured.result };
+}
+
+/** Records one route attempt for the send's fallback episode; null when no episode could be
+ *  staged. The recorder's own refusal is logged by the caller and never changes the walk. */
+type WalkNote = (attempt: WalkAttempt) => void;
+
+/** The attempt shape the walk records, measured from the run's own clock. */
+function walkAttempt(
+  route: string,
+  outcome: AttemptOutcome,
+  liveRoutesRemain: boolean,
+  at: Date,
+  startedAt: number,
+  extra: { reason?: string; receipt?: RelayReceipt } = {},
+): WalkAttempt {
+  return {
+    route,
+    outcome,
+    liveRoutesRemain,
+    at,
+    ms: at.getTime() - startedAt,
+    ...(extra.reason === undefined ? {} : { reason: extra.reason }),
+    ...(extra.receipt === undefined ? {} : { receipt: extra.receipt }),
+  };
+}
+
+/** Whether a leg after this one can still take the send: a walk's remaining routes, less the one
+ *  this build carries no runtime for. A route is live when it stands; the drop leg's file always
+ *  stands in front of a copy. */
+function liveRoutesAfter(walk: readonly DeliveryLeg[], at: number): boolean {
+  return walk.slice(at + 1).some((leg) => leg !== 'headless-resume');
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
@@ -1070,25 +1320,39 @@ function recordOf(msgId: string, to: Aim, body: string, from: string, admission:
   };
 }
 
+/** The record a leg wrote, with its signed text: the socket leg carries those bytes in its frame
+ *  attempt's message. */
+type RecordWritten = { ok: true; path: string; existing?: true; record: string } | { ok: false; reason: string };
+
 /**
  * Writes the signed record under the leg's own lock, before the leg's transport action. Every
  * ending that says "nothing was sent" happens above this call, and every leg that takes the send
- * has the record on disk first. A record already at the id is this message's (`ensureRecord`): a
- * walk that falls from the socket to the typed leg writes one record, not two.
+ * has the record on disk first. The write is the relay package's (`stage`), with the record's
+ * bytes as this build signs them. A name already held by a regular file is left untouched by the
+ * relay and judged here by `ensureRecord`, so a duplicate id is this message's record exactly as
+ * before: a walk that falls from the socket to the typed leg writes one record, not two.
  */
-function writeSendRecord(dropDir: string, payload: RecordPayload, home: string): { ok: true; path: string } | { ok: false; reason: string } {
+async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date): Promise<RecordWritten> {
   let signed: SignedRecord;
   try {
     signed = signRecord(payload, home);
   } catch {
     return { ok: false, reason: 'the record could not be signed' };
   }
-  const written = ensureRecord(dropDir, signed);
-  if (!written.ok) return { ok: false, reason: written.reason };
-  return { ok: true, path: written.path };
+  const record = `${JSON.stringify(signed, null, 2)}\n`;
+  const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
+  if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
+  if (staged.receipt.existing) {
+    // Admission still decides whether the file at the name is this message's record: `ensureRecord`
+    // reads it and, while the name is held, writes nothing.
+    const held = ensureRecord(dropDir, signed);
+    if (!held.ok) return { ok: false, reason: held.reason };
+    return { ok: true, path: held.path, existing: true, record };
+  }
+  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record };
 }
 
-function handOff(
+async function handOff(
   storeProject: string,
   storeRoot: string,
   from: string,
@@ -1098,7 +1362,7 @@ function handOff(
   fallback: readonly PendingNativeFallbackLeg[],
   dropDir: string,
   host: SendHost,
-): HandOff {
+): Promise<HandOff> {
   if (!admission.ok) return { kind: 'refused', why: 'the send was not admitted' };
   const body = payload.body;
   const found = findAgent(host, to.session, to.seat);
@@ -1143,10 +1407,11 @@ function handOff(
   // The signed record the native leg transports, under the handoff's own id: the receiver can
   // read the message before the sender's own SendMessage carries the line, and a handoff that
   // expires leaves the message where `team messages` reads it.
-  const signed = writeSendRecord(
+  const signed = await writeSendRecord(
     dropDir,
     { ...payload, id, body: stamped, thread, at: host.now().toISOString() },
     host.home,
+    host.now,
   );
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
@@ -1490,6 +1755,22 @@ function confirmed(
   return 0; // exit: send.confirmed
 }
 
+/** The typed leg's daemon answer, as the fallback episode records the typed route. A trigger
+ *  the daemon saw the seat take is a delivery of the transport — the read receipt is a later,
+ *  separate signal. */
+function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: Date, startedAt: number): void {
+  if (note === null) return;
+  if (res.outcome === 'delivered' || res.outcome === 'answered') {
+    note(walkAttempt('typed', 'delivered', false, at, startedAt));
+    return;
+  }
+  const outcome: AttemptOutcome =
+    res.outcome === 'held' || res.outcome === 'timeout' || res.outcome === 'unreachable' || res.outcome === 'refused'
+      ? res.outcome
+      : 'refused';
+  note(walkAttempt('typed', outcome, false, at, startedAt, { reason: res.detail }));
+}
+
 function finishDaemonSend(
   io: Io,
   dir: string,
@@ -1746,24 +2027,42 @@ async function deliverDropped(
   wait = false,
   timeoutS = 60,
   extraRoot?: { root: string; session: string },
+  note: WalkNote = (_attempt) => { /* no episode */ },
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
+    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
   try {
     try {
       sealDropTree(dir, session, seatName);
     } catch {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
     }
+    // The drop leg's one route attempt. The durable copy is the route: stored by the write above
+    // and confirmed by `deliver`, which returns `held` — a copy is never a delivery.
+    const attempt = await relayDeliver(
+      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
+      { id: msgId, record: written.record },
+      { now: host.now },
+    );
+    if (attempt.outcome === 'refused') {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: attempt.reason }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written (${attempt.reason}); nothing was sent`, host, report);
+    }
+    // A durable copy with no seat woken is the walk's last route's `held`: the episode counts it
+    // so the delayed escalation can name a message nothing live ever took.
+    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
     if (!human) {
       // Written before the send returns: a watcher that reads the drop a moment later still finds
       // the marker the receipt promotes, and a process that dies here leaves the watch its record.
@@ -1841,12 +2140,14 @@ async function deliverNative(
   wait = false,
   timeoutS = 60,
   extraRoot?: { root: string; session: string },
+  walkNote: WalkNote = (_attempt) => { /* no episode */ },
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
+    walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
   let taken = false;
@@ -1858,10 +2159,12 @@ async function deliverNative(
     try {
       sealDropTree(dir, session, seatName);
     } catch {
+      walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
+      walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
     }
     path = written.path;
@@ -1876,6 +2179,7 @@ async function deliverNative(
     if (result.outcome === 'held') {
       appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'held', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
       markPending(dropDir, entry);
+      walkNote?.(walkAttempt('typed', 'held', false, host.now(), startedAt, { reason: result.reason ?? 'the composer holds text' }));
       return held(io, dir, who, seatName, `${result.reason ?? 'the composer holds text'}; ${where}; ${retry}`, host, report);
     }
     if (result.outcome === 'unreachable') {
@@ -1884,13 +2188,16 @@ async function deliverNative(
       // prompt is answered, so the watch gets the same record a held send leaves.
       if (result.dialog !== undefined) {
         markPending(dropDir, entry);
+        walkNote?.(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: result.reason ?? 'the seat was not reached' }));
         return unreachable(io, dir, who, seatName, `${retry}; ${where}`, host, report, result.dialog);
       }
+      walkNote?.(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: result.reason ?? 'the seat was not reached' }));
       return unreachable(io, dir, who, seatName, `${result.reason ?? 'the seat was not reached'}; ${where}`, host, report);
     }
     if (result.outcome === 'not-submitted') {
       appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
       markPending(dropDir, entry);
+      walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the line was not submitted' }));
       return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}${draft === undefined ? '' : `; ${draft}`}`, host, report);
     }
     // A signed read receipt that landed inside the window — or between its last poll and this
@@ -1898,6 +2205,7 @@ async function deliverNative(
     // disk. That is `delivered (read)`, the one word a typed line earns only this way; the seat
     // read the message, which is not a claim that it acted on it.
     if (result.evidence === 'receipt' || (result.evidence === 'taken' && receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, msgId)))) {
+      walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt));
       logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, typed, receipt${draft === undefined ? '' : `; ${draft}`})`, host.now());
       appendHistory(project, root, host.home, {
         ...entry,
@@ -1911,6 +2219,9 @@ async function deliverNative(
       return delivered(io, seatName, report, 'read', 'typed');
     }
     taken = result.evidence === 'taken';
+    // The line left the box: the transport delivered it, and the read receipt (if one comes) is
+    // a later, separate signal.
+    walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: 'trigger taken, no read receipt yet' }));
     logLine(dir, 'send', who, `${seatName}: sent (unconfirmed) (drop ${String(body.length)} characters, typed, ${evidenceOf(result)}${draft === undefined ? '' : `; ${draft}`})`, host.now());
     if (taken) {
       markTaken(dropDir, {
@@ -1984,12 +2295,14 @@ async function deliverInbox(
   wait = false,
   timeoutS = 60,
   extraRoot?: { root: string; session: string },
+  note: WalkNote = (_attempt) => { /* no episode */ },
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
+    note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
@@ -1997,13 +2310,18 @@ async function deliverInbox(
     try {
       sealDropTree(dir, session, seatName);
     } catch {
+      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
+      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
     }
     report.sent = msgId;
+    // The seat's own inbox server took the record: the transport delivered it, whether or not a
+    // read receipt follows inside the window.
+    note(walkAttempt('mcp-inbox', 'delivered', false, host.now(), startedAt, { reason: "written to the seat's own MCP inbox" }));
     // Written before the wait: a process that dies mid-wait still leaves the message marked
     // for the watch's later pass. A receipt clears it; `sent (unconfirmed)` leaves it on disk.
     markPending(dropDir, { ...entry, leg: 'mcp-inbox' });
@@ -2056,6 +2374,7 @@ async function deliverComposeSeat(
   wait = false,
   timeoutS = 60,
   extraRoot?: { root: string; session: string },
+  note: WalkNote = (_attempt) => { /* no episode */ },
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -2063,10 +2382,12 @@ async function deliverComposeSeat(
   const profile = profileFor(cli);
   const compose = profile?.compose ?? null;
   if (profile === null || compose === null) {
+    note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'its profile carries no compose module' }));
     return refuse(io, dir, who, `${seatName}: its profile carries no compose module; nothing was sent`, host, report);
   }
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
+    note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
     return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
   }
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
@@ -2075,10 +2396,12 @@ async function deliverComposeSeat(
     try {
       sealDropTree(dir, session, seatName);
     } catch {
+      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = writeSendRecord(dropDir, payload, host.home);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
     if (!written.ok) {
+      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
     }
     path = written.path;
@@ -2094,12 +2417,15 @@ async function deliverComposeSeat(
     const where = `the record is at ${path}`;
     if (result.outcome === 'unreachable') {
       appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'unreachable', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+      note(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: result.reason }));
       return unreachable(io, dir, who, seatName, `${result.reason}; ${where}`, host, report);
     }
     if (result.outcome === 'not-submitted') {
       appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
+      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: result.reason }));
       return typedBriefNotSubmitted(io, dir, who, seatName, `${result.reason}; ${where}`, host, report);
     }
+    note(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: `typed brief, ${result.evidence}` }));
     logLine(dir, 'send', who, `${seatName}: delivered (typed brief, ${result.evidence})`, host.now());
   } finally {
     lock.release();
@@ -2501,6 +2827,8 @@ async function deliverSocketFrame(
   startedAt: number,
   wait = false,
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
+  /** The sending run's team root: the entity an owner-origin reply line is read from. */
+  callerRoot: string,
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -2515,7 +2843,9 @@ async function deliverSocketFrame(
   if (sendingTeam === undefined) {
     return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
   }
-  const frame = frameFor(body, msgId, replyLine(host.home, payload.from, sendingTeam));
+  const reply = frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
+  if ('missing' in reply) return { kind: 'fallback', reason: reply.missing };
+  const frame = frameFor(body, msgId, reply.line);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
@@ -2542,15 +2872,26 @@ async function deliverSocketFrame(
   }
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
-  const written = writeSendRecord(join(to.dir, 'send-drops', to.session, to.seat), payload, host.home);
+  const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
+  const written = await writeSendRecord(copy.dir, payload, host.home, host.now);
   if (!written.ok) return { kind: 'fallback', reason: `the record could not be written (${written.reason})` };
-  let taken = await host.deliver(first.path, frame);
-  if (!taken.ok && first.recorded) {
+  // One frame on the socket, through the relay's socket route. The caller's own dial is handed in,
+  // so an injected host's transport is the transport this attempt uses. A recorded address whose
+  // write refuses gets the same one live re-resolution it always did, as a second attempt.
+  const message = { id: msgId, record: written.record, frame };
+  let taken = await relayDeliver(
+    { route: 'socket', socket: first.path, runtime: to.cli, copy },
+    message,
+    { now: host.now, dial: host.deliver },
+  );
+  if (taken.outcome !== 'delivered' && first.recorded) {
     const processes = host.processInfo(to.session, found.pane);
     const live = processes === null ? null : socketOf(host, processes);
-    if (live !== null && live !== first.path) taken = await host.deliver(live, frame);
+    if (live !== null && live !== first.path) {
+      taken = await relayDeliver({ route: 'socket', socket: live, runtime: to.cli, copy }, message, { now: host.now, dial: host.deliver });
+    }
   }
-  if (!taken.ok) return { kind: 'fallback', reason: taken.reason };
+  if (taken.outcome !== 'delivered') return { kind: 'fallback', reason: taken.reason };
   logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
   if (await heldAtDialog(to.session, found.pane, host)) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
@@ -2987,12 +3328,6 @@ function notSubmitted(io: Io, dir: string, who: string, seat: string, result: De
  *  and not written down. */
 function refuse(io: Io, dir: string | null, who: string, reason: string, host: SendHost, report: Report): number {
   if (dir !== null) logLine(dir, 'send', who, `refused: ${reason}`, host.now());
-  return refusedLine(io, reason, report);
-}
-
-/** The refusal line alone, for a refusal that leaves the tree as it found it: the brief
- *  transport's memory refusal writes no log line, and the contract keeps one site for the id. */
-function refusedLine(io: Io, reason: string, report: Report): number {
   if (report.json) writeJsonError(io, 'send.refused', `refused: ${reason}`);
   else io.stderr(`team send: refused: ${reason}\n`);
   return 1; // exit: send.refused

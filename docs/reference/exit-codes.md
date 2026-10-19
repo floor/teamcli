@@ -175,6 +175,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
 | `delegate.invalid` | `delegate` | 2 | the team file or proposed authority record is invalid or cannot be read | `team delegate <session/pane> --commands up,down` |
 | `delegate.invocation` | `delegate` | 2 | the command arguments are invalid | `team delegate <session/pane> --commands up,down` |
+| `development-mode.done` | `development-mode` | 0 | the machine development mode was read, shown, planned, or switched | `team development-mode set local-fast --show` |
+| `development-mode.refused` | `development-mode` | 1 | a non-owner called set without the owner-authorization token for this exact switch, or the machine record cannot be read or verified | `team development-mode set off` |
+| `development-mode.invocation` | `development-mode` | 2 | the command arguments are invalid | `team development-mode set maybe` |
 | `doctor.clear` | `doctor` | 0 | nothing is missing | `team doctor` |
 | `doctor.missing` | `doctor` | 1 | something is missing | `team doctor` |
 | `doctor.file` | `doctor` | 2 | the team file can't be read | `team doctor --file missing.yaml` |
@@ -250,7 +253,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.not-a-repo` | `init` | 2 | not inside a git repository | `team init` |
 | `issues.none` | `issues` | 0 | nothing is waiting | `team issues` |
 | `issues.shown` | `issues` | 0 | the task list was shown | `team issues` |
-| `issues.file` | `issues` | 1 | the team file can't be read, it declares no task source, or its source is a broker's | `team issues` |
+| `issues.file` | `issues` | 1 | the team file can't be read, its source is a broker's, or its task path can't be used | `team issues` |
 | `issues.missing` | `issues` | 1 | the task file is not there | `team issues` |
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
@@ -295,7 +298,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.wait` | `next` | 0 | the wait was stopped, or a clock that did not advance ended it | `team next --wait` |
 | `next.broker` | `next` | 1 | no broker is running, or its answer was not one this build knows | `team next` |
 | `next.caller` | `next` | 1 | the caller is not a seat of this team on its recorded pane | `team next` |
-| `next.file` | `next` | 1 | the team file can't be read, or it declares no task source | `team next` |
+| `next.file` | `next` | 1 | the team file can't be read, or its task source or task path can't be used | `team next` |
 | `next.missing` | `next` | 1 | the task file is not there | `team next` |
 | `next.paused` | `next` | 1 | the team is paused, so nothing was claimed | `team next` |
 | `next.policy` | `next` | 1 | a task policy the validator refuses | `team next` |
@@ -316,7 +319,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `plan.shown` | `plan` | 0 | the takeable queue was printed | `team plan` |
 | `plan.broker` | `plan` | 1 | no broker is running, or its answer was not one this build knows | `team plan` |
 | `plan.caller` | `plan` | 1 | the caller is not a seat of this team on its recorded pane | `team plan` |
-| `plan.file` | `plan` | 1 | the team file can't be read, or it declares no task source | `team plan` |
+| `plan.file` | `plan` | 1 | the team file can't be read, or its task source or task path can't be used | `team plan` |
 | `plan.missing` | `plan` | 1 | the task file is not there | `team plan` |
 | `plan.read` | `plan` | 1 | the broker failed the read | `team plan` |
 | `plan.shape` | `plan` | 1 | nothing was printed, and a record is not a task or the task file is not a list | `team plan` |
@@ -350,6 +353,22 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `projects.listed` | `projects` | 0 | the projects are listed | `team projects` |
 | `projects.unreadable` | `projects` | 1 | the project registry cannot be read | `team projects` |
 | `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
+| `queue.added` | `queue` | 0 | the record was added to the queue | `team queue add "the task title" --id m1` |
+| `queue.install` | `queue` | 0 | the install acknowledgment was recorded, or the same one was already held | `team queue install m1 --commit abcdef1` |
+| `queue.none` | `queue` | 0 | the queue is empty | `team queue list` |
+| `queue.present` | `queue` | 0 | the same record was already queued; nothing was written | `team queue add "the task title" --id m1` |
+| `queue.ready` | `queue` | 0 | the green slice was recorded ready, or the same one was already held | `team queue ready m1 --commit abcdef1` |
+| `queue.shown` | `queue` | 0 | the queue was listed | `team queue list` |
+| `queue.caller` | `queue` | 1 | the caller is not the owner or a seat of this team on its recorded pane, or is not a seat for `ready` | `team queue add "the task title" --id m1` |
+| `queue.duplicate` | `queue` | 1 | the id is already queued with a different record | `team queue add "another title" --id m1` |
+| `queue.file` | `queue` | 1 | the team file can't be read | `team queue list` |
+| `queue.installer` | `queue` | 1 | the caller is not the owner or the designated installer on its recorded pane, or the designation is not approved | `team queue install m1 --commit abcdef1` |
+| `queue.lease` | `queue` | 1 | the caller holds no live lease of the task it names | `team queue ready m1 --commit abcdef1` |
+| `queue.read` | `queue` | 1 | the task file is missing, not a list, could not be written or read back, or holds no such task | `team queue list` |
+| `queue.record` | `queue` | 1 | the green-slice journal can't be read or written, or holds its maximum pending slices | `team queue ready m1 --commit abcdef1` |
+| `queue.source` | `queue` | 1 | the team file declares a linear task source; there is no local queue, and the tracker is never written | `team queue list` |
+| `queue.invocation` | `queue` | 2 | the invocation can't be read, or a value is not a task id, a declared seat, a one-line title or priority, a commit, or a version | `team queue add` |
+| `queue.not-a-repo` | `queue` | 2 | not inside a git repository | `team queue list` |
 | `raise.dry-run` | `raise` | 0 | the route the raise would take; nothing was written | `team raise release.ready "the release is ready for the owner" --dry-run` |
 | `raise.merged` | `raise` | 0 | the line was merged into the owner's open record, and the record counts it | `team raise release.ready "the release is ready for the owner"` |
 | `raise.raised` | `raise` | 0 | the line reached the owner's mailbox as a signed record, and the owner was notified | `team raise release.ready "the release is ready for the owner"` |
@@ -529,6 +548,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
 | `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |

@@ -116,3 +116,15 @@ export {
   type BriefTransport,
   type BriefTransportReading,
 } from './brief-transport.ts';
+
+export {
+  resolveOwnerReplyTo,
+  type OwnerReplyResolution,
+} from './owner-reply.ts';
+
+export {
+  OWNER_REPLY_DEFAULT,
+  OWNER_REPLY_FLOOR_ENTITY,
+  ownerReplyToValueProblem,
+  parseOwnerReplyToValue,
+} from '../settings/owner-reply.ts';

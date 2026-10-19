@@ -28,6 +28,7 @@ import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
 import { claimLocal, releaseLocal } from '../tasks/lease.ts';
+import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
 import { pauseText, readState, type State } from '../state.ts';
 import { queuedSwap, swapLine } from '../swap/queue.ts';
 import { waitOrStop } from '../wait.ts';
@@ -116,8 +117,9 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
     }
     return file(io, message, json);
   }
-  const tasks = loaded.team.tasks;
-  if (!tasks) return file(io, 'the team file declares no task source', json);
+  // A team that declares no source reads its own local queue; a missing one is an empty queue,
+  // not a refusal. The declared sources keep their own reads and refusals unchanged.
+  const tasks = loaded.team.tasks ?? LOCAL_TASKS;
   const emit: Emit = {
     context: contextLine(loaded.team.project, loaded.team.session),
     project: loaded.team.project,
@@ -224,7 +226,10 @@ async function pass(
     if (result.kind === 'released') return released(io, result.id, emit);
     return none(io, 'nothing is held', speak, emit);
   }
-  const read = adapter.read({ root: loaded.root, path: tasks.path });
+  const source = fileSourceOf(loaded.team);
+  const read = source !== null && source.local
+    ? readFileSource(loaded.root, source)
+    : adapter.read({ root: loaded.root, path: tasks.path });
   if (read.kind === 'missing') return missing(io, emit.json);
   if (read.kind === 'outside') return file(io, 'tasks.path must stay inside the checkout', emit.json);
   if (read.kind === 'not-a-list') {

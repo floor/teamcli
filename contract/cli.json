@@ -875,6 +875,92 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "development-mode",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--show",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "local-fast|pr-per-change|off",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged"
+          }
+        }
+      ],
+      "usage": [
+        "team development-mode [--json]",
+        "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -2296,6 +2382,229 @@
       "who": {
         "gate": "any-caller",
         "why": "it reads the project registry and changes nothing, from any folder"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "queue",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--assignee",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--id",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--priority",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "add",
+          "positionals": [
+            {
+              "name": "title",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "adding to the local queue is the owner's or a declared seat's; the module refuses a seat the state cannot place on its recorded pane"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--commit",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--version",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "install",
+          "positionals": [
+            {
+              "name": "task",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue install <task> --commit <sha> [--version <version>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "an install is the owner's, or the one seat the file designates with an approved `installer:` on its recorded pane; the module refuses every other seat"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "list",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team queue list [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the listing reads the checkout and the queue only, and asks for no session and no terminal"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--commit",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--version",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "ready",
+          "positionals": [
+            {
+              "name": "task",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue ready <task> --commit <sha> [--version <version>] [--json]"
+          ],
+          "who": {
+            "gate": "seat-only",
+            "why": "a green slice ready is a declared seat's own record of the task its live lease holds, on the pane the state records for it; the owner is not admitted"
+          }
+        }
+      ],
+      "usage": [
+        "team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]",
+        "team queue list [--json]",
+        "team queue ready <task> --commit <sha> [--version <version>] [--json]",
+        "team queue install <task> --commit <sha> [--version <version>] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "list reads the local task queue from the checkout and asks no caller; add is the owner's or a seat of this team's, on the pane the state records for it"
       }
     },
     {

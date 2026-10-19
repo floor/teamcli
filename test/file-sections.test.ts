@@ -32,6 +32,7 @@ test('the generated owner sections equal the hand-kept list, in order', () => {
     // so `delegates` stays last.
     'tasks',
     'tempo',
+    'installer',
     'grant',
     'delegates',
   ]);
@@ -150,9 +151,9 @@ describe('delivery_order', () => {
 
   test('a written key with no legs, an unknown leg and a repeated one are refused', () => {
     const cases = [
-      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop' },
-      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop' },
-      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: socket, native, mcp-inbox, typed, drop' },
+      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop, headless-resume' },
+      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop, headless-resume' },
+      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume' },
       { text: `${TEAM}delivery_order: [typed, typed]\n`, message: 'delivery_order names "typed" twice' },
     ];
     for (const one of cases) {

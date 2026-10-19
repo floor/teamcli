@@ -1186,6 +1186,27 @@
     },
     {
       "code": 0,
+      "command": "development-mode",
+      "id": "development-mode.done",
+      "meaning": "the machine development mode was read, shown, planned, or switched",
+      "trigger": "team development-mode set local-fast --show"
+    },
+    {
+      "code": 1,
+      "command": "development-mode",
+      "id": "development-mode.refused",
+      "meaning": "a non-owner called set without the owner-authorization token for this exact switch, or the machine record cannot be read or verified",
+      "trigger": "team development-mode set off"
+    },
+    {
+      "code": 2,
+      "command": "development-mode",
+      "id": "development-mode.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team development-mode set maybe"
+    },
+    {
+      "code": 0,
       "command": "doctor",
       "id": "doctor.clear",
       "meaning": "nothing is missing",
@@ -1713,7 +1734,7 @@
       "code": 1,
       "command": "issues",
       "id": "issues.file",
-      "meaning": "the team file can't be read, it declares no task source, or its source is a broker's",
+      "meaning": "the team file can't be read, its source is a broker's, or its task path can't be used",
       "trigger": "team issues"
     },
     {
@@ -2028,7 +2049,7 @@
       "code": 1,
       "command": "next",
       "id": "next.file",
-      "meaning": "the team file can't be read, or it declares no task source",
+      "meaning": "the team file can't be read, or its task source or task path can't be used",
       "trigger": "team next"
     },
     {
@@ -2175,7 +2196,7 @@
       "code": 1,
       "command": "plan",
       "id": "plan.file",
-      "meaning": "the team file can't be read, or it declares no task source",
+      "meaning": "the team file can't be read, or its task source or task path can't be used",
       "trigger": "team plan"
     },
     {
@@ -2408,6 +2429,118 @@
       "id": "projects.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team projects extra"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.added",
+      "meaning": "the record was added to the queue",
+      "trigger": "team queue add \"the task title\" --id m1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.install",
+      "meaning": "the install acknowledgment was recorded, or the same one was already held",
+      "trigger": "team queue install m1 --commit abcdef1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.none",
+      "meaning": "the queue is empty",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.present",
+      "meaning": "the same record was already queued; nothing was written",
+      "trigger": "team queue add \"the task title\" --id m1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.ready",
+      "meaning": "the green slice was recorded ready, or the same one was already held",
+      "trigger": "team queue ready m1 --commit abcdef1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
+      "id": "queue.shown",
+      "meaning": "the queue was listed",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.caller",
+      "meaning": "the caller is not the owner or a seat of this team on its recorded pane, or is not a seat for `ready`",
+      "trigger": "team queue add \"the task title\" --id m1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.duplicate",
+      "meaning": "the id is already queued with a different record",
+      "trigger": "team queue add \"another title\" --id m1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.installer",
+      "meaning": "the caller is not the owner or the designated installer on its recorded pane, or the designation is not approved",
+      "trigger": "team queue install m1 --commit abcdef1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.lease",
+      "meaning": "the caller holds no live lease of the task it names",
+      "trigger": "team queue ready m1 --commit abcdef1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.read",
+      "meaning": "the task file is missing, not a list, could not be written or read back, or holds no such task",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.record",
+      "meaning": "the green-slice journal can't be read or written, or holds its maximum pending slices",
+      "trigger": "team queue ready m1 --commit abcdef1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.source",
+      "meaning": "the team file declares a linear task source; there is no local queue, and the tracker is never written",
+      "trigger": "team queue list"
+    },
+    {
+      "code": 2,
+      "command": "queue",
+      "id": "queue.invocation",
+      "meaning": "the invocation can't be read, or a value is not a task id, a declared seat, a one-line title or priority, a commit, or a version",
+      "trigger": "team queue add"
+    },
+    {
+      "code": 2,
+      "command": "queue",
+      "id": "queue.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team queue list"
     },
     {
       "code": 0,
@@ -3661,6 +3794,13 @@
       "id": "send.sent-unconfirmed",
       "meaning": "the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back",
       "trigger": "team send worker hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.brief-memory",
+      "meaning": "a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback",
+      "trigger": "team send worker --brief brief.md"
     },
     {
       "code": 1,

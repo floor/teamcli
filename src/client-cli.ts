@@ -71,12 +71,14 @@ export function clientPublicInput(arg: string, cwd: string): { ok: true; key: Cl
 
 /** The owner admission every client-form call shares: the one sentence a seat reads, and the
  *  `*.refused` error the JSON form writes. Returns true when the call may go on. */
-export function clientOwnerAllows(command: 'grant' | 'revoke', rawIo: Io, io: Io, json: boolean): boolean {
+export function clientOwnerAllows(command: 'grant' | 'revoke', rawIo: Io, io: Io, json: boolean, home: string = homedir()): boolean {
   const caller = walkCaller(io);
   if (isOwner(caller)) return true;
   const message = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-  // The owner's dev-mode admission for exactly this gate (OD-20261019-49).
-  const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: message });
+  // The owner's dev-mode admission for exactly this gate (OD-20261019-49). The home is the
+  // one the central resolver reads a governing policy or the machine record from; the command
+  // always names it, so a herdr caller is not refused before the record can be read.
+  const lift = devModeOwnerLiftAtCwd(rawIo, { command, refusal: message, home });
   if (lift !== null && lift.lifted) {
     io.stderr(`${lift.warning}\n`);
     return true;
@@ -104,21 +106,21 @@ export function clientGrantProblem(args: Args): string | null {
 }
 
 /** The client form of `team grant`: owner-only, one fresh id per issuance, at most seven days. */
-export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean): 'ok' | 'refused' | 'invalid' {
+export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean, home: string = homedir()): 'ok' | 'refused' | 'invalid' {
   const problem = clientGrantProblem(args);
   if (problem !== null) {
     if (json) writeJsonError(rawIo, 'grant.invalid', plainText(problem), null);
     else io.stderr(`team grant: ${problem}\n`);
     return 'invalid';
   }
-  if (!clientOwnerAllows('grant', rawIo, io, json)) return 'refused';
+  if (!clientOwnerAllows('grant', rawIo, io, json, home)) return 'refused';
   const key = clientPublicInput(args.values['public-key']!, io.cwd);
   if (!key.ok) {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(key.why), null);
     else io.stderr(`team grant: ${key.why}\n`);
     return 'refused';
   }
-  const result = writeClientGrant(homedir(), {
+  const result = writeClientGrant(home, {
     clientId: args.values.client!,
     entity: args.values.entity!,
     publicKey: key.key.publicKey,
@@ -149,14 +151,14 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean)
 }
 
 /** The client form of `team revoke`: owner-only, appended by grant id and never overwritten. */
-export function runClientRevokeMode(rawIo: Io, io: Io, grantId: string, json: boolean): 'ok' | 'refused' | 'invalid' {
+export function runClientRevokeMode(rawIo: Io, io: Io, grantId: string, json: boolean, home: string = homedir()): 'ok' | 'refused' | 'invalid' {
   if (!CLIENT_GRANT_ID_PATTERN.test(grantId)) {
     if (json) writeJsonError(rawIo, 'revoke.invalid', plainText(`${JSON.stringify(grantId)} is not a client grant id`), null);
     else io.stderr(`team revoke: ${JSON.stringify(grantId)} is not a client grant id\n`);
     return 'invalid';
   }
-  if (!clientOwnerAllows('revoke', rawIo, io, json)) return 'refused';
-  const result = appendClientRevocation(homedir(), grantId);
+  if (!clientOwnerAllows('revoke', rawIo, io, json, home)) return 'refused';
+  const result = appendClientRevocation(home, grantId);
   if (!result.ok) {
     if (json) writeJsonError(rawIo, 'revoke.refused', plainText(result.why), null);
     else io.stderr(`team revoke: ${result.why}\n`);

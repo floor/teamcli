@@ -23,6 +23,7 @@ import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
 import { watchCommand, watchWouldRead } from './up.ts';
+import { realHost, sendDirect, type DirectSendResult } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
@@ -34,6 +35,7 @@ import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
+import { dispatchIdleWork, type IdleDispatchResult, type WorkPush, type WorkPushResult } from '../watch/dispatch.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -187,7 +189,32 @@ export type WatchSources = {
   onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
   /** Optional herdr status-event source (`herdr wait agent-status` per seat). */
   statusSource?: StatusSource;
+  /**
+   * The direct route to an idle seat with takeable work (the dispatcher's `pushWork`). Absent,
+   * the watch dispatches nothing directly and types no old work nudge either: an episode the
+   * dispatcher owns is never typed at by the legacy path, and the one fallback record says so.
+   * The real watch runs the send command in this process, over direct routes only; a test
+   * stands in.
+   */
+  pushWork?: WorkPush;
 };
+
+/** The streams a direct dispatch writes through: the watch process's own, with an optional copy
+ *  of what it said on stderr, so a refusal that names no route still reaches the dispatcher. */
+function watchIo(onStderr?: (text: string) => void): Io {
+  return {
+    stdout: (text) => void process.stdout.write(text),
+    stderr: (text) => {
+      onStderr?.(text);
+      void process.stderr.write(text);
+    },
+    cwd: process.cwd(),
+    env: process.env,
+    stdinIsTTY: Boolean(process.stdin.isTTY),
+    stdoutIsTTY: Boolean(process.stdout.isTTY),
+    stderrIsTTY: Boolean(process.stderr.isTTY),
+  };
+}
 
 export const realWatchSources: WatchSources = {
   // The status live read, handed no state: the watch compares each live pane's process with its
@@ -231,7 +258,31 @@ export const realWatchSources: WatchSources = {
   busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'owner', cursor }, { deadlineMs: 500 }),
   busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
   statusSource: herdrStatusSource(),
+  pushWork: async (request) => {
+    // The send runs in this process, through the same admission, delivery order and route rules
+    // an ordinary send runs; only routes that reach a live receiver without a keystroke are
+    // walked. What the dispatcher reads back is that route's own ending, never an exit code.
+    const said: string[] = [];
+    const run = await sendDirect(watchIo((text) => said.push(text)), realHost, request);
+    return workPushResultOf(run.result, said.join(''));
+  },
 };
+
+/**
+ * What the idle dispatcher reads back from one direct send. Only a route that delivered is a
+ * wake; a stored copy, a timeout, an unreachable or a refused ending is `ok: false`, whatever the
+ * command's exit code was. A run that ended before any route was attempted is a refusal too, with
+ * the command's own words when it said any.
+ */
+export function workPushResultOf(result: DirectSendResult | null, said: string): WorkPushResult {
+  if (result === null) {
+    const why = said.replace(/\s+/g, ' ').trim();
+    return { ok: false, refused: why === '' ? 'the send ended before any direct route was attempted' : why };
+  }
+  const detail = result.reason === undefined ? '' : `: ${result.reason}`;
+  if (result.outcome === 'delivered') return { ok: true, outcome: `${result.route}: delivered${detail}` };
+  return { ok: false, refused: `${result.route}: ${result.outcome}${detail}` };
+}
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
 export default watch;
@@ -778,6 +829,31 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The seats this project's queue waits on, whoever queued them: the pass types no work
         // drop into one, so it takes no task while its swap waits (the design's work-drop rule).
         const waiting = new Set(queuedSwaps(readState(dir)).map(([seat]) => seat));
+        // The dispatcher: the watch's one path to an idle seat with takeable work. It reads the
+        // same snapshot `status` prints (no picker of its own, no claim) and calls the direct
+        // route when the sources wire one. Every episode it owns is dropped from the legacy typed
+        // work nudge, whether the route exists or not: with no route the seat is not typed at,
+        // and the pass says the one fallback line instead. `--no-nudge` is the watch that types
+        // nothing: it dispatches nothing at all rather than spending an episode on a route it was
+        // told not to use.
+        const idleDispatch: IdleDispatchResult = foreign || args.flags.has('no-nudge')
+          ? { pushed: [], suppressed: [] }
+          : await dispatchIdleWork({
+            root, team, state, live, now: sources.now(),
+            home: sources.home,
+            pause: whole.pause ?? null,
+            swaps: [...waiting],
+            body: (seat) => (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', seat),
+            push: sources.pushWork,
+          });
+        const suppressed = new Set(idleDispatch.suppressed ?? []);
+        for (const item of idleDispatch.pushed) {
+          if (item.ok) continue;
+          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); nothing was typed for it this episode`, false);
+        }
+        for (const line of idleDispatch.fallback?.failed ?? []) tell(line, true);
+        for (const line of idleDispatch.fallback?.missing ?? []) say(line, false);
+        if (suppressed.size > 0) result.work = result.work.filter((item) => !suppressed.has(item.seat));
         // A liveness word the chain set aside: said once per process, as a line, never typed
         // into a seat and never a desktop notice. The value in force stands.
         for (const refusal of result.refusals) {
@@ -824,6 +900,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign && statusEngine !== undefined) {
           for (const nudgedSeat of statusEngine.drainNudges()) {
             if (result.work.some((item) => item.seat === nudgedSeat)) continue;
+            // The dispatcher owns this seat's idle episode: the status nudge is not a second
+            // typed path into it, exactly as the pass's own work drop is dropped above.
+            if (suppressed.has(nudgedSeat)) continue;
             if (waiting.has(nudgedSeat)) continue;
             const fileSeat = team.seats.find((item) => item.name === nudgedSeat);
             const agent = live.agents.find((item) => item.name === nudgedSeat);

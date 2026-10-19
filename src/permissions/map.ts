@@ -204,6 +204,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'the listing is the command\'s only verb and reads the registry only: no team file, seat or terminal is read',
     },
+    'development-mode': {
+      kind: 'any-caller',
+      why: 'it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal',
+    },
+    'development-mode:set': {
+      kind: 'owner-only',
+      why: 'the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged',
+    },
     doctor: {
       kind: 'any-caller',
       why: 'the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them',
@@ -248,6 +256,26 @@ function buildGates(): Record<string, Gate> {
     pr: {
       kind: 'any-caller',
       why: 'it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal',
+    },
+    queue: {
+      kind: 'any-caller',
+      why: 'list reads the local task queue from the checkout and asks no caller; add is the owner\'s or a seat of this team\'s, on the pane the state records for it',
+    },
+    'queue:add': {
+      kind: 'owner-or-own-team',
+      why: 'adding to the local queue is the owner\'s or a declared seat\'s; the module refuses a seat the state cannot place on its recorded pane',
+    },
+    'queue:install': {
+      kind: 'owner-or-own-team',
+      why: 'an install is the owner\'s, or the one seat the file designates with an approved `installer:` on its recorded pane; the module refuses every other seat',
+    },
+    'queue:list': {
+      kind: 'any-caller',
+      why: 'the listing reads the checkout and the queue only, and asks for no session and no terminal',
+    },
+    'queue:ready': {
+      kind: 'seat-only',
+      why: 'a green slice ready is a declared seat\'s own record of the task its live lease holds, on the pane the state records for it; the owner is not admitted',
     },
     proc: {
       kind: 'owner-or-own-team',

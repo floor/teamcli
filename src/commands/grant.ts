@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { readArgs, type Args } from '../args.ts';
 import { runAuthorityEdit, type AuthorityEditOptions } from '../authority-edit.ts';
 import { runClientGrantMode } from '../client-cli.ts';
@@ -29,7 +30,7 @@ export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEdit
   const dryRun = args.flags.has('dry-run');
   let result: 'ok' | 'refused' | 'invalid';
   if (args.values.client !== undefined) {
-    result = runClientGrantMode(rawIo, io, args, json);
+    result = runClientGrantMode(rawIo, io, args, json, options.home ?? homedir());
   } else {
     const problem = invocationProblem(args);
     if (problem !== null) {
