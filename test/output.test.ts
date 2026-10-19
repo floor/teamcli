@@ -916,6 +916,38 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           tasks: [],
         }),
       ],
+      'team.green-slice': [
+        jsonEnvelope('team.green-slice', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          action: 'ready' as const,
+          status: 'recorded' as const,
+          event: {
+            kind: 'ready' as const,
+            task: 'q1',
+            seat: 'worker',
+            commit: 'abc1234',
+            version: '0.5.3',
+            at: '2026-10-20T10:00:00.000Z',
+          },
+        }),
+        jsonEnvelope('team.green-slice', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          action: 'install' as const,
+          status: 'held' as const,
+          event: {
+            kind: 'install' as const,
+            task: 'q1',
+            commit: 'abc1234',
+            version: '0.5.3',
+            installedBy: 'owner',
+            at: '2026-10-20T10:01:00.000Z',
+          },
+        }),
+      ],
       'team.pr': [
         jsonEnvelope('team.pr', {
           format: 1 as const,

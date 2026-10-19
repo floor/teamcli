@@ -1303,6 +1303,8 @@ Usage:
 
     team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]
     team queue list [--json]
+    team queue ready <task> --commit <sha> [--version <version>] [--json]
+    team queue install <task> --commit <sha> [--version <version>] [--json]
 
 ### Who may run it
 
@@ -1348,6 +1350,34 @@ Usage:
 | --- | --- | --- |
 | `title` | no | no |
 
+### `install`
+
+Hidden: no
+
+Usage:
+
+    team queue install <task> --commit <sha> [--version <version>] [--json]
+
+#### Who may run it
+
+`owner-or-own-team` — an install is the owner's, or the one seat the file designates with an approved `installer:` on its recorded pane; the module refuses every other seat
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--commit` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--version` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `task` | no | no |
+
 ### `list`
 
 Hidden: no
@@ -1371,6 +1401,34 @@ Usage:
 #### Positionals
 
 None.
+
+### `ready`
+
+Hidden: no
+
+Usage:
+
+    team queue ready <task> --commit <sha> [--version <version>] [--json]
+
+#### Who may run it
+
+`seat-only` — a green slice ready is a declared seat's own record of the task its live lease holds, on the pane the state records for it; the owner is not admitted
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--commit` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--version` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `task` | no | no |
 
 ## `raise`
 

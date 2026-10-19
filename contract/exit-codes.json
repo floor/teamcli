@@ -2328,6 +2328,13 @@
     {
       "code": 0,
       "command": "queue",
+      "id": "queue.install",
+      "meaning": "the install acknowledgment was recorded, or the same one was already held",
+      "trigger": "team queue install m1 --commit abcdef1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
       "id": "queue.none",
       "meaning": "the queue is empty",
       "trigger": "team queue list"
@@ -2342,6 +2349,13 @@
     {
       "code": 0,
       "command": "queue",
+      "id": "queue.ready",
+      "meaning": "the green slice was recorded ready, or the same one was already held",
+      "trigger": "team queue ready m1 --commit abcdef1"
+    },
+    {
+      "code": 0,
+      "command": "queue",
       "id": "queue.shown",
       "meaning": "the queue was listed",
       "trigger": "team queue list"
@@ -2350,7 +2364,7 @@
       "code": 1,
       "command": "queue",
       "id": "queue.caller",
-      "meaning": "the caller is not the owner or a seat of this team on its recorded pane",
+      "meaning": "the caller is not the owner or a seat of this team on its recorded pane, or is not a seat for `ready`",
       "trigger": "team queue add \"the task title\" --id m1"
     },
     {
@@ -2370,9 +2384,30 @@
     {
       "code": 1,
       "command": "queue",
+      "id": "queue.installer",
+      "meaning": "the caller is not the owner or the designated installer on its recorded pane, or the designation is not approved",
+      "trigger": "team queue install m1 --commit abcdef1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.lease",
+      "meaning": "the caller holds no live lease of the task it names",
+      "trigger": "team queue ready m1 --commit abcdef1"
+    },
+    {
+      "code": 1,
+      "command": "queue",
       "id": "queue.read",
-      "meaning": "the task file is missing, not a list, or could not be written or read back",
+      "meaning": "the task file is missing, not a list, could not be written or read back, or holds no such task",
       "trigger": "team queue list"
+    },
+    {
+      "code": 1,
+      "command": "queue",
+      "id": "queue.record",
+      "meaning": "the green-slice journal can't be read or written, or holds its maximum pending slices",
+      "trigger": "team queue ready m1 --commit abcdef1"
     },
     {
       "code": 1,
@@ -2385,7 +2420,7 @@
       "code": 2,
       "command": "queue",
       "id": "queue.invocation",
-      "meaning": "the invocation can't be read, or a value is not a task id, a declared seat, or a one-line title or priority",
+      "meaning": "the invocation can't be read, or a value is not a task id, a declared seat, a one-line title or priority, a commit, or a version",
       "trigger": "team queue add"
     },
     {

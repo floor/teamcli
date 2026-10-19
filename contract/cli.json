@@ -2283,6 +2283,57 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--commit",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--version",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "install",
+          "positionals": [
+            {
+              "name": "task",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue install <task> --commit <sha> [--version <version>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "an install is the owner's, or the one seat the file designates with an approved `installer:` on its recorded pane; the module refuses every other seat"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
@@ -2311,11 +2362,64 @@
             "gate": "any-caller",
             "why": "the listing reads the checkout and the queue only, and asks for no session and no terminal"
           }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--commit",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--version",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "ready",
+          "positionals": [
+            {
+              "name": "task",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue ready <task> --commit <sha> [--version <version>] [--json]"
+          ],
+          "who": {
+            "gate": "seat-only",
+            "why": "a green slice ready is a declared seat's own record of the task its live lease holds, on the pane the state records for it; the owner is not admitted"
+          }
         }
       ],
       "usage": [
         "team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]",
-        "team queue list [--json]"
+        "team queue list [--json]",
+        "team queue ready <task> --commit <sha> [--version <version>] [--json]",
+        "team queue install <task> --commit <sha> [--version <version>] [--json]"
       ],
       "who": {
         "gate": "any-caller",

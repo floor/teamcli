@@ -338,15 +338,20 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `projects.unreadable` | `projects` | 1 | the project registry cannot be read | `team projects` |
 | `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
 | `queue.added` | `queue` | 0 | the record was added to the queue | `team queue add "the task title" --id m1` |
+| `queue.install` | `queue` | 0 | the install acknowledgment was recorded, or the same one was already held | `team queue install m1 --commit abcdef1` |
 | `queue.none` | `queue` | 0 | the queue is empty | `team queue list` |
 | `queue.present` | `queue` | 0 | the same record was already queued; nothing was written | `team queue add "the task title" --id m1` |
+| `queue.ready` | `queue` | 0 | the green slice was recorded ready, or the same one was already held | `team queue ready m1 --commit abcdef1` |
 | `queue.shown` | `queue` | 0 | the queue was listed | `team queue list` |
-| `queue.caller` | `queue` | 1 | the caller is not the owner or a seat of this team on its recorded pane | `team queue add "the task title" --id m1` |
+| `queue.caller` | `queue` | 1 | the caller is not the owner or a seat of this team on its recorded pane, or is not a seat for `ready` | `team queue add "the task title" --id m1` |
 | `queue.duplicate` | `queue` | 1 | the id is already queued with a different record | `team queue add "another title" --id m1` |
 | `queue.file` | `queue` | 1 | the team file can't be read | `team queue list` |
-| `queue.read` | `queue` | 1 | the task file is missing, not a list, or could not be written or read back | `team queue list` |
+| `queue.installer` | `queue` | 1 | the caller is not the owner or the designated installer on its recorded pane, or the designation is not approved | `team queue install m1 --commit abcdef1` |
+| `queue.lease` | `queue` | 1 | the caller holds no live lease of the task it names | `team queue ready m1 --commit abcdef1` |
+| `queue.read` | `queue` | 1 | the task file is missing, not a list, could not be written or read back, or holds no such task | `team queue list` |
+| `queue.record` | `queue` | 1 | the green-slice journal can't be read or written, or holds its maximum pending slices | `team queue ready m1 --commit abcdef1` |
 | `queue.source` | `queue` | 1 | the team file declares a linear task source; there is no local queue, and the tracker is never written | `team queue list` |
-| `queue.invocation` | `queue` | 2 | the invocation can't be read, or a value is not a task id, a declared seat, or a one-line title or priority | `team queue add` |
+| `queue.invocation` | `queue` | 2 | the invocation can't be read, or a value is not a task id, a declared seat, a one-line title or priority, a commit, or a version | `team queue add` |
 | `queue.not-a-repo` | `queue` | 2 | not inside a git repository | `team queue list` |
 | `raise.dry-run` | `raise` | 0 | the route the raise would take; nothing was written | `team raise release.ready "the release is ready for the owner" --dry-run` |
 | `raise.merged` | `raise` | 0 | the line was merged into the owner's open record, and the record counts it | `team raise release.ready "the release is ready for the owner"` |

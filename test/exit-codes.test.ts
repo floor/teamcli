@@ -3774,6 +3774,22 @@ async function queued(place: Place, argv: string[], caller: Caller = leadSeat): 
   return { code: await runQueue(argv, io, { home: place.home }), out: io.out, err: io.err };
 }
 
+/** A live lease on `id`, written with the machine's clock: the exit scenes run in real time. */
+function leaseFile(place: Place, id: string, seat = 'lead', pane = 'w1:p1'): void {
+  const at = new Date().toISOString();
+  const until = new Date(Date.now() + 60 * 60_000).toISOString();
+  mkdirSync(join(place.root, '.agents', 'leases'), { recursive: true });
+  writeFileSync(
+    join(place.root, '.agents', 'leases', `${id}.json`),
+    `${JSON.stringify({ format: 1, id, seat, pane, acquiredAt: at, renewedAt: at, until }, null, 2)}\n`,
+  );
+}
+
+/** A queue holding `q1`, written directly: these scenes test the producer, not the add. */
+function queueQ1(place: Place): void {
+  writeFileSync(join(place.root, '.agents', 'queue.yaml'), '- id: "q1"\n  title: "a leased task"\n');
+}
+
 scene('queue.added', async (place) => {
   write(place, TEAM);
   recordLead(place);
@@ -3816,6 +3832,36 @@ scene('queue.source', async (place) => {
 });
 scene('queue.invocation', async (place) => show(await queued(place, ['bogus']), 'unexpected "bogus"'));
 scene('queue.not-a-repo', async (place) => show(await queued(place, ['list']), 'run team from a project\n'), false);
+scene('queue.ready', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  queueQ1(place);
+  leaseFile(place, 'q1');
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'ready q1 at abcdef1');
+});
+scene('queue.install', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['install', 'q1', '--commit', 'abcdef1'], { kind: 'owner' }), 'installed q1 at abcdef1');
+});
+scene('queue.lease', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'holds no live lease');
+});
+scene('queue.installer', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['install', 'q1', '--commit', 'abcdef1']), 'designates no installer');
+});
+scene('queue.record', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  queueQ1(place);
+  leaseFile(place, 'q1');
+  writeFileSync(join(place.root, '.agents', 'green-slices.json'), 'nope\n');
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'is not valid JSON');
+});
 
 /** `team send`'s fixtures: a fake seat of the fixture's own file, a sockets folder with a file
  *  at the pid the fake pane process reports, and a deliver that accepts — with `reply` set,

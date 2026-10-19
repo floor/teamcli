@@ -1221,6 +1221,36 @@ export const QUEUE_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+export const GREEN_SLICE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.green-slice',
+  fileName: 'green-slice.schema.json',
+  title: 'team queue ready|install --json output',
+  required: ['format', 'project', 'session', 'action', 'status', 'event'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    action: { type: 'string', enum: ['ready', 'install'] },
+    // `held` means the same task, commit and version was already recorded; nothing was written.
+    status: { type: 'string', enum: ['recorded', 'held'] },
+    event: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'task', 'commit', 'version', 'at'],
+      properties: {
+        kind: { type: 'string', enum: ['ready', 'install'] },
+        task: { type: 'string', minLength: 1 },
+        commit: { type: 'string', minLength: 7, maxLength: 40 },
+        version: { type: 'string', minLength: 1 },
+        // A ready event names the seat; an install event names the installer that acknowledged it.
+        seat: { type: 'string', minLength: 1 },
+        installedBy: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team feed` (`schema/feed.schema.json`). */
 export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.feed',
@@ -2520,6 +2550,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
   QUEUE_OUTPUT_SCHEMA,
+  GREEN_SLICE_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,

@@ -32,6 +32,7 @@ test('the generated owner sections equal the hand-kept list, in order', () => {
     // so `delegates` stays last.
     'tasks',
     'tempo',
+    'installer',
     'grant',
     'delegates',
   ]);
