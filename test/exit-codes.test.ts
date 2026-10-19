@@ -1963,6 +1963,10 @@ function tamperedSeatSetting(place: Place): void {
   });
   scene('settings.no-agent', async (place) => {
     write(place, TEAM);
+    // The seat is declared and never launched, so the first set bootstraps its record; a path
+    // where the agent registry belongs cannot hold it, and the refusal names that instead.
+    mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(place.home, '.config', 'team', 'agents'), 'not a directory');
     return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'has no registered agent record');
   });
   scene('settings.not-set', async (place) => {

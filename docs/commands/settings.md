@@ -46,6 +46,19 @@ generation; a failed event append leaves the written record in place and the rec
 the missing event. A dry run prints the same summary with `would set`/`would unset` and stops
 before the record is replaced.
 
+A seat the team file declares that has never launched has no agent record yet. A write form aimed
+at it creates that record first, seeded from the seat's declaration — its name, signing words,
+lab, CLI and launch line, with no pane, session or state — and signs the setting there; a later
+launch finds the same record and keeps its id, so the settings signed before it are the ones the
+seat runs with. The create is the record, not a launch: nothing starts, attaches or types. A dry
+run creates the record too and still writes no setting, and an unset on such a seat reports the
+setting is not set. A printed `team settings <seat>` reads the declaration and the team's records
+without creating anything.
+
+`team settings set lead nickname=Atlas` therefore works on a declared seat before its first
+launch, and the `settings.no-agent` refusal is left for a registry that cannot hold the record at
+all, such as a path that is not a directory.
+
 ## Where a value comes from
 
 | Source | Meaning |
@@ -70,7 +83,7 @@ walks. The replaced file word addresses nobody.
 | Exit | When |
 | --- | --- |
 | 0 | the seat's settings were printed, a write was recorded, or a dry run printed its change |
-| 1 | `--file` is not the caller's, the team file declares no seat of that name, a write is not the owner's, the seat has no agent record, a policy forbids the value, or an unset names a setting that is not set |
+| 1 | `--file` is not the caller's, the team file declares no seat of that name, a write is not the owner's, the seat's agent record cannot be created, a policy forbids the value, or an unset names a setting that is not set |
 | 2 | the invocation, the team file, the caller's right to read this team, a signed settings record cannot be read, a value is outside what the seat's profile accepts, or the record cannot be written |
 
 ## Example

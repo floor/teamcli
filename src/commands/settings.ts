@@ -19,7 +19,7 @@ import { resolveSeatOverrides } from '../config/apply.ts';
 import { agentIdOf, readSeatSettings } from '../config/read.ts';
 import { CONFIG_KEYS, getConfigSpec } from '../config/registry.ts';
 import type { ApplyKind, ConfigKey } from '../config/registry.ts';
-import { planConfigSet, planConfigUnset, writeConfigSet, writeConfigUnset } from '../config/sources.ts';
+import { planConfigSet, planConfigUnset, seatRecordForWrite, writeConfigSet, writeConfigUnset } from '../config/sources.ts';
 import type { SignedConfigRecord } from '../config/record.ts';
 import type { PlannedConfigSetting } from '../config/sources.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
@@ -43,7 +43,7 @@ export const USAGE = `Usage: team settings <seat> [--file <path>] [--json]
 
 Prints the seat's settings and where each value comes from: a signed record at the seat, team, project or entity level, the team file, the team's own order, the release default, or unset. The write forms record a signed setting for one seat, one key and value or several key=value words; only the owner runs them, and a change is signed, logged and raised as config.changed. A model is recorded as the launch id it names in the seat's profile, so a later launch reads the same model.
 
-Exits 0 when the settings are printed or the change is written, 1 when the seat is not declared or has no agent record, the caller is not the owner, a policy forbids the value, or an unset names a setting that is not set, 2 when the invocation, the team file, or a signed record cannot be read, a value is outside what the seat's profile accepts, or the record cannot be written.
+Exits 0 when the settings are printed or the change is written, 1 when the seat is not declared or its agent record cannot be created, the caller is not the owner, a policy forbids the value, or an unset names a setting that is not set, 2 when the invocation, the team file, or a signed record cannot be read, a value is outside what the seat's profile accepts, or the record cannot be written.
 `;
 
 export type SettingsCommandOptions = {
@@ -385,17 +385,25 @@ function executeWrite(
   const seat = team.seats.find((one) => one.name === parsed.seat);
   if (seat === undefined) return noSeatExit(io, json, parsed.seat, team.project);
   const found = agentIdOf(home, current.root, seat.name);
-  if (found.agentId === null) {
-    const message = `seat "${seat.name}" has no registered agent record to hold its settings; run \`team up\` first`;
-    if (json) {
-      writeJsonError(io, 'settings.no-agent', message, 'run `team up` to register the seat');
-    } else {
-      io.stderr(`team settings: ${message}\n`);
+  let agentId = found.agentId;
+  if (agentId === null) {
+    // The seat is declared but has never launched: the bootstrap ruling makes the first write the
+    // moment its record is created, seeded from the declaration, so `set`, `unset` and a dry run
+    // all answer from a record rather than refuse for the missing one. A launch would create the
+    // same record; nothing here starts a pane, attaches or types anything.
+    const boot = seatRecordForWrite(home, seat.name, { root: current.root, team, seat });
+    if (!boot.ok) {
+      const message = `seat "${seat.name}" has no registered agent record to hold its settings and none could be created: ${boot.why}; run \`team up\` first`;
+      if (json) {
+        writeJsonError(io, 'settings.no-agent', message, 'run `team up` to register the seat');
+      } else {
+        io.stderr(`team settings: ${message}\n`);
+      }
+      // exit: settings.no-agent
+      return 1;
     }
-    // exit: settings.no-agent
-    return 1;
+    agentId = boot.agentId;
   }
-  const agentId = found.agentId;
   const dryRun = flags.has('dry-run');
 
   if (verb === 'set') {
@@ -544,6 +552,8 @@ function executeWrite(
     if (written.kind === 'value') return notSetExit(io, json, written.why);
     return planExit(io, json, written.kind, written.why);
   }
+  // The write gate above gives every command an agent record, so the target is its id: a seat
+  // that never launched had its record created from the declaration before the plan read it.
   const notice = recordRemovals(current, home, seat.name, agentId, removed, now);
   logLine(
     join(current.root, '.agents'),

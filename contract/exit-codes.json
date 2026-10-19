@@ -3512,7 +3512,7 @@
       "code": 1,
       "command": "settings",
       "id": "settings.no-agent",
-      "meaning": "the seat has no registered agent record to hold its settings",
+      "meaning": "the seat has no registered agent record and one could not be created to hold its settings",
       "trigger": "team settings set lead nickname=Atlas"
     },
     {

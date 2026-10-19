@@ -507,7 +507,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `settings.shown` | `settings` | 0 | the seat's settings are printed | `team settings lead` |
 | `settings.unset` | `settings` | 0 | the setting is removed from the seat's record and logged | `team settings unset lead nickname` |
 | `settings.file-owner` | `settings` | 1 | --file is the owner's | `team settings lead --file .agents/team.yaml` |
-| `settings.no-agent` | `settings` | 1 | the seat has no registered agent record to hold its settings | `team settings set lead nickname=Atlas` |
+| `settings.no-agent` | `settings` | 1 | the seat has no registered agent record and one could not be created to hold its settings | `team settings set lead nickname=Atlas` |
 | `settings.no-seat` | `settings` | 1 | the team file declares no seat of that name | `team settings ghost` |
 | `settings.not-owner` | `settings` | 1 | only the owner sets a seat's settings | `team settings set lead nickname=Atlas` |
 | `settings.not-set` | `settings` | 1 | an unset names a setting that is not set on the seat | `team settings unset lead model` |

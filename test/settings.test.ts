@@ -11,10 +11,11 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { readEvents } from '../src/bus/log.ts';
 import { runSettings, USAGE } from '../src/commands/settings.ts';
+import { resolveSeatOverrides } from '../src/config/apply.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { SETTINGS_CHANGE_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { writePolicySet } from '../src/policy/index.ts';
-import { agentsDir, registerAgent, type AgentInit } from '../src/registry/agents.ts';
+import { agentsDir, readAgents, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { installKey } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
@@ -525,10 +526,52 @@ describe('the write verbs', () => {
     expect(result.err).toContain('loosens policy "delivery-order"');
   });
 
-  test('a seat with no agent record is refused', async () => {
+  test('a declared seat with no agent record gets a registered one on its first write', async () => {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const result = await run(['set', 'lead', 'nickname=Hera']);
+    expect(result.code).toBe(0);
+    const agents = readAgents(home);
+    expect(agents).toHaveLength(1);
+    const [agent] = agents;
+    // Seeded from the team file's declaration: the identity words are the file's own.
+    expect(agent?.name).toBe('lead');
+    expect(agent?.signing).toEqual({ model: 'Claude Opus', version: '5.5', role: 'coordinator' });
+    expect(agent?.lab).toBe('anthropic');
+    expect(agent?.cli).toBe('claude-code');
+    expect(agent?.launch).toBe('claude --model claude-opus-5-5');
+    expect(agent?.lifecycle).toBe('registered');
+    expect(agent?.reach).toEqual({ team: teamIdOf(root), seat: 'lead', session: 'acme', pane: null, address: null });
+    expect(agent?.provenance.registered_by).toBe('team settings');
+    // The word the command wrote is the signed one the seat reads back.
+    expect(resolveSeatOverrides({ home, root, seat: 'lead' })).toEqual({ ok: true, overrides: { nickname: 'Hera' } });
+  });
+
+  test('a dry run on a seat that never launched creates its record and writes no setting', async () => {
+    const result = await run(['set', 'lead', 'nickname=Hera', '--dry-run']);
+    expect(result.code).toBe(0);
+    expect(result.out).toBe('settings: would set nickname=Hera at seat (lead)\n');
+    const agents = readAgents(home);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.settings).toBeUndefined();
+  });
+
+  test('an unset on a seat that never launched says there is nothing to unset, not that its record is missing', async () => {
+    const result = await run(['unset', 'lead', 'nickname']);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('nothing to unset');
+    expect(result.err).not.toContain('no registered agent record');
+    expect(readAgents(home)).toHaveLength(1);
+  });
+
+  test('a seat record that cannot be created is refused, and the id says which', async () => {
+    // A path where the agent registry belongs cannot hold records: the bootstrap is refused
+    // rather than the write landing nowhere.
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(home, '.config', 'team', 'agents'), 'not a directory');
     const result = await run(['set', 'lead', 'nickname=Hera']);
     expect(result.code).toBe(1);
     expect(result.err).toContain('has no registered agent record');
+    expect(result.err).toContain('none could be created');
   });
 
   test('unsetting a setting that is not set is refused', async () => {

@@ -23,10 +23,12 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { entitiesPath } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import { grantsDir } from '../grant.ts';
-import { agentsDir, getAgent, isAgentId, updateAgent } from '../registry/agents.ts';
+import { agentsDir, findAgent, getAgent, isAgentId, updateAgent } from '../registry/agents.ts';
 import { get as getProject, projectsFile, upsertProject } from '../registry/projects.ts';
-import { getTeam, readTeams, teamsFile, upsertTeam } from '../registry/teams.ts';
+import { registerDeclaredSeat } from '../registry/sync.ts';
+import { getTeam, readTeams, teamIdOf, teamsFile, upsertTeam } from '../registry/teams.ts';
 import { bumpGeneration, keyOf, keyState } from '../store/keys.ts';
 import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
@@ -675,6 +677,66 @@ function seatTargetProblem(home: string, target: string): string | null {
   return `no registered agent "${target}" in ${agentsDir(home)}, and no team roster declares it`;
 }
 
+/** One seat a registered team's file declares: the declaration a first write is seeded from. */
+export type SeatDeclaration = { root: string; team: TeamFile; seat: Seat };
+
+/** The declaration of a seat by name across the registered teams, or null when none names it. */
+function declaredSeatOf(home: string, name: string): SeatDeclaration | null {
+  try {
+    for (const record of Object.values(readTeams(home))) {
+      const loaded = loadTeamFile(record.root, { home });
+      if (!loaded.ok) continue;
+      const seat = loaded.team.seats.find((one) => one.name === name);
+      if (seat !== undefined) return { root: record.root, team: loaded.team, seat };
+    }
+  } catch {
+    // An unreadable team registry declares no seat here; the caller answers with what it found.
+  }
+  return null;
+}
+
+/** The agent that already holds a seat: its roster line first, then the record whose reach names
+ *  the seat. Null when no agent record holds it yet. */
+function seatAgentId(home: string, name: string): string | null {
+  try {
+    const records = Object.values(readTeams(home));
+    for (const record of records) {
+      const line = record.roster.find((entry) => entry.seat === name);
+      if (line !== undefined && getAgent(home, line.agent) !== null) return line.agent;
+    }
+    for (const record of records) {
+      const found = findAgent(home, { team: teamIdOf(record.root), seat: name });
+      if (found !== null) return found.id;
+    }
+  } catch {
+    // An unreadable registry names no agent here; the caller reports what it could not find.
+  }
+  return null;
+}
+
+/**
+ * The agent id a seat-level write signs under. A launched seat has one already. A seat that is
+ * declared but never launched has none: the bootstrap ruling makes the first write the moment its
+ * record is created, seeded from the declaration and signed like any other record, so the write
+ * never refuses for the missing record and no launch or pane operation happens as its side effect.
+ */
+export function seatRecordForWrite(
+  home: string,
+  target: string,
+  declaration?: SeatDeclaration,
+): { ok: true; agentId: string } | { ok: false; why: string } {
+  if (getAgent(home, target) !== null) return { ok: true, agentId: target };
+  const known = seatAgentId(home, target);
+  if (known !== null) return { ok: true, agentId: known };
+  const declared = declaration ?? declaredSeatOf(home, target);
+  if (declared === null) {
+    return { ok: false, why: `no registered agent "${target}" in ${agentsDir(home)}, and no team roster declares it` };
+  }
+  const created = registerDeclaredSeat({ home, root: declared.root, team: declared.team, by: 'team settings' }, declared.seat);
+  if ('note' in created) return { ok: false, why: created.note };
+  return { ok: true, agentId: created.id };
+}
+
 /**
  * Validates a write without touching any file: every key is in the registry at that level, every
  * value is one the key's type admits, and the level's current record verifies. All settings are
@@ -806,10 +868,14 @@ function writeSettingsMap(
  */
 export function writeConfigSet(home: string, plan: ConfigSetPlan, options: ConfigWriteOptions = {}): ConfigWriteResult {
   if (!plan.ok) return plan;
-  // The target is checked before the generation is bumped: a write that cannot land must move
-  // nothing, or the next real write would carry the burned number.
-  if (plan.level === 'seat' && getAgent(home, plan.target) === null) {
-    return { ok: false, kind: 'source', why: `no registered agent "${plan.target}" in ${agentsDir(home)}` };
+  // The target is resolved before the generation is bumped: a write that cannot land must move
+  // nothing, or the next real write would carry the burned number. A seat name that has no record
+  // yet is the bootstrap case: the first write creates it from the declaration.
+  let target = plan.target;
+  if (plan.level === 'seat' && getAgent(home, target) === null) {
+    const resolved = seatRecordForWrite(home, target);
+    if (!resolved.ok) return { ok: false, kind: 'source', why: resolved.why };
+    target = resolved.agentId;
   }
   const now = options.now ?? new Date();
   const folder = grantsDir(home);
@@ -823,7 +889,7 @@ export function writeConfigSet(home: string, plan: ConfigSetPlan, options: Confi
         key: setting.key,
         value: setting.value,
         level: plan.level,
-        target: plan.target,
+        target,
         setter: 'owner',
         date,
         generation,
@@ -834,11 +900,11 @@ export function writeConfigSet(home: string, plan: ConfigSetPlan, options: Confi
   const updates: Record<string, Record<string, YamlValue>> = {};
   for (const record of written) updates[record.key] = diskEntry(record);
   try {
-    writeSettingsMap(home, plan.level, plan.target, updates);
+    writeSettingsMap(home, plan.level, target, updates);
   } catch (error) {
     return { ok: false, kind: 'write', why: (error as Error).message };
   }
-  return { ok: true, level: plan.level, target: plan.target, generation, written };
+  return { ok: true, level: plan.level, target, generation, written };
 }
 
 /**

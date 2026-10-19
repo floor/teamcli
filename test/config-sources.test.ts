@@ -376,6 +376,48 @@ describe('the seat record', () => {
     expect(plan.why).toContain('no registered agent');
     expect(existsSync(join(agentsDir(home), 'agt_000000000000.yaml'))).toBe(false);
   });
+
+  test('a plan aimed at a declared seat name bootstraps its record, signed under the new id', () => {
+    const root = join(home, 'repo');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    const teamId = teamIdOf(root);
+    upsertTeam(home, teamId, { project: 'teamcli', session: 'teamcli', root, lobby: '' });
+    writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
+project: teamcli
+coordinator: builder-2
+operator: builder-2
+workspace:
+  mode: shared
+seats:
+  - role: builder
+    name: builder-2
+    label: builder-2
+    cli: antigravity
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: agy
+`);
+    const plan = planConfigSet(home, { level: 'seat', target: 'builder-2', settings: [{ key: 'nickname', value: 'b2' }] });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+
+    const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T08:00:00Z') });
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+
+    // The write signs under an id that did not exist when the plan ran, and returns it.
+    expect(written.target).toMatch(/^agt_[0-9a-f]{12}$/);
+    const agent = getAgent(home, written.target);
+    expect(agent).not.toBeNull();
+    expect(agent?.lifecycle).toBe('registered');
+    expect(agent?.signing).toEqual({ model: 'Claude Sonnet', version: '5.5', role: 'builder' });
+    expect(agent?.reach).toEqual({ team: teamId, seat: 'builder-2', session: 'teamcli', pane: null, address: null });
+    const read = readSeatConfigSource(home, written.target, 'builder-2');
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.settings.map((entry) => [entry.key, entry.value])).toEqual([['nickname', 'b2']]);
+  });
 });
 
 describe('the registry records above a seat', () => {

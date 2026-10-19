@@ -189,6 +189,34 @@ export function registerLaunch(
 }
 
 /**
+ * Creates the record of a seat the team file declares but that has never launched: the first
+ * write the bootstrap ruling names. The identity words come from the declaration, so nothing is
+ * invented; the record is `registered` with no pane, session address or state touched, so no
+ * launch, attach or typed key happens here. A later launch finds this record by (team, seat) and
+ * keeps its id, so the settings signed before it are the ones the seat runs with.
+ */
+export function registerDeclaredSeat(input: RegistryTeam, seat: Seat): { id: string } | { note: string } {
+  try {
+    const agent = registerAgent(input.home, {
+      name: seat.name,
+      signing: { model: seat.model, version: seat.version, role: seat.role },
+      lab: seat.vendor,
+      cli: seat.cli,
+      launcher: null,
+      launch: seat.launch,
+      reach: { team: teamIdOf(input.root), seat: seat.name, session: input.team.session, pane: null, address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'registered',
+      by: input.by,
+    });
+    return { id: agent.id };
+  } catch (error) {
+    return { note: noteOf(error) };
+  }
+}
+
+/**
  * A seat was renamed from `fromSeat` to `toSeat`: its agent record keeps the same `agt_…` id
  * (so grants keyed by agent id continue to cover the seat) while `name` and `reach.seat` move
  * to `toSeat` and the team's roster is re-keyed. Returns `{ id }` when an agent record was
