@@ -131,6 +131,15 @@ export function modelRuleAllows(
   return entry.allow ? named : !named;
 }
 
+/** Whether the rule allows a lab for a pane no seat claims: such a pane has no name or role to
+ *  answer for it, so only the `*` entry can decide. No `*` entry allows every lab. */
+export function modelRuleAllowsUnclaimed(entries: readonly ModelRuleEntry[], lab: string): boolean {
+  const entry = entries.find((candidate) => candidate.subject === '*');
+  if (!entry) return true;
+  const named = entry.labs.includes(lab.trim().toLowerCase());
+  return entry.allow ? named : !named;
+}
+
 /** The rule in force for an entity, parsed; the empty default is no rule at all. */
 export function parseModelRuleValue(raw: unknown): ModelRuleEntry[] {
   return parseModelRule(raw) ?? [];

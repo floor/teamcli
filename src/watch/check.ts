@@ -10,6 +10,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { HerdrAgent } from '../herdr.ts';
 import type { ReplacedContinuity, SeatProcessVerdict } from '../launch/identity.ts';
 import type { QuotaFigure } from '../profiles/quota.ts';
+import type { ModelRuleEntry } from '../policy/model-rule.ts';
 import type { LivenessThresholds } from '../settings/inherit.ts';
 import type { Live } from '../status/compare.ts';
 import type { SessionState } from '../state.ts';
@@ -34,12 +35,42 @@ export type SeatHistory = {
   idleSince: number | undefined;
 };
 
+// One declared seat the entity's model rule refuses (Policies rule 10): the vendor the file
+// declares, and the swap the rule proposes or the reason there is none. Built once per pass by
+// the caller that read the entity's teams; the screen's own contradiction of the file is the
+// model-drift check's report, never this one.
+export type ModelRuleBreachReading = {
+  /** The rule in force, canonical. */
+  rule: string;
+  /** The vendor the team file declares, as written. */
+  vendor: string;
+  /** `<cli> <model> <version> from <team>/<seat>`, or null when no recipe is proposed. */
+  proposal: string | null;
+  /** Why no recipe is proposed, when none is. */
+  reason: string | null;
+};
+
+// The entity model rule as one pass reads it: the rule in force, its entries — the `*` entry
+// decides for a pane no seat claims — and this team's breaching seats, by name. A rule that
+// cannot be read is its reason, never an empty rule: an unreadable rule must not read every
+// seat as in rule.
+export type ModelRulePass =
+  | { ok: true; rule: string; entries: readonly ModelRuleEntry[]; breaches: ReadonlyMap<string, ModelRuleBreachReading> }
+  | { ok: false; why: string }
+  | null;
+
+// The model a pane outside the file shows, when a shipped profile can read it: the reading and
+// the lab its own line names. An absent reading is an unread pane, never a guess.
+export type PaneModelReading = { model: string; version: string; lab: string };
+
 // Everything a seat check may read about the seat it is handed. One is built per seat per pass,
 // before any check runs; a check never reads the live team itself.
 export type SeatObservation = {
   name: string;
   // The seat the file declares; undefined for a temporary seat, which signs with no file model.
   seat: { cli: string; model: string; version: string; display: string } | undefined;
+  // The entity model rule's breach for a declared seat of this team, when the pass read one.
+  rule: ModelRuleBreachReading | undefined;
   // The agent herdr lists for the seat; undefined when no agent answers for it.
   agent: HerdrAgent | undefined;
   // Whether the session answered at all: false is every seat absent for the same reason.
@@ -102,6 +133,12 @@ export type TeamObservation = {
   seats: SeatObservation[];
   // The panes the file's seats answer for: an agent in none of them is extra.
   known: Set<string>;
+  // The entity model rule as this pass read it; null when the team declares no entity or the
+  // entity sets no rule. An unreadable rule is its own case: the pass says it once.
+  modelRule: ModelRulePass;
+  // The model each pane outside the file shows, by pane id, where a shipped profile reads one
+  // off the pane's screen.
+  paneModels: ReadonlyMap<string, PaneModelReading>;
   // The seats that count as the team's workers (not the leads, not parked), and their idle flag.
   workers: { idle: boolean }[];
   // How the file differs from the last approval: [] none, null never approved, undefined unlooked.
@@ -152,6 +189,7 @@ export const CHECK_NAMES = [
   'missing',
   'restored',
   'model-drift',
+  'model-rule',
   'attention',
   'provider-error',
   'unsent',
@@ -168,14 +206,16 @@ export const CHECK_NAMES = [
   'budget',
 ] as const;
 
-// The checks the file cannot turn off (RFC 0002 § 4.2): the five whose condition is the one
-// thing the watch exists for — a missing seat, a wrong model, an unanswered prompt, the prompt
-// that climbs when its lead does not clear it, and the approval the rest reads against. The
-// schema refuses them in `watch.checks`, and the pass runs them whatever the list says.
+// The checks the file cannot turn off (RFC 0002 § 4.2): the six whose condition is the one
+// thing the watch exists for — a missing seat, a wrong model, a seat the entity's rule refuses,
+// an unanswered prompt, the prompt that climbs when its lead does not clear it, and the approval
+// the rest reads against. The schema refuses them in `watch.checks`, and the pass runs them
+// whatever the list says.
 export const ALWAYS_ON: readonly string[] = [
   'attention',
   'missing',
   'model-drift',
+  'model-rule',
   'prompt-escalation',
   'approval',
 ];

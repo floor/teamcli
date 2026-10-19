@@ -4,8 +4,9 @@
 // observation it is handed (RFC 0002 § 4.2).
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
+import { CLIS } from '../clis.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { payingAccountOf, payingPoolOf } from '../information/machine-accounts.ts';
+import { labOfRunningModel, payingAccountOf, payingPoolOf } from '../information/machine-accounts.ts';
 import type { MachineFigure } from '../information/machine-readings.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -21,12 +22,14 @@ import type { Tempo } from '../file/sections/tempo.ts';
 import { pauseText, type PauseRecord, type SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
-import { seatModel } from '../status/statusline.ts';
+import { seatModel, runningModel } from '../status/statusline.ts';
 import { liveDisplayAgent } from './seat-label.ts';
 import {
   ALWAYS_ON,
   type Attention,
   type CheckContext,
+  type ModelRulePass,
+  type PaneModelReading,
   type Report,
   type SeatCheck,
   type SeatHistory,
@@ -46,6 +49,7 @@ import { load } from './checks/load.ts';
 import { memory as memoryCheck } from './checks/memory.ts';
 import { missing } from './checks/missing.ts';
 import { modelDrift } from './checks/model-drift.ts';
+import { modelRule } from './checks/model-rule.ts';
 import { promptEscalation } from './checks/prompt-escalation.ts';
 import { restored } from './checks/restored.ts';
 import { swapFree } from './checks/swap-free.ts';
@@ -169,8 +173,8 @@ export type PassResult = {
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
-// run, except the five that can't be turned off.
-export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, attention, providerError, unsent, idle];
+// run, except the six that can't be turned off.
+export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, modelRule, attention, providerError, unsent, idle];
 export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
@@ -258,6 +262,9 @@ export type PassInput = {
   readScreen?: (cli: string, screen: string | undefined) => Screen;
   /** Quota patterns in force, shipped plus the approved override. The shipped list, when omitted. */
   quotaFor?: (cli: string) => readonly QuotaPattern[];
+  /** The entity model rule as the caller read it once for this pass. Omitted or null, no rule is
+   *  in force; a refusal is said once, to the owner. The pass never reads the entity's files. */
+  modelRule?: ModelRulePass;
   /** Unacked messages already verified. Omitted, the pass rings nothing. */
   mailbox?: readonly MailboxWaiting[];
   /**
@@ -292,6 +299,7 @@ export function pass({
   quotaFor: patternsOf = shippedQuota,
   mailbox = [],
   pause,
+  modelRule: rule = null,
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
@@ -378,6 +386,7 @@ export function pass({
       observations.push({
         name,
         seat,
+        rule: rule !== null && rule.ok ? rule.breaches.get(name) : undefined,
         agent: undefined,
         herdr: live.running,
         screen: { kind: 'unknown' },
@@ -433,6 +442,7 @@ export function pass({
     observations.push({
       name,
       seat,
+      rule: rule !== null && rule.ok ? rule.breaches.get(name) : undefined,
       agent,
       herdr: live.running,
       screen,
@@ -508,6 +518,23 @@ export function pass({
     readings = observeCheck(readings, outcome.account, outcome.reading.windows);
   }
 
+  // The model every pane outside the file shows, where a shipped profile reads one. The lab is
+  // the one the pane's own model line names, never the CLI's name (the owner's rule); a pane no
+  // profile's process names claim, or whose screen names no maker, stays unread — the extra
+  // check reports it as it always did and judges no rule on it.
+  const paneModels = new Map<string, PaneModelReading>();
+  for (const agent of live.agents) {
+    if (known.has(agent.pane)) continue;
+    const names = foreground?.[agent.pane] ?? null;
+    const cli = CLIS.find((name) => reportedLiveAgent(names, profileFor(name)?.processNames ?? []));
+    if (cli === undefined) continue;
+    const running = runningModel(cli, live.screens[agent.pane] ?? '');
+    if (running === null) continue;
+    const lab = labOfRunningModel(`${running.model} ${running.version}`);
+    if (lab === undefined) continue;
+    paneModels.set(agent.pane, { model: running.model, version: running.version, lab });
+  }
+
   const teamObservation: TeamObservation = {
     team,
     state,
@@ -516,6 +543,8 @@ export function pass({
     limits: team.machine,
     seats: observations,
     known,
+    modelRule: rule,
+    paneModels,
     workers,
     approval,
     approvalReason,
@@ -548,6 +577,14 @@ export function pass({
     for (const check of SEAT_CHECKS) if (enabled(check.name)) reports.push(...check.run(seat, ctx));
   }
   for (const check of TEAM_CHECKS) if (enabled(check.name)) reports.push(...check.run(teamObservation, ctx));
+
+  // A rule that cannot be read is said once, to the owner, and no breach is judged: an
+  // unreadable rule must never read as a rule every seat satisfies. `team check` says the same
+  // sentence for the same refusal.
+  if (rule !== null && !rule.ok) {
+    const report = once('model-rule:unreadable', `the entity model rule cannot be read, so no breach is judged: ${rule.why}`, 'owner');
+    if (report) reports.push(report);
+  }
 
   // One pass of grace for an attention key that stops being named: a screen can flicker, and a
   // report for every flicker is noise. An attention key stays active through the first pass that

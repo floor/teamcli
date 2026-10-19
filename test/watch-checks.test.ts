@@ -132,10 +132,10 @@ describe('watch.checks, the section', () => {
     ]);
   });
 
-  test('every registered check is named, and the five always-on ones are the RFC\'s five', () => {
+  test('every registered check is named, and the six always-on ones are the RFC\'s', () => {
     expect([...new Set(CHECK_NAMES)]).toEqual([...CHECK_NAMES]);
     expect([...SEAT_CHECKS, ...TEAM_CHECKS].map((check) => check.name)).toEqual([...CHECK_NAMES]);
-    expect([...ALWAYS_ON].sort()).toEqual(['approval', 'attention', 'missing', 'model-drift', 'prompt-escalation']);
+    expect([...ALWAYS_ON].sort()).toEqual(['approval', 'attention', 'missing', 'model-drift', 'model-rule', 'prompt-escalation']);
     for (const name of ALWAYS_ON) expect(CHECK_NAMES).toContain(name as (typeof CHECK_NAMES)[number]);
   });
 });
@@ -226,7 +226,7 @@ describe('a pass with checks turned off', () => {
     expect(run(true)).toEqual(plain);
   });
 
-  test('the five always-on checks run for a file that lists them anyway', () => {
+  test('the six always-on checks run for a file that lists them anyway', () => {
     // Only a hand-made file can list them: the schema refuses them, and approve validates. The
     // core holds regardless — the off list is in effect here, and they still run.
     const smuggled = teamFile();
@@ -290,7 +290,7 @@ describe('team approve and watch.checks', () => {
     return { code, err: io.err };
   }
 
-  test('a file that turns off one of the five is refused, and nothing is written', async () => {
+  test('a file that turns off one of the six is refused, and nothing is written', async () => {
     write(source('  checks:\n    attention: off\n'));
     const run = await approve();
     expect(run.code).toBe(2);

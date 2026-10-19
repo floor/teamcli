@@ -28,6 +28,7 @@ import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, NUDGE_TEXT, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
@@ -710,6 +711,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
         }
         const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
+        // The entity's model rule, read once for this pass: the breach list `team check` prints,
+        // narrowed to this team by name. The pass never reads the entity's files itself.
+        const modelRule = modelRuleOfPass(team, root, sources.home);
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           team, state, live, machine, now, memory,
@@ -718,6 +722,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // of that watch is.
           pause: whole.pause ?? null,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
+          modelRule,
           liveness: {
             machine: machineLiveness(sources.home),
             entity: entityLiveness(sources.home, team.entity),
