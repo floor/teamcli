@@ -255,6 +255,7 @@ describe('the seat record', () => {
     expect(refused.why).toContain('is known to 2 teams');
     expect(refused.why).toContain(teamIdOf(mine.root));
     expect(readAgents(home)).toHaveLength(1);
+    expect(recordedGeneration(grantsDir(home), home)).toBeNull();
     expect(readFileSync(seatFile(otherId), 'utf8')).toBe(otherBytes);
   });
 
