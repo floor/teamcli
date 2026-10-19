@@ -19,6 +19,7 @@ import { listUnread, MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { readTriggerLine } from '../src/send/native.ts';
 import { signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, writeRecord } from '../src/send/record.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { messageKeyState } from '../src/store/keys.ts';
@@ -249,8 +250,52 @@ seats:
     expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toContain('"state":"working"');
   });
 
-  test('a plain send types nothing, and the turn-start read delivers it: receipt signed before the body', async () => {
+  test('a plain send types one trigger, and the turn-start read delivers it: receipt signed before the body', async () => {
     const command = dropCommand(install());
+    const io = testIo(project, { kind: 'owner' });
+    const typed: { pane: string; text: string }[] = [];
+    const host: SendHost = {
+      agents: () => [{ name: SEAT, pane: 'w1:p1', cli: 'claude' }],
+      processInfo: () => ({ shell: 1, foreground: [2] }),
+      socketsDir: join(base, 'sockets'),
+      deliver: async () => {
+        throw new Error('the inbox leg must not dial: this inbox has no listener');
+      },
+      native: {
+        typeText: (_session, pane, text) => {
+          typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: () => true,
+        status: () => 'idle',
+        wait: async () => {},
+        paneText: () => '',
+      },
+      now: () => NOW,
+      home,
+    };
+
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
+
+    // The default walk takes the typed leg: the seat's own drop-read trigger is typed once, and
+    // the sender's side has only the unconfirmed ending until the seat's own read writes the
+    // receipt. The typed leg wrote the record the trigger reads.
+    expect(io.out).toContain('sent (unconfirmed)');
+    expect(typed).toEqual([{ pane: 'w1:p1', text: readTriggerLine(SEAT, SESSION) as string }]);
+    const dir = dropsAt();
+    const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
+    if (id === undefined) throw new Error('the send wrote no drop');
+
+    // The end-to-end proof: the installed hook command reads the record, and its body reaches
+    // the turn only after a signed read receipt is on disk.
+    expect(landing(run(command))).toBe(`${HEADER}hello`);
+    expectReadReceipt(dir, id);
+    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
+    // The receipt is what says it was handed over: the next turn prints nothing.
+    expect(run(command)).toBe('');
+  }, 60_000);
+
+  test('a seat the session does not list is unreachable, and no drop is written', async () => {
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
     const host: SendHost = {
@@ -274,24 +319,14 @@ seats:
       home,
     };
 
-    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(1);
 
-    // The default walk takes the drop leg: nothing is typed, and the sender's side has only the
-    // unconfirmed ending until the seat's own watcher reads the record.
-    expect(io.out).toContain('sent (unconfirmed)');
+    // The typed leg is terminal: a name the session does not list ends the walk unreachable,
+    // never typed blind and never quietly downgraded to a drop file.
+    expect(io.err).toContain('no live agent carries that name in the session');
     expect(typed).toEqual([]);
-    const dir = dropsAt();
-    const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
-    if (id === undefined) throw new Error('the send wrote no drop');
-
-    // The end-to-end proof: the installed hook command reads the record, and its body reaches
-    // the turn only after a signed read receipt is on disk.
-    expect(landing(run(command))).toBe(`${HEADER}hello`);
-    expectReadReceipt(dir, id);
-    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
-    // The receipt is what says it was handed over: the next turn prints nothing.
-    expect(run(command)).toBe('');
-  }, 60_000);
+    expect(existsSync(dropsAt()) ? readdirSync(dropsAt()).filter((name) => MESSAGE_ID.test(name)) : []).toEqual([]);
+  });
 
   test('a waiting record is handed to the turn once, and its receipt is written beside it at 0600', () => {
     const dir = dropsAt();
