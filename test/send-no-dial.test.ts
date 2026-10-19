@@ -178,7 +178,7 @@ describe('the sending paths never dial while the socket is off', () => {
     expect(host.frames).toEqual([]);
     const path = dropped(w.root, 'lead');
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
-    const trigger = readTriggerLine('lead', 'acme');
+    const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' });
     if (trigger === null) throw new Error('the trigger line did not fit');
     expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);
     expect(host.enters).toEqual(['pane-lead']);
@@ -200,7 +200,7 @@ describe('the sending paths never dial while the socket is off', () => {
     expect(host.frames).toEqual([]);
     const path = dropped(w.root, 'lead');
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
-    const trigger = readTriggerLine('lead', 'acme');
+    const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' });
     if (trigger === null) throw new Error('the trigger line did not fit');
     expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);
     expect(host.enters).toEqual(['pane-lead']);
