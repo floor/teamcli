@@ -867,14 +867,16 @@ function unreadDifferences(
     const oldest = unread[0];
     if (oldest === undefined) continue;
     const minutes = Math.max(1, Math.round((now.getTime() - Date.parse(oldest.ts)) / 60_000));
-    // The sender is the record's own word when the record verifies; the marker's unsigned hint
-    // is what `team drops` prints beside it, and is used only when the record cannot be opened.
-    let sender = oldest.from;
+    // The sender is the verified record's own word, and only that. The `.pending` marker beside
+    // it is unsigned: it is never read as the message's sender, so it can never lend a message the
+    // owner's name or a seat's standing. A record that cannot be opened or verified is named as
+    // what it is — an unverified message — and keeps its age, its id and its count.
+    let who = 'an unverified message';
     const looked = readRecord(join(dropDir, oldest.id), oldest.id);
     if (looked.ok && looked.record !== null && verifyRecord(looked.record, key.key)) {
-      sender = looked.record.payload.from;
+      const from = looked.record.payload.from;
+      who = typeof from === 'string' && from !== '' ? `a message from ${from}` : 'a message from an unknown sender';
     }
-    const who = sender === undefined ? 'a message' : `a message from ${sender}`;
     const more = unread.length > 1 ? `; ${String(unread.length - 1)} more unread` : '';
     const watcher = state.seats[seat.name]?.watcher;
     const repair = watcher === undefined || watcher === 'none'

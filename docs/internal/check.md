@@ -139,9 +139,11 @@ force, 600 s when the file omits it — is one difference for the seat,
 `<seat>: a message from <from> has been unread for <n> min (id <id>)`, with `; <m> more unread`
 when others are due and the oldest named. The repair is the seat's next turn, or
 `team drops --read --seat <seat>` when the seat's record says no turn-start reader is installed.
-The sender is the verified record's `from`; a record that does not verify falls back to the
-marker's own unsigned word, as `team drops` prints it. A person's drop is read by a person and is
-never asked for a receipt, and with no message key no receipt can be judged: neither is named.
+The sender is the verified record's `from`; a record that does not verify is named `an
+unverified message`, and the `.pending` marker beside it is never read as a sender — it is
+unsigned, so it may not lend a message the owner's name or a seat's standing. A person's drop is
+read by a person and is never asked for a receipt, and with no message key no receipt can be
+judged: neither is named.
 The line is advice like the rest, and the watch's unread wake is the path that types the read.
 
 ## Seats held at a prompt

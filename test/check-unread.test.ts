@@ -195,6 +195,55 @@ describe('unread work in team check', () => {
     expect(code).toBe(1);
   });
 
+  test("a verified record's sender wins over the marker's unsigned word", () => {
+    const at = place();
+    seed(at, 'lead', ID_A, 11);
+    const ts = new Date(NOW.getTime() - 11 * MIN);
+    writeFileSync(
+      join(at.dir, 'send-drops', at.session, 'lead', `${ID_A}.pending`),
+      JSON.stringify({ id: ID_A, from: 'helper-2', ts: ts.toISOString() }),
+    );
+
+    const { code, out } = check(at);
+
+    expect(out).toContain(`difference: lead: a message from owner has been unread for 11 min (id ${ID_A})`);
+    expect(out).not.toContain('from helper-2');
+    expect(code).toBe(1);
+  });
+
+  test('an unverified record never lends its marker word a sender', () => {
+    const at = place();
+    const ts = new Date(NOW.getTime() - 11 * MIN);
+    const dropDir = join(at.dir, 'send-drops', at.session, 'lead');
+    const record = signRecord({
+      kind: 'message',
+      id: ID_A,
+      to: 'lead',
+      to_id: null,
+      root: realpathSync(at.root),
+      session: at.session,
+      at: ts.toISOString(),
+      body: `work ${ID_A}`,
+      from: 'owner',
+      from_id: null,
+      rule: 'the owner',
+      thread: ID_A,
+    }, at.home);
+    record.signature = `${record.signature.slice(0, -4)}AAAA`;
+    dropMessage(dropDir, ID_A, `${JSON.stringify(record, null, 2)}\n`);
+    utimesSync(join(dropDir, ID_A), new Date(), ts);
+    writeFileSync(
+      join(dropDir, `${ID_A}.pending`),
+      JSON.stringify({ id: ID_A, from: 'owner', ts: ts.toISOString() }),
+    );
+
+    const { code, out } = check(at);
+
+    expect(out).toContain(`difference: lead: an unverified message has been unread for 11 min (id ${ID_A})`);
+    expect(out).not.toContain('a message from owner');
+    expect(code).toBe(1);
+  });
+
   test('the general seat brief keeps its own read difference and is not unread work', () => {
     const at = place(false, new Date(NOW.getTime() - 20 * MIN));
     const { code, out } = check(at);

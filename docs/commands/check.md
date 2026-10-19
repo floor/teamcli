@@ -78,11 +78,14 @@ Unread work is named on the same pass. Each seat's drop folder is read the way t
 unread wake reads it: a message with no signed read receipt past `watch.unread_after` — ten
 minutes when the file omits it — is one difference for the seat,
 `<seat>: a message from <from> has been unread for <n> min (id <id>)`, with
-`; <m> more unread` when other messages are due and the oldest named. The repair is the seat's
-next turn, or `team drops --read --seat <seat>` when the seat's record says no turn-start reader
-is installed; the watch's unread wake types that same read into an idle seat. The general seat
-brief keeps its own read difference and is not counted twice. A person's drop is read by a
-person and is never asked for a receipt. The check writes nothing here either.
+`; <m> more unread` when other messages are due and the oldest named. The sender is the verified
+record's own `from`; a record that does not verify is named `an unverified message` and keeps
+its age, its id and its count, never the word beside it — that marker is unsigned and lends no
+sender, owner or seat. The repair is the seat's next turn, or `team drops --read --seat <seat>`
+when the seat's record says no turn-start reader is installed; the watch's unread wake types
+that same read into an idle seat. The general seat brief keeps its own read difference and is
+not counted twice. A person's drop is read by a person and is never asked for a receipt. The
+check writes nothing here either.
 
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
