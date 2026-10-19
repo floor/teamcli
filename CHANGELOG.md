@@ -48,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session registry's own `measured` / `estimated` / `unknown` word, so every surface prints the
   same mark for the same figure.
 
+### Changed
+
+- **The bus verifies only what was appended.** A reconciliation pass or a subscription now
+  verifies the event records appended since the last verified sequence and trusts the prefix its
+  checkpoint pins: the highest sequence it has verified and a SHA-256 over the raw lines of every
+  retained record at or below it, in retained order. A read with no checkpoint, a different
+  message key, or a digest that does not match — a segment trimmed, a file rewritten, a record
+  altered in place — verifies the whole retained log again and rebuilds the checkpoint, so a
+  record altered earlier is still caught: it changes the digest, and the read that sees the
+  change falls back to the full verify that finds it. File boundaries are not part of the digest,
+  so a rotation that keeps every byte keeps the checkpoint while a trim does not, and the
+  checkpoint lives in the bus process's memory, so a restart or a read from another process
+  starts from a full verify. The bus's plain output and exit codes are unchanged.
+
 ## [0.5.1] - 2026-10-19
 
 ### Added
