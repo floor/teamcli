@@ -5,7 +5,194 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.2] - 2026-10-19
+
+### Added
+
+- **`team pause` and `team resume`.** A pause lives in the team state, never in the team file —
+  the file waits for the owner's approval, and a stop that waits is no stop. While it stands the
+  team takes no new work: `team next` claims nothing and names the pause with its repair, and the
+  watch's work nudges become one notice per non-human seat, at its first quiet prompt after the
+  pause landed and never twice for the same pause, saying to finish the step in hand, take nothing
+  new and hold no lock. `team status` and `team seats` print the pause above their rows, and a
+  human seat is never touched. The pause records a stop point for every declared seat that is not
+  a human's: the stage and last activity its record held, and the worktree it was given, branch
+  and folder. `team resume` deletes the record, restarts claims and nudges, and prints the stop
+  points it held — for one team, `resumed <project> (<pause line>)` then one `stop <seat>: …` line
+  each — so the lead can restart every seat from the place the tool holds; a resume with no pause
+  standing is refused. Both act on the team file of the folder when no name is given, on a
+  registered `<team>` by its name, project or id, or on every team in the machine's registry with
+  `--all` (an unreadable team is named on stderr and left as it is), and both judge every target's
+  caller before any state is written. The caller is the owner at a terminal outside herdr, or the
+  team's own orchestrator on the pane the state records for it. `--json` emits `team.pause` /
+  `team.resume` and is refused with `--all`.
+- **Operators of one team may message each other.** Two seats of the same team whose file lines
+  both write `role: operator` may send to each other; the pair rule admits that direction alone,
+  and it is the one decision a role's own word makes. It reads the word the live file writes
+  today — a seat the file no longer declares falls back to the role it was registered under —
+  and it is not the team's operator place, which already reaches every seat of its team. The word
+  grants no other reach: it makes no lead and no assistant, and the pair never crosses teams, so
+  another team's operator is reached through that team's orchestrator or an owner-signed grant.
+  A send the pair admits is written, delivered and logged like any other: its header names the
+  rule and its history line lands in the receiving team's store. `team send --list` shows both
+  seats with their role, and a refusal for an unknown name lists them among the file's seats.
+- **`team usage` reports each seat's spend.** Under each team's seat table, `--tree` now prints
+  the seats' own figures: one line per window — left, used, resets, margin — and one spend line
+  per seat. A figure is `measured` when the run read the seat's own screen, `estimated` from the
+  watch's per-seat record when the live read did not answer, and a seat with neither prints
+  `unknown` with its reason. The spend line is the seat's own money figure, read from the amount
+  a Claude Code status row prints in its `S:` field; any other CLI, an unread pane or a row
+  without the field prints `cost unknown` with one sentence, never `0`. Figures belong to the
+  seat and the run (herdr session) their pane was read in, so two teams' same-named seats never
+  borrow each other's numbers. `--json` carries the same facts under `teams[].seats`, with the
+  session registry's own `measured` / `estimated` / `unknown` word, so every surface prints the
+  same mark for the same figure.
+- **`team check` names a seat held at a prompt.** The pass that reads the team's differences now
+  names each seat that sits at a prompt on the pane the state records for it, one line per seat,
+  read through the watch's own screen reader and only while that pane still holds the process team
+  launched: a pane back at its shell, one running a process the record does not name with no
+  stored session showing continuity, or a record with no identity whose pane holds a bare shell is
+  not read for a prompt at all, so a dialog left in a dead or replaced pane's scrollback is not a
+  seat held at one. The line gives the seat, the prompt's kind — a permission prompt, a trust
+  prompt, a quota prompt with the reset time the screen shows, the CLI's own exit question, or an
+  unrecognised screen that quotes the safety floor's row — the command the screen shows when the
+  profile's trace reader finds one, and the record's `last active` age: that age dates the
+  record, and the line never claims the prompt itself has waited that long. A permission prompt is
+  its lead's to answer; a trust prompt, a quota screen, a confirm prompt or an unrecognised one is
+  the owner's, and a confirm prompt also closes with `team down --abandon`, a quota screen with
+  the reset it names. The check answers nothing, types nothing and writes nothing: the pane's own
+  reader takes the act. Where `status`'s plain permission or trust row would name the same seat
+  the check replaces it, so a held seat is named once, and `status` itself now reads a prompt only
+  where the seat's process runs, for a declared seat and a temporary one alike. A temporary seat
+  is read the same way from its record, with its like-seat's CLI. `--json` renders each line's
+  `what` as it stands, cleaned with the report's own plain-line reader.
+- **The event thresholds are the owner's to set.** Seven `event-*` policies join the release
+  catalogue: how long an unanswered thread stays open (`event-thread-ttl-seconds`, 72 hours by
+  default), how many records a thread may hold (`event-thread-cap`, 50), how many days the event
+  log keeps (`event-retention-days`, 30), when a held record reaches the lead
+  (`event-held-threshold-seconds`, 600), when a seat that watches nothing reads `unreachable`
+  (`event-unreachable-threshold-seconds`, 600), when an idle seat's lead is told
+  (`event-idle-threshold-seconds`, 300), and how often the bus reconciles
+  (`event-reconcile-interval-seconds`, 120). Each takes a whole number — seconds, days for
+  retention, records for the cap — and a seconds value may carry an `s` suffix; the shorter field
+  spellings are accepted and written back under the canonical name. The three delay thresholds may
+  only be shortened: a value above the release default is refused, and so is a level's word that
+  lengthens the one above it. `team bus` reads the held, retention and reconcile numbers when it
+  starts and refuses to start on a signed policy source it cannot read or verify, with the
+  problem on stderr and exit 2, and `team reply` reads the thread life and cap from the caller's
+  chain.
+- **Seat status comes from herdr as events.** One `herdr wait agent-status` waiter per eligible
+  seat turns herdr's status transitions into signed event records, replacing screen polling where
+  herdr's status is reliable: `blocked` raises `seat.at-prompt` — the screen is read once to
+  classify the prompt — `done` raises `seat.done`, `idle` past the idle-lead threshold raises
+  `seat.idle` once per idle stretch, and `working` after `blocked` raises the new
+  `seat.unblocked`, which closes the open prompt notice and cancels its climb clock; `unknown`
+  raises no event, and a `blocked -> working -> blocked` flicker within the one-pass grace window
+  does not emit `seat.at-prompt` twice. Profiles whose herdr status is unreliable keep the screen
+  module, `human: true` seats are never waited on and their screens are never read, and a status
+  waiter never types or sends keys.
+- **`team sessions` lists the session records TeamCLI keeps.** Every launch and stop command now
+  writes an append-only registry, one event per line, in the project's machine state folder —
+  never from an agent's word. `up` and `add` write a `start` when a pane takes the launch line;
+  `restart` closes a record with reason `restart`, `reload` with `swap`, and `down` or `remove`
+  with `owner-stop`; a `start` that finds a session still open for the same team, herdr session
+  and seat closes it as `crash`, and a launch after a drift repair or a reload closes the old
+  record as `swap` and links the new one. A record holds what the launching command knew — seat,
+  team and entity, CLI and lab, declared model, version and effort, account, herdr session, pane
+  and workspace, the previous session of the seat, and the CLI session id where the CLI takes one
+  — and a field no command wrote is absent. `team sessions [<seat>] [--by model|team|entity]
+  [--json]` lists them from every state folder on the machine, so it runs anywhere and needs no
+  team file: SESSION, SEAT, TEAM, MODEL, STARTED, ENDED, WHY (`swap`, `restart`, `crash`,
+  `owner-stop`; `quota` is in the vocabulary with no writer yet) and COST, which prints `unknown`
+  — never `0` — until a command measures it. `--by` groups the listing under one heading per
+  value, and `--json` carries each record whole, absent keys absent. A Claude Code launch line
+  that chooses no session gets `--session-id <uuid>` appended; one that already carries
+  `--session-id`, `--resume`/`-r` or `--continue`/`-c` is left as the owner wrote it, and an id
+  the line spells is recorded. The id is the one TeamCLI set — it never reads the CLI's own
+  session files — and reading a record back into a launch is not part of this release.
+- **`team add <name> --like <seat>` copies a declared seat.** Without `--temporary`, `--like` now
+  writes a new entry directly under the source's last field: the source's fields and the title
+  `<name>`, with its `stopped` mark and `count:` dropped (a counted source is split first) and its
+  comments and blank lines left where they are. The source's own entry is untouched, and the new
+  seat starts now where `up` would start it, and the entry is written before the launch, so a
+  launch that fails leaves the declared seat in the file for a retry. A `human: true` source is
+  refused before anything is written or launched. The name must be one the file does not declare (refused as
+  `add.like-exists`) and the source one it does; a copy the file's own validation refuses — a
+  second `leads`, `assistant` or nickname — stops before anything is written or launched. The new
+  entry is not added to the approval record, so the roster change is the owner's to approve; a
+  delegate's standing grant admits a copy only when the record holds the source seat just as the
+  live file writes it and the run writes that one entry, and a source the record does not hold, or
+  holds differently, stays the owner's. `--until` and `--worktree` still need `--temporary`;
+  `--like` alone is now a declared copy.
+- **A one-row unsent draft no longer holds a delivery.** A profile may now carry an `input`
+  block, declaring the measured way into its CLI's input box: the keys that empty an idle box
+  (`clear`), optionally the keys that empty it mid-turn (`clear_working`), the paste surface
+  (`paste: bracketed`, the one measured), and whether the CLI takes text while a turn runs
+  (`mid_turn`). claude-code, codex and cursor carry one, each from a run recorded over its own
+  pane; every other profile carries none, and a delivery that finds unsent text there holds as
+  it did. A typed delivery that finds a one-row draft copies it beside the drop file
+  (`<drop>.draft`), clears the box with the profile's keys — the mid-turn key while the seat is
+  working, never the interrupt key — types the trigger and presses Enter, then pastes the text
+  back exactly as it was read and removes the copy only once the box reads that text back. A
+  copy already beside the drop holding different text is never overwritten: the run holds and
+  names it. The direct leg, the daemon queue, the watch's held-send retry and the native
+  handoff all carry the same keys, so every route makes the same delivery, while the watch's
+  own nudge still types only into an empty idle box. The receipt says where the text went (`the
+  unsent text was pasted back`, or `…; its copy is at <path>`); a delivered exit restores the
+  draft after a late clear or a read that fails, a box that reads other text keeps its copy,
+  and a not-submitted run puts the text back before saying so. `restart` restarts an idle seat
+  holding one row of unsent text instead of leaving it: it copies that row to
+  `restart-drafts/<session>/<seat>.draft` under the session lock, prints the copy's path in the
+  pre-close facts, closes the pane without typing over the text, and pastes it back into the
+  new pane once herdr reports it idle or done, removing the copy only after the box reads it
+  back; a different copy at the path refuses the restart and is never overwritten.
+  A box drawn over more than one row is never copied — the composer word-wraps a long line over
+  the same continuation rows a person's Enters draw, so a soft wrap cannot come back as a line
+  break nobody typed — and that box, a profile with no measured keys, a missing mid-turn key, a
+  paste chip and rows the reader cannot read each keep the old hold on send or the old refusal
+  on restart, with the box's own reason. `--abandon` still closes the workspace without a copy.
+- **Every command states who may run it.** The generated CLI contract now carries a `who` row for
+  every command and subcommand — the gate kind and the command map's own sentence, plus the
+  detached route (who and where) where the module refuses a run with no terminal — and
+  `docs/reference/cli.md` prints it under each command's `Who may run it` heading. The rows are
+  copied from `COMMAND_GATES` (`src/permissions/map.ts`) as they stand, never reworded, and
+  generation stops on a word the map does not name: the map is closed, so its silence is not an
+  admission and no unlisted word reaches the adapter. The 0.5.2 kinds `any-caller`, `seat-only`,
+  `leads-only`, `team-change`, `team-pause` and `team-read` join the map, `error.rule` carries
+  `team-change`, `team-read` and `terminal`, and a difference repair names the actor it named
+  before: a lead for `team-change`, `team-pause`, `any-caller`, `seat-only` and `leads-only`, any
+  seat for `team-read`.
+
+### Changed
+
+- **The bus verifies only what was appended.** A reconciliation pass or a subscription now
+  verifies the event records appended since the last verified sequence and trusts the prefix its
+  checkpoint pins: the highest sequence it has verified and a SHA-256 over the raw lines of every
+  retained record at or below it, in retained order. A read with no checkpoint, a different
+  message key, or a digest that does not match — a segment trimmed, a file rewritten, a record
+  altered in place — verifies the whole retained log again and rebuilds the checkpoint, so a
+  record altered earlier is still caught: it changes the digest, and the read that sees the
+  change falls back to the full verify that finds it. File boundaries are not part of the digest,
+  so a rotation that keeps every byte keeps the checkpoint while a trim does not, and the
+  checkpoint lives in the bus process's memory, so a restart or a read from another process
+  starts from a full verify. The bus's plain output and exit codes are unchanged.
+
+### Fixed
+
+- **A seat launched into a lobby keeps its inbox.** The launch now carries the team file it read
+  into the plan and the seat-inbox registration, and the registration names that file to
+  `team mcp serve` with `--file`: the server resolves the team from it instead of the folder it
+  started in, which a seat launched into a lobby does not have. With no file named, the folder's
+  team file is the fallback, and a team that cannot be read is still refused. `restart`'s real
+  launch registers the inbox like `up`, `add` and `reload` already do. The codex launch-line route
+  writes no config file of its own, so its two `-c` values now carry the `--file` pair, with the
+  path escaped as a JSON string inside the structured value so a path with spaces or quotes stays
+  one argument; the cursor route's written JSON names the launch file, and gemini's and grok's
+  `mcp add` argv carries the path byte for byte. A named file is read and only that file: an empty
+  name, a missing file, a folder or an unreadable file is a refusal that writes nothing, though
+  the folder holds a valid team of its own, and `team mcp serve` exits 2 with the loader's message
+  before it makes a listener or an inbox folder. `--file ''` is refused by the parser with
+  `team mcp: --file needs a value`.
 
 ## [0.5.1] - 2026-10-19
 
