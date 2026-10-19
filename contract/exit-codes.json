@@ -1074,6 +1074,27 @@
     },
     {
       "code": 0,
+      "command": "development-mode",
+      "id": "development-mode.done",
+      "meaning": "the machine development mode was read, shown, planned, or switched",
+      "trigger": "team development-mode set local-fast --show"
+    },
+    {
+      "code": 1,
+      "command": "development-mode",
+      "id": "development-mode.refused",
+      "meaning": "a non-owner called set without the owner-authorization token for this exact switch, or the machine record cannot be read or verified",
+      "trigger": "team development-mode set off"
+    },
+    {
+      "code": 2,
+      "command": "development-mode",
+      "id": "development-mode.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team development-mode set maybe"
+    },
+    {
+      "code": 0,
       "command": "doctor",
       "id": "doctor.clear",
       "meaning": "nothing is missing",
