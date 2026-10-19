@@ -144,3 +144,37 @@ export function modelRuleAllowsUnclaimed(entries: readonly ModelRuleEntry[], lab
 export function parseModelRuleValue(raw: unknown): ModelRuleEntry[] {
   return parseModelRule(raw) ?? [];
 }
+
+/** The maker word a model's display name begins with, and the lab it names in the rule's vendor
+ *  vocabulary. The table is closed on purpose: it holds the families this version's launch
+ *  profiles map, and a maker outside it has no lab the rule can judge. */
+const MODEL_LABS: ReadonlyArray<readonly [string, string]> = [
+  ['claude', 'anthropic'],
+  ['gpt', 'openai'],
+  ['gemini', 'google'],
+  ['grok', 'xai'],
+  ['muse', 'meta'],
+  ['composer', 'cursor'],
+  ['deepseek', 'deepseek'],
+  ['glm', 'zhipu'],
+  ['z.ai', 'zhipu'],
+  ['zai', 'zhipu'],
+  ['zhipu', 'zhipu'],
+  ['kimi', 'moonshot'],
+  ['moonshot', 'moonshot'],
+];
+
+/**
+ * The lab a model runs under, read from the maker word its display name begins with (`Claude
+ * Opus`, `GPT Sol`, `Gemini Pro`, `Grok 4.7`, `Muse Wonder`, `Composer`). Undefined when the
+ * maker is not in the closed table: a caller that must judge a lab then decides its own answer
+ * — never a guess, and never the lab the file happens to declare today.
+ */
+export function labOfModel(model: string): string | undefined {
+  const text = model.trim().toLowerCase();
+  if (text === '') return undefined;
+  for (const [maker, lab] of MODEL_LABS) {
+    if (text === maker || text.startsWith(`${maker} `) || text.startsWith(`${maker}-`)) return lab;
+  }
+  return undefined;
+}
