@@ -148,6 +148,20 @@ test('a source that cannot be read is said, never read as no work', () => {
   ]);
 });
 
+test('an unreadable threshold is said as unknown, never as the default window', () => {
+  expect(idleWorkNotes(report({ threshold_unknown: 'the signed policy chain has no verifiable entry' }))).toEqual([
+    'the idle threshold cannot be read, so the idle reading is unknown (the signed policy chain has no verifiable entry); no dispatch acts on it',
+  ]);
+  expect(idleWorkNotes(report({
+    threshold_unknown: 'the chain could not be read',
+    takeable: null,
+    refused: 'the team declares a linear task source and no broker snapshot is available here',
+  }))).toEqual([
+    'the idle threshold cannot be read, so the idle reading is unknown (the chain could not be read); no dispatch acts on it',
+    'the task source cannot be read, so the idle reading is unknown (the team declares a linear task source and no broker snapshot is available here)',
+  ]);
+});
+
 test('the green lines list pending slices oldest first, and a refused read is explicit', () => {
   expect(greenNotes(null)).toEqual([]);
   expect(greenNotes({ kind: 'slices', slices: [] })).toEqual([]);
@@ -343,5 +357,32 @@ test('status and check read the real snapshot from persisted state and the local
     pendingGreen: pendingGreenSlices,
   });
   expect(checked.out).toContain(line);
+  expect(code).toBe(0);
+});
+
+test('status and check say an unreadable threshold is unknown, not a window to act on', async () => {
+  const at = place();
+  const why = 'the signed policy chain has no verifiable entry';
+  const note = `the idle threshold cannot be read, so the idle reading is unknown (${why}); no dispatch acts on it`;
+  const io = testIo(at.root, { kind: 'owner' });
+  await runStatus(['--json'], io, {
+    live: () => live(),
+    branch: () => 'main',
+    standing: (root) => approvalStanding(root, at.home),
+    now: () => NOW,
+    home: at.home,
+    idleWork: () => report({ threshold_unknown: why }),
+  });
+  const doc = JSON.parse(io.out) as { notes: string[]; idle_work: IdleWorkReport };
+  expect(doc.idle_work.threshold_unknown).toBe(why);
+  expect(doc.notes).toContain(note);
+  expect(doc.notes.join('\n')).not.toContain('past 5 minutes');
+  const checked = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, checked, {
+    ...realCheck(at),
+    idleWork: () => report({ threshold_unknown: why }),
+  });
+  expect(checked.out).toContain(note);
+  expect(checked.out).not.toContain('past 5 minutes');
   expect(code).toBe(0);
 });
