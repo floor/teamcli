@@ -12,7 +12,7 @@ import { taskPathStaysInside } from '../src/file/sections/tasks.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { emptySession } from '../src/state.ts';
 import type { TaskAdapter } from '../src/tasks/adapter.ts';
-import { newMemory, pass, RING_TEXT } from '../src/watch/pass.ts';
+import { newMemory, pass, ringText } from '../src/watch/pass.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -206,7 +206,7 @@ describe('team issues', () => {
     return run().then((listed) => {
       expect(listed.code).toBe(0);
       expect(existsSync(join(home, '.config', 'team-key'))).toBe(false);
-      expect(RING_TEXT).toBe('Team: run team messages');
+      expect(ringText('lead', 'acme')).toBe('Team: run team drops --read --seat lead --session acme');
       const checked = validateTeamFile(TEAM);
       if (!checked.ok) throw new Error('the fixture does not validate');
       const result = pass({

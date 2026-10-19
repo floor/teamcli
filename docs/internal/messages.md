@@ -15,7 +15,8 @@ one step. A record that does not verify prints no body and writes nothing.
 `<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The typed
 leg types the wake line that names the record, the drop leg leaves the record for its seat, and
 the mcp-inbox leg puts the same record in the seat's inbox. The watch rings
-`Team: run team messages` when a record is already there, and never writes one. A message a
+`Team: run team drops --read --seat <seat> --session <session>` — the waiting seat's own read —
+when a record is already there, and never writes one. A message a
 previous build left in `.agents/messages/<seat>/` is read the same way. The owner's mailbox is
 `.agents/messages/owner/`: the Runtime writes one signed record there for each event it delivers
 to the owner, its `from` is `runtime`, and the run lists it and writes its receipt like any other

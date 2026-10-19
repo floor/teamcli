@@ -133,9 +133,13 @@ export type { Report } from './check.ts';
 // report does not concern.
 export const NUDGE_TEXT = 'Team watch: reports are waiting in .agents/team.log';
 
-// The one line the watch types into a seat's pane when a message is waiting. Fixed, and not the
-// body: the body is what `team messages` prints after it verifies.
-export const RING_TEXT = 'Team: run team messages';
+/** The one line the watch types into a seat's pane when a message is waiting. Fixed, and not the
+ *  body: the body is what the seat's own read prints after it verifies. The seat and session are
+ *  the receiving record's own, so the line reads exactly that seat's unread folder — never a
+ *  broad log of what every seat in the session has waiting. */
+export function ringText(seat: string, session: string): string {
+  return `Team: run team drops --read --seat ${seat} --session ${session}`;
+}
 
 /** One unacked message the watch has already verified, joined to the seat's pane when it has one. */
 export type MailboxWaiting = {
@@ -618,12 +622,15 @@ export function pass({
   const ordered = [...mailbox].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
   for (const record of ordered) {
     const screen = record.pane ? read(record.cli, record.screen) : null;
+    // The receiver's own seat and the session the mailbox was read for: the line sends it to its
+    // own unread drops, never to a listing of the whole session's mail.
+    const text = ringText(record.to, team.session);
     const mine = record.pane !== null && screen?.kind === 'unsent'
-      && ownUnsent(memory, record.pane, RING_TEXT, record.cli, record.screen);
+      && ownUnsent(memory, record.pane, text, record.cli, record.screen);
     const free = record.pane !== null && (record.status === 'idle' || record.status === 'done')
       && (screen?.kind === 'idle' || mine);
     if (free && ring === null && record.pane !== null) {
-      ring = { pane: record.pane, text: RING_TEXT, cli: record.cli, to: record.to, id: record.id };
+      ring = { pane: record.pane, text, cli: record.cli, to: record.to, id: record.id };
       continue;
     }
     const toldKey = `${record.to}/${record.id}`;

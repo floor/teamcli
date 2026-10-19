@@ -27,7 +27,7 @@ may keep a field from crossing, and a field left out is absent from the record, 
 A record with `blocked-by`, `repos`, or `needs` is listed by `team issues` and is not taken.
 A deadline is printed and not read as a time. A missed deadline is not decided here.
 Releasing a lease records no progress.
-The watch's ring is unchanged: `Team: run team messages`.
+The watch's ring is unchanged: `Team: run team drops --read --seat <seat> --session <session>`.
 
 ## What it reads and writes
 

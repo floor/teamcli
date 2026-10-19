@@ -20,9 +20,9 @@
 // carries no thread and is read, never answered.
 //
 // A reply is delivered the way the drop leg delivers: the record is left in the target's folder,
-// nothing is typed and no frame is sent, and the receiving seat's own watch rings
-// `Team: run team messages`. A human's pane takes exactly that, so no separate human rule is
-// needed here.
+// nothing is typed and no frame is sent, and the receiving seat's own watch rings its own read
+// (`Team: run team drops --read --seat <seat> --session <session>`). A human's pane takes exactly
+// that, so no separate human rule is needed here.
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';

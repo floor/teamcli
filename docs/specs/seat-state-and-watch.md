@@ -221,7 +221,8 @@ The watch types fixed lines and never a report.
 - **The nudge**: the work drop's line, typed into an idle worker. Its body is the file's
   `watch.nudge`, or the fixed line `Team watch: reports are waiting in .agents/team.log` when
   the file omits it.
-- **The ring**: `Team: run team messages`, typed when a message already waits for a seat and the
+- **The ring**: `Team: run team drops --read --seat <seat> --session <session>`, named for the
+  waiting seat and its own session, typed when a message already waits for that seat and the
   seat's box is an empty idle prompt.
 - **The held-send retry**: `Run team drops --read --seat <seat> --session <session> and do
   that.`, the seat's own drop read for the drop of a send held while a pane was busy, typed on a
@@ -368,7 +369,7 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    idle or exact-trigger screen, and MUST hold the seat lock; `--no-nudge` MUST suppress the
    wake too. The wake and the unread report MUST reserve their marker before their effect and
    MUST keep a reservation whose attempt is uncertain, so no crash repeats a typed line or a
-   published record. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `RING_TEXT`), `src/watch/retry.ts`,
+   published record. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `ringText`), `src/watch/retry.ts`,
    `src/watch/unread.ts`, `src/send/native.ts` (`triggerLine`), the watch command. *Proof:*
    `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`, `test/held-retry.test.ts`,
    `test/unread-wake.test.ts`.

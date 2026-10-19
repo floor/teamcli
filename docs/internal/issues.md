@@ -19,7 +19,7 @@ The list is file order. A priority is shown in `--json` and does not reorder.
 A listing is not a claim and not the intake rule. `team plan` prints the takeable queue and claims nothing.
 `repos` and `needs` mark a record `blocked` in the STATE column when the file has them. They are
 not a grant, and they are not checked.
-The watch's ring is unchanged: `Team: run team messages`.
+The watch's ring is unchanged: `Team: run team drops --read --seat <seat> --session <session>`.
 
 ## What it reads and writes
 

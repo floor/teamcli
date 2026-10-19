@@ -18,10 +18,15 @@ import type { Live } from '../src/status/compare.ts';
 import { parseLoadavg, parseMeminfo, parseMemoryPressure, parseSwapUsage, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
-import { newMemory, NUDGE_TEXT, pass, RING_TEXT } from '../src/watch/pass.ts';
+import { newMemory, NUDGE_TEXT, pass, ringText } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
+
+// The ring line is the receiver's own: this fixture's team session is `acme-web`, and each
+// scene's seat is the one its record names.
+const ringFor = (seat: string): string => ringText(seat, 'acme-web');
+const RING_TEXT = ringFor('deepseek-acme');
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8')
   .replace('operator: claude-coordinator-acme', 'operator: claude-operator-acme')
@@ -1397,7 +1402,7 @@ describe('team watch', () => {
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { ...waiting('codex-acme'), screen: () => (looks++ === 0 ? codexIdle : pinned) }));
-    expect(typed).toEqual([`w2:p1 ${RING_TEXT}`]);
+    expect(typed).toEqual([`w2:p1 ${ringFor('codex-acme')}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
@@ -1555,7 +1560,7 @@ describe('team watch', () => {
         return true;
       },
     }));
-    expect(typed).toEqual([`w2:p1 ${RING_TEXT}`, 'w2:p1 <enter>']);
+    expect(typed).toEqual([`w2:p1 ${ringFor('codex-acme')}`, 'w2:p1 <enter>']);
     expect(io.out).toContain('rang codex-acme');
   });
 
@@ -1934,7 +1939,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file, '--no-nudge'], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
     expect(typed).toEqual([]);
-    expect(io.out).toContain(`ring not typed (--no-nudge): ${RING_TEXT}`);
+    expect(io.out).toContain(`ring not typed (--no-nudge): ${ringFor('claude-operator-acme')}`);
     expect(io.out).not.toContain(body);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
@@ -1945,9 +1950,13 @@ describe('team watch', () => {
     planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
-    expect(typed).toEqual([`w0:p1 ${RING_TEXT}`, 'w0:p1 <enter>']);
+    // The line is the receiving seat's own: its name and the session its mailbox was read for.
+    expect(typed).toEqual([
+      'w0:p1 Team: run team drops --read --seat claude-operator-acme --session acme-web',
+      'w0:p1 <enter>',
+    ]);
     expect(typed.join('\n')).not.toContain(body);
-    expect(io.out).toContain(`rang claude-operator-acme: ${RING_TEXT}`);
+    expect(io.out).toContain(`rang claude-operator-acme: ${ringFor('claude-operator-acme')}`);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
   });
@@ -1960,7 +1969,7 @@ describe('team watch', () => {
     planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home') }));
-    expect(typed).toEqual([`w0:p1 ${RING_TEXT}`, 'w0:p1 <enter>']);
+    expect(typed).toEqual([`w0:p1 ${ringFor('claude-operator-acme')}`, 'w0:p1 <enter>']);
     expect(io.out).toContain('deepseek-acme-2 asked a question');
     expect(io.out).not.toContain(`w3:p1 ${NUDGE_TEXT}`);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
@@ -2028,7 +2037,7 @@ describe('team watch', () => {
   test('a restarted watch does not send a box that already holds the wake line', async () => {
     const body = 'the message body itself';
     planted('claude-operator-acme', body, '2026-10-03T13:59:00.000Z');
-    const held = claudeBox(RING_TEXT);
+    const held = claudeBox(ringFor('claude-operator-acme'));
     const sceneHeld = live({ 'claude-operator-acme': { status: 'idle', screen: held } });
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
@@ -2046,7 +2055,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { live: () => live() }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain(RING_TEXT);
+    expect(io.out).not.toContain(ringFor('claude-operator-acme'));
   });
 
   test('a file that never validated, and a bad option', async () => {

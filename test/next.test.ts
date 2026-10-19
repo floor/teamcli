@@ -22,7 +22,7 @@ import { emptySession, updateState } from '../src/state.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
 import type { TaskAdapter } from '../src/tasks/adapter.ts';
 import { LEASE_MS } from '../src/tasks/lease.ts';
-import { newMemory, pass, RING_TEXT } from '../src/watch/pass.ts';
+import { newMemory, pass, ringText } from '../src/watch/pass.ts';
 import { gitEnv, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -548,7 +548,7 @@ describe('team next', () => {
     ready();
     expect((await run()).code).toBe(0);
     expect(existsSync(join(home, '.config', 'team-key'))).toBe(false);
-    expect(RING_TEXT).toBe('Team: run team messages');
+    expect(ringText('lead', 'acme')).toBe('Team: run team drops --read --seat lead --session acme');
     const checked = validateTeamFile(TEAM);
     if (!checked.ok) throw new Error('the fixture does not validate');
     const result = pass({
