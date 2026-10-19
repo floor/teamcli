@@ -14,10 +14,11 @@ public: not yet; staged in the private docs; ported after review with no private
 
 This spec covers the three record types the tool registers — the agent, the team and the
 project — with their ids, fields, lifecycles, provenance and write discipline, and the roster
-line a team record carries. It leaves the team file's own seat declaration to the launch spec,
-the seat's live state to the seat-state-and-watch spec, and the grants a record may be mentioned
-by to the grants spec. It says what the code at the tag does, in the code's words; where a text or a decision names
-something the code does not hold, §3.5 and §7 say so, the planned store among them.
+line a team record carries; §3.7 adds the planned session record a seat holds over time. It
+leaves the team file's own seat declaration to the launch spec, the seat's live state to the
+seat-state-and-watch spec, and the grants a record may be mentioned by to the grants spec. It
+says what the code at the tag does, in the code's words; where a text or a decision names
+something the code does not hold, §3.5, §3.7 and §7 say so, the planned store among them.
 
 ## 2. Terms
 
@@ -154,7 +155,7 @@ key.
   yet is hashed as written, resolved to an absolute path.
 - `<project id>` — the derived display name above.
 
-### 3.5 The store (planned; OD-20261018-08)
+### 3.5 The store (planned; Runtime commitments 28 and 29)
 
 The registry's storage is one contract, whatever holds the records. None of this subsection is
 built at the tag; it is the owner decision's direction of 2026-10-18.
@@ -176,7 +177,7 @@ The backends the decision names:
 | Redis | optional add-on package | fast shared state for the event bus; not the only copy unless it is durable |
 | an online service, possibly hosted from teamcli.io one day | optional add-on package | neither named nor built |
 
-*Source:* OD-20261018-08 (2026-10-18). *Proof:* none at the tag — no storage interface exists, and
+*Source:* the Runtime text (commitments 28 and 29, 2026-10-18). *Proof:* none at the tag — no storage interface exists, and
 no backend but the files does.
 
 ### 3.6 The memory entry (planned; 003 Memory)
@@ -198,6 +199,37 @@ the owner accepts it again; a removal reaches neither a conversation that alread
 nor what a lab kept (003 Memory, commitments 6 and 7).
 
 *Source:* the Memory module (003), commitments 4–7; planned, not built at the tag. *Proof:* none.
+
+### 3.7 The session record (planned; Runtime commitment 39)
+
+One record per session, under its seat; a seat holds many sessions over time. TeamCLI writes the
+record itself at `up`, `restart`, the swap and `down`, never from the agent's word; where the CLI
+allows it, TeamCLI sets the session id at launch (Claude Code's `--session-id`), so it never reads
+a CLI's session files. Records are only ever appended.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `entity`, `project`, `team`, `seat`, `nickname` | strings | yes | The seat the session belongs to, and its places in the entity |
+| `cli`, `lab`, `model`, `version`, `effort` | strings | yes | What ran the session, and at what effort |
+| `account` | string | yes | The account or route spent |
+| `started_at` | ISO 8601 | yes | When the session started |
+| `ended_at` | ISO 8601 \| null | yes | When it ended; null while it is live |
+| `end_reason` | `swap` \| `restart` \| `crash` \| `owner-stop` \| `quota` \| null | yes | Why it ended |
+| `previous`, `next` | session id \| null | yes | The sessions before and after it |
+| `session_id` | string \| null | yes | The CLI's session id, where the CLI allows one to be set or read |
+| `resumable` | boolean | yes | Whether the CLI can still resume it |
+| `resumable_until` | ISO 8601 \| null | yes | The end of the CLI's own retention |
+| `handover` | string \| null | yes | The handover file the next session reads first |
+| `tokens_in`, `tokens_out`, `tokens_cached`, `cost` | number \| null | yes | Each marked measured or estimated; unknown is never shown as zero |
+| `links` | string[] | yes | The commits, PRs and releases the session produced |
+
+The planned commands: `team sessions [<seat>]`; `team sessions --by model|team|entity`; and
+`team resume <seat> --session <id>`, where the resumed session reads the latest handover first.
+
+**Today (v0.5.0).** Not built: no session record exists, no command reads or writes one, and no
+launch sets a session id.
+
+*Source:* the Runtime text (commitment 39, 2026-10-19). *Proof:* none at the tag.
 
 ## 4. Commands and options
 
@@ -270,7 +302,7 @@ This area writes no registry of its own; its words are the fields above. It feed
 
 | Entry | Meaning | Since | Source at the tag | Note |
 |---|---|---|---|---|
-| `register` | the owner, or the seat's own team | 0.5.0 | `src/permissions/map.ts` | a registry record is a report and confers no right |
+| `register` | the owner or the seat's own team; the code also admits a `delegates` entry naming `up`, the file's `grant` naming `up`, and a create-grant whose paths cover the team's root | 0.5.0 | `src/permissions/map.ts` | a registry record is a report and confers no right |
 | `list` | any seat with a registry record | 0.5.0 | `src/permissions/map.ts` | a read surface |
 | `status` | any seat with a registry record | 0.5.0 | `src/permissions/map.ts` | a read surface |
 
@@ -283,7 +315,7 @@ This area writes no registry of its own; its words are the fields above. It feed
 
 ## 7. Open points
 
-- **The store is a planned direction, not built.** OD-20261018-08 makes the registry the home of a
+- **The store is a planned direction, not built.** Runtime commitments 28 and 29 make the registry the home of a
   team's definition — seats, roles, the role-and-trade briefs, the general brief, the start
   briefs, and as today grants, policies and records — keyed by entity, then project, then team,
   with TeamCLI's defaults overridden by the entity then the project, and its storage pluggable
@@ -306,12 +338,13 @@ This area writes no registry of its own; its words are the fields above. It feed
 - **The entity is an entry, not a record.** The team record carries `entity`, and the lobby key
   reads it; the entity's own entry lives in `.config/team/entities.yaml` and may carry `liveness`
   and `policies`. It has no id, no lifecycle and no record of its own in this registry.
-- **The project's `deliveryOrder` has no writer.** A hand-written value reads and an upsert keeps
-  it; no command sets a project-level setting.
+- **The legacy project's `deliveryOrder` has no writer.** A hand-written value reads and an upsert
+  keeps it; no command writes the legacy field. A signed project-level `delivery-order` policy is
+  written by `team policy set`.
 - **The registry's cost view is not built.** `team usage` reads accounts and seats, not agent
   records.
 - **One `leads` per team is checked at the file and not re-checked when a grant is made or a
-  seat added** (the Runtime text's §10, question 11).
+  seat added** (an open point of the Runtime text).
 - **A seat the roster does not list has no record, whatever the file declares.** The refusal's
   words live in the resolver, not in a registry row; a run of `team register` on such a seat is
   refused by placement rather than by a record-shaped exit id.
@@ -320,8 +353,12 @@ This area writes no registry of its own; its words are the fields above. It feed
 
 - **Draft** (the Runtime text's writer, 2026-10-18): lifted from the Runtime's chapters B and I;
   read at the tag.
-- **Draft, amended** (the writer, 2026-10-18): §3.5 and §7 record OD-20261018-08's
+- **Draft, amended** (the writer, 2026-10-18): §3.5 and §7 record Runtime commitments 28 and 29's
   planned store — the five-operation contract, the backend list and the still-to-specify points —
   none of it built at the tag.
 - **Amended** (the writer, 2026-10-19): §3.6 adds the Memory entry's planned provenance format
   (003 Memory, commitments 4–7) for the Memory v2 draft's fold; none of it is built at the tag.
+- **Amended** (the writer, 2026-10-19): §3.7 adds the session record's planned format and its
+  three commands (Runtime commitment 39) for the Runtime fold — one record per session under its seat,
+  written by TeamCLI at `up`, `restart`, the swap and `down` and only ever appended; not built at
+  the tag.

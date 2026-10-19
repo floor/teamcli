@@ -143,7 +143,7 @@ How an act under it is read: the signer is the principal on every record the act
 
 ### 3.9. The vault scope (planned; not built)
 
-Decided by OD-20261018-12 (Kernel amendment 01's commitment 3.4 carries the authority rules); **not built at v0.5.0, not built at int/0.5.1 8acb470b**. A vault scope is the scope field of a grant record of §3.1's shape, a path pattern within **one** entity's vault, written:
+Decided by Kernel amendment 01 Grants commitment 3.4 (which carries the authority rules); **not built at v0.5.0, not built at int/0.5.1 8acb470b**. A vault scope is the scope field of a grant record of §3.1's shape, a path pattern within **one** entity's vault, written:
 
 ```
 vault:<entity>/<pattern>
@@ -195,6 +195,7 @@ team delegate <session/pane> --commands <act,...> [--dry-run] [--json]
 4. **A record's signature covers the file's stem and the whole mapping under the grant's own domain tag**, so a renamed or edited record does not verify and is not a grant; a record with a field this version does not know MUST be skipped, not judged. *Source:* `src/permissions/grants.ts`. *Proof:* `test/permissions/grants.test.ts`.
 5. **Granting is the approval; there is no `team approve`.** The commands that write authority MUST refuse every caller but the owner at a terminal outside the terminal multiplexer, in every mode, with one sentence; gate-lifting MUST NOT reach them. *Source:* `src/permissions/manage.ts`, `src/dev_mode.ts`, `src/cli.ts`. *Proof:* `test/permissions/grants.test.ts`, `test/dev-mode-gates.test.ts`.
 6. **A revocation is its own appended record, never an edit of the grant.** The write MUST refuse a stem that is its grant's own or another grant's, and MUST require the exact pair of stem and generation; the active set MUST be read fresh at every gate, with revoked and expired records left out, so revocation takes effect at the next gate check and expiry needs no action. A revocation record MUST never be removed; revival is a new grant. *Source:* `src/permissions/grants.ts`. *Proof:* `test/permissions/grants.test.ts`.
+   *Today (v0.5.0):* a reused grant name overwrites the earlier revocation — the name-reuse gap of Kernel amendment 01's §10, question 13; rule 6 stays the target, the tag's behaviour is the overwrite.
 7. **A dry run refuses exactly what a write refuses**: `planGrant`/`planRevocation` are the write's validation without the generation, the signature or the file. *Source:* `src/permissions/grants.ts`. *Proof:* `test/permissions/grants.test.ts`.
 8. **The resolver denies by default and decides from records alone.** Absent is deny; deny wins through every grant; a caller with no registry record MUST be refused with the rule named; the same inputs MUST always give the same answer; nothing resolves by a role's name — the name is recorded in the answer and the bundle's capability words decide. *Source:* `src/permissions/resolve.ts`. *Proof:* `test/permissions/resolve.test.ts`.
 9. **A seat's effective list is its own list intersected with the team envelope, never a union.** A capability MUST be admitted only when the seat's own list names it (a seat grant over the role's resolved bundle — the most specific admitting rule is recorded) and the team envelope carries it; named but not enveloped is refused under `outside-envelope`; a target outside a grant's scope or the envelope's is refused under `outside-scope`; a seat resolves within its own team's envelope and never another's (`other-team`). *Source:* `src/permissions/resolve.ts`. *Proof:* `test/permissions/resolve.test.ts`.
@@ -221,7 +222,7 @@ This specification contributes to `registries/capabilities.md` and `registries/o
 | `act-as` | operational capability of the closed vocabulary | 0.5.0 | `src/permissions/grants.ts` | gated nowhere at the tag |
 | `use-broker` | operational capability of the closed vocabulary | 0.5.0 | `src/permissions/grants.ts` | gated nowhere at the tag |
 | `dialogs.trust` | the one owner setting a team grant may carry beside its capabilities | 0.5.0 | `src/permissions/grants.ts` (`GRANT_SETTINGS`) | a word of the record, never a command |
-| `grant`, `create`, `agree`, `leads` | administrative names, never capability words | 0.5.0 | `src/permissions/grants.ts` (`TEAM_GRANT_FORBIDDEN`) | refused on a team grant with the four named |
+| `grant`, `create`, `agree`, `leads` | administrative capabilities, not grantable operational words at this release | 0.5.0 | `src/permissions/grants.ts` (`TEAM_GRANT_FORBIDDEN`) | refused on a team grant with the four named |
 
 ### operations.md
 
@@ -248,7 +249,7 @@ This specification contributes to `registries/capabilities.md` and `registries/o
 
 1. **The holder's renunciation is not built**: `by` is `'owner'` and the command is owner-only; the amendment keeps the renunciation as its round's question 1.
 2. **No listing command, no notice**: no command lists the standing grants, no team-log line is written on a grant or a revocation, and nothing tells the owner beyond the command's own output.
-3. **The gate-lifting list is nine against a decision's seven** (`reload` and `rename` in the code's list); the amendment reads them as the same words, to confirm or take out.
+3. **The gate-lifting list is nine against the eight-command gate-lifting scope of Kernel amendment 01 Grants** (`reload` included in the eight; `rename` in the code's list and left open by Kernel amendment 01 Grants §10 question 4); the amendment reads it as the same word, to confirm or take out.
 4. **The role bundle is empty at the tag**: the resolver reads no per-role capabilities, so a seat's list is its seat grants within the envelope and its `leads`; the roles catalogue is the slot that fills it.
 5. **The lifecycle delegation record (§3.8) is decided and not built**; the `delegates` and file `grant` forms it replaces stay readable, and nothing reports an entry with no record behind it.
 6. **`available` and `waits` are rows with no command**, kept because the map is the Kernel's table, not the CLI's.
@@ -259,3 +260,4 @@ This specification contributes to `registries/capabilities.md` and `registries/o
 - **Draft** (the writer, 2026-10-18): lifted from Kernel amendment 01 Grants and amendment 03 Lifecycle Delegation; read at `v0.5.0 (52db9b75)`, the delegation section read against `int/0.5.1 8acb470b`.
 - **§3.9 added** (the writer, 2026-10-19): the vault scope's written form and its generic examples, placed here by the amendment's review fold — the RFC keeps the one-entity bounds and the authority rules, the record's form lives in the spec; examples are generic, no entity of this machine is named.
 - **Public-bound scrub** (the writer, 2026-10-19): at the lifecycle amendment's review fold, the two home-directory shorthand literals (the scope row and rule 3) became the user's home directory spelled out, and the two terminal-multiplexer product names (the pane row and rule 5) became the generic session and multiplexer words.
+- **Fold of round 1** (the writer, 2026-10-19): at the round-1 review fold of Kernel amendment 01 Grants the §6 row's grant-word note became "administrative capabilities, not grantable operational words at this release"; at the verification follow-up rule 6 gained its Today note (at v0.5.0 a reused grant name overwrites the earlier revocation — Kernel amendment 01 Grants §10, question 13; the rule stays the target) and open point 3's count was corrected to the eight-command gate-lifting scope of Kernel amendment 01 Grants (§10, question 4).

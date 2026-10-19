@@ -269,7 +269,7 @@ The proposed historical-cost input to these estimates is specified in §7.3. An 
       Runtime's commitment 2; 008 commitment 7), and the swap waits for the seat's idle prompt, never
       cutting a turn. The target respects the cross-lab review rule (Kernel §5): a reviewer never
       lands on the lab of the authors it reviews, and a swap that would is refused and said. The lead
-      is told, and the seat is not swapped back by itself (question 4).
+      is told, and the seat is not swapped back on recovery alone; `quota.recovered` offers the return as a proposal, and under an enabled `act` policy the Runtime makes it at the seat's task boundary (Planning commitment 30).
     - **Refuse `add` and `up` on a drained account.** The launch gate refuses a seat whose account is
       inside its reserve, at its spend floor, walled, or past the pace floor, naming the figure, the
       window, the age and the accounts with room (the launch-gate contract); unknown is said and refuses nothing.
@@ -277,8 +277,7 @@ The proposed historical-cost input to these estimates is specified in §7.3. An 
       each other go to the batched cadence (`report-cadence` tightened to its batched value; 010
       commitment 6), and the leads' own Claude turns are advised lean (`pace-conduct`, advised).
     - **Hold non-release work on the account at the floor.** On `quota.floor-reached`, `team next`
-      refuses a pull onto a seat of that account unless the item is release-critical (an item of the
-      open release round, 010 commitment 11, or one the owner marked), the plan is re-cut onto the
+      refuses a pull onto a seat of that account unless the item is release-critical (the owner's label on the item; a lead may mark during a run only under a delegation record, and only the owner may unmark it — Planning commitment 31), the plan is re-cut onto the
       other accounts (commitment 18), and a `team hold` records the reason (Runtime §10, question 7);
       the owner's answer lifts the hold or widens the floor, and nothing else does.
     Every action writes a record with its before and after (`quota.action`: the event, the act, the
@@ -295,9 +294,7 @@ The proposed historical-cost input to these estimates is specified in §7.3. An 
     margin, per account or lab; tighter is nearer zero); `budget-marks`, `budget-reserve`,
     `budget-floor` (the reading specification’s three, as policies beside the team file's section); `unknown-is-spent`
     (`off` for subscriptions, `on` for spend; tighter is `on`); `budget-actions` (`off`, `advise`,
-    `act`; the default `advise` prints what `act` would do, `act` does it; tighter is `off`, and a
-    lower level may turn actions off and never on); `release-critical` (how an item is marked so: the
-    open round's items, a label, or the owner's list); `swap-targets` (the accounts a swap may land
+    `act`; the default `advise` prints what `act` would do, `act` does it; tighter is `off`; a lower level may turn actions off, and a lead may set `act` for its own team only under a Kernel amendment 03 delegation record and within the entity's envelope (Planning commitment 32)); `release-critical` (the owner's label on the item; a lead may mark during a run only under a delegation record, and only the owner may unmark it — neither the open round nor an unrecorded lead choice confers the status; Planning commitment 31); `swap-targets` (the accounts a swap may land
     on, a subset of the entity's declared accounts; tighter is fewer). Four things hold whatever is
     set: unknown is never plenty; no action loosens a limit; the owner hears the floor at once; a
     credential is never read.
@@ -317,9 +314,9 @@ The hierarchical token and money records, CLI sources and views extending this c
 
 ### 7.2. Questions preserved from the chapter
 
-The default unit (account or lab), the last-call point, swap-back, release-critical marking authority, recovery hysteresis, delegation to enable actions and whether plan approval reserves the spend envelope remain open. Cost units are input/output/cache tokens and money where known; price, allocation and estimation details remain open in §7.3. The source’s “four kinds” is an editorial slip corrected to five; all five are preserved. In both mark clauses, a margin nearer zero is tighter; this clarifies the existing wording and settles nothing further. The action record is named `quota.action`, without settling whether it is also a bus kind.
+The default unit, the last-call point, swap-back, release-critical marking and delegation to enable actions are settled and carried by Planning commitments 28–32 and §10 questions 12–15 and 17; recovery hysteresis and whether plan approval reserves the spend envelope remain open (Planning §10.16 and §10.19). Cost units are input/output/cache tokens and money where known; price, allocation and estimation details remain open in §7.3. The source’s “four kinds” is an editorial slip corrected to five; all five are preserved. In both mark clauses, a margin nearer zero is tighter; this clarifies the existing wording and settles nothing further. The action record is named `quota.action`, without settling whether it is also a bus kind.
 
-Current quota margin and two-point budget pace have different units; the proposed language conflates them. Unknown-is-spent is unimplemented; the spend envelope remains unbuilt, while current unknown subscription readings refuse no launch. Credential access stays in an owner-declared check or a future launch mechanism; reporting never opens a credential. A future swap waits for idle, preserves identity and task, respects independent review, changes no account declarations, and is not swapped back automatically. Every proposed action records before, after and reversal and does not happen if it cannot be recorded. It never loosens a limit.
+Current quota margin and two-point budget pace have different units; the proposed language conflates them. Unknown-is-spent is unimplemented; the spend envelope remains unbuilt, while current unknown subscription readings refuse no launch. Credential access stays in an owner-declared check or a future launch mechanism; reporting never opens a credential. A future swap waits for idle, preserves identity and task, respects independent review, changes no account declarations, and is not swapped back on recovery alone; under an enabled `act` policy the Runtime makes the return at the seat's task boundary (Planning commitment 30). Every proposed action records before, after and reversal and does not happen if it cannot be recorded. It never loosens a limit.
 
 ### 7.3. Proposed cost accounting and views; not implemented
 
