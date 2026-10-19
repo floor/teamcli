@@ -148,7 +148,7 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
   try {
     text = readFileSync(path, 'utf8');
   } catch {
-    return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read` }] };
+    return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
   }
   const result = validateTeamFile(text, { home: options.home, fs: options.fs, root });
   if (!result.ok) return { ...result, path };
