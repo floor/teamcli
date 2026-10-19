@@ -246,7 +246,10 @@ printed no amount — any other CLI, an unread pane, or a row without the field 
 figures and spend are attributed to the run (herdr session) its pane was read in, so two teams’
 same-named seats never borrow each other’s figures. In `--json` the same facts are `teams[].seats`:
 the seat, its CLI and paying account, its `run`, its `windows` (each with `mark`, `source`,
-`readAt`, `age` and `stale`), and its `cost` (`amount`, `currency`, `mark`, `source`, `readAt`,
-`age`; `why` when unknown).
+`readAt`, `age` and `stale`), and its `cost` (`amount`, `currency`, `source`, `readFrom`,
+`readAt`, `age`; `why` when unknown). The cost’s `source` carries the session registry’s own word
+for how the amount was obtained — `measured`, `estimated`, or `unknown` for a seat whose screen
+printed no amount — so `team sessions` and `team usage` print the same mark for the same figure;
+`readFrom` names the screen it was read from (`status line`).
 
 Rationale, behaviour, refusals and known limits: [docs/internal/usage.md](../internal/usage.md).

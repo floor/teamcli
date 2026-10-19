@@ -1024,17 +1024,21 @@ export type ReportSeatWindow = {
   stale: boolean;
 };
 
-/** A seat's spend in money, per run. `measured` when this run read the amount off the seat's own
- *  screen — the claude-family status row's `S: $5.8` (test/usage-quota.test.ts:47) is the one
- *  grammar a capture showed printing money; `unknown` with its reason when no screen printed an
- *  amount, never an estimated zero that would read as a spend. The figure is per seat and per
- *  run: the pane's own session, stamped with the herdr session it was read in. */
+/** A seat's spend in money, per run. `source` carries the session registry's own two words
+ *  (`SessionRecord['cost']['source']`, sessions format 1) plus `unknown`, which the registry
+ *  spells by omitting the field and printing `unknown`, never a zero: `measured` when this run
+ *  read the amount off the seat's own screen — the claude-family status row's `S: $5.8`
+ *  (test/usage-quota.test.ts:47) is the one grammar a capture showed printing money — or
+ *  `unknown` with its reason when no screen printed an amount. The figure is per seat and per
+ *  run: the pane's own session, stamped with the herdr session it was read in; `readFrom`,
+ *  `readAt` and `age` say where and when this run read it. */
 export type ReportSeatCost = {
   amount: number | null;
   currency: 'USD';
-  mark: 'measured' | 'estimated' | 'unknown';
-  /** Where a measured amount was read. */
-  source?: string;
+  /** The session registry's own word for how the amount was obtained. */
+  source: 'measured' | 'estimated' | 'unknown';
+  /** The screen a measured amount was read from (the status line). */
+  readFrom?: string;
   /** ISO, when this run read the figure. */
   readAt?: string;
   age?: string;
@@ -1705,12 +1709,12 @@ function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number): Rep
 /** One seat's spend as this run read it: the newest observation of its own screen, marked
  *  measured, or unknown with one reason. A screen that printed no amount is never a zero. */
 function costOf(paid: CostObservation | null, now: number): ReportSeatCost {
-  if (paid === null) return { amount: null, currency: 'USD', mark: 'unknown', why: SEAT_COST_UNREAD };
+  if (paid === null) return { amount: null, currency: 'USD', source: 'unknown', why: SEAT_COST_UNREAD };
   return {
     amount: paid.amount,
     currency: paid.currency,
-    mark: 'measured',
-    source: paid.source,
+    source: 'measured',
+    readFrom: paid.source,
     readAt: new Date(paid.observedAt).toISOString(),
     age: span(now - paid.observedAt),
   };
@@ -2012,9 +2016,9 @@ function seatFiguresText(block: ReportTeamBlock): string[] {
     }
     // The spend line belongs to its seat: the amount is the pane's own session, so two seats on
     // one account print their own figures, and one no screen answered for prints `unknown`.
-    const cost = seat.cost.mark === 'unknown' || seat.cost.amount === null
+    const cost = seat.cost.source === 'unknown' || seat.cost.amount === null
       ? `unknown  ${seat.cost.why ?? SEAT_COST_UNREAD}`
-      : `$${seat.cost.amount}  ${seat.cost.mark}  ${seat.cost.source ?? 'status line'}${seat.cost.age === undefined ? '' : `  read ${seat.cost.age} ago`}`;
+      : `$${seat.cost.amount}  ${seat.cost.source}  ${seat.cost.readFrom ?? 'status line'}${seat.cost.age === undefined ? '' : `  read ${seat.cost.age} ago`}`;
     lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  cost  ${cost}`);
   }
   return lines;
