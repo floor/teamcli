@@ -193,6 +193,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the folder holds a valid team of its own, and `team mcp serve` exits 2 with the loader's message
   before it makes a listener or an inbox folder. `--file ''` is refused by the parser with
   `team mcp: --file needs a value`.
+- **`team usage` tells a file it cannot read from one that does not load.** The team-file loader
+  returns its refusal for an unreadable file instead of throwing it, and marks that refusal
+  `unreadable`, so `team usage` keeps the two faces the case had: the owner reads the loader's
+  own sentence — the file named once, with the reason — while a caller who is not the owner reads
+  the fixed `<team file> cannot be read: the owner reads the reason` sentence, never `does not
+  load` for a file that never loaded. A file that loads and still has a problem keeps its load
+  sentence, with the line and the loader's reason for the owner.
 
 ## [0.5.1] - 2026-10-19
 
