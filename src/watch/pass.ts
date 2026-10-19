@@ -54,6 +54,25 @@ import { teamIdle } from './checks/team-idle.ts';
 import { unsent } from './checks/unsent.ts';
 import type { Machine } from './machine.ts';
 import { readScreen, statusRow, type Screen } from './screen.ts';
+export {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isStatusWaiterSeat,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+} from './status-events.ts';
 
 // What the watch remembers between passes. It lives in the watch's process: a restarted watch
 // starts its timers again, and reports again what is still true.

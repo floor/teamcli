@@ -74,7 +74,7 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBe(31);
+    expect(EVENT_KINDS.length).toBe(32);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
     expect(isEventKind('record.invalid')).toBe(true);
@@ -82,6 +82,7 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
     expect(isEventKind('team.event-log-dropped')).toBe(true);
     expect(isPrivilegedKind('team.event-log-dropped')).toBe(false);
     expect(isEventKind('seat.at-prompt')).toBe(true);
+    expect(isEventKind('seat.unblocked')).toBe(true);
     expect(isEventKind('not.a.kind')).toBe(false);
     expect(isEventKind('seat.started')).toBe(false);
     expect(isEventKind('seat.provider-error')).toBe(false);

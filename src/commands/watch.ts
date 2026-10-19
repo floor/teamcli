@@ -58,6 +58,45 @@ import {
 } from '../bus/server.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
+import {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isStatusWaiterSeat,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+} from '../watch/status-events.ts';
+
+export {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isStatusWaiterSeat,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+};
 
 // What the watch reads and does outside its own process, so tests can stand in for it.
 export type WatchSources = {
@@ -128,6 +167,8 @@ export type WatchSources = {
    *  and watch resyncs from records. `reason` is `'retention'` when retained drop records declare
    *  the missing window. */
   onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
+  /** Optional herdr status-event source (`herdr wait agent-status` per seat). */
+  statusSource?: StatusSource;
 };
 
 export const realWatchSources: WatchSources = {
@@ -456,6 +497,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let paneGoneOnce = false;
   // The agents and panes of the last whole read: what the label sweep between passes works on.
   let lastLive: Live | null = null;
+  let statusEngine: SeatStatusEngine | undefined;
   try {
     for (;;) {
       // The file is read again on every pass, so a seat parked or stopped since is seen.
@@ -553,6 +595,34 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         noteWorked(dir, session, live, sources.now());
         const state = readState(dir).sessions[session] ?? emptySession();
         const now = sources.now().getTime();
+        if (!foreign && sources.statusSource !== undefined) {
+          statusEngine ??= createSeatStatusEngine({
+            team,
+            session,
+            root,
+            home: sources.home,
+            source: sources.statusSource,
+            now: () => sources.now().getTime(),
+            graceMs: inForce.interval * 1000,
+            publish: sources.busPublish,
+          });
+          for (const seat of team.seats) {
+            const agent = live.agents.find((candidate) => candidate.name === seat.name);
+            if (!agent) continue;
+            if (herdrUnreliable(seat.cli)) {
+              await statusEngine.pollUnreliableSeat(seat.name, live.screens[agent.pane], now, agent.pane);
+            } else if (
+              agent.status === 'idle'
+              || agent.status === 'working'
+              || agent.status === 'blocked'
+              || agent.status === 'done'
+              || agent.status === 'unknown'
+            ) {
+              await statusEngine.observe(seat.name, agent.status, now, agent.pane);
+            }
+          }
+          await statusEngine.tick(now);
+        }
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the
         // pass reads what they read, and nothing else. Only their state is ever said — a
         // contract failure or a timeout says `unreadable`, never a line of what they printed.
