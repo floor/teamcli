@@ -97,6 +97,10 @@ export function greenNotes(read: PendingGreenRead | null): string[] {
 
 function duration(seconds: number): string {
   const whole = Math.max(0, Math.round(seconds));
+  if (whole > 0 && whole % 3600 === 0) {
+    const hours = whole / 3600;
+    return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  }
   if (whole > 0 && whole % 60 === 0) {
     const minutes = whole / 60;
     return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;

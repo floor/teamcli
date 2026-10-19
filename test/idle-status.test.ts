@@ -112,6 +112,12 @@ test('the idle line names the count, the threshold, the work and each seat since
   expect(idleWorkNotes(report({ threshold_seconds: 60, idle: [{ seat: 'lead', since: null }], takeable: 2 }))).toEqual([
     'idle with work: 1 idle seat past 1 minute, 2 takeable; lead idle since the watch started',
   ]);
+  expect(idleWorkNotes(report({ threshold_seconds: 7200, idle: [{ seat: 'lead', since: null }], takeable: 1 }))).toEqual([
+    'idle with work: 1 idle seat past 2 hours, 1 takeable; lead idle since the watch started',
+  ]);
+  expect(idleWorkNotes(report({ threshold_seconds: 3600, idle: [{ seat: 'lead', since: null }], takeable: 1 }))).toEqual([
+    'idle with work: 1 idle seat past 1 hour, 1 takeable; lead idle since the watch started',
+  ]);
 });
 
 test('nothing is said when seats are busy or the queue is empty', () => {
