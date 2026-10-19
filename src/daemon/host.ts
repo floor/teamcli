@@ -30,6 +30,7 @@ import { pidAlive } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
+import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import {
   ensureMachineDir,
@@ -346,6 +347,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const sendHandles: SendDaemonHandle[] = [];
   const busHandles: BusHandle[] = [];
   const watched: EndpointWatch[] = [];
+  /** The roots whose team files validated: the only ones the heartbeat's fallback sweep reads. */
+  const sweepRoots: SweepRoot[] = [];
 
   // Staged limitation, and the exact block the extraction replaces: the machine protocol
   // socket is the daemon's own endpoint, but send and bus still have no machine route, so this
@@ -365,6 +368,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       continue;
     }
     status.team = loaded.team.project;
+    sweepRoots.push({ root: loaded.root, team: loaded.team });
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
     let send: Awaited<ReturnType<typeof startSendDaemon>>;
     try {
@@ -484,6 +488,25 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     heartbeatAt = now().toISOString();
     writeState();
     void refreshHostedEndpoints();
+    // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
+    // hosted root reads its own validated team file and its markers' durable due instants; the
+    // pass keeps no state of its own, and close stops it with this timer.
+    if (closed) return;
+    const swept = sweepFallbackEscalations({ home, roots: sweepRoots, now });
+    for (const entry of swept.roots) {
+      if (entry.why !== null) {
+        appendDaemonLog(home, `fallback sweep ${entry.root}: ${entry.why}`, now());
+        continue;
+      }
+      const report = entry.report;
+      if (report === null) continue;
+      if (report.escalated.length === 0 && report.refused.length === 0 && report.unreadable.length === 0) continue;
+      appendDaemonLog(
+        home,
+        `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
+        now(),
+      );
+    }
   }, heartbeatMs);
   timer.unref();
 
