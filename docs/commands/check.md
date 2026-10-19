@@ -46,7 +46,10 @@ key or holding another body is `<seat>: the general seat brief's delivery record
 with the same repair.
 
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
-state records for it through the watch's own screen reader. The line names the seat, the prompt's
+state records for it through the watch's own screen reader. A pane that no longer holds the
+process team launched — back at its shell, or replaced by one the state's stored session does not
+vouch for — is not read for a prompt: the check's own process line already says what the pane is,
+and a dialog left in its scrollback is not a seat held at one. The line names the seat, the prompt's
 kind — a permission prompt, a trust prompt, a quota prompt (a usage limit, with the reset time the
 screen shows), a confirm prompt (the CLI's own exit question), or an unrecognised prompt — the
 command the screen shows when the profile's trace reader finds one, and the age the state's clock
@@ -60,7 +63,9 @@ screen, a confirm prompt or an unrecognised one is the owner's, and a confirm pr
 with `team down --abandon`, a quota screen with the reset it names. The check never answers, types
 or nudges: the line names the act, and the pane's own reader takes it. Where `compare()` already
 printed its plain permission or trust row for the seat (`status`'s wording), the check replaces it
-with this one line, so a held seat is named once.
+with this one line, so a held seat is named once. A temporary seat — one `team add --temporary`
+recorded and the file never names — is read the same way, from its record, with its like-seat's
+CLI.
 
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of

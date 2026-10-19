@@ -4,15 +4,15 @@
 // one, and the age the state's own clock gives the seat. The reading is the watch's own
 // (`readScreen` + the floor), it is read-only, and `compare()`'s plain prompt row for the seat is
 // replaced, never doubled.
-import { beforeEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { STATE_FILE, emptySession, updateState } from '../src/state.ts';
+import { STATE_FILE, emptySession, updateState, type SeatState } from '../src/state.ts';
 import type { Standing } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
 import { testIo } from './helpers.ts';
@@ -66,7 +66,14 @@ beforeEach(() => {
   });
 });
 
-function recordSeat(name: string, pane: string, workspace: string, cli: string, lastActive = AT): void {
+function recordSeat(
+  name: string,
+  pane: string,
+  workspace: string,
+  cli: string,
+  lastActive = AT,
+  extra: Partial<SeatState> = {},
+): void {
   updateState(join(dir, '.agents'), (state) => {
     const session = (state.sessions['acme-web'] ??= emptySession());
     session.seats[name] = {
@@ -75,9 +82,13 @@ function recordSeat(name: string, pane: string, workspace: string, cli: string, 
       workspace,
       cli,
       ...(lastActive === '' ? {} : { last_active: lastActive }),
+      ...extra,
     };
   });
 }
+
+// The scene's own scratch directory is test-created and owned here.
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function check() {
   const io = testIo(dir, { kind: 'owner' });
@@ -204,6 +215,103 @@ test('the JSON document carries the line and nothing of the suppression mark', (
   expect(rows).toHaveLength(1);
   expect(Object.keys(rows[0]!).sort()).toEqual(['repair', 'what', 'who']);
   expect(rows[0]!.what).toBe('deepseek-acme: stuck at a permission prompt (last active 4m ago): Write(synthetic-note.txt)');
+});
+
+test('a pane back at its shell keeps the process row, and its old dialog is not a prompt', () => {
+  live = {
+    ...built(),
+    screens: { 'w3:p1': PERMISSION },
+    processes: { 'w3:p1': { shell: 10, foreground: [10] } },
+  };
+  recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code', AT, { launched: { shell: 10, cli: [11] } });
+  const { out } = check();
+  expect(out).toContain('deepseek-acme: its pane runs no CLI (the CLI ended or the session was restored)');
+  expect(out).not.toContain('stuck at a permission prompt');
+});
+
+test('a record with no identity whose pane holds a shell reads no prompt either', () => {
+  live = {
+    ...built(),
+    screens: { 'w3:p1': PERMISSION },
+    processes: { 'w3:p1': { shell: 10, foreground: [10] } },
+  };
+  recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code');
+  const { out, code } = check();
+  expect(out).not.toContain('stuck at a permission prompt');
+  expect(code).toBe(1);
+});
+
+test('a replaced pane whose stored session is the live one is still read for its prompt', () => {
+  live = {
+    ...built(),
+    agents: built().agents.map((candidate) => (candidate.name === 'deepseek-acme' ? { ...candidate, session: 'sess-1' } : candidate)),
+    screens: { 'w3:p1': PERMISSION },
+    processes: { 'w3:p1': { shell: 20, foreground: [30] } },
+  };
+  recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code', AT, {
+    launched: { shell: 10, cli: [11] },
+    agent_session: 'sess-1',
+  });
+  const { out } = check();
+  expect(out).toContain('stuck at a permission prompt (last active 4m ago): Write(synthetic-note.txt)');
+});
+
+test('a floor row above the composer rule is transcript, not the live dialog', () => {
+  // The same words, above the rule line: a turn the pane has scrolled past.
+  live = {
+    ...built(),
+    agents: built().agents.map((candidate) => (candidate.name === 'deepseek-acme' ? { ...candidate, status: 'blocked' } : candidate)),
+    screens: { 'w3:p1': 'Do you want to continue?\n────────\nA new dialog the profile never saw' },
+  };
+  recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code');
+  const { out } = check();
+  expect(out).not.toContain('stuck at an unrecognised prompt');
+  expect(out).toContain('deepseek-acme is blocked, and its screen is not one the watch recognises');
+});
+
+test('a floor row below the composer rule is the live dialog and is quoted', () => {
+  live = { ...built(), screens: { 'w3:p1': 'A new dialog the profile never saw\n────────\nDo you want to continue?' } };
+  recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code');
+  const { out } = check();
+  expect(out).toContain('stuck at an unrecognised prompt (last active 4m ago): matched "Do you want to continue?"');
+});
+
+test('control sequences on the screen never reach the JSON document', () => {
+  // A tool row and a floor row as a pane may carry them, styling and control bytes included.
+  const polluted = `${PERMISSION.replace('⏺ Write(synthetic-note.txt)', '⏺ Write(synthetic-note.txt)\x1b]0;title\x07\r')}`;
+  live = { ...built(), screens: { 'w3:p1': polluted } };
+  recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code');
+  const io = testIo(dir, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml', json: true }, io, {
+    live: () => live,
+    branch: () => 'main',
+    standing: () => standing,
+    now: () => NOW,
+    home: dir,
+  });
+  expect(code).toBe(1);
+  expect(io.out).not.toContain('\x07');
+  expect(io.out).not.toContain('\r');
+  expect(io.out).not.toContain('\x1b');
+  const doc = JSON.parse(io.out) as { differences: Array<Record<string, unknown>> };
+  const row = doc.differences.find((candidate) => String(candidate.what).includes('stuck at a permission prompt'));
+  expect(row?.what).toBe('deepseek-acme: stuck at a permission prompt (last active 4m ago): Write(synthetic-note.txt)');
+});
+
+test('a real live read reaches a temporary seat\'s pane and names it', async () => {
+  const proc = Bun.spawn(['bun', 'test/check-live-temp-seat-run.ts'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exit = await proc.exited;
+  const out = await new Response(proc.stdout).text();
+  const err = await new Response(proc.stderr).text();
+  expect(exit, err || out).toBe(0);
+  const parsed = JSON.parse(out) as { code: number; out: string };
+  expect(parsed.code).toBe(1);
+  expect(parsed.out).toContain('claude-acme-tmp-1: stuck at a permission prompt (last active 4m ago): Write(synthetic-note.txt)');
+  expect(parsed.out).not.toContain('waits at a permission prompt');
 });
 
 test('the reading writes nothing: the state file is byte-identical after the check', () => {

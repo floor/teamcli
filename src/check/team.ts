@@ -28,6 +28,7 @@ import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
+import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import {
@@ -117,6 +118,12 @@ export const realCheckSources: CheckSources = {
     for (const seat of team.seats) {
       const pane = state.seats[seat.name]?.pane;
       if (pane) recorded.add(pane);
+    }
+    // A temporary seat is a seat of this team by its record alone (`team add --temporary` never
+    // writes one into the file): its pane is read on the same terms as a declared seat's, so a
+    // temporary seat held at a prompt is named in a real run and not only in a scene.
+    for (const held of Object.values(state.seats)) {
+      if (held.temporary !== undefined && held.pane) recorded.add(held.pane);
     }
     const screens: Record<string, string> = {};
     const processes: Record<string, PaneProcesses | null> = {};
@@ -780,10 +787,13 @@ function stuckPromptDifference(
   now: Date,
 ): Difference {
   const details: string[] = [];
-  if (screen.kind === 'rate limit' && screen.reset !== null) details.push(`resets at ${screen.reset}`);
-  if (screen.kind === 'unknown' && screen.matched !== undefined) details.push(`matched "${screen.matched}"`);
+  // Every detail below is text the screen showed, not text `team` wrote: each is cleaned the way
+  // the report cleans a difference line, so the same string is safe in `--json`, which renders
+  // `what` as it stands (a control sequence or a `\r` in it would otherwise reach the document).
+  if (screen.kind === 'rate limit' && screen.reset !== null) details.push(`resets at ${plainLine(screen.reset)}`);
+  if (screen.kind === 'unknown' && screen.matched !== undefined) details.push(`matched "${plainLine(screen.matched)}"`);
   const tool = toolTrace(cli, screenText);
-  if (tool !== null) details.push(tool.what);
+  if (tool !== null) details.push(plainLine(tool.what));
   const age = formatRelativeTime(recorded?.last_active, now);
   const since = age === '-' ? '' : ` (last active ${age})`;
   const detail = details.length === 0 ? '' : `: ${details.join('; ')}`;
@@ -829,6 +839,23 @@ function attentionDifferences(
     if (pane === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === read.name);
     if (!agent || agent.pane !== pane) continue;
+    // The pane is the seat only while the process team launched is still in it, read as
+    // `compare()` reads it: a pane back at its shell, or one running a process the record does
+    // not name (with no stored session showing continuity), keeps the process row, and its
+    // scrollback is not read for a prompt — a dialog the CLI drew before it exited is not a seat
+    // held at one.
+    const processes = live.processes?.[pane] ?? null;
+    const verdict = seatProcessVerdict(read.recorded?.launched, processes);
+    const continuity = replacedSeat(verdict, {
+      asked: true,
+      namedOnPane: read.recorded?.pane === pane,
+      recordedSession: read.recorded?.agent_session,
+      liveSession: agent.session,
+    });
+    if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) continue;
+    // A record with no identity whose pane holds a bare shell reads no prompt either: there is
+    // no CLI in it to be held (`compare()` prints the shell's own row).
+    if (read.recorded !== undefined && !read.recorded.launched && paneHoldsShell(processes)) continue;
     const text = live.screens[pane];
     const screen = readScreen(read.cli, text);
     // A launch's own waiting record already names the seat and the dialog it stopped at, with
