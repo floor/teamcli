@@ -20,7 +20,7 @@ import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
-import { clearStopped, seatIsStopped } from '../file/lines.ts';
+import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
@@ -136,7 +136,7 @@ export const realSources: AddSources = {
   launch: realLaunch,
 };
 
-export const USAGE = `Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
@@ -160,6 +160,10 @@ function delegateRefused(io: Io, json: boolean, verdict: { id: string; text: str
 
 type Running = { name: string; vendor: string; temporary: boolean };
 type Until = { kind: 'result'; path: string } | { kind: 'merged'; branch: string };
+/** What a builder hands the run: the seat to start and the file its entry is written into.
+ *  `copiedFrom` names the source of a declared copy; `temporary` the end a temporary seat runs to. */
+type Built = { name: string; seat: Seat; edited: string; temporary?: SeatState['temporary']; copiedFrom?: string };
+type BuildRefusal = { error: string; id: string };
 
 export const add: Command = (argv, io) => runAdd(argv, io, realSources);
 export default add;
@@ -208,8 +212,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.temporary-unexpected
     return 2;
   }
-  if (!temporary && (args.values.like || args.values.until || args.values.worktree)) {
-    refuse(io, json, 'add', { id: 'add.temporary-flags', message: '--like, --until and --worktree are for --temporary', repair: null });
+  if (!temporary && (args.values.until || args.values.worktree)) {
+    refuse(io, json, 'add', { id: 'add.temporary-flags', message: '--until and --worktree are for --temporary', repair: null });
     // exit: add.temporary-flags
     return 2;
   }
@@ -439,7 +443,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const asked = args.rest[0] ?? '';
   const built = temporary
     ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
-    : declaredSeat(asked, original, team, sources.home, sources.fs);
+    : args.values.like !== undefined
+      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs)
+      : declaredSeat(asked, original, team, sources.home, sources.fs);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
     // …); the plain line is the sentence it always printed.
@@ -448,6 +454,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.human
     // exit: add.not-restored
     // exit: add.no-like
+    // exit: add.like-exists
     // exit: add.until
     // exit: add.result-absolute
     // exit: add.result-exists
@@ -526,7 +533,18 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if (delegatePane !== null) {
     const stanza = fingerprints(team).seats[built.name];
     const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
-    if (built.edited !== original || inCopy === undefined || inCopy !== stanza) {
+    let admitted = built.edited === original && inCopy !== undefined && inCopy === stanza;
+    // The seat a delegate adds by copy is new to the file, so the record cannot hold it: the
+    // source is what is compared, hash for hash with the record's own seat, and the edit is the
+    // copy that source makes and nothing else — the command builds it from the live text, never
+    // from the delegate's. A source the record does not hold, or holds differently, stays the
+    // owner's.
+    if (!admitted && built.copiedFrom !== undefined && standing.kind === 'verified') {
+      const beside = fingerprints(team).seats[built.copiedFrom];
+      const held = approvedFingerprints(standing.record).seats[built.copiedFrom];
+      admitted = held !== undefined && held === beside && copySeat(original, built.copiedFrom, built.name) === built.edited;
+    }
+    if (!admitted) {
       refuse(io, json, 'add', { id: 'add.delegate-edit', message: ADD_DELEGATE_EDIT.text, repair: null });
       // exit: add.delegate-edit
       return 1;
@@ -1068,7 +1086,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
 function declaredSeat(
   name: string, current: string, team: TeamFile, home: string, fs?: FsReader,
-): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string; id: string } {
+): Built | BuildRefusal {
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) return { id: 'add.no-seat', error: `the file has no seat ${JSON.stringify(name)}` };
   // A human's pane is never launched into or typed into. `add` names one seat, so it refuses
@@ -1082,10 +1100,43 @@ function declaredSeat(
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
 }
 
+/**
+ * The new declared seat `team add <name> --like <seat>` writes: the file gains one entry, named
+ * `name`, that the source describes field for field except for the name, the title and the
+ * stopped flag. The copy starts now, so it is written without `stopped: true` and launched like
+ * any declared seat. A source that is a human's pane is refused: nothing is launched over it.
+ */
+function copiedSeat(
+  name: string, like: string, current: string, team: TeamFile, home: string, fs?: FsReader,
+): Built | BuildRefusal {
+  const source = team.seats.find((item) => item.name === like);
+  if (!source) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(like)}` };
+  if (team.seats.some((item) => item.name === name)) {
+    return { id: 'add.like-exists', error: `the file already declares ${JSON.stringify(name)}; --like adds a copy under a new name` };
+  }
+  if (source.human) return { id: 'add.human', error: `${like} is a human's pane: nothing is typed into it or launched over it; left as it is` };
+  const edited = copySeat(current, like, name);
+  if (edited === current || !hasSeat(edited, name)) {
+    return { id: 'add.not-restored', error: `couldn't copy ${like} into the file as ${name}` };
+  }
+  // A copy the file refuses — a second `leads`, `assistant` or nickname — is read here so the
+  // seat carries what the file would say; the validation before the write then refuses it by
+  // name and the file is never touched.
+  const again = validateTeamFile(edited, { home, fs });
+  const copied = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
+  return {
+    name,
+    seat: copied ? { ...copied, stopped: false } : { ...source, name, label: name, stopped: false },
+    edited,
+    copiedFrom: like,
+    temporary: undefined,
+  };
+}
+
 function temporarySeat(
   values: Record<string, string>, current: string, approved: TeamFile, state: SessionState, agents: readonly HerdrAgent[],
   root: string, base: string | null, home: string, now: Date,
-): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string; id: string } {
+): Built | BuildRefusal {
   const like = approved.seats.find((item) => item.name === values.like);
   if (!like) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(values.like)}` };
   const until = parseUntil(values.until ?? '');
