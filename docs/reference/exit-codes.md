@@ -483,6 +483,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
 | `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
+| `sessions.none` | `sessions` | 0 | no session record matched | `team sessions` |
+| `sessions.shown` | `sessions` | 0 | the session records were listed | `team sessions` |
+| `sessions.read` | `sessions` | 1 | a session registry can't be read | `team sessions` |
+| `sessions.invocation` | `sessions` | 2 | the invocation can't be read | `team sessions --by nothing` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |

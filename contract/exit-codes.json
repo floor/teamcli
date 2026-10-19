@@ -3342,6 +3342,34 @@
     },
     {
       "code": 0,
+      "command": "sessions",
+      "id": "sessions.none",
+      "meaning": "no session record matched",
+      "trigger": "team sessions"
+    },
+    {
+      "code": 0,
+      "command": "sessions",
+      "id": "sessions.shown",
+      "meaning": "the session records were listed",
+      "trigger": "team sessions"
+    },
+    {
+      "code": 1,
+      "command": "sessions",
+      "id": "sessions.read",
+      "meaning": "a session registry can't be read",
+      "trigger": "team sessions"
+    },
+    {
+      "code": 2,
+      "command": "sessions",
+      "id": "sessions.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team sessions --by nothing"
+    },
+    {
+      "code": 0,
       "command": "status",
       "id": "status.agrees",
       "meaning": "the file, the state and the session agree",

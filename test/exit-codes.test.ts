@@ -55,6 +55,7 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
+import { runSessions } from '../src/commands/sessions.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -2765,6 +2766,44 @@ scene('issues.shape', async (place) => {
 });
 scene('issues.invocation', async (place) => show(await issued(place, ['extra']), 'unexpected'));
 scene('issues.not-a-repo', async (place) => show(await issued(place), 'run team from a project\n'), false);
+
+// The session registry's scenes write the append-only stream directly, in the shape the launch
+// commands append: one `start` event per session and one `end` for a session that ended.
+function sessionsRegistry(place: Place): string {
+  return join(storePath('acme', place.root, place.home), 'sessions.jsonl');
+}
+
+function startEvent(id: string, seat: string, ts: string): Record<string, unknown> {
+  return {
+    event: 'start', ts, id, project: 'acme', team: 'acme', seat, nickname: seat === 'lead' ? 'Lead' : undefined,
+    cli: 'claude-code', lab: 'anthropic', model: 'claude-opus-5-5', version: '5.5', account: 'anthropic',
+    herdr_session: 'acme', pane: 'w1:p1', cli_session: '2f6d1c1a-6f3b-4b4e-9d4a-1f0f0a2a9b7c', resumable: true,
+  };
+}
+
+async function sessionsRun(place: Place, argv: string[] = []): Promise<Ran> {
+  const io = testIo(place.root);
+  return { code: await runSessions(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('sessions.none', async (place) => show(await sessionsRun(place), '0 sessions'));
+scene('sessions.shown', async (place) => {
+  const file = sessionsRegistry(place);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, [
+    JSON.stringify(startEvent('ses_000000000001', 'lead', '2026-10-04T08:00:00.000Z')),
+    JSON.stringify({ event: 'end', ts: '2026-10-04T08:30:00.000Z', id: 'ses_000000000001', reason: 'owner-stop' }),
+    JSON.stringify(startEvent('ses_000000000002', 'worker', '2026-10-04T08:31:00.000Z')),
+  ].join('\n') + '\n');
+  const ran = await sessionsRun(place);
+  show(ran, 'ses_000000000001  lead    acme  claude-opus-5-5  2026-10-04 08:00Z  2026-10-04 08:30Z  owner-stop  unknown');
+  return ran;
+});
+scene('sessions.read', async (place) => {
+  mkdirSync(sessionsRegistry(place), { recursive: true });
+  return show(await sessionsRun(place), 'the session registry path is a directory');
+});
+scene('sessions.invocation', async (place) => show(await sessionsRun(place, ['--by', 'nothing']), 'must be one of model, team, entity'));
 
 // A machine lock is a directory under the scene's own home. The holder and the clock are
 // injected, so these scenes never read a team file or the wall clock. The project refusals are

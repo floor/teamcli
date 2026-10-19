@@ -68,6 +68,7 @@ import { shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
@@ -448,7 +449,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
       // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
-      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, name, 'stopped');
+      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, name, 'stopped', 'restart');
       if (ended) logLine(dir, 'restart', who, ended.note, sources.now());
     }
 
@@ -880,6 +881,23 @@ function hostOf(input: {
         }
       }
     },
+    // The new session's start, with the id TeamCLI set where the CLI takes one. The old record
+    // ended as `restart` before the close; this one names it `previous`.
+    sessionStarted(name, started) {
+      if (name !== seat.name) return;
+      const began = beginSession({
+        home: input.home,
+        root: input.root,
+        team: input.team,
+        session,
+        seat,
+        pane: started.pane,
+        ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
+        ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+        now: input.now(),
+      });
+      if ('note' in began) logLine(dir, 'restart', input.caller, began.note, input.now());
+    },
     running(name) {
       if (!running.some((item) => item.name === name)) {
         running.push({ name, vendor: seat.vendor, temporary: false });
@@ -902,7 +920,7 @@ function hostOf(input: {
       });
       if (pane) forgetLaunchedPane(input.home, pane, session);
       if (name === seat.name) {
-        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped');
+        const ended = registerEnd({ home: input.home, team: input.team, root: input.root, by: input.caller, session }, name, 'stopped', 'restart');
         if (ended) logLine(dir, 'restart', input.caller, ended.note, input.now());
       }
     },

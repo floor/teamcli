@@ -74,6 +74,7 @@ import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
+import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
@@ -1723,6 +1724,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           if (replaced) forgetLaunchedPane(sources.home, replaced, session);
           noteLaunchedPane(sources.home, loaded.path, patch.pane, session);
         }
+      },
+      // The session registry records the launch itself, with the id TeamCLI set where the CLI
+      // takes one; a registry that cannot be written is a note in the run's log, never a refusal.
+      sessionStarted(name, started) {
+        const seat = team.seats.find((item) => item.name === name);
+        if (!seat) return;
+        const began = beginSession({
+          home: sources.home,
+          root,
+          team,
+          session,
+          seat,
+          pane: started.pane,
+          ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
+          ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+          now: now(),
+        });
+        if ('note' in began) logLine(dir, 'up', callerLabel(caller), `${name}: ${began.note}`, now());
       },
       running(name) {
         if (running.some((item) => item.name === name)) return;
