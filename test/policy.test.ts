@@ -264,6 +264,25 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     }
   });
 
+  test('delivery-order accepts headless-resume, a leg a declared word may add and no default names', () => {
+    // The headless-resume leg is opt-in: it is in the vocabulary, a word may name it, and the
+    // fallback order still names neither it nor any implied default that would insert it.
+    expect(POLICY_CATALOGUE['delivery-order'].defaultValue).toEqual(['mcp-inbox', 'typed', 'drop']);
+    const narrowed = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['native', 'headless-resume', 'typed'], level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['headless-resume', 'typed'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(narrowed.ok).toBe(true);
+    if (narrowed.ok) expect(narrowed.effective.value).toEqual(['headless-resume', 'typed']);
+
+    const addsUnderTyped = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['typed'], level: 'team', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['headless-resume', 'typed'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(addsUnderTyped.ok).toBe(true);
+    if (addsUnderTyped.ok) expect(addsUnderTyped.effective.value).toEqual(['headless-resume', 'typed']);
+  });
+
   test('a loosening is refused at load and names both levels', () => {
     const declarations: Policy[] = [
       { name: 'dev-mode', value: 'off', level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },

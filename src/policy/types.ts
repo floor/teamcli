@@ -386,14 +386,15 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
-    // Dropping or reordering channels present in `higher` is within. `native` and `socket` are
-    // the legs a word may add: neither is in the fallback order, and a level that names one is
-    // the sender choosing that channel — its own SendMessage, or this build's frame on the
-    // receiver's socket. Every other leg absent from `higher` is still an addition, and the whole
+    // Dropping or reordering channels present in `higher` is within. `native`, `socket` and
+    // `headless-resume` are the legs a word may add: none is in the fallback order, and a level
+    // that names one is the sender choosing that channel — its own SendMessage, this build's
+    // frame on the receiver's socket, or a headless runtime's own turn, which no default order
+    // ever inserts. Every other leg absent from `higher` is still an addition, and the whole
     // word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
   // The line a typed wake opens with: `on` is the shipped `From <seat>@<team>:`,
   // and a level may set its own one-line format in its place, as long as both names are in it.
