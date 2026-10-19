@@ -247,6 +247,7 @@ policy: set model-rule=*=!anthropic at entity (lab)
 exit 0
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
+key isolation: not enforced (pane guard pending)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-keeper
