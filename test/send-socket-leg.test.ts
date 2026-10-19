@@ -3,10 +3,12 @@
 // declared order is walked as written. No live pane and no real socket: the host's deliver is a
 // fake, and the socket file only has to stand where `socketOf` looks.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
+import { cliHookSettings, cliHookSettingsPath } from '../src/launch/cli-hook.ts';
+import { declaredInboundOf } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
@@ -57,6 +59,35 @@ test('an accepting Claude seat with no declared order walks the socket first, af
   expect(atDial.length).toBe(1);
   expect(readdirSync(drops).length).toBe(1);
 });
+
+/** The socket the fake pane exposes; the deliver fake only records it. */
+function socketFor(made: World): string {
+  const socket = join(made.sockets, '222.sock');
+  writeFileSync(socket, '');
+  return socket;
+}
+
+/** The generated per-seat settings file this build writes for the lead's launch. */
+function generated(made: World, text: string, fresh = true): string {
+  const path = cliHookSettingsPath(made.dir, 'acme', 'lead');
+  if (path === null) throw new Error('the fixture declares no settings path for lead');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+  const at = fresh ? Date.now() - 60_000 : Date.now() + 60_000;
+  utimesSync(path, new Date(at), new Date(at));
+  return path;
+}
+
+/** A launcher script outside the team root that execs the CLI with the given inline word, and
+ *  the launch line that names it. Its mtime is backdated so a socket written after it is fresh. */
+function wrapper(word: string): { launch: string; cleanup: () => void } {
+  const base = mkdtempSync(join(tmpdir(), 'team-send-wrap-'));
+  const path = join(base, 'launcher.sh');
+  writeFileSync(path, `#!/bin/sh\nexec claude --settings '{"crossSessionInbound":"${word}"}' "$@"\n`);
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(path, past, past);
+  return { launch: `zsh ${path}`, cleanup: () => rmSync(base, { recursive: true, force: true }) };
+}
 
 test('a plain-text owner send reports delivered (socket), never read', async () => {
   const made = world(null);
@@ -170,4 +201,89 @@ test('a socket leg named for a non-Claude seat is skipped, and the typed leg beh
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
   expect(pane.typed.length).toBe(1);
+});
+
+test('a wrapper accept overridden by the appended hooks file does not dial: the effective word is unset', async () => {
+  // The installed failure this pins: the launch appends the generated hooks file after the
+  // wrapper's own --settings, the CLI keeps the last one, and that file declares no
+  // crossSessionInbound. The session is unset, so the frame would be held; the walk must not
+  // read the wrapper's earlier accept through the effective file.
+  const wrap = wrapper('accept');
+  const made = world(null, [], { lead: wrap.launch });
+  cleanup = () => {
+    made.cleanup();
+    wrap.cleanup();
+  };
+  socketFor(made);
+  const settings = generated(made, JSON.stringify({ hooks: { UserPromptSubmit: [] } }));
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['lead', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed.length).toBe(1);
+
+  const found = declaredInboundOf({
+    dir: made.dir,
+    root: made.root,
+    session: 'acme',
+    seat: 'lead',
+    launch: wrap.launch,
+  });
+  expect(found.policy).toBeNull();
+  expect(found.source).toBe(settings);
+});
+
+test('a wrapper accept with no generated settings file on the line is the effective word and dials', async () => {
+  const wrap = wrapper('accept');
+  const made = world(null, [], { lead: wrap.launch });
+  cleanup = () => {
+    made.cleanup();
+    wrap.cleanup();
+  };
+  socketFor(made);
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(frames.length).toBe(1);
+});
+
+test('the merged generated file carries the wrapper word, and the walk dials on it', async () => {
+  const wrap = wrapper('accept');
+  const made = world(null, [], { lead: wrap.launch });
+  cleanup = () => {
+    made.cleanup();
+    wrap.cleanup();
+  };
+  socketFor(made);
+  // Exactly what installCliHooks writes for an accepting launch: hooks + the merged word.
+  const statePath = join(made.dir, 'seat-state', 'acme', 'lead.json');
+  generated(made, cliHookSettings(statePath, { seat: 'lead', session: 'acme' }, undefined, 'accept'));
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(frames.length).toBe(1);
+  const parsed = JSON.parse(cliHookSettings(statePath, undefined, undefined, 'accept')) as Record<string, unknown>;
+  expect(parsed.hooks).toBeDefined();
+  expect(parsed.crossSessionInbound).toBe('accept');
+  const plain = JSON.parse(cliHookSettings(statePath)) as Record<string, unknown>;
+  expect('crossSessionInbound' in plain).toBe(false);
 });

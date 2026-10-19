@@ -24,7 +24,11 @@ export type World = { root: string; dir: string; sockets: string; home: string; 
 /** One more file line, launched as a Claude Code seat: the role word a scene wants to give it. */
 export type ExtraSeat = { name: string; role: string };
 
-function teamFile(root: string, lobby: string, order: readonly string[] | null, extraSeats: readonly ExtraSeat[]): string {
+/** Launch-line overrides for the three standard seats, for scenes that spy on the wrapper a
+ *  seat's line names. Unset seats keep their plain CLI line. */
+export type LaunchLines = Partial<Record<'lead' | 'helper' | 'native', string>>;
+
+function teamFile(root: string, lobby: string, order: readonly string[] | null, extraSeats: readonly ExtraSeat[], launches: LaunchLines): string {
   const extra = extraSeats
     .map(
       (seat) => `  - role: ${seat.role}
@@ -54,21 +58,21 @@ seats:
     vendor: test
     model: Test
     version: "1"
-    launch: claude
+    launch: ${launches.lead ?? 'claude'}
   - role: implementer
     name: helper
     cli: claude-code
     vendor: test
     model: Test
     version: "1"
-    launch: claude
+    launch: ${launches.helper ?? 'claude'}
   - role: reviewer
     name: native
     cli: codex
     vendor: test
     model: Test
     version: "1"
-    launch: codex -m test
+    launch: ${launches.native ?? 'codex -m test'}
 ${extra}# The team's word is the walk these scenes resolve. The plain-send suites keep the typed trigger:
 # the inbox is tried and skipped for want of a listener, then the line is typed, and the default's
 # drop step stays out. The native suite declares native first, because the handoff is the leg a
@@ -77,7 +81,11 @@ ${extra}# The team's word is the walk these scenes resolve. The plain-send suite
 ${order === null ? '' : `delivery_order: [${order.join(', ')}]\n`}`;
 }
 
-export function world(order: readonly string[] | null = ['mcp-inbox', 'typed'], extraSeats: readonly ExtraSeat[] = []): World {
+export function world(
+  order: readonly string[] | null = ['mcp-inbox', 'typed'],
+  extraSeats: readonly ExtraSeat[] = [],
+  launches: LaunchLines = {},
+): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-native-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
@@ -86,7 +94,7 @@ export function world(order: readonly string[] | null = ['mcp-inbox', 'typed'], 
   mkdirSync(sockets, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home), order, extraSeats));
+  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home), order, extraSeats, launches));
   return {
     root,
     dir: join(root, '.agents'),

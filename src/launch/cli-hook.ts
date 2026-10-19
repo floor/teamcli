@@ -27,6 +27,7 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
+import { wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
 import type { CliHookReading } from '../labels/state.ts';
 import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 import { readState } from '../state.ts';
@@ -90,8 +91,10 @@ function legacyStatePath(dir: string, seat: string): string | null {
 }
 
 /** The launch line already sets its own settings: the seat is left alone — no file is written
- *  and no flag appended. `--settings <file>` and `--settings=<file>` both count. */
-function setsSettings(launch: string): boolean {
+ *  and no flag appended. `--settings <file>` and `--settings=<file>` both count. The send side
+ *  asks the same question before it reads the generated file as the effective declaration
+ *  (`src/send/inbound.ts`), so the two readings agree on when the generated file is on the line. */
+export function setsSettings(launch: string): boolean {
   return /(^|\s)--settings(=|\s|$)/.test(launch);
 }
 
@@ -203,8 +206,19 @@ function dropReadCommand(seat: string, session: string, epoch?: string): string 
  *  turn-start read of the seat's drop folder when it has one, and — for a claude-code seat — the
  *  PreToolUse command guard. Two commands share `UserPromptSubmit`: the state word first, so a
  *  read that takes a moment still leaves the seat reading `working`, then the folder read whose
- *  stdout the CLI adds to the turn. */
-export function cliHookSettings(statePath: string, drops?: { seat: string; session: string; epoch?: string }, guard?: string): string {
+ *  stdout the CLI adds to the turn.
+ *
+ *  `inbound`, when the seat's own launch line declares one, is written into this same file as the
+ *  top-level `crossSessionInbound`. The launch command appends this file's flag at the END of the
+ *  line, and a CLI keeps the LAST `--settings` it is given: a wrapper's earlier accept is
+ *  overridden by this file, so the receiver's word must be carried here as well or the CLI reads
+ *  it as unset and holds every cross-session frame. The wrapper's word is merged, not guessed. */
+export function cliHookSettings(
+  statePath: string,
+  drops?: { seat: string; session: string; epoch?: string },
+  guard?: string,
+  inbound?: CrossSessionInbound | null,
+): string {
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
@@ -216,7 +230,9 @@ export function cliHookSettings(statePath: string, drops?: { seat: string; sessi
   if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
   hooks.UserPromptSubmit = start;
   hooks.Stop = [hook('idle')];
-  return `${JSON.stringify({ hooks }, null, 2)}\n`;
+  const document: Record<string, unknown> = { hooks };
+  if (inbound !== undefined && inbound !== null) document.crossSessionInbound = inbound;
+  return `${JSON.stringify(document, null, 2)}\n`;
 }
 
 /** What this run would install, without touching anything: the settings path per seat whose CLI
@@ -301,12 +317,18 @@ function claimEpochAt(dir: string, session: string, seat: string): string | unde
  *  file landed; a seat that failed is absent, and its launch goes without the flag. A claude-code
  *  seat's file also carries the PreToolUse command guard when the caller hands the context the
  *  refusal event is raised with — every launch path (`up`, `add`, `restart`, `reload`) does. A
- *  seat whose brief this run delivered names the claim's epoch on its turn-start read. */
+ *  seat whose brief this run delivered names the claim's epoch on its turn-start read.
+ *
+ *  A seat whose launch scripts declare `crossSessionInbound` gets that word merged into the same
+ *  file: the file is appended last on the launch line, so it overrides the scripts' own
+ *  `--settings` and would otherwise leave the CLI with the setting unset. `root` resolves a
+ *  relative script word; it defaults to the folder holding the state folder. */
 export function installCliHooks(
   dir: string,
   session: string,
   seats: readonly CliHookSeat[],
   guard?: CommandGuardContext,
+  root: string = dirname(dir),
 ): Record<string, string> {
   const planned = plannedCliHooks(dir, session, seats);
   if (Object.keys(planned).length === 0) return {};
@@ -317,6 +339,7 @@ export function installCliHooks(
   if (!ensureFolder(join(dir, 'hooks')) || !ensureFolder(join(dir, 'seat-state'))
     || !ensureFolder(hooks) || !ensureFolder(states)) return {};
   const guarded = guard !== undefined && commandGuardAvailable();
+  const launches = new Map(seats.map((seat) => [seat.name, seat.launch]));
   const landed: Record<string, string> = {};
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
@@ -324,7 +347,8 @@ export function installCliHooks(
     const epoch = claimEpochAt(dir, session, seat);
     const drops = { seat, session, ...(epoch === undefined ? {} : { epoch }) };
     const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
-    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command))) continue;
+    const inbound = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
+    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound))) continue;
     landed[seat] = settingsPath;
   }
   return landed;
