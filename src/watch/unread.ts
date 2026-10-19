@@ -16,11 +16,25 @@
 // one would be one too many. Nothing here claims more than it saw: a typed wake is `sent
 // (unconfirmed)` until a receipt verifies, and only a verified receipt is `delivered (read)`.
 //
-// The markers are conveniences beside the message, never the message: `<id>.wake` says the one
-// wake line was sent, `<id>.reported` says the sender and the lead were told. A marker that
-// cannot be written costs a repeat, not a byte of the body.
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+// The markers are reservations made before their effect, never reminders written after it:
+// `<id>.wake` is linked into place exclusively before a line is typed, and `<id>.reported` before
+// a mailbox record is written. A reservation already there belongs to an earlier attempt whose
+// effect is unknown — a crash after Enter leaves no other trace — and is spent: it is never typed
+// over and never reported over. A delivery the seam itself says took nothing (`held`,
+// `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
+// reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { listUnread, receiptHeld } from '../mcp/inbox.ts';
@@ -52,21 +66,75 @@ export type UnreadWindow = { unreadAfter: number };
  *  either way. */
 export type UnreadOptions = UnreadWindow & { noNudge?: boolean };
 
-/** A marker is written whole, 0600, by the same rename the drop itself gets. It is a convenience:
- *  a write that fails costs a repeat, never the message. */
+/** Rewrites a reservation with what it was seen to become. This is a record update, never the
+ *  reservation itself: the marker was linked into place before the effect, and a failed update
+ *  leaves `reserved`, which is the truth at that point. */
 function mark(dropDir: string, name: string, record: Record<string, unknown>): void {
   try {
     dropMessage(dropDir, name, `${JSON.stringify(record)}\n`);
   } catch {
-    // The drop is the message; this record only remembers what was already done.
+    // The reservation stands; only the note about its outcome is missing.
   }
 }
 
-/** The instant the wake marker carries, when it can be read; null otherwise. */
-function wakeAt(dropDir: string, id: string): string | null {
+/**
+ * Takes a marker name exclusively, before the effect it guards: the record is written whole, 0600,
+ * to a temporary file and linked into place. `link` fails when the name exists, so exactly one
+ * pass — or one crash's predecessor — owns the attempt. `true` means this call wrote the
+ * reservation; `false` means someone else's is there (or the name could not be written at all),
+ * and the caller must not perform the effect. The temporary file never shares a name with a
+ * message: the scan reads UUID names only.
+ */
+function reserve(path: string, record: Record<string, unknown>): boolean {
+  const dir = dirname(path);
+  const temp = join(dir, `.${String(process.pid)}.${randomBytes(6).toString('hex')}.tmp`);
+  let fd: number | null = null;
   try {
-    const parsed = JSON.parse(readFileSync(wakePath(dropDir, id), 'utf8')) as { at?: unknown };
-    return typeof parsed.at === 'string' ? parsed.at : null;
+    fd = openSync(temp, 'wx', 0o600);
+    writeSync(fd, `${JSON.stringify(record)}\n`);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    linkSync(temp, path);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Already closed; the error that ended the attempt is the answer.
+      }
+    }
+    try {
+      unlinkSync(temp);
+    } catch {
+      // Never written, or linked and unlinked above: nothing is left to remove.
+    }
+  }
+}
+
+/** Gives back a reservation this pass wrote, after a delivery the seam says took nothing. A
+ *  reservation found on disk is never removed by a later pass. */
+function release(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone: nothing is claimed by its absence.
+  }
+}
+
+type WakeMark = { at: string; state: 'reserved' | 'sent' | 'read' };
+
+/** What the wake reservation says, when it can be read; null otherwise. A marker written before
+ *  reservations existed carried no state and records a wake line that was sent. */
+function wakeMarkOf(dropDir: string, id: string): WakeMark | null {
+  try {
+    const parsed = JSON.parse(readFileSync(wakePath(dropDir, id), 'utf8')) as { at?: unknown; state?: unknown };
+    if (typeof parsed.at !== 'string') return null;
+    const state = parsed.state === 'reserved' ? 'reserved' : parsed.state === 'read' ? 'read' : 'sent';
+    return { at: parsed.at, state };
   } catch {
     return null;
   }
@@ -154,10 +222,28 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const line = readTriggerLine(seat.name, scene.session);
       if (line === null) continue;
       // The oldest due message that verifies supplies the audit: the read the trigger names
-      // serves the whole folder, and the history line says which message the wake was for.
-      const audited = due.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
+      // serves the whole folder, and the history line says which message the wake was for. A
+      // message that does not verify cannot be read, so it neither earns a wake nor spends one,
+      // and a message whose wake is already reserved is a spent attempt of its own: it is not
+      // woken again, and it does not stand in the way of the messages behind it.
+      const wakeable = due.filter((one) => !existsSync(wakePath(dropDir, one.id)));
+      const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
       if (audited === undefined || audited.payload === null) continue;
+      // The reservations go down before the line is typed. A crash after Enter can leave no other
+      // trace, so the marker is what makes the wake single-writer: one that is already there is an
+      // earlier attempt whose effect is unknown, and no second line is typed for it.
+      const at = scene.now.toISOString();
+      const reserved: string[] = [];
+      const take = (id: string): boolean => {
+        if (!reserve(wakePath(dropDir, id), { id, at, state: 'reserved' })) return false;
+        reserved.push(id);
+        return true;
+      };
+      if (!take(audited.message.id)) continue;
+      for (const one of wakeable) {
+        if (one.id !== audited.message.id) take(one.id);
+      }
       const { message, payload } = audited;
       const receipt = (): boolean => receiptHeld(dropDir, message.id, context, home);
       const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
@@ -165,14 +251,20 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         dropPath: join(dropDir, message.id),
         receipt,
       });
-      // `held` (the box filled between the reads), `unreachable` (a dialog, an unreadable
-      // status) and `not-submitted` typed no line the seat took: nothing is marked, and a later
-      // pass inside the window tries the one wake again.
+      // `held` left the box as it was, and `not-submitted` left the trigger in it for the next
+      // Enter: neither put a line the seat could act on, so their reservations go back and a later
+      // pass inside the window may still wake. `unreachable` keeps them: the delivery may have
+      // typed before it stopped, and an uncertain attempt is spent rather than repeated.
+      if (result.outcome === 'held' || result.outcome === 'not-submitted') {
+        for (const id of reserved) release(wakePath(dropDir, id));
+        continue;
+      }
       if (result.outcome !== 'delivered') continue;
       const draft = result.draft === undefined ? undefined : draftNote(result.draft);
       // The wake's trigger is the seat's own receipt-writing read: a receipt that landed inside
       // the window — or just after its last poll — is the read itself, never merely a take.
-      if (result.evidence === 'receipt' || receipt()) {
+      const read = result.evidence === 'receipt' || receipt();
+      if (read) {
         appendHistory(scene.team.project, scene.root, home, {
           ts: scene.now.toISOString(),
           from: payload.from,
@@ -213,10 +305,17 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         });
         scene.say(`${seat.name}: a message from ${payload.from} was unread and one wake line was sent (${note})`, false);
       }
-      // One line served every message due at this instant: each is marked, so none is woken
-      // twice. A message that arrives later gets its own wake when its own window opens.
-      for (const one of due) {
-        mark(dropDir, `${one.id}.wake`, { id: one.id, at: scene.now.toISOString(), evidence: result.evidence ?? result.outcome });
+      // One line served every message due at this instant, and every reservation this pass took
+      // now records what was seen. Only the ones this pass took are touched: another pass's
+      // reservation is its attempt to describe, not this one's. A crash before this line leaves
+      // `reserved`, which is exactly what was known at that point.
+      for (const id of reserved) {
+        mark(dropDir, `${id}.wake`, {
+          id,
+          at,
+          state: read ? 'read' : 'sent',
+          ...(result.evidence === undefined ? {} : { evidence: result.evidence }),
+        });
       }
     } finally {
       lock.release();
@@ -264,14 +363,25 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       if (existsSync(reportedPath(dropDir, message.id))) continue;
       const payload = payloadOf(dropDir, message.id, home);
       if (payload === null) continue;
+      const targets = reportTargets(scene, payload.from);
+      if (targets.length === 0) continue;
+      const at = scene.now.toISOString();
+      // The reservation is linked before the first mailbox write: one pass publishes, and one
+      // that finds the name taken — a concurrent pass, or a crash between the write and its
+      // marker — spends nothing. The record id alone would make a repeat overwrite bytes; this
+      // makes a repeat impossible.
+      if (!reserve(reportedPath(dropDir, message.id), { id: message.id, at, state: 'reserved' })) continue;
       const minutes = Math.max(1, Math.round(age / 60_000));
-      const woke = wakeAt(dropDir, message.id);
+      const woke = wakeMarkOf(dropDir, message.id);
       const wakeWords = woke === null
         ? 'no wake line was typed'
-        : `its wake line was sent at ${woke}`;
+        : woke.state === 'reserved'
+          ? `a wake was reserved at ${woke.at} and its outcome is unconfirmed`
+          : `its wake line was sent at ${woke.at}`;
       const text = `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; the drop is at ${join(dropDir, message.id)}`;
-      const targets = reportTargets(scene, payload.from);
-      let written = true;
+      let published = 0;
+      let existed = 0;
+      let failure: string | null = null;
       for (const target of targets) {
         const outcome = writeRuntimeMailboxRecord({
           root: scene.root,
@@ -280,19 +390,41 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
           id: `unread-${message.id}`,
           text,
           session: scene.session,
-          at: scene.now.toISOString(),
+          at,
+          once: true,
         });
         if (!outcome.ok) {
-          written = false;
-          scene.say(`${seat.name}: the unread report for ${message.id} was not written to ${target}: ${outcome.error}`, true);
+          failure = `${target}: ${outcome.error}`;
+          continue;
         }
+        if (outcome.existing === true) existed += 1;
+        else published += 1;
       }
-      if (!written) continue;
-      mark(dropDir, `${message.id}.reported`, { id: message.id, at: scene.now.toISOString(), to: targets });
-      scene.say(
-        `${seat.name}: a message from ${payload.from} was still unread after ${minutes} min; reported to ${targets.join(' and ')}`,
-        true,
-      );
+      if (failure !== null && published === 0 && existed === 0) {
+        // Nothing was published: the reservation goes back, and a later pass may speak.
+        release(reportedPath(dropDir, message.id));
+        scene.say(`${seat.name}: the unread report for ${message.id} was not written (${failure}); nothing was sent`, true);
+        continue;
+      }
+      if (failure !== null) {
+        // Part of it landed. The reservation stays spent — a repeat could duplicate the part
+        // that did — and the line says what did not land.
+        mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'partial', to: targets });
+        scene.say(
+          `${seat.name}: the unread report for ${message.id} reached ${String(published + existed)} of ${String(targets.length)} mailboxes (${failure})`,
+          true,
+        );
+        continue;
+      }
+      mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'reported', to: targets });
+      // A record already at a mailbox is the first publication still standing; only a pass that
+      // wrote something new says the line again.
+      if (published > 0) {
+        scene.say(
+          `${seat.name}: a message from ${payload.from} was still unread after ${minutes} min; reported to ${targets.join(' and ')}`,
+          true,
+        );
+      }
     }
   }
 }

@@ -239,9 +239,16 @@ The watch types fixed lines and never a report.
   same delivery the retry makes, with the same status, screen, seat-lock and human-pane rules,
   and it skips a message a held send's retry owns (a `.pending` marker). One line serves every
   message due for that seat at that instant; the history records `sent (unconfirmed)` until a
-  signed receipt verifies, then `delivered (read)`. At twice the window a message still unread
-  is reported once to its sender and to the team's lead as a signed Runtime mailbox record —
-  never by typing into a pane — and `--no-nudge` skips the wake but still writes the report.
+  signed receipt verifies, then `delivered (read)`. The wake writes its `<id>.wake` reservation
+  before the line is typed and holds it through the attempt: a crash after the reservation never
+  types a second line, a definite not-delivered outcome (`held`, `not-submitted`) gives the
+  reservation back so a later pass may wake, and an uncertain one (`unreachable`) keeps it,
+  spent. At twice the window a message still unread is reported once to its sender and to the
+  team's lead as a signed Runtime mailbox record — never by typing into a pane — after a
+  `<id>.reported` reservation of its own; the record is published write-once, so a mailbox
+  already holding it keeps those bytes. The report's words say whether a wake line was sent, was
+  reserved with an unconfirmed outcome, or was never typed, and `--no-nudge` skips the wake but
+  still writes the report.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
 orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that
@@ -355,7 +362,9 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    retry MUST use the persisted marker as its ownership evidence, and the wake MUST leave a
    message a retry marker owns alone; both MUST require an idle or done status and a readable
    idle or exact-trigger screen, and MUST hold the seat lock; `--no-nudge` MUST suppress the
-   wake too. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `RING_TEXT`), `src/watch/retry.ts`,
+   wake too. The wake and the unread report MUST reserve their marker before their effect and
+   MUST keep a reservation whose attempt is uncertain, so no crash repeats a typed line or a
+   published record. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `RING_TEXT`), `src/watch/retry.ts`,
    `src/watch/unread.ts`, `src/send/native.ts` (`triggerLine`), the watch command. *Proof:*
    `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`, `test/held-retry.test.ts`,
    `test/unread-wake.test.ts`.

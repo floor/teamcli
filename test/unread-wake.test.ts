@@ -9,7 +9,7 @@
 // The pane here is a scripted screen; no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
@@ -432,6 +432,156 @@ describe('reportUnreadDrops', () => {
 
     expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
     expect(said).toEqual([]);
+  });
+});
+
+describe('crash-safe reservations', () => {
+  test('the wake reservation is on disk before the line is typed', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nbefore', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const base = scripts(one);
+    let held = false;
+    const sources: RetrySources = {
+      ...base,
+      typeText: (paneId, text, session) => {
+        held = existsSync(wakePath(dropDir, UNREAD_A));
+        return base.typeText(paneId, text, session);
+      },
+    };
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
+
+    expect(held).toBe(true);
+  });
+
+  test('a reservation left by a crash is never typed over, and the report says its outcome is unconfirmed', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\ncrashed', new Date(NOW.getTime() - 21 * MIN));
+    const at = '2026-10-17T03:30:00.000Z';
+    writeFileSync(wakePath(dropDir, UNREAD_A), `${JSON.stringify({ id: UNREAD_A, at, state: 'reserved' })}\n`);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+
+    reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+
+    const owner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(owner.body).toContain(`a wake was reserved at ${at} and its outcome is unconfirmed`);
+    expect(owner.body).not.toContain('its wake line was sent');
+  });
+
+  test('a spent wake does not stand in the way of a later message', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\ncrashed', new Date(NOW.getTime() - 21 * MIN));
+    seedMessage(made, 'acme', 'lead', UNREAD_B, 'from the owner\n\nbehind it', new Date(NOW.getTime() - 15 * MIN));
+    const at = '2026-10-17T03:30:00.000Z';
+    const spent = `${JSON.stringify({ id: UNREAD_A, at, state: 'reserved' })}\n`;
+    writeFileSync(wakePath(dropDir, UNREAD_A), spent);
+    const one = pane(claudeBox(''));
+
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+
+    // The line was typed for the message behind the spent one, whose reservation is untouched.
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+    expect(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')).toBe(spent);
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
+  });
+
+  test('a held delivery gives its reservation back, and a later pass wakes', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nheld first', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox('a draft this CLI cannot move'));
+
+    // No sendKey: the delivery cannot move the draft and holds without touching the box.
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources: scripts(one) }), { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+
+    one.screen = claudeBox('');
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('a not-submitted line gives its reservation back, and the retry submits the line already in the box', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nnot submitted', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    one.submits = false;
+
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+    expect(one.enters).toBe(3);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+
+    one.submits = true;
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    // The second pass pressed Enter on the line already there; it never typed it again.
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+    expect(one.enters).toBe(4);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('an unreachable delivery keeps its reservation, because the attempt is uncertain', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nunreadable', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const base = scripts(one);
+    let calls = 0;
+    const sources: RetrySources = {
+      ...base,
+      status: () => {
+        calls += 1;
+        return calls === 1 ? 'idle' : null;
+      },
+    };
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
+
+    expect(one.typed).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('a report reservation already on disk publishes nothing', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nreserved', new Date(NOW.getTime() - 21 * MIN));
+    writeFileSync(reportedPath(dropDir, UNREAD_A), `${JSON.stringify({ id: UNREAD_A, at: NOW.toISOString(), state: 'reserved' })}\n`);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    expect(said).toEqual([]);
+    expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`))).toBe(false);
+    expect(existsSync(join(made.root, '.agents', 'messages', 'lead', `unread-${UNREAD_A}.json`))).toBe(false);
+  });
+
+  test('a publication already on disk is left byte for byte when its marker is lost', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\npublished', new Date(NOW.getTime() - 21 * MIN));
+    const said: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said, { now: NOW }), { unreadAfter: N });
+    const before = readFileSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`), 'utf8');
+    unlinkSync(reportedPath(dropDir, UNREAD_A));
+
+    const later: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), later, { now: new Date(NOW.getTime() + 5 * MIN) }), { unreadAfter: N });
+
+    expect(readFileSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`), 'utf8')).toBe(before);
+    expect(later).toEqual([]);
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
   });
 });
 

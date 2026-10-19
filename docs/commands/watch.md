@@ -306,12 +306,19 @@ receipt `watch.unread_after` after it landed — ten minutes by default — gets
 `team drops --read` line a retry types, under the retry's rules (a readable idle prompt or that
 line itself unsent, status `idle` or `done`, the seat lock taken, never a human's pane, a draft
 copied and pasted back). One wake line serves every message due for that seat, and a message a
-held send's retry owns is not woken twice: the retry's marker is the claim. The wake records
-`sent (unconfirmed)` until a signed receipt verifies, never a read before one. At twice
-`watch.unread_after` a message still unread is reported once to its sender and to the team's lead
-as a signed Runtime mailbox record — never by typing into a pane — and the words keep the states
-apart: a message with a wake marker says when its wake line was sent, one without says no wake
-line was typed. `--no-nudge` skips the wake but still writes the report.
+held send's retry owns is not woken twice: the retry's marker is the claim. A wake is reserved on
+disk before the line is typed, and the reservation is the attempt's whole claim: a wake a crash
+interrupted is never typed a second time, a wake the box held or did not submit gives its
+reservation back so a later pass may type it, and one whose delivery reached the pane but could
+not be confirmed keeps it, because the attempt is spent. The wake records `sent (unconfirmed)`
+until a signed receipt verifies, never a read before one. At twice `watch.unread_after` a message
+still unread is reported once to its sender and to the team's lead as a signed Runtime mailbox
+record — never by typing into a pane — after a report reservation of its own, so a crash between
+the record and its marker neither drops the report nor writes it twice, and a mailbox already
+holding the record is left byte for byte. The words keep the states apart: a wake that was typed
+says when its line was sent, one whose attempt was interrupted says it was reserved at that
+instant and its outcome is unconfirmed, and one never attempted says no wake line was typed.
+`--no-nudge` skips the wake but still writes the report.
 
 ## Budgets
 
