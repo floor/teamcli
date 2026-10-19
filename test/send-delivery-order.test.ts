@@ -30,12 +30,14 @@ import type { ConfigKey, ConfigValue } from '../src/config/registry.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { loadTeamFile } from '../src/file/load.ts';
-import { lobbyDir } from '../src/lobby/gate.ts';
+import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { ProjectRecord } from '../src/registry/projects.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { planPolicySet, writePolicySet } from '../src/policy/index.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { deliveryChainOf } from '../src/send/delivery.ts';
 import { readHistory } from '../src/send/history.ts';
@@ -126,17 +128,21 @@ ${extra.watchless ?? ''}  - role: reviewer
 ${extra.own ?? ''}${extra.top ?? ''}`;
 }
 
-function world(extra: { top?: string; lead?: string; watchless?: string; own?: string } = {}): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
+function world(extra: { top?: string; lead?: string; watchless?: string; own?: string; entity?: string } = {}): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-walk-')));
   const root = join(base, 'acme');
   const dir = join(root, '.agents');
   const sockets = join(base, 'sockets');
   const home = join(base, 'home');
+  // An entity moves the team's lobby to `<home>/.config/team/lobbies/<slug>`; the trust list
+  // names the lobby the file resolves to, so the scene creates and trusts that one.
+  const lobby = extra.entity === undefined ? lobbyDir(home) : resolveLobby(home, { entity: extra.entity });
   mkdirSync(dir, { recursive: true });
   mkdirSync(sockets, { recursive: true });
-  mkdirSync(lobbyDir(home), { recursive: true });
+  mkdirSync(lobby, { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(dir, 'team.yaml'), teamYaml(root, lobbyDir(home), extra));
+  const top = `${extra.entity === undefined ? '' : `entity: ${extra.entity}\n`}${extra.top ?? ''}`;
+  writeFileSync(join(dir, 'team.yaml'), teamYaml(root, lobby, { ...extra, top }));
   const loaded = loadTeamFile(root, { home });
   if (!loaded.ok) throw new Error('fixture team.yaml failed to load');
   return { root, dir, sockets, home, team: loaded.team };
@@ -649,6 +655,109 @@ describe('the chain is read from the files when the host hands none in', () => {
     expect(asked).toEqual([teamIdOf(w.root)]);
     expect(chain).toEqual({ project: ['mcp-inbox', 'typed'] });
   });
+
+  test('a signed entity policy is the entity’s word', () => {
+    const w = world({ entity: 'acme-corp' });
+    const written = writePolicySet(w.home, { level: 'entity', target: 'acme-corp', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({ root: w.root, seat: 'lead', home: w.home, projectOfTeam: () => null }))
+      .toEqual({ entity: ['drop'] });
+  });
+
+  test('the entity’s word reaches the walk: the drop leg takes the send and nothing is typed', async () => {
+    const w = world({ entity: 'acme-corp' });
+    const written = writePolicySet(w.home, { level: 'entity', target: 'acme-corp', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(host.typed).toEqual([]);
+    expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
+  });
+
+  test('a signed project policy shadows the registry record’s legacy word', () => {
+    const w = world();
+    const written = writePolicySet(w.home, { level: 'project', target: 'acme', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      projectOfTeam: () => projectRecord(['native', 'typed']),
+    })).toEqual({ project: ['drop'] });
+  });
+
+  test('the project’s signed word reaches the walk, over the record’s legacy word', async () => {
+    const w = world();
+    const written = writePolicySet(w.home, { level: 'project', target: 'acme', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+    const host = walker(w);
+    host.projects = projectSources(projectRecord(['mcp-inbox', 'typed']));
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(host.typed).toEqual([]);
+  });
+
+  test('a signed team policy shadows the file’s word', () => {
+    const w = world({ top: 'delivery_order: [mcp-inbox, typed]\n' });
+    const written = writePolicySet(
+      w.home,
+      { level: 'team', target: w.root, teamRoot: w.root, name: 'delivery-order', value: ['drop'] },
+      { now: NOW },
+    );
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({ root: w.root, seat: 'lead', home: w.home, projectOfTeam: () => null }))
+      .toEqual({ team: ['drop'] });
+  });
+
+  test('an expired signed word leaves its level silent, and the legacy word it shadows does not come back', () => {
+    const w = world({ top: 'delivery_order: [mcp-inbox, typed]\n' });
+    const written = writePolicySet(
+      w.home,
+      {
+        level: 'team',
+        target: w.root,
+        teamRoot: w.root,
+        name: 'delivery-order',
+        value: ['drop'],
+        expiry: '2026-10-18T00:00:00.000Z',
+      },
+      { now: NOW },
+    );
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      projectOfTeam: () => null,
+      now: new Date('2026-10-19T00:00:00.000Z'),
+    })).toEqual({});
+  });
+
+  test('entity, project and team each accept a delivery-order word naming socket', () => {
+    const w = world({ entity: 'acme-corp' });
+    const requests = [
+      { level: 'entity' as const, target: 'acme-corp' },
+      { level: 'project' as const, target: 'acme' },
+      { level: 'team' as const, target: w.root, teamRoot: w.root },
+    ];
+    for (const request of requests) {
+      const plan = planPolicySet(w.home, { ...request, name: 'delivery-order', value: ['socket', 'drop'] });
+      expect([request.level, plan.ok ? 'ok' : plan.why]).toEqual([request.level, 'ok']);
+    }
+  });
 });
 
 describe('native leaves the default order and returns when a word names it', () => {
@@ -1001,6 +1110,18 @@ describe('the dry run names only the legs this build can walk', () => {
     expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
   });
 
+  test('a word naming only the headless-resume leg is honoured, and the dry run finds no channel this build walks', async () => {
+    // `headless-resume` is a leg a word may add; this build carries no headless runtime, so the
+    // order in force is that leg alone and nothing of it is a channel this run could take.
+    const w = world();
+    const host = walker(w, { seat: ['headless-resume'] });
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
+  });
+
   test('a seat that watches nothing is named without the drop leg', async () => {
     // The muse seat installs no watcher: its shape leaves drop out of the order, so the dry run
     // names the inbox and the typed fallback behind it, and never the drop file.
@@ -1065,6 +1186,21 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
       "team send: lead: unreachable: no leg of its delivery order took the send (native: unavailable; the native leg is the sending session's own SendMessage)\n",
     );
     expect(host.dials()).toBe(0);
+    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+  });
+  test('a word naming only the headless-resume leg ends unreachable, typing nothing into the seat', async () => {
+    const w = world();
+    const host = { ...walker(w, { seat: ['headless-resume'] }), waitMs: 0 };
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toBe(
+      'team send: lead: unreachable: no leg of its delivery order took the send (headless-resume: this build carries no headless resume runtime)\n',
+    );
+    expect(host.typed).toEqual([]);
+    expect(host.frames).toEqual([]);
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 });

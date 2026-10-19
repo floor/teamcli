@@ -14,7 +14,8 @@ seat's own folder, read from `git remote get-url origin` there. The module prove
 chooser collapsed on that repo before it types, and refuses with nothing typed when the CLI's
 list does not hold it. The receiving seat's
 delivery order decides the channel: with no declaration it is `mcp-inbox`, then `typed`, then
-`drop`; `native` is never in that default, and only a declared word can add it. Each leg in
+`drop`; `native` and `headless-resume` are never in that default, and only a declared word can
+add either. Each leg in
 turn either takes the send, which ends the walk, or
 definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
 the history line names the channel the send went by and the legs that failed before it. A typed
@@ -166,9 +167,9 @@ folder is a pointer, not a brief: the send warns on stderr, naming the pointer a
 the brief itself — with `--brief <file>` or its text in the body — and still sends exactly what
 it was given. A prose body that merely mentions such a path draws no warning. `--brief` reads
 the receiving team's `brief-transport` before it writes anything: `file` and `message` both send
-the whole body as an ordinary send, while `memory` refuses the send — no drop, no state or
-history line, no fallback — because no runtime in this build proves that transport keeps nothing
-on disk. An ordinary send that names no brief never reads the policy. `--timeout` is a
+the whole body as an ordinary send, while `memory` refuses the send (exit `send.brief-memory`,
+1) — no drop, no state or history line, no fallback — because no runtime in this build proves
+that transport keeps nothing on disk. An ordinary send that names no brief never reads the policy. `--timeout` is a
 whole number of seconds, 1 to 86,400, and is only meaningful with
 `--wait`; without it a wait runs 120 seconds. `--json` prints one document instead of the lines: the action surface and the outcome in one —
 `{format, dry_run, status, action_summary, project, session, seat, channel, ids, thread?, reply?, plan?}` —

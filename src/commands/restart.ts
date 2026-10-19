@@ -71,6 +71,7 @@ import { dropMessage } from '../send/native.ts';
 import { shellQuote, withResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
+import { recordedSeatSession } from '../registry/resume.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -296,6 +297,42 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     return notReadyRefused(out, json, `${name} is a human's pane: nothing is typed into it or launched over it; left as it is`);
   }
 
+  // The seat's own recorded conversation, when the two team-owned records agree on it: the
+  // restart resumes that conversation instead of starting a fresh one. A record that belongs to
+  // another seat, team, agent or CLI, or one the seat state does not match, is never resumed —
+  // the run says why and launches fresh, exactly as a restart did before. The id is the CLI's
+  // own, read from the launch's herdr reading; nothing here reads a CLI home or session file.
+  const ownSession = recordedSeatSession({
+    home,
+    root,
+    herdrSession: session,
+    seat: declared,
+    state: recordedSeat,
+  });
+  let resume: string | undefined;
+  const noResume = (why: string): void => {
+    const said = `${name}: not resuming its recorded session (${why})`;
+    if (json) notes.push(said);
+    else if (dry) out.stdout(`! ${said}\n`);
+    else out.stderr(`team restart: ${plainText(said)}\n`);
+    if (!dry) logLine(dir, 'restart', describeCaller(caller), said, sources.now());
+  };
+  if (ownSession.kind === 'refused') {
+    noResume(ownSession.why);
+  } else if (ownSession.kind === 'bound') {
+    const recordedPane = recordedSeat?.pane;
+    const listed = recordedPane === undefined
+      ? undefined
+      : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
+    if (listed?.session !== undefined && listed.session !== '' && listed.session !== ownSession.recorded.sessionId) {
+      // The live pane is another conversation: resuming the recorded one would put two live
+      // copies of the seat's history beside each other. The restart proceeds fresh.
+      noResume('its live agent session is not the recorded one');
+    } else if (withResume(declared.cli, declared.launch, ownSession.recorded.sessionId) !== null) {
+      resume = ownSession.recorded.sessionId;
+    }
+  }
+
   const performed = await performRestart({
     out,
     json,
@@ -320,6 +357,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     command: 'restart',
     endReason: 'restart',
     dry,
+    ...(resume === undefined ? {} : { resume }),
     now: sources.now,
     sources,
   });
@@ -533,6 +571,19 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules);
+  const declaredLaunch = planSeat.launch;
+  // The recorded conversation, resumed on the new declaration. The profile decides whether the
+  // CLI can carry the id at all; the attempt is the log's fact, never a claim that it resumed
+  // losslessly. It is applied before the dry answer so the plan prints the line the launch would
+  // run; the log line itself is written once the seat is down and the launch is going out.
+  let resumed: string | undefined;
+  if (input.resume !== undefined) {
+    const line = withResume(next.cli, planSeat.launch, input.resume);
+    if (line !== null) {
+      planSeat.launch = line;
+      resumed = input.resume;
+    }
+  }
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -578,6 +629,29 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (freshAgents === null) return { kind: 'herdr' };
     const freshSession = readState(dir).sessions[session] ?? emptySession();
     const freshRecorded = freshSession.seats[name];
+    // The binding is re-read under the run lock: a record that changed between the caller's read
+    // and this one no longer names the conversation this run would start with, so the launch goes
+    // out fresh and says why. A restart never resumes an id the current records do not bind.
+    if (input.command === 'restart' && resumed !== undefined) {
+      const freshOwn = recordedSeatSession({
+        home,
+        root,
+        herdrSession: session,
+        seat: declared,
+        state: freshRecorded,
+      });
+      if (freshOwn.kind !== 'bound' || freshOwn.recorded.sessionId !== resumed) {
+        const why = freshOwn.kind === 'bound'
+          ? 'the seat record changed before the launch'
+          : freshOwn.why;
+        planSeat.launch = declaredLaunch;
+        resumed = undefined;
+        const said = `${name}: not resuming its recorded session (${why})`;
+        if (json) notes.push(said);
+        else out.stderr(`team restart: ${plainText(said)}\n`);
+        logLine(dir, 'restart', callerText, said, sources.now());
+      }
+    }
     const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart');
     if (rechecked.kind === 'replaced') return { kind: 'replaced' };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
@@ -727,17 +801,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       if (planSeat.rulesFile) planSeat.rulesFile.line = `${planSeat.rulesFile.line} ${handoverSentence}`;
     }
 
-    // The recorded conversation, resumed on the new declaration. The profile decides whether the
-    // CLI can carry the id at all; the attempt is the log's fact, never a claim that it resumed
-    // losslessly.
-    let resumed: string | undefined;
-    if (input.resume !== undefined) {
-      const line = withResume(next.cli, planSeat.launch, input.resume);
-      if (line !== null) {
-        planSeat.launch = line;
-        resumed = input.resume;
-        logLine(dir, input.command, who, `${name}: resuming session ${input.resume} on the new declaration`, sources.now());
-      }
+    if (resumed !== undefined) {
+      logLine(dir, input.command, callerText, `${name}: resuming session ${resumed} on the new declaration`, sources.now());
     }
 
     // What the launch declares: the recipe, with the resume line the plan carries where one was

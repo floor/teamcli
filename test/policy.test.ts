@@ -16,6 +16,7 @@ import { buildCommandOutputSchema, POLICY_OUTPUT_SCHEMA } from '../src/output/in
 import {
   DEV_MODE_OPERATIONS,
   loadAndResolvePolicyChain,
+  normalizePolicyName,
   planPolicySet,
   POLICY_CATALOGUE,
   POLICY_LEVELS,
@@ -182,6 +183,89 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(POLICY_CATALOGUE['dev-mode'].gateLifting).toBe(true);
   });
 
+  test('codex-daemon defaults on at every level and a lower level may always switch it off', () => {
+    const spec = POLICY_CATALOGUE['codex-daemon'];
+    expect(spec.kind).toBe('enforced');
+    expect(spec.levels).toEqual(['entity', 'project', 'team', 'seat']);
+    expect(spec.defaultValue).toBe('on');
+    expect(spec.gateLifting).toBe(false);
+    expect(normalizePolicyName('codex_daemon')).toBe('codex-daemon');
+
+    const absent = resolvePolicy('codex-daemon', []);
+    expect(absent.ok).toBe(true);
+    if (absent.ok) {
+      expect(absent.effective.value).toBe('on');
+      expect(absent.effective.level).toBe('default');
+    }
+
+    const optOut = resolvePolicy('codex-daemon', [
+      { name: 'codex-daemon', value: 'on', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'codex-daemon', value: 'off', level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(optOut.ok).toBe(true);
+    if (optOut.ok) {
+      expect(optOut.effective.value).toBe('off');
+      expect(optOut.effective.level).toBe('seat');
+    }
+
+    const backOn = resolvePolicy('codex-daemon', [
+      { name: 'codex-daemon', value: 'off', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'codex-daemon', value: 'on', level: 'team', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(backOn.ok).toBe(false);
+    if (!backOn.ok) {
+      expect(backOn.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'codex-daemon', higherLevel: 'entity', lowerLevel: 'team' });
+    }
+  });
+
+  test('idle-threshold takes a duration with its unit, defaults to five minutes and stops at the team', () => {
+    const spec = POLICY_CATALOGUE['idle-threshold'];
+    expect(spec.kind).toBe('enforced');
+    expect(spec.levels).toEqual(['entity', 'project', 'team']);
+    expect(spec.defaultValue).toBe(300);
+    expect(spec.gateLifting).toBe(false);
+    expect(normalizePolicyName('idle_threshold')).toBe('idle-threshold');
+
+    for (const [word, seconds] of [['30s', 30], ['5m', 300], ['2h', 7200], ['300', 300], [300, 300], ['1.5m', 90]] as const) {
+      expect(spec.parseValue(word)).toBe(seconds);
+    }
+    for (const word of [0, -5, '0m', '5x', '1.5s', 'nope', '', true]) expect(spec.parseValue(word)).toBeNull();
+
+    const absent = resolvePolicy('idle-threshold', []);
+    expect(absent.ok).toBe(true);
+    if (absent.ok) {
+      expect(absent.effective.value).toBe(300);
+      expect(absent.effective.level).toBe('default');
+    }
+
+    const tightened = resolvePolicy('idle-threshold', [
+      { name: 'idle-threshold', value: '10m', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'idle-threshold', value: '5m', level: 'team', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(tightened.ok).toBe(true);
+    if (tightened.ok) {
+      expect(tightened.effective.value).toBe(300);
+      expect(tightened.effective.level).toBe('team');
+    }
+
+    const loosened = resolvePolicy('idle-threshold', [
+      { name: 'idle-threshold', value: '5m', level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'idle-threshold', value: '10m', level: 'team', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(loosened.ok).toBe(false);
+    if (!loosened.ok) {
+      expect(loosened.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'idle-threshold', higherLevel: 'entity', lowerLevel: 'team' });
+    }
+
+    const seatLevel = resolvePolicy('idle-threshold', [
+      { name: 'idle-threshold', value: '5m', level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(seatLevel.ok).toBe(false);
+    if (!seatLevel.ok) {
+      expect(seatLevel.refusals[0]?.message).toContain('allowed: entity, project, team');
+    }
+  });
+
   test('absent declarations resolve to the release default, and off for gate-lifting policies', () => {
     const devMode = resolvePolicy('dev-mode', []);
     expect(devMode.ok).toBe(true);
@@ -226,6 +310,25 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
         message: 'team: socket-accepted is not available in this release',
       });
     }
+  });
+
+  test('delivery-order accepts headless-resume, a leg a declared word may add and no default names', () => {
+    // The headless-resume leg is opt-in: it is in the vocabulary, a word may name it, and the
+    // fallback order still names neither it nor any implied default that would insert it.
+    expect(POLICY_CATALOGUE['delivery-order'].defaultValue).toEqual(['mcp-inbox', 'typed', 'drop']);
+    const narrowed = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['native', 'headless-resume', 'typed'], level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['headless-resume', 'typed'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(narrowed.ok).toBe(true);
+    if (narrowed.ok) expect(narrowed.effective.value).toEqual(['headless-resume', 'typed']);
+
+    const addsUnderTyped = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['typed'], level: 'team', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['headless-resume', 'typed'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(addsUnderTyped.ok).toBe(true);
+    if (addsUnderTyped.ok) expect(addsUnderTyped.effective.value).toEqual(['headless-resume', 'typed']);
   });
 
   test('a loosening is refused at load and names both levels', () => {

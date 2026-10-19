@@ -35,6 +35,7 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
 import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
@@ -43,7 +44,7 @@ import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliv
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
-import { frameFor, replyLine } from './frame.ts';
+import { frameFor, frameReplyFor } from './frame.ts';
 import { declaredInboundOf, inboundIsLive, inboundSkipReason } from './inbound.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
@@ -981,8 +982,10 @@ async function executeQueuedSend(
   // The wake names the sender from the send's own record: the caller seat the daemon was asked
   // to deliver for, and the team it runs under. Nothing in the body decides the name. The drop is
   // already written, so a wake that cannot carry the name is refused as held with the drop kept
-  // and named, never typed nameless.
-  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project });
+  // and named, never typed nameless. The team's sender-line policy supplies the words around the
+  // two names; one that cannot be read leaves the shipped format, never an unnamed line.
+  const format = senderLineFormatInForce({ home: host.home, root, team, now: host.now() });
+  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project, format });
   if (trigger === null) {
     return recordHeld(`${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was typed`);
   }
@@ -1211,7 +1214,18 @@ async function executeSocketSend(
       detail: `${seatName}: the sending team is not known, so the frame carries no reply address; nothing was sent`,
     };
   }
-  const frame = frameFor(body, msgId, replyLine(host.home, from, sendingTeam));
+  const reply = frameReplyFor(host.home, root, from, sendingTeam);
+  if ('missing' in reply) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: ${reply.missing}; nothing was sent`,
+    };
+  }
+  const frame = frameFor(body, msgId, reply.line);
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

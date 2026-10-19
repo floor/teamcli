@@ -1178,6 +1178,49 @@ export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team queue` (`schema/queue.schema.json`). */
+export const QUEUE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.queue',
+  fileName: 'queue.schema.json',
+  title: 'team queue --json output',
+  required: ['format', 'project', 'session', 'source', 'path', 'tasks'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    // `local` is the fallback queue; `file` is the path the owner's tasks section names.
+    source: { type: 'string', enum: ['local', 'file'] },
+    path: { type: 'string', minLength: 1 },
+    // Present on an add alone: `present` means the same record was already queued and nothing was written.
+    status: { type: 'string', enum: ['added', 'present'] },
+    task: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'title', 'assignee'],
+      properties: {
+        id: { type: 'string', minLength: 1 },
+        title: { type: 'string', minLength: 1 },
+        assignee: { type: ['string', 'null'] },
+        priority: { type: ['string', 'number'] },
+      },
+    },
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'title', 'assignee'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          title: { type: 'string', minLength: 1 },
+          assignee: { type: ['string', 'null'] },
+          priority: { type: ['string', 'number'] },
+        },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team feed` (`schema/feed.schema.json`). */
 export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.feed',
@@ -1730,7 +1773,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },
         seat: { type: 'string', minLength: 1 },
-        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', null] },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', null] },
         to: { type: 'string', minLength: 1 },
         confirm: { type: 'string', minLength: 1 },
         message: { type: 'string' },
@@ -2476,6 +2519,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SESSIONS_OUTPUT_SCHEMA,
   FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
+  QUEUE_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,

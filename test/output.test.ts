@@ -896,6 +896,26 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           tasks: [{ step: 1, state: 'open', owner: 'lead', id: 'task-1', title: 'merge the contract branches' }],
         }),
       ],
+      'team.queue': [
+        jsonEnvelope('team.queue', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          source: 'local' as const,
+          path: '.agents/queue.yaml',
+          status: 'added' as const,
+          task: { id: 'q1', title: 'a queued task', assignee: 'worker', priority: 2 },
+          tasks: [{ id: 'q1', title: 'a queued task', assignee: 'worker', priority: 2 }],
+        }),
+        jsonEnvelope('team.queue', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          source: 'local' as const,
+          path: '.agents/queue.yaml',
+          tasks: [],
+        }),
+      ],
       'team.pr': [
         jsonEnvelope('team.pr', {
           format: 1 as const,

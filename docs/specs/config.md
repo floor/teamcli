@@ -108,7 +108,7 @@ nothing.
 | launch | seat | an adapter launch line (escape hatch) | from the account | restart + resume |
 | account | seat | an account of the entity (Runtime commitment 50) | from the team | restart + resume |
 | nickname | seat | unique in the team, never `lead` | none | at once |
-| delivery_order | seat, team, project, entity | legs: native, mcp-inbox, typed, drop (tighten only) | mcp-inbox, typed, drop | at once |
+| delivery_order | seat, team, project, entity | legs: socket, native, mcp-inbox, typed, drop, headless-resume (tighten only) | mcp-inbox, typed, drop | at once |
 | human | seat | true / false | false | at once |
 | universe | team, project, entity | a universe name: a built-in public-domain universe, or the entity's own made with `team universes add` | none (plain seat numbering) | at once; the next `team add` draws the next free name from it — a change never renames existing seats |
 | workspace | team, project, entity | headless, herdr, tmux | headless (from 0.6) | next up |

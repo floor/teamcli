@@ -92,6 +92,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'proc', args: ['proc', 'list'], schemaKey: 'team.proc' },
   { command: 'issues', args: ['issues'], schemaKey: 'team.issues' },
   { command: 'plan', args: ['plan'], schemaKey: 'team.plan', asSeat: true },
+  { command: 'queue', args: ['queue', 'list'], schemaKey: 'team.queue' },
   { command: 'feed', args: ['feed'], schemaKey: 'team.feed' },
   { command: 'messages', args: ['messages'], schemaKey: 'team.messages' },
   { command: 'worktree', args: ['worktree', 'list'], schemaKey: 'team.worktree' },

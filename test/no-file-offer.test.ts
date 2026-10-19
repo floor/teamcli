@@ -72,6 +72,8 @@ const REACHED = [
   'messages',
   'next',
   'plan',
+  'queue add',
+  'queue list',
   'proc add',
   'proc done',
   'proc list',

@@ -4,7 +4,7 @@
 // does — a snapshot never claims, writes a lease, touches the broker or infers an install from a
 // ready event, a time or a version.
 import type { TeamFile } from './file/types.ts';
-import type { SessionState } from './state.ts';
+import type { PauseRecord, SessionState } from './state.ts';
 import type { Live } from './status/compare.ts';
 import type { PendingGreenSlice } from './tasks/green-slices.ts';
 
@@ -33,7 +33,10 @@ export type IdleWorkReport = {
   idle: IdleSeat[];
 };
 
-/** What the watch needs to take the snapshot. `home` is absent in a test that does not set one. */
+/** What the watch needs to take the snapshot. `home` is absent in a test that does not set one.
+ *  The pause and the queued swaps are the project's records, not one session's, so they arrive
+ *  beside the session state: a paused team claims nothing, and a seat holding a queued swap takes
+ *  no new task and is not an idle worker. */
 export type IdleWorkInput = {
   root: string;
   team: TeamFile;
@@ -41,6 +44,8 @@ export type IdleWorkInput = {
   live: Live | null;
   now: Date;
   home?: string;
+  pause?: PauseRecord | null;
+  swaps?: readonly string[];
 };
 
 export type IdleWorkSource = (input: IdleWorkInput) => IdleWorkReport;

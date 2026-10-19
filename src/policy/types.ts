@@ -6,6 +6,7 @@
 // policies come from a closed, release-owned vocabulary; advised policies may be from the
 // catalogue or a project's own text.
 
+import { DURATION, parseMeasure } from '../file/sections/units.ts';
 import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
@@ -17,6 +18,8 @@ import {
   SWAP_WAIT_SECONDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
+import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
+import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
@@ -93,6 +96,7 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-owner-seconds',
   'delivery-order',
   'brief-transport',
+  'sender-line',
   'event-thread-ttl-seconds',
   'event-thread-cap',
   'event-retention-days',
@@ -102,6 +106,9 @@ export const ENFORCED_POLICY_NAMES = [
   'event-reconcile-interval-seconds',
   'model-rule',
   'swap-wait-seconds',
+  'owner-reply-to',
+  'codex-daemon',
+  'idle-threshold',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -141,6 +148,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
   brief_transport: 'brief-transport',
+  sender_line: 'sender-line',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -170,6 +178,9 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   reconcile: 'event-reconcile-interval-seconds',
   model_rule: 'model-rule',
   swap_wait_seconds: 'swap-wait-seconds',
+  owner_reply_to: 'owner-reply-to',
+  codex_daemon: 'codex-daemon',
+  idle_threshold: 'idle-threshold',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -224,6 +235,25 @@ function parsePositiveSeconds(raw: unknown): number | null {
     return Number.isInteger(n) && n > 0 ? n : null;
   }
   return null;
+}
+
+/**
+ * A duration written the way the team file writes one — a number with its unit, `30s`, `5m` or
+ * `2h` (the `DURATION` table in `src/file/sections/units.ts`) — or a bare whole number of
+ * seconds, the spelling a policy threshold already takes. The value is whole seconds.
+ */
+function parseDurationSeconds(raw: unknown): number | null {
+  if (typeof raw === 'number') return Number.isInteger(raw) && raw > 0 ? raw : null;
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  if (/^[1-9][0-9]*$/.test(text)) return Number.parseInt(text, 10);
+  const seconds = parseMeasure(text, DURATION);
+  return seconds !== null && Number.isInteger(seconds) && seconds > 0 ? seconds : null;
+}
+
+function durationValueProblem(name: string, raw: unknown): string | null {
+  if (parseDurationSeconds(raw) !== null) return null;
+  return `policy "${name}" needs a duration above 0, such as 30s, 5m or 2h, or a whole number of seconds`;
 }
 
 /** A positive whole count (a record cap, a number of days), without the seconds suffix. */
@@ -380,14 +410,15 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
-    // Dropping or reordering channels present in `higher` is within. `native` and `socket` are
-    // the legs a word may add: neither is in the fallback order, and a level that names one is
-    // the sender choosing that channel — its own SendMessage, or this build's frame on the
-    // receiver's socket. Every other leg absent from `higher` is still an addition, and the whole
+    // Dropping or reordering channels present in `higher` is within. `native`, `socket` and
+    // `headless-resume` are the legs a word may add: none is in the fallback order, and a level
+    // that names one is the sender choosing that channel — its own SendMessage, this build's
+    // frame on the receiver's socket, or a headless runtime's own turn, which no default order
+    // ever inserts. Every other leg absent from `higher` is still an addition, and the whole
     // word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
   // How a general seat brief travels (OD50): `file` is the signed record in the seat's own drop
   // folder, as every launch writes it; `message` keeps that same signed record and claim and
@@ -407,6 +438,21 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: (raw: unknown) => (raw === 'file' || raw === 'message' || raw === 'memory' ? raw : null),
     isWithin: (lower: 'file' | 'message' | 'memory', higher: 'file' | 'message' | 'memory') =>
       lower === higher || (lower === 'message' && higher === 'file'),
+  },
+  // The line a typed wake opens with: `on` is the shipped `From <seat>@<team>:`,
+  // and a level may set its own one-line format in its place, as long as both names are in it.
+  // A wake always names the sender its signed record carries; a format decides the words around
+  // those two names, never whether they are there. So the floor has no off: `off` is refused by
+  // the parser, and every format is as strict as every other, which lets a lower level choose.
+  'sender-line': {
+    name: 'sender-line',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseSenderLineValue,
+    valueProblem: senderLineValueProblem,
+    isWithin: () => true,
   },
   // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field
   // at a time; `src/policy/thresholds.ts` reads the resolved chain back into the set the bus and
@@ -514,6 +560,52 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     defaultValue: SWAP_WAIT_SECONDS.fallback,
     gateLifting: false,
     parseValue: parsePositiveSeconds,
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The entity-level address an owner-origin message names for the seat that answers it: one
+  // qualified `seat@team` target. The empty default is no target; entity `floor` alone answers
+  // its shipped `orchestrator@floor`, applied by the reader (`src/policy/owner-reply.ts`) rather
+  // than inherited by every entity as a level default. A signed entity declaration replaces it,
+  // and any other entity without one has no target.
+  'owner-reply-to': {
+    name: 'owner-reply-to',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: parseOwnerReplyToValue,
+    valueProblem: ownerReplyToValueProblem,
+    isWithin: () => true,
+  },
+  // The Codex daemon on a seat's runtime: on unless a level says otherwise. `off` is a valid
+  // opt-out at every level, so a project, team or seat may switch off a daemon the levels above
+  // left on; `on` is only within an inherited `on`, so a level that turned the daemon off is not
+  // turned back on lower down. The runtime reader that consumes this value is owned elsewhere;
+  // this entry is only the name, its alias and the value rule.
+  'codex-daemon': {
+    name: 'codex-daemon',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseOnOff,
+    // 'off' is the opt-out and is always within; 'on' is only within an inherited 'on'.
+    isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => lower === 'off' || higher === 'on',
+  },
+  // How long a seat may sit idle before its lead hears about it: a duration with its unit (`5m`,
+  // `30s`) or whole seconds, five minutes when nothing declares it, always read as numeric
+  // seconds. Only the entity, project or team sets it — never the seat — and a shorter window is
+  // the tighter one. `team watch` reads the effective value; this entry is only the name, its
+  // alias and the value rule.
+  'idle-threshold': {
+    name: 'idle-threshold',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 300,
+    gateLifting: false,
+    parseValue: parseDurationSeconds,
+    valueProblem: (raw: unknown) => durationValueProblem('idle-threshold', raw),
+    // A shorter or equal window is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   'development-mode': {
