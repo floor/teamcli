@@ -1005,6 +1005,28 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           ],
         }),
       ],
+      'team.sessions': [
+        jsonEnvelope('team.sessions', {
+          format: 1 as const,
+          by: 'team' as const,
+          seat: 'claude-keeper',
+          sessions: [
+            {
+              id: 'ses_aaaaaaaaaaaa',
+              seat: 'claude-keeper',
+              team: 'beacon',
+              project: 'beacon',
+              cli: 'claude-code',
+              lab: 'anthropic',
+              account: 'anthropic',
+              herdr_session: 'beacon',
+              started: '2026-10-19T13:58:00Z',
+              ended: '2026-10-19T14:03:00Z',
+              reason: 'restart' as const,
+            },
+          ],
+        }),
+      ],
       'team.config-keys': [
         jsonEnvelope('team.config-keys', {
           format: 1 as const,
