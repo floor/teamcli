@@ -92,6 +92,7 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-lead-seconds',
   'liveness-idle-owner-seconds',
   'delivery-order',
+  'brief-transport',
   'event-thread-ttl-seconds',
   'event-thread-cap',
   'event-retention-days',
@@ -139,6 +140,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   idle_owner_seconds: 'liveness-idle-owner-seconds',
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
+  brief_transport: 'brief-transport',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -386,6 +388,25 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
       && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+  },
+  // How a general seat brief travels (OD50): `file` is the signed record in the seat's own drop
+  // folder, as every launch writes it; `message` keeps that same signed record and claim and
+  // delivers it through the seat's own delivery walk, so a brief earns the same receipts and
+  // history a send does; `memory` is a strict opt-in experiment that hands the whole brief to a
+  // live receiver through its own runtime, with no body written to disk on either side and no
+  // fallback when the receiver is not live. The values are not one ladder: `message` is within
+  // `file` (it keeps the same durable record and adds the receipted walk), while `memory` is
+  // comparable only to itself — it drops the durable record, so no level may infer it from, or
+  // be inferred into, `file` or `message`.
+  'brief-transport': {
+    name: 'brief-transport',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'file',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'file' || raw === 'message' || raw === 'memory' ? raw : null),
+    isWithin: (lower: 'file' | 'message' | 'memory', higher: 'file' | 'message' | 'memory') =>
+      lower === higher || (lower === 'message' && higher === 'file'),
   },
   // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field
   // at a time; `src/policy/thresholds.ts` reads the resolved chain back into the set the bus and
