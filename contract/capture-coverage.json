@@ -93,7 +93,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 9,
+        "real": 10,
         "constructed": 3,
         "undocumented": 0
       },
@@ -1012,6 +1012,12 @@
       "file": "claude-code/2.1.302/working.txt",
       "cli": "claude-code",
       "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.303/unsent-multiline-ansi.txt",
+      "cli": "claude-code",
+      "kind": "unsent",
       "provenance": "capture"
     },
     {
