@@ -23,11 +23,9 @@ a signature. This package starts no server and no service on import. The relay-h
 in this same package without importing TeamCLI: `host/server.js` frames one caller's machine
 socket, and `host/queue.js` holds durable messages for a host that took verified admission. The
 framing host binds only when its caller calls `listen`, inside the caller's process; the queue
-opens no socket. The listener and the verified caller stay the receiving session's host. The
-modules are source modules in this repository, not packed or exported in this build: the manifest
-exports only `@teamcli/relay`, and its file list carries only the entry files and this page, so
-`host/` is neither exported nor packed. The public subpath names and the manifest change are the
-package owner's; this page names module paths, not import specifiers.
+opens no socket. The listener and the verified caller stay the receiving session's host. Both
+host modules are included and exported at `@teamcli/relay/host/server` and
+`@teamcli/relay/host/queue`, with declarations beside the code.
 
 ## Current endpoints and auth
 
@@ -106,9 +104,8 @@ deadline when supplied; `timeoutMs` applies to the package's default dial.
 ## Host modules
 
 The host modules are plain Node ESM with hand-written declarations beside the code: no
-dependencies, no TeamCLI import, no service. They are source modules today, not packed or
-exported in this build (see "Current endpoints and auth"); the manifest and the public subpath
-names remain the package owner's to change.
+dependencies, no TeamCLI import, no service. They are included and exported at
+`@teamcli/relay/host/server` and `@teamcli/relay/host/queue`, with declarations.
 
 ### `host/server.js` — socket framing
 
