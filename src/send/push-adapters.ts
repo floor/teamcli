@@ -4,7 +4,6 @@ import type { RuntimePushAdapter } from './push.ts';
 export {
   CODEX_NATIVE_ROUTE,
   CODEX_NATIVE_TIMEOUT_MS,
-  CODEX_PREPROBE_TIMEOUT_MS,
   CODEX_RECEIPT_TIMEOUT_SECONDS,
   codexRelayCapabilities,
   deliverCodexNativeRoute,

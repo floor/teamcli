@@ -732,7 +732,6 @@ seats:
     const {
       CODEX_NATIVE_ROUTE,
       CODEX_NATIVE_TIMEOUT_MS,
-      CODEX_PREPROBE_TIMEOUT_MS,
       CODEX_RECEIPT_TIMEOUT_SECONDS,
       codexRelayCapabilities,
       deliverCodexNativeRoute,
@@ -748,7 +747,6 @@ seats:
     // 1. Capabilities and shared timing constants from src/policy/delivery.ts & src/policy/types.ts
     expect(CODEX_NATIVE_ROUTE).toBe('native');
     expect(CODEX_NATIVE_TIMEOUT_MS).toBe(15_000);
-    expect(CODEX_PREPROBE_TIMEOUT_MS).toBe(400);
     expect(CODEX_RECEIPT_TIMEOUT_SECONDS).toBe(120);
     expect(receiptSecondsFor(15)).toBe(120);
     expect(receiptSecondsFor(15, 10)).toBe(15);
@@ -760,7 +758,8 @@ seats:
       supported: true,
       command: ['codex', 'queue', '--thread', '<agent_session>', '--message', '<pointer>'],
       timeoutMs: 15_000,
-      preprobeTimeoutMs: 400,
+      liveProbe: false,
+      precheck: 'local-policy-and-session-only',
       ack: false,
       proof: 'queue-accepted-only',
     });
@@ -829,7 +828,31 @@ seats:
       attemptSeconds: 6,
     });
 
-    // 3. probeCodexNativeRoute preprobe (ready vs codex-daemon: off vs mismatched session)
+    // 2b. Override clamping & failed signed budget rejection:
+    //   - A longer override (12_000ms) is clamped to the stricter signed budget (6_000ms)
+    expect(resolveCodexNativeAttemptTimeoutMs(shortenedTimeouts, 12_000)).toEqual({
+      ok: true,
+      timeoutMs: 6_000,
+      attemptSeconds: 6,
+    });
+    //   - A shorter override (4_000ms) shortens the signed budget (4_000ms)
+    expect(resolveCodexNativeAttemptTimeoutMs(shortenedTimeouts, 4_000)).toEqual({
+      ok: true,
+      timeoutMs: 4_000,
+      attemptSeconds: 4,
+    });
+    //   - A failed signed budget ({ ok: false }) is NEVER bypassed by a numeric override
+    const failedTimeouts = {
+      ok: false as const,
+      error: 'delivery-timeout' as const,
+      why: 'the team policy record for "delivery-timeout" failed signature verification',
+    };
+    expect(resolveCodexNativeAttemptTimeoutMs(failedTimeouts, 4_000)).toEqual({
+      ok: false,
+      why: failedTimeouts.why,
+    });
+
+    // 3. probeCodexNativeRoute local policy/session/pointer validation (ready vs codex-daemon: off)
     const readyProbe = probeCodexNativeRoute({
       root: scene.root,
       home: scene.home,
@@ -861,18 +884,73 @@ seats:
       reason: CODEX_DAEMON_OFF_REASON,
     });
 
-    // 4. deliverCodexNativeRoute stages durable copy via packages/relay and feeds 785d63e1f FallbackWalk
-    const now = () => new Date('2026-10-20T01:00:00.000Z');
+    // 4. Invalid signed budget + override in deliverCodexNativeRoute fails closed without spawning or staging
     const dropDir = join(scene.dir, 'send-drops', 'teamcli', 'builder-3');
     const signedRecordText = `${JSON.stringify({ payload: { id: SAMPLE_ID, body: 'hello' }, signature: 'sig' }, null, 2)}\n`;
-    const spawnCalls: { args: readonly string[]; timeoutMs: number }[] = [];
+    const invalidBudgetAttempt = await deliverCodexNativeRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy: { dir: dropDir, name: SAMPLE_ID },
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        sender: { seat: 'tester-2', team: 'teamcli' },
+      },
+      {
+        id: SAMPLE_ID,
+        record: signedRecordText,
+        pointer: SAMPLE_POINTER,
+      },
+      {
+        now: () => new Date('2026-10-20T01:00:00.000Z'),
+        deliveryTimeout: failedTimeouts,
+        timeoutMs: 4_000,
+        liveRoutesRemain: true,
+        spawn: () => {
+          throw new Error('must never spawn when signed delivery-timeout policy failed');
+        },
+      },
+    );
+    expect(invalidBudgetAttempt).toEqual({
+      route: 'native',
+      outcome: 'unsupported',
+      reason: failedTimeouts.why,
+      walkAttempt: {
+        route: 'native',
+        outcome: 'unreachable',
+        liveRoutesRemain: true,
+        at: new Date('2026-10-20T01:00:00.000Z'),
+        ms: 0,
+        reason: failedTimeouts.why,
+        receipt: { kind: 'unknown' },
+      },
+    });
 
+    // 5. Shortened remaining deadline: preparation (stage + probeCodexNativeRoute) deducts from overall budget
+    //   5a. When preparation takes 2_500ms of a 6_000ms budget (even with a 12_000ms override clamped to 6_000ms),
+    //       spawn receives the remaining 3_500ms budget (never a fresh 6_000ms or 15_000ms).
+    let clockStep = 0;
+    const stepTimesMs = [
+      Date.parse('2026-10-20T01:00:00.000Z'), // attemptStartedAtMs
+      Date.parse('2026-10-20T01:00:01.000Z'), // relayStage timestamp
+      Date.parse('2026-10-20T01:00:02.500Z'), // post-probe / pre-spawn elapsed check (2_500ms elapsed)
+      Date.parse('2026-10-20T01:00:03.000Z'), // post-spawn completion timestamp (3_000ms total)
+    ];
+    const advancingNow = () => {
+      const idx = Math.min(clockStep, stepTimesMs.length - 1);
+      clockStep += 1;
+      return new Date(stepTimesMs[idx]!);
+    };
+
+    const spawnCalls: { args: readonly string[]; timeoutMs: number }[] = [];
     const walk = beginFallbackWalk({
       caller: { kind: 'owner' },
       team: loadedShortened.team,
       root: scene.root,
       home: scene.home,
-      now,
+      now: () => new Date('2026-10-20T01:00:00.000Z'),
       recipient: {
         team: 'acme',
         seat: 'builder-3',
@@ -884,6 +962,66 @@ seats:
       record: signedRecordText,
     });
 
+    // First test failure fallback (continued walk) before final enqueue delivery:
+    //   5b. When preparation exhausts the 6_000ms budget before spawn, spawn is NOT called and outcome is timeout
+    let exhaustedStep = 0;
+    const exhaustedTimesMs = [
+      Date.parse('2026-10-20T01:00:00.000Z'), // attemptStartedAtMs
+      Date.parse('2026-10-20T01:00:02.000Z'), // relayStage timestamp
+      Date.parse('2026-10-20T01:00:06.000Z'), // post-probe elapsed check (6_000ms >= 6_000ms budget)
+      Date.parse('2026-10-20T01:00:06.000Z'), // timeout walkAttempt timestamp
+    ];
+    const exhaustedAttempt = await deliverCodexNativeRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy: { dir: dropDir, name: SAMPLE_ID },
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        sender: { seat: 'tester-2', team: 'teamcli' },
+      },
+      {
+        id: SAMPLE_ID,
+        record: signedRecordText,
+        pointer: SAMPLE_POINTER,
+      },
+      {
+        now: () => {
+          const idx = Math.min(exhaustedStep, exhaustedTimesMs.length - 1);
+          exhaustedStep += 1;
+          return new Date(exhaustedTimesMs[idx]!);
+        },
+        deliveryTimeout: shortenedTimeouts,
+        liveRoutesRemain: true,
+        spawn: () => {
+          throw new Error('must never spawn when preparation exhausted the attempt budget');
+        },
+      },
+    );
+    expect(exhaustedAttempt.outcome).toBe('unreachable');
+    if (exhaustedAttempt.outcome !== 'enqueue') {
+      expect(exhaustedAttempt.timedOut).toBe(true);
+    }
+    expect(exhaustedAttempt.walkAttempt).toEqual({
+      route: 'native',
+      outcome: 'timeout',
+      liveRoutesRemain: true,
+      at: new Date('2026-10-20T01:00:06.000Z'),
+      ms: 6_000,
+      reason: 'codex queue timed out before spawn (6000ms attempt budget exhausted during preparation)',
+      receipt: { kind: 'stored', id: SAMPLE_ID },
+    });
+    const continuedNote = walk.note(exhaustedAttempt.walkAttempt);
+    expect(continuedNote.ok).toBe(true);
+    if (continuedNote.ok) {
+      expect(continuedNote.state).toBe('continued');
+      expect(continuedNote.marker.receipt).toEqual({ kind: 'stored', id: SAMPLE_ID });
+    }
+    expect(readFileSync(join(dropDir, SAMPLE_ID), 'utf8')).toBe(signedRecordText);
+
+    // 6. Enqueue unconfirmed with shortened remaining deadline (3_500ms passed to spawn):
     const deliveredAttempt = await deliverCodexNativeRoute(
       {
         route: 'native',
@@ -901,8 +1039,9 @@ seats:
         pointer: SAMPLE_POINTER,
       },
       {
-        now,
+        now: advancingNow,
         deliveryTimeout: shortenedTimeouts,
+        timeoutMs: 12_000, // clamped to 6_000ms, then 2_500ms elapsed -> 3_500ms remaining
         spawn: (_bin, args, opts) => {
           spawnCalls.push({ args, timeoutMs: opts.timeoutMs });
           return { status: 0, stdout: 'Queued\n', stderr: '' };
@@ -916,15 +1055,15 @@ seats:
     expect(spawnCalls).toEqual([
       {
         args: ['queue', '--thread', scene.sessionId, '--message', SAMPLE_POINTER],
-        timeoutMs: 6_000,
+        timeoutMs: 3_500,
       },
     ]);
     expect(deliveredAttempt.walkAttempt).toEqual({
       route: 'native',
       outcome: 'delivered',
       liveRoutesRemain: false,
-      at: new Date('2026-10-20T01:00:00.000Z'),
-      ms: 0,
+      at: new Date('2026-10-20T01:00:03.000Z'),
+      ms: 3_000,
       reason: 'pushed to codex queue; no read receipt yet',
       receipt: { kind: 'maybe-consumed' },
     });
@@ -935,7 +1074,8 @@ seats:
       expect(deliveredNote.marker.receipt).toEqual({ kind: 'maybe-consumed' });
     }
 
-    // 5. Timeout / failure preserves the same staged record and message.id for the next fallback route
+    // 7. Spawn timeout / failure preserves the same staged record and message.id for the next fallback route
+    const now = () => new Date('2026-10-20T01:00:00.000Z');
     const timeoutAttempt = await deliverCodexNativeRoute(
       {
         route: 'native',
@@ -977,8 +1117,6 @@ seats:
       reason: 'codex queue could not run: timed out after 6000ms',
       receipt: { kind: 'stored', id: SAMPLE_ID },
     });
-    const timeoutNote = walk.note(timeoutAttempt.walkAttempt);
-    expect(timeoutNote.ok).toBe(true);
     expect(readFileSync(join(dropDir, SAMPLE_ID), 'utf8')).toBe(signedRecordText);
   });
 });

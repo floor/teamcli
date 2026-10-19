@@ -3,13 +3,19 @@
 //
 // Invariants enforced here:
 //   - Accepts already-resolved shared policy/timing budgets from `src/policy/delivery.ts`
-//     (`DeliveryTimeoutInForce`, `DeliveryEscalationDelay`, `DELIVERY_PREPROBE_MS`,
-//     `DELIVERY_RECEIPT_SECONDS`, `receiptSecondsFor`) and `src/policy/types.ts`
-//     (`DELIVERY_TIMEOUT_DEFAULTS.native`). Never re-parses policy YAML or introduces a second
-//     independent timeout resolver.
+//     (`DeliveryTimeoutInForce`, `DeliveryEscalationDelay`, `DELIVERY_RECEIPT_SECONDS`,
+//     `receiptSecondsFor`) and `src/policy/types.ts` (`DELIVERY_TIMEOUT_DEFAULTS.native`).
+//     Never re-parses policy YAML or introduces a second independent timeout resolver.
+//   - Resolves signed `deliveryTimeout` first, fails closed on `{ ok: false }`, and clamps any
+//     optional `timeoutMs` override so it can only shorten (never lengthen or bypass) the signed
+//     `native` budget.
+//   - Deducts elapsed preparation time (durable staging + local policy/session pre-validation)
+//     from the overall `native` attempt deadline and passes only the remaining budget to
+//     `codex queue`.
 //   - Uses `B7`'s shared `recordedSeatSession` (`src/registry/resume.ts`) for trusted session
 //     binding and `resolveCodexDaemonPolicy` (`src/policy/codex-daemon.ts`) for `codex-daemon`
-//     (`on | off`) verification when the caller has not already passed the resolved values.
+//     (`on | off`) verification via `probeCodexNativeRoute`, which `deliverCodexNativeRoute`
+//     calls directly.
 //   - Stages the durable signed copy via `stage` from `packages/relay/index.js` (create-or-match,
 //     mode `0600`, no-follow) before invoking `codex queue`, preserving one `message.id` and
 //     `record` across route fallbacks.
@@ -17,9 +23,8 @@
 //     parses `message.record` and never touches the message body.
 //   - Preserves `enqueue != delivered (read)`: `codex queue` exit `0` returns `outcome: 'enqueue'`
 //     (daemon queue acceptance transport only, `receipt: { kind: 'maybe-consumed' }` on the
-//     fallback-walk transport fact), leaving user-facing delivery as `sent (unconfirmed)` until a
-//     signed `<id>.read.json` receipt verifies. Does not claim that `<id>.read.json` deduplicates
-//     repeated `readMessage` calls.
+//     fallback-walk transport fact). Signed `<id>.read.json` receipt verification and user-facing
+//     `read` vs `sent (unconfirmed)` classification stay in `src/commands/send.ts` (`B1`).
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -33,7 +38,6 @@ import {
   type CodexDaemonValue,
 } from '../../policy/codex-daemon.ts';
 import {
-  DELIVERY_PREPROBE_MS,
   DELIVERY_RECEIPT_SECONDS,
   receiptSecondsFor,
   type DeliveryEscalationDelay,
@@ -72,9 +76,6 @@ export const CODEX_NATIVE_ROUTE = 'native' as const;
 /** Default attempt budget for the `native` route in milliseconds (`15_000` ms from `DELIVERY_TIMEOUT_DEFAULTS.native`). */
 export const CODEX_NATIVE_TIMEOUT_MS = DELIVERY_TIMEOUT_DEFAULTS.native * 1000;
 
-/** Readiness preprobe budget in milliseconds (`400` ms from `DELIVERY_PREPROBE_MS`). */
-export const CODEX_PREPROBE_TIMEOUT_MS = DELIVERY_PREPROBE_MS;
-
 /** Post-submit read-receipt `--wait` window in seconds (`120` s from `DELIVERY_RECEIPT_SECONDS`). */
 export const CODEX_RECEIPT_TIMEOUT_SECONDS = DELIVERY_RECEIPT_SECONDS;
 
@@ -88,7 +89,8 @@ export type CodexRelayCapabilities = {
     supported: true;
     command: readonly ['codex', 'queue', '--thread', '<agent_session>', '--message', '<pointer>'];
     timeoutMs: number;
-    preprobeTimeoutMs: number;
+    liveProbe: false;
+    precheck: 'local-policy-and-session-only';
     ack: false;
     proof: 'queue-accepted-only';
   };
@@ -110,7 +112,8 @@ export function codexRelayCapabilities(version = '0.161.0'): CodexRelayCapabilit
       supported: true,
       command: ['codex', 'queue', '--thread', '<agent_session>', '--message', '<pointer>'],
       timeoutMs: CODEX_NATIVE_TIMEOUT_MS,
-      preprobeTimeoutMs: CODEX_PREPROBE_TIMEOUT_MS,
+      liveProbe: false,
+      precheck: 'local-policy-and-session-only',
       ack: false,
       proof: 'queue-accepted-only',
     },
@@ -118,19 +121,19 @@ export function codexRelayCapabilities(version = '0.161.0'): CodexRelayCapabilit
       supported: true,
     },
     limitations: [
-      'Requires codex-daemon: on and a bound recordedSeatSession (team.state.json + agents/<id>.yaml).',
-      'Fails closed when codex-daemon is off (seat launched with --no-daemon) or when policy/session binding cannot be verified.',
-      'codex queue exit 0 proves daemon queue acceptance (transport only), never receiver turn consumption or read confirmation; send remains sent (unconfirmed) until a signed <id>.read.json receipt verifies.',
+      'Codex 0.161.0 has no live readiness/accepts/held preprobe RPC; probeCodexNativeRoute performs synchronous local validation only (codex-daemon policy, bound recordedSeatSession thread UUID, single-line pointer, and optional --remote URL).',
+      'Requires codex-daemon: on and a bound recordedSeatSession (team.state.json + agents/<id>.yaml); fails closed when codex-daemon is off (seat launched with --no-daemon) or when policy/session binding cannot be verified.',
+      'codex queue exit 0 proves daemon queue acceptance (transport only, receipt: maybe-consumed), never receiver turn consumption or read confirmation; signed <id>.read.json verification stays in the sender walk (send.ts).',
     ],
   };
 }
 
 /**
- * Accepts an already-resolved `DeliveryTimeoutInForce` (from `deliveryTimeoutInForce` in
- * `src/policy/delivery.ts`), a route-budget map (`seconds`), or an explicit `timeoutMs` number,
- * and returns the `native` attempt timeout in milliseconds without re-parsing policy files.
- * Fails closed (`ok: false`) if the caller's `DeliveryTimeoutInForce` failed or if the budget is
- * non-positive.
+ * Resolves the signed `DeliveryTimeoutInForce` (from `deliveryTimeoutInForce` in
+ * `src/policy/delivery.ts`), a route-budget map (`seconds`), or a milliseconds number first,
+ * rejects any failed signed result (`{ ok: false }`), and then clamps any optional
+ * `overrideTimeoutMs` so an override can only shorten (never lengthen or bypass) the signed
+ * `native` attempt budget.
  */
 export type ResolvedCodexAttemptBudget =
   | { ok: true; timeoutMs: number; attemptSeconds: number }
@@ -141,46 +144,54 @@ export function resolveCodexNativeAttemptTimeoutMs(
     | DeliveryTimeoutInForce
     | Readonly<Partial<Record<DeliveryTimeoutRoute, number>>>
     | number,
+  overrideTimeoutMs?: number,
 ): ResolvedCodexAttemptBudget {
-  if (resolved === undefined) {
+  let baseTimeoutMs = CODEX_NATIVE_TIMEOUT_MS;
+  let baseAttemptSeconds: number = DELIVERY_TIMEOUT_DEFAULTS.native;
+
+  if (resolved !== undefined) {
+    if (typeof resolved === 'number') {
+      if (!Number.isFinite(resolved) || resolved <= 0) {
+        return { ok: false, why: 'the native attempt timeout budget must be above 0ms' };
+      }
+      baseTimeoutMs = Math.round(resolved);
+      baseAttemptSeconds = Math.max(1, Math.ceil(baseTimeoutMs / 1000));
+    } else if ('ok' in resolved) {
+      if (!resolved.ok) {
+        return { ok: false, why: resolved.why };
+      }
+      const seconds = resolved.budgets.native;
+      if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+        return { ok: false, why: 'the resolved "delivery-timeout" map has no valid native budget' };
+      }
+      baseTimeoutMs = Math.round(seconds * 1000);
+      baseAttemptSeconds = seconds;
+    } else {
+      const seconds = resolved.native ?? DELIVERY_TIMEOUT_DEFAULTS.native;
+      if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+        return { ok: false, why: 'the native attempt timeout budget must be above 0s' };
+      }
+      baseTimeoutMs = Math.round(seconds * 1000);
+      baseAttemptSeconds = seconds;
+    }
+  }
+
+  if (overrideTimeoutMs !== undefined) {
+    if (typeof overrideTimeoutMs !== 'number' || !Number.isFinite(overrideTimeoutMs) || overrideTimeoutMs <= 0) {
+      return { ok: false, why: 'the native attempt timeout override must be above 0ms' };
+    }
+    const clampedTimeoutMs = Math.min(baseTimeoutMs, Math.round(overrideTimeoutMs));
     return {
       ok: true,
-      timeoutMs: CODEX_NATIVE_TIMEOUT_MS,
-      attemptSeconds: DELIVERY_TIMEOUT_DEFAULTS.native,
+      timeoutMs: clampedTimeoutMs,
+      attemptSeconds: Math.min(baseAttemptSeconds, Math.max(1, Math.ceil(clampedTimeoutMs / 1000))),
     };
   }
-  if (typeof resolved === 'number') {
-    if (!Number.isFinite(resolved) || resolved <= 0) {
-      return { ok: false, why: 'the native attempt timeout budget must be above 0ms' };
-    }
-    return {
-      ok: true,
-      timeoutMs: Math.round(resolved),
-      attemptSeconds: Math.max(1, Math.ceil(resolved / 1000)),
-    };
-  }
-  if ('ok' in resolved) {
-    if (!resolved.ok) {
-      return { ok: false, why: resolved.why };
-    }
-    const seconds = resolved.budgets.native;
-    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
-      return { ok: false, why: 'the resolved "delivery-timeout" map has no valid native budget' };
-    }
-    return {
-      ok: true,
-      timeoutMs: Math.round(seconds * 1000),
-      attemptSeconds: seconds,
-    };
-  }
-  const seconds = resolved.native ?? DELIVERY_TIMEOUT_DEFAULTS.native;
-  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
-    return { ok: false, why: 'the native attempt timeout budget must be above 0s' };
-  }
+
   return {
     ok: true,
-    timeoutMs: Math.round(seconds * 1000),
-    attemptSeconds: seconds,
+    timeoutMs: baseTimeoutMs,
+    attemptSeconds: baseAttemptSeconds,
   };
 }
 
@@ -261,9 +272,13 @@ export type CodexNativeProbeOutcome =
     };
 
 /**
- * Bounded readiness preprobe for the Codex `native` route (`<= 400ms`, zero child-process spawn):
- * verifies `codex-daemon` policy (`on`), bound `recordedSeatSession` (`src/registry/resume.ts`),
- * opaque single-line pointer (`pushPointer`), and optional `--remote` address.
+ * Synchronous local policy/session/pointer validation for the Codex `native` route (zero
+ * child-process spawn): verifies `codex-daemon` signed policy (`on`), bound `recordedSeatSession`
+ * (`src/registry/resume.ts`), opaque single-line pointer (`pushPointer`), and optional `--remote`
+ * address.
+ *
+ * Does not probe live daemon/thread accepts/held state and does not enforce a 400ms live probe
+ * timer. Called directly by `deliverCodexNativeRoute` before spawning `codex queue`.
  */
 export function probeCodexNativeRoute(input: CodexNativeProbeInput): CodexNativeProbeOutcome {
   if (input.codexDaemon !== undefined) {
@@ -316,7 +331,10 @@ export function probeCodexNativeRoute(input: CodexNativeProbeInput): CodexNative
   ) {
     return {
       status: 'refused',
-      reason: 'the runtime pointer is not a valid single line',
+      reason:
+        pointer === null || pointer.length > TRIGGER_MAX
+          ? `the pointer would exceed ${String(TRIGGER_MAX)} characters`
+          : 'the runtime pointer is not a valid single line',
     };
   }
 
@@ -404,7 +422,10 @@ export type CodexNativeDeliverOptions = {
     | DeliveryTimeoutInForce
     | Readonly<Partial<Record<DeliveryTimeoutRoute, number>>>
     | number;
-  /** Optional explicit attempt timeout in milliseconds (overrides `deliveryTimeout` when given). */
+  /**
+   * Optional explicit attempt timeout override in milliseconds. Clamped to `deliveryTimeout` so an
+   * override can only shorten (never lengthen or bypass) the signed `delivery-timeout` budget.
+   */
   timeoutMs?: number;
   /** Optional already-resolved `codex-daemon` policy (`resolveCodexDaemonPolicy`). */
   codexDaemon?: CodexDaemonResolution | CodexDaemonValue;
@@ -437,7 +458,7 @@ export type CodexNativeAttempt =
       /**
        * `enqueue` means `codex queue` exited `0` and accepted the pointer into the daemon queue.
        * It is transport queue acceptance only — never `read` or `delivered (read)` until a signed
-       * `<id>.read.json` receipt verifies.
+       * `<id>.read.json` receipt verifies in `src/commands/send.ts`.
        */
       outcome: 'enqueue';
       receipt: PackageRelayReceipt;
@@ -474,14 +495,18 @@ function buildWalkAttempt(
 /**
  * Makes one bounded Codex `native` (`codex queue`) attempt against the committed sender walk
  * (`785d63e1f`):
- *   1. Validates the caller-resolved `delivery-timeout` (`native`) budget without re-parsing
- *      policy files.
+ *   1. Resolves the caller-supplied `delivery-timeout` (`native`) budget first, rejects any failed
+ *      signed budget, and clamps any optional `timeoutMs` override to it.
  *   2. Stages (or verifies create-or-match) the signed record via `stage` from
  *      `packages/relay/index.js` so the durable copy is on disk under the same `message.id`
  *      before the transport attempt.
- *   3. Hands the opaque single-line pointer (`pushPointer`) to `codexPushAdapter` using shared
- *      `resolveCodexDaemonPolicy` and `recordedSeatSession`.
- *   4. Returns both the `@teamcli/relay` receipt and the exact `WalkAttempt` for `FallbackWalk.note`.
+ *   3. Runs synchronous local policy/session/pointer pre-validation via `probeCodexNativeRoute`
+ *      (`resolveCodexDaemonPolicy` + `recordedSeatSession` + `pushPointer`).
+ *   4. Deducts elapsed preparation time (staging + pre-validation) from the overall attempt budget
+ *      and passes only the remaining `remainingTimeoutMs` budget to `codex queue`.
+ *   5. Returns both the `@teamcli/relay` receipt and the exact `WalkAttempt` for `FallbackWalk.note`
+ *      (`receipt: { kind: 'maybe-consumed' }` on queue-accepted `exit 0`; signed `<id>.read.json`
+ *      receipt verification stays in `src/commands/send.ts`).
  */
 export async function deliverCodexNativeRoute(
   target: CodexNativeTarget,
@@ -489,10 +514,11 @@ export async function deliverCodexNativeRoute(
   options: CodexNativeDeliverOptions = {},
 ): Promise<CodexNativeAttempt> {
   const nowFn = options.now ?? (() => new Date());
-  const startedAt = options.startedAt ?? nowFn().getTime();
+  const attemptStartedAtMs = nowFn().getTime();
+  const startedAt = options.startedAt ?? attemptStartedAtMs;
   const liveRoutesRemain = options.liveRoutesRemain ?? true;
 
-  const budget = resolveCodexNativeAttemptTimeoutMs(options.timeoutMs ?? options.deliveryTimeout);
+  const budget = resolveCodexNativeAttemptTimeoutMs(options.deliveryTimeout, options.timeoutMs);
   if (!budget.ok) {
     const at = nowFn();
     return {
@@ -500,29 +526,6 @@ export async function deliverCodexNativeRoute(
       outcome: 'unsupported',
       reason: budget.why,
       walkAttempt: buildWalkAttempt('unreachable', liveRoutesRemain, at, startedAt, budget.why, {
-        kind: 'unknown',
-      }),
-    };
-  }
-
-  const pointer = message.pointer ?? pushPointer(message.id, target.sender);
-  if (
-    pointer === null
-    || pointer === ''
-    || pointer.includes('\n')
-    || pointer.includes('\r')
-    || pointer.includes('\0')
-    || pointer.length > TRIGGER_MAX
-  ) {
-    const at = nowFn();
-    const reason = pointer === null
-      ? `the pointer would exceed ${String(TRIGGER_MAX)} characters`
-      : 'the runtime pointer is not a valid single line';
-    return {
-      route: CODEX_NATIVE_ROUTE,
-      outcome: 'unsupported',
-      reason,
-      walkAttempt: buildWalkAttempt('unreachable', liveRoutesRemain, at, startedAt, reason, {
         kind: 'unknown',
       }),
     };
@@ -555,17 +558,69 @@ export async function deliverCodexNativeRoute(
     copyReceipt = staged.receipt;
   }
 
+  const precheck = probeCodexNativeRoute({
+    root: target.root,
+    home: target.home,
+    session: target.session,
+    seat: target.seat,
+    id: message.id,
+    sender: target.sender,
+    ...(message.pointer !== undefined ? { pointer: message.pointer } : {}),
+    ...(target.agentSession !== undefined ? { agentSession: target.agentSession } : {}),
+    ...(target.remote !== undefined ? { remote: target.remote } : {}),
+    ...(options.codexDaemon !== undefined ? { codexDaemon: options.codexDaemon } : {}),
+    ...(options.sessionBinding !== undefined ? { sessionBinding: options.sessionBinding } : {}),
+  });
+  if (precheck.status !== 'ready') {
+    const at = nowFn();
+    const outcome = precheck.status === 'refused' ? 'unsupported' : 'unreachable';
+    return {
+      route: CODEX_NATIVE_ROUTE,
+      outcome,
+      reason: precheck.reason,
+      receipt: copyReceipt,
+      walkAttempt: buildWalkAttempt(
+        'unreachable',
+        liveRoutesRemain,
+        at,
+        startedAt,
+        precheck.reason,
+        { kind: 'stored', id: message.id },
+      ),
+    };
+  }
+
+  const elapsedMs = Math.max(0, nowFn().getTime() - attemptStartedAtMs);
+  const remainingTimeoutMs = budget.timeoutMs - elapsedMs;
+  if (remainingTimeoutMs <= 0) {
+    const at = nowFn();
+    const reason = `codex queue timed out before spawn (${String(budget.timeoutMs)}ms attempt budget exhausted during preparation)`;
+    return {
+      route: CODEX_NATIVE_ROUTE,
+      outcome: 'unreachable',
+      reason,
+      timedOut: true,
+      receipt: copyReceipt,
+      walkAttempt: buildWalkAttempt(
+        'timeout',
+        liveRoutesRemain,
+        at,
+        startedAt,
+        reason,
+        { kind: 'stored', id: message.id },
+      ),
+    };
+  }
+
   const adapter =
     options.adapter
     ?? codexPushAdapter({
       ...(options.binary !== undefined ? { binary: options.binary } : {}),
       ...(target.remote !== undefined ? { remote: target.remote } : {}),
-      ...(options.codexDaemon !== undefined ? { codexDaemon: options.codexDaemon } : {}),
-      ...(options.sessionBinding !== undefined
-        ? { resolveSession: () => options.sessionBinding! }
-        : {}),
+      codexDaemon: 'on',
+      resolveSession: () => ({ kind: 'bound', recorded: precheck.recorded }),
       ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
-      timeoutMs: budget.timeoutMs,
+      timeoutMs: remainingTimeoutMs,
     });
 
   let pushed: RuntimePushOutcome;
@@ -576,10 +631,10 @@ export async function deliverCodexNativeRoute(
       seat: target.seat,
       id: message.id,
       sender: target.sender,
-      agentSession: target.agentSession ?? null,
-      pointer,
+      agentSession: precheck.threadId,
+      pointer: precheck.pointer,
       home: target.home,
-      timeoutMs: budget.timeoutMs,
+      timeoutMs: remainingTimeoutMs,
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -616,7 +671,7 @@ export async function deliverCodexNativeRoute(
   const receipt: PackageRelayReceipt = {
     ...(copyReceipt.copy !== undefined ? { copy: copyReceipt.copy } : {}),
     ...(copyReceipt.existing !== undefined ? { existing: copyReceipt.existing } : {}),
-    bytes: Buffer.byteLength(pointer, 'utf8'),
+    bytes: Buffer.byteLength(precheck.pointer, 'utf8'),
     at: at.toISOString(),
   };
 
