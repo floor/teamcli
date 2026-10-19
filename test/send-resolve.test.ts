@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { registerAgent, updateAgent, type Agent } from '../src/registry/agents.ts';
+import { agentsDir, registerAgent, updateAgent, type Agent } from '../src/registry/agents.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
 import { historyPath } from '../src/send/history.ts';
@@ -314,6 +314,28 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
       error: 'builder-1: the spec matches two seats — the seat "builder-1" and the nickname "builder-1" of the seat "lead"; nothing was sent',
       kind: 'ambiguous',
     });
+  });
+
+  test('a nickname over a record that does not verify is refused, never read as absence', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false },
+    ]);
+    signNickname(w.home, builder.id, 'wren');
+    const path = join(agentsDir(w.home), `${builder.id}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('value: "wren"', 'value: "crow"'));
+
+    // Falling back to the roster's projection would resolve an address the store disowns; the
+    // send refuses and names the record instead.
+    const target = resolveTarget(w.home, '@wren', { cwd: w.root });
+    expect('error' in target).toBe(true);
+    if (!('error' in target)) return;
+    expect(target.kind).toBe('configuration');
+    expect(target.error).toContain(path);
+    expect(target.error).toContain('signature verification failed');
   });
 
   test('no role addresses: a spec equal to a seat\'s role names nobody', () => {
