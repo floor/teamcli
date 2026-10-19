@@ -14,11 +14,13 @@
 //
 // TeamCLI resolves the nickname from the team registry's roster, where sync projects the file's
 // `nickname` field, and the team's name from the record's `project` — the team file's own
-// `project:` key. A record read from disk carries the seat and the agent id, never the team: the
+// `project:` key. A seat's signed `nickname` setting is its own word and stands over that
+// projection. A record read from disk carries the seat and the agent id, never the team: the
 // roster line the id sits on is where its team is found. A registry that cannot answer is no
 // answer: the seat name stands, and a team no record names reads as its id, exactly as an
 // earlier build printed it.
 
+import { seatOverridesOf } from '../config/apply.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import { ofTeam as projectOfTeam, type ProjectRecord } from '../registry/projects.ts';
@@ -43,11 +45,15 @@ export type SenderIdentity = {
 };
 
 /** What a reading needs: the word in force, the team whose command is printing (its id), and the
- *  registered teams, whose roster lines hold both the nickname and the team's own name. */
+ *  registered teams, whose roster lines hold both the nickname and the team's own name. A
+ *  reading over a real registry also carries the seat's *signed* nickname, when one is set: the
+ *  roster line is the team file's projection, and a signed setting stands in its place. */
 export type SenderNaming = {
   mode: SenderNameMode;
   viewerTeam: string | null;
   teams: Readonly<Record<string, TeamRecord>>;
+  /** The nickname a sender's signed seat record holds, or null; absent reads the roster alone. */
+  signedNickname?: (sender: SenderIdentity, team: string | null) => string | null;
 };
 
 /** No project word, no registry: a reading that knows only the sender's seat and team. */
@@ -84,9 +90,13 @@ function teamOf(sender: SenderIdentity, naming: SenderNaming): string | null {
 
 /** The nickname a team's roster gives a sender: by the agent id when it is known, else by the
  *  seat name — one team holds at most one line per seat, and the file refuses a repeated
- *  nickname. Null when the roster or the line is not held. */
-function nicknameOf(sender: SenderIdentity, team: string | null, teams: Readonly<Record<string, TeamRecord>>): string | null {
-  const record = team ? teams[team] : undefined;
+ *  nickname. A signed seat setting is the seat's own word and stands over the roster's, which is
+ *  the file's projection; a record that does not verify says nothing here, the same way a send
+ *  never fails on a broken record. Null when neither the record nor the roster holds one. */
+function nicknameOf(sender: SenderIdentity, team: string | null, naming: SenderNaming): string | null {
+  const signed = naming.signedNickname?.(sender, team) ?? null;
+  if (signed !== null) return signed;
+  const record = team ? naming.teams[team] : undefined;
   if (!record) return null;
   const byId = sender.id ? record.roster.find((line) => line.agent === sender.id) : undefined;
   const line = byId ?? record.roster.find((entry) => entry.seat === sender.seat);
@@ -120,13 +130,13 @@ export function senderDisplayName(sender: SenderIdentity, naming: SenderNaming):
     case 'seat@team':
       return address;
     case 'nickname':
-      return nicknameOf(sender, team, naming.teams) ?? seat;
+      return nicknameOf(sender, team, naming) ?? seat;
     case 'auto':
     default: {
       // Another team only when the registry holds it: an id no roster answers for is no answer,
       // and the seat's own team — whose roster then names it — is the reading that stands.
       const otherTeam = team !== null && team !== naming.viewerTeam && naming.teams[team] !== undefined;
-      return otherTeam ? address : nicknameOf(sender, team, naming.teams) ?? seat;
+      return otherTeam ? address : nicknameOf(sender, team, naming) ?? seat;
     }
   }
 }
@@ -219,14 +229,42 @@ export function senderNameModeAt(home: string, root: string, seat?: string | nul
   return senderNameModeFor({ home, root, ...(seat === undefined ? {} : { seat }) });
 }
 
-/** The naming a reading across teams uses — the feed's `--all`, or one run outside a checkout:
+/**
+ * The signed nickname a reading resolves, looked up per sender and kept for the life of the
+ * reading: a listing prints many rows from few seats, and each seat's chain is verified once. The
+ * team record's root and the roster line's seat name are what find the agent record; a seat no
+ * roster holds has no signed word here, and a record that does not verify says nothing, so the
+ * roster's projection stands — a display never fails on a broken record.
+ */
+export function signedNicknames(
+  home: string,
+  teams: Readonly<Record<string, TeamRecord>>,
+): NonNullable<SenderNaming['signedNickname']> {
+  const answers = new Map<string, string | null>();
+  return (sender, team) => {
+    const record = team ? teams[team] : undefined;
+    if (record === undefined) return null;
+    const line = (sender.id ? record.roster.find((entry) => entry.agent === sender.id) : undefined)
+      ?? record.roster.find((entry) => entry.seat === sender.seat);
+    if (line === undefined) return null;
+    const key = `${record.root}\u0000${line.seat}`;
+    if (answers.has(key)) return answers.get(key) ?? null;
+    const nickname = seatOverridesOf({ home, root: record.root, seat: line.seat }).nickname ?? null;
+    answers.set(key, nickname);
+    return nickname;
+  };
+}
+
+/**
+ * The naming a reading across teams uses — the feed's `--all`, or one run outside a checkout:
  *  the registry's rosters, no viewer team and no project word. A sender in a team the registry
  *  holds reads as `seat@team`, its single honest address with no own team to compare; one no
  *  roster holds reads as its seat. A registry that cannot answer is the empty reading, never a
  *  failed command. */
 export function namingAcross(home: string): SenderNaming {
   try {
-    return { mode: DEFAULT_SENDER_NAME, viewerTeam: null, teams: readTeams(home) };
+    const teams = readTeams(home);
+    return { mode: DEFAULT_SENDER_NAME, viewerTeam: null, teams, signedNickname: signedNicknames(home, teams) };
   } catch {
     return defaultNaming();
   }
@@ -278,5 +316,5 @@ export function namingFor(input: {
     ...(input.file === undefined ? {} : { file: input.file }),
     ...(input.projectOfTeam === undefined ? {} : { projectOfTeam: input.projectOfTeam }),
   });
-  return { mode, viewerTeam, teams };
+  return { mode, viewerTeam, teams, signedNickname: signedNicknames(input.home, teams) };
 }
