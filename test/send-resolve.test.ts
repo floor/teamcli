@@ -844,6 +844,39 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
     expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
   });
+
+  test('a bare nickname the registry has no record for answers to the word its record signs', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [
+      seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'),
+      `${seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')}    nickname: hephaestus\n`,
+    ]);
+    // The seat's record signs another word: the declared-seat path takes the word the listing
+    // prints and the registry addresses, so the file's replaced word names nobody.
+    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    signNickname(alpha.home, builder.id, 'wren');
+    const helperPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-builder', paneStatus: helperPane } });
+    const io = testIo(alpha.root, OWNER);
+
+    const code = await runSend(['wren', BODY], io, host);
+
+    expect(code).toBe(0);
+    expect(helperPane.typed.length).toBe(1);
+    const typed = helperPane.typed[0] as Typed;
+    expect(typed.pane).toBe('pane-builder');
+    const drop = dropOf(typed.text);
+    expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
+
+    // The native handoff names the same seat: the recorded run resolves the word as the send
+    // does, so a delivery the sender makes itself reaches the seat the word signs.
+    const recorded = testIo(alpha.root, OWNER);
+    expect(await runSend(['--record', 'wren', '--channel', 'native', '--ms', '812', '--dry-run'], recorded, host)).toBe(0);
+    expect(recorded.out).toContain('builder-1: would record (native, 812 ms); nothing was written');
+
+    const replaced = testIo(alpha.root, OWNER);
+    expect(await runSend(['hephaestus', BODY], replaced, host)).toBe(1);
+    expect(replaced.err).toBe(`team send: refused: hephaestus: it is not a declared seat; the file's seats are lead, builder-1\n`);
+  });
 });
 
 describe('the whole command from a folder that is no team', () => {

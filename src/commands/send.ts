@@ -7,7 +7,7 @@ import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -506,11 +506,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'placement', seatName, host.now());
       return refuse(io, dir, who, placement, host, report);
     }
-    // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
-    // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
+    // A bare nickname the registry cannot answer is still a declared seat's nickname: the word
+    // its signed record sets, or the file's where it sets none, maps it, and the rules judge the
+    // seat it names, never the human name the caller wrote.
     const configured =
       team.seats.find((seat) => seat.name === seatName) ??
-      team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
+      team.seats.find((seat) => addressedNickname(host.home, root, seat) === seatName);
     const seat = configured === undefined ? seatName : configured.name;
     admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) {
@@ -1051,11 +1052,12 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'placement', seatName, host.now());
       return refuse(io, dir, who, placement, host, report);
     }
-    // A bare nickname the registry cannot answer is still a declared seat's nickname: the local
-    // file maps it, and the rules judge the seat it names, never the human name the caller wrote.
+    // A bare nickname the registry cannot answer is still a declared seat's nickname: the word
+    // its signed record sets, or the file's where it sets none, maps it, and the rules judge the
+    // seat it names, never the human name the caller wrote.
     const configured =
       team.seats.find((seat) => seat.name === seatName) ??
-      team.seats.find((seat) => seat.nickname !== undefined && seat.nickname === seatName);
+      team.seats.find((seat) => addressedNickname(host.home, root, seat) === seatName);
     const seat = configured === undefined ? seatName : configured.name;
     admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
     if (!admission.ok) {
@@ -1954,7 +1956,7 @@ function listSeats(io: Io, host: SendHost, report: Report): number {
   const seats: SeatRow[] = loaded.team.seats.map((seat) => {
     // The signed seat setting stands where the file word did, so the row prints the address the
     // resolver takes: every row the listing prints is a spec the resolver answers.
-    const nickname = seatOverridesOf({ home: host.home, root: loaded.root, seat: seat.name }).nickname ?? seat.nickname;
+    const nickname = addressedNickname(host.home, loaded.root, seat);
     return {
       name: seat.name,
       // The `@<nickname>` form: every row the listing prints is a spec the resolver takes as it
@@ -2483,6 +2485,13 @@ function overlayTeam(home: string, records: AdmitTeams, team: TeamFile, teamId: 
     operator: team.operator,
     roster,
   };
+}
+
+/** The nickname a declared seat answers to: the one its signed record sets, standing where the
+ *  file's word did, and the file's own when no record signs one. A record that does not verify
+ *  signs nothing, so a broken record never takes the file's word away. */
+function addressedNickname(home: string | null, root: string, seat: Seat): string | undefined {
+  return seatOverridesOf({ home, root, seat: seat.name }).nickname ?? seat.nickname;
 }
 
 function seatList(team: TeamFile): string {
