@@ -3460,7 +3460,11 @@
           "subcommands": [],
           "usage": [
             "team swap cancel <seat> [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "cancelling a queued swap is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, through `mayChangeTeamVerdict`"
+          }
         },
         {
           "flags": [
@@ -3501,7 +3505,15 @@
           "subcommands": [],
           "usage": [
             "team swap now <seat> [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "terminal": {
+              "where": "a terminal outside herdr or its own seat",
+              "who": "the owner"
+            },
+            "why": "forcing a swap is the owner's word, from a terminal outside herdr or its own seat"
+          }
         },
         {
           "flags": [
@@ -3548,7 +3560,11 @@
           "subcommands": [],
           "usage": [
             "team swap queue <seat> [--to <target>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "queueing a swap is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, through `mayChangeTeamVerdict`"
+          }
         }
       ],
       "usage": [
@@ -3558,7 +3574,11 @@
         "team swap now <seat> [--file <path>] [--json]",
         "team swap cancel <seat> [--file <path>] [--json]",
         "team swap --run [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "the view and `--rule` read is the team's: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call"
+      }
     },
     {
       "flags": [

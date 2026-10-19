@@ -239,7 +239,7 @@ describe('the capability rows: the own list intersected with the envelope', () =
 
 describe('the map names every word the contract exposes, and no more', () => {
   test('a word the map does not name is refused, not judged', () => {
-    for (const command of ['sudo', 'create', 'approve', 'swap']) {
+    for (const command of ['sudo', 'create', 'approve', 'teleport']) {
       const decision = resolvePermission(OWNER, { id: TEAM }, command, [], TARGET);
       expect(decision).toMatchObject({ effect: 'deny', rule: 'not-in-map' });
       expect(decision.why).toContain("gates no command the Kernel's table does not name");

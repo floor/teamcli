@@ -1946,6 +1946,10 @@ Usage:
     team swap cancel <seat> [--file <path>] [--json]
     team swap --run [--file <path>] [--json]
 
+### Who may run it
+
+`team-read` — the view and `--rule` read is the team's: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1968,6 +1972,10 @@ Hidden: no
 Usage:
 
     team swap cancel <seat> [--file <path>] [--json]
+
+#### Who may run it
+
+`team-change` — cancelling a queued swap is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, through `mayChangeTeamVerdict`
 
 #### Flags
 
@@ -1992,6 +2000,12 @@ Usage:
 
     team swap now <seat> [--file <path>] [--json]
 
+#### Who may run it
+
+`owner-only` — forcing a swap is the owner's word, from a terminal outside herdr or its own seat
+
+A run with no terminal is refused: only the owner runs this, from a terminal outside herdr or its own seat
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -2014,6 +2028,10 @@ Hidden: no
 Usage:
 
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
+
+#### Who may run it
+
+`team-change` — queueing a swap is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, through `mayChangeTeamVerdict`
 
 #### Flags
 

@@ -267,6 +267,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-read',
       why: 'one seat\'s settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner\'s alone, and set and unset are the owner\'s outright (their rows below)',
     },
+    swap: {
+      kind: 'team-read',
+      why: 'the view and `--rule` read is the team\'s: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call',
+    },
     tempo: {
       kind: 'owner-only',
       why: 'the tempo word is the owner\'s, from a terminal outside herdr',
@@ -365,6 +369,19 @@ function buildGates(): Record<string, Gate> {
     'settings:unset': {
       kind: 'owner-only',
       why: 'removing a seat\'s setting is the owner\'s by the same gate as set: a lead\'s write within its role policy is not shipped yet, and this build refuses rather than admit one',
+    },
+    'swap:cancel': {
+      kind: 'team-change',
+      why: 'cancelling a queued swap is the team\'s: the owner, the orchestrator\'s seat or the operator\'s seat, on its recorded pane, through `mayChangeTeamVerdict`',
+    },
+    'swap:now': {
+      kind: 'owner-only',
+      why: 'forcing a swap is the owner\'s word, from a terminal outside herdr or its own seat',
+      terminal: { who: 'the owner', where: 'a terminal outside herdr or its own seat' },
+    },
+    'swap:queue': {
+      kind: 'team-change',
+      why: 'queueing a swap is the team\'s: the owner, the orchestrator\'s seat or the operator\'s seat, on its recorded pane, through `mayChangeTeamVerdict`',
     },
     'worktree:list': {
       kind: 'team-change',
