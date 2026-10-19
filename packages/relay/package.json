@@ -11,8 +11,24 @@
     ".": {
       "types": "./index.d.ts",
       "default": "./index.js"
+    },
+    "./host/server": {
+      "types": "./host/server.d.ts",
+      "default": "./host/server.js"
+    },
+    "./host/queue": {
+      "types": "./host/queue.d.ts",
+      "default": "./host/queue.js"
     }
   },
   "engines": { "node": ">=22" },
-  "files": ["index.js", "index.d.ts", "README.md"]
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "host/server.js",
+    "host/server.d.ts",
+    "host/queue.js",
+    "host/queue.d.ts",
+    "README.md"
+  ]
 }
