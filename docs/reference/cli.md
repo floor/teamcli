@@ -36,6 +36,10 @@ Usage:
     team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
+### Who may run it
+
+`owner-only` — adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -69,6 +73,10 @@ Usage:
 
 Literal: `trust`
 
+### Who may run it
+
+`pane-authority` — a key into another agent's pane belongs to the pane's lead, a seat above it, or the owner's word for that case; trust, login and security prompts to the owner's alone — pane authority is its own gate, and this map admits no one to it
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -92,6 +100,10 @@ Hidden: no
 Usage:
 
     team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -118,6 +130,10 @@ Usage:
 
     team broker
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -136,6 +152,10 @@ Hidden: no
 Usage:
 
     team bus
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -156,6 +176,10 @@ Usage:
 
     team check [--session <name>] [--file <path>] [--repair] [--json]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -183,6 +207,10 @@ Hidden: no
 Usage:
 
     team commits check <ref> [--since <ref>] [--file <path>] [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -225,6 +253,10 @@ Hidden: yes
 
 Usage: none
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 None.
@@ -240,6 +272,10 @@ Hidden: no
 Usage:
 
     team delegate <session/pane> --commands <act,...> [--dry-run] [--json]
+
+### Who may run it
+
+`owner-only` — a standing grant with a command list, written against this map: the owner's
 
 ### Flags
 
@@ -265,6 +301,10 @@ Usage:
 
     team doctor [--session <name>] [--file <path>] [--login] [--json]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -287,6 +327,10 @@ Hidden: no
 Usage:
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — `stop`: the owner or `leads` for its own team, and the owner may always stop
 
 ### Flags
 
@@ -314,6 +358,10 @@ Usage:
     team drops [--follow] [--json]
     team drops --read --seat <seat> [--session <session>]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -337,6 +385,10 @@ Hidden: no
 Usage:
 
     team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -364,6 +416,10 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+
+### Who may run it
+
+`owner-only` — granting is the approval, and the owner grants alone in 0.5.0
 
 ### Flags
 
@@ -393,6 +449,10 @@ Usage:
 
     team <command> [options]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 None.
@@ -409,6 +469,10 @@ Usage:
 
     team hold <reason> [--until <time>] [--json]
     team hold --release [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -434,6 +498,10 @@ Usage:
 
     team init [--restore] [--json]
 
+### Who may run it
+
+`owner-only` — writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -455,6 +523,10 @@ Usage:
 
     team issues [--json]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -474,6 +546,10 @@ Hidden: no
 Usage:
 
     team list [--all] [--seats] [--watch] [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -497,6 +573,10 @@ Hidden: no
 Usage:
 
     team lock <name> [--for <text>] [--wait <seconds>] [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -523,6 +603,10 @@ Usage:
     team mcp status [--json]
     team mcp doctor [--json]
     team mcp serve --seat <seat> [--session <session>]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -604,6 +688,10 @@ Usage:
 
     team messages [--json]
 
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -623,6 +711,10 @@ Hidden: no
 Usage:
 
     team next [--mine | --release] [--wait] [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
 
 ### Flags
 
@@ -647,6 +739,10 @@ Usage:
 
     team plan [--json]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -668,6 +764,10 @@ Usage:
     team policy [--seat <name>] [--file <path>] [--json]
     team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
     team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -750,6 +850,10 @@ Usage:
 
     team pr check <file> [--file <path>] [--json]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -793,6 +897,10 @@ Usage:
     team proc add <name> [--pid <pid>] [--note <text>] [--json]
     team proc list [--json]
     team proc done <name> [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -879,6 +987,10 @@ Usage:
 
     team projects [--json]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -898,6 +1010,10 @@ Hidden: no
 Usage:
 
     team raise <kind> <text> [--dry-run] [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -923,6 +1039,10 @@ Usage:
 
     team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]
 
+### Who may run it
+
+`owner-or-own-team` — a registry record is a report and confers no right: the owner, or the seat's own team
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -947,6 +1067,10 @@ Hidden: no
 Usage:
 
     team release check <package@version> [--json] [--file <path>]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -990,6 +1114,10 @@ Usage:
 
     team reload <seat> [--file <path>] [--json]
 
+### Who may run it
+
+`owner-or-leads` — the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1012,6 +1140,10 @@ Hidden: no
 Usage:
 
     team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — removing a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner
 
 ### Flags
 
@@ -1039,6 +1171,10 @@ Usage:
 
     team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
     team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — renaming a seat: the owner or `leads` for its own team
 
 ### Flags
 
@@ -1068,6 +1204,10 @@ Usage:
     team reply <id> [<text>] [--close] [--json]
     team reply <id> --close
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1091,6 +1231,10 @@ Hidden: no
 Usage:
 
     team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — the `start` row for a seat: as `start`
 
 ### Flags
 
@@ -1119,6 +1263,10 @@ Usage:
     team revoke grant [--dry-run] [--json]
     team revoke delegate <session/pane> [--dry-run] [--json]
     team revoke <name> [--dry-run] [--json]
+
+### Who may run it
+
+`owner-only` — removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal
 
 ### Flags
 
@@ -1187,6 +1335,10 @@ Usage:
 
     team route <seat> [--json] [--dry-run]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1209,6 +1361,10 @@ Hidden: no
 Usage:
 
     team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -1238,6 +1394,10 @@ Usage:
     team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
+
+### Who may run it
+
+`admission` — admission is chain position and the pair's setting, never a role's name: it is decided by the send admission, and this map admits no one to it
 
 ### Flags
 
@@ -1271,6 +1431,10 @@ Usage:
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
 
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1295,6 +1459,10 @@ Usage:
 
     team tempo <word> [--json]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1317,6 +1485,10 @@ Usage:
 
     team unlock <name> [--json]
 
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1338,6 +1510,10 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — `start`: it runs the hash-pinned start command, and an operation is reached only through `leads` held in a role, never through a grant
 
 ### Flags
 
@@ -1363,6 +1539,10 @@ Usage:
 
     team usage [--json] [--all] [--tree]
 
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1384,6 +1564,10 @@ Hidden: no
 Usage:
 
     team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
@@ -1409,6 +1593,10 @@ Usage:
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
     team worktree list [--session <name>] [--file <path>] [--json]
     team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
 
 ### Flags
 
