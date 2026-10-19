@@ -34,7 +34,7 @@ import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor } from '../send/names.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
-import { awaitReceipt, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
+import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
@@ -1534,7 +1534,7 @@ async function finishThreadWait(
     : [{ root, session }];
   const waitMs = host.waitMs ?? timeoutS * 1000;
   const found = await awaitThreadReply(roots, payload, host.home, waitMs);
-  if ((via === 'mcp-inbox' || via === 'drop') && (found !== null || receiptHeld(dropDir, payload.id, { to: seatName, root, session }, host.home))) {
+  if ((via === 'mcp-inbox' || via === 'drop') && (found !== null || receiptHeld(dropDir, payload.id, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, payload.id)))) {
     clearPending(dropDir, payload.id);
   }
   const entry = {
@@ -1744,7 +1744,7 @@ async function deliverNative(
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
     }
     path = written.path;
-    const receipt = (): boolean => receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home);
+    const receipt = (): boolean => receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, msgId));
     const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli, { receipt, dropPath: path });
     const where = `the record is at ${path}`;
     draft = result.draft === undefined ? undefined : draftNote(result.draft);
@@ -1776,7 +1776,7 @@ async function deliverNative(
     // line — is the read itself: the seat ran the trigger's own drop read and the receipt is on
     // disk. That is `delivered (read)`, the one word a typed line earns only this way; the seat
     // read the message, which is not a claim that it acted on it.
-    if (result.evidence === 'receipt' || (result.evidence === 'taken' && receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home))) {
+    if (result.evidence === 'receipt' || (result.evidence === 'taken' && receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, msgId)))) {
       logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, typed, receipt${draft === undefined ? '' : `; ${draft}`})`, host.now());
       appendHistory(project, root, host.home, {
         ...entry,
@@ -1888,7 +1888,7 @@ async function deliverInbox(
     markPending(dropDir, { ...entry, leg: 'mcp-inbox' });
     if (!wait) {
       const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-      if (await awaitReceipt(dropDir, msgId, { to: seatName, root, session }, host.home, grace)) {
+      if (await awaitReceipt(dropDir, msgId, { to: seatName, root, session }, host.home, grace, claimBindingIn(root, session, seatName, msgId))) {
         clearPending(dropDir, msgId);
         logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
         appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'mcp-inbox', ...failed });

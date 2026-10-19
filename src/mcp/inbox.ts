@@ -483,7 +483,8 @@ export function claimBindingIn(root: string, session: string, seat: string, id: 
 /**
  * Waits up to `timeoutMs` for the receipt, looking once, then every `pollMs`. The
  * caller's grace bounds the wait even while the disk keeps answering; a timeout of zero is the
- * one look and no wait at all.
+ * one look and no wait at all. `brief` is the claim binding `claimBindingIn` derives for this
+ * message; a receipt that does not carry it cannot satisfy the wait, as on every other route.
  */
 export async function awaitReceipt(
   dropDir: string,
@@ -491,15 +492,16 @@ export async function awaitReceipt(
   context: StatusContext,
   home: string,
   timeoutMs: number,
+  brief?: BriefBinding,
   pollMs = INBOX_POLL_MS,
 ): Promise<boolean> {
-  if (receiptHeld(dropDir, id, context, home)) return true;
+  if (receiptHeld(dropDir, id, context, home, brief)) return true;
   const deadline = Date.now() + timeoutMs;
   for (let left = deadline - Date.now(); left > 0; left = deadline - Date.now()) {
     await new Promise((resolve) => {
       setTimeout(resolve, Math.min(pollMs, left));
     });
-    if (receiptHeld(dropDir, id, context, home)) return true;
+    if (receiptHeld(dropDir, id, context, home, brief)) return true;
   }
   return false;
 }
