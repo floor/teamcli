@@ -359,6 +359,37 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(io.out).toContain('team daemon: stopped');
   });
 
+  test('run names endpoints that were not hosted', async () => {
+    const { root, home } = scratch();
+    const io = testIo(root, owner);
+    const code = await runDaemon(['run'], io, sourcesOf(home, {
+      start: async () => ({
+        kind: 'serving',
+        daemon: {
+          socketPath: join(home, 'daemon.sock'),
+          roots: [
+            {
+              root,
+              team: 'acme',
+              send: 'serving',
+              bus: 'failed',
+              why: 'another bus server holds the project socket',
+            },
+          ],
+          health: () => snapshot,
+          close: async () => {},
+        },
+      }),
+      stop: (end) => {
+        setTimeout(end, 0);
+        return () => {};
+      },
+    }));
+    expect(code).toBe(0);
+    expect(io.out).toContain('roots 1 (send 1, bus 0)');
+    expect(io.out).toContain('1 endpoint not hosted here');
+  });
+
   test('run reports an existing daemon and a held lock without starting a second one', async () => {
     const { root, home } = scratch();
     const existing = testIo(root, owner);
