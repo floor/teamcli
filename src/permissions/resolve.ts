@@ -62,6 +62,7 @@ export type PermissionRule =
   | 'record'
   | 'seat-grant'
   | 'role-bundle'
+  | 'any-caller'
   // deny
   | 'no-record'
   | 'unreadable'
@@ -70,6 +71,8 @@ export type PermissionRule =
   | 'owner-only'
   | 'owner-or-leads'
   | 'owner-or-own-team'
+  | 'seat-only'
+  | 'leads-only'
   | 'absent'
   | 'outside-envelope'
   | 'outside-scope'
@@ -112,6 +115,11 @@ export function resolvePermission(
       why: `the map names no \`${command}\` row: 0.5.0 gates no command the Kernel's table does not name`,
     };
   }
+  // The `any-caller` rows ask for no record at all: nothing about the caller is read, so a
+  // caller with none is admitted as any other.
+  if (gate.kind === 'any-caller') {
+    return { effect: 'allow', rule: 'any-caller', why: `\`${command}\` asks for no caller: ${gate.why}` };
+  }
   if (caller === null) {
     return {
       effect: 'deny',
@@ -120,9 +128,14 @@ export function resolvePermission(
     };
   }
   if (caller.kind === 'owner') {
-    // The two rows whose gates live elsewhere: the owner's word matters there, but it is those
-    // gates' to weigh, not this map's.
-    if (gate.kind === 'admission' || gate.kind === 'pane-authority') {
+    // The rows whose gates live elsewhere, or whose gate the owner is not admitted to: the
+    // owner's word matters, but it is those gates' to weigh, not this map's.
+    if (
+      gate.kind === 'admission' ||
+      gate.kind === 'pane-authority' ||
+      gate.kind === 'seat-only' ||
+      gate.kind === 'leads-only'
+    ) {
       return { effect: 'deny', rule: gate.kind, why: gate.why };
     }
     return { effect: 'allow', rule: 'owner', why: `the owner: ${gate.why}` };
@@ -168,6 +181,28 @@ export function resolvePermission(
         };
       }
       return { effect: 'allow', rule: 'record', why: `${caller.seat}'s registry record stands: ${gate.why}` };
+    case 'seat-only':
+      // The owner is a different gate, refused above; here a seat of the team is admitted by
+      // membership alone, and the module's own placement check judges the pane.
+      if (caller.team === team.id) {
+        return { effect: 'allow', rule: 'own-team', why: `${caller.seat} belongs to its own team: ${gate.why}` };
+      }
+      return {
+        effect: 'deny',
+        rule: 'seat-only',
+        why: `\`${command}\` admits a seat of this team alone: ${caller.seat} belongs to ${caller.team}, not ${team.id}`,
+      };
+    case 'leads-only':
+      if (caller.leads === true && caller.team === team.id) {
+        return { effect: 'allow', rule: 'leads', why: `${caller.seat} leads its own team: ${gate.why}` };
+      }
+      return {
+        effect: 'deny',
+        rule: 'leads-only',
+        why: `\`${command}\` admits \`leads\` for its own team, and not the owner: ${caller.seat} ${
+          caller.leads === true ? `leads a team, and not ${team.id}'s` : 'holds no `leads`'
+        }`,
+      };
     case 'admission':
     case 'pane-authority':
       return { effect: 'deny', rule: gate.kind, why: gate.why };
@@ -309,6 +344,12 @@ function says(gate: Gate, command: string): string {
       return `\`${command}\` admits the owner or the seat's own team`;
     case 'seat-record':
       return `\`${command}\` admits any seat with a registry record`;
+    case 'seat-only':
+      return `\`${command}\` admits a declared seat of the team on the pane its state records, and not the owner`;
+    case 'leads-only':
+      return `\`${command}\` admits a seat the team marks \`leads\`, on its recorded pane, and not the owner`;
+    case 'any-caller':
+      return `\`${command}\` asks for no caller and reads no record`;
     case 'capability':
       return `\`${command}\` is admitted by the seat holding it, within its scope`;
     case 'admission':

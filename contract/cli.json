@@ -201,8 +201,8 @@
         "team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read"
       }
     },
     {
@@ -228,8 +228,8 @@
         "team broker"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-only",
+        "why": "the broker reads the tracker credential from the owner's keychain, one per clone, from a terminal outside herdr"
       }
     },
     {
@@ -255,8 +255,8 @@
         "team bus"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-only",
+        "why": "the bus reconciles the project's event log, and the owner runs it, one per clone, from a terminal outside herdr"
       }
     },
     {
@@ -393,15 +393,19 @@
           "subcommands": [],
           "usage": [
             "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the check reads the commit range and the ledger only, from any folder, and asks for no session and no terminal"
+          }
         }
       ],
       "usage": [
         "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "it reads the commit range and the ledger only, from any folder, and asks for no session and no terminal"
       }
     },
     {
@@ -412,8 +416,8 @@
       "subcommands": [],
       "usage": [],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "the hidden port answers classify and yaml requests on stdin: it reads no team file and asks for no caller"
       }
     },
     {
@@ -514,8 +518,8 @@
         "team doctor [--session <name>] [--file <path>] [--login] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them"
       }
     },
     {
@@ -635,8 +639,8 @@
         "team drops --read --seat <seat> [--session <session>]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "seat-only",
+        "why": "a drop folder is one seat's mailbox: the seat the team declares, on the pane the state records for it, and never the owner; --read is the launch line's own invocation and asks for no caller"
       }
     },
     {
@@ -793,8 +797,8 @@
         "team <command> [options]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "the help text reads no team file and asks for no caller"
       }
     },
     {
@@ -845,8 +849,8 @@
         "team hold --release [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-or-leads",
+        "why": "a hold is the team's: the owner or `leads` on its own seat places and releases it"
       }
     },
     {
@@ -917,8 +921,8 @@
         "team issues [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "it lists the task file the owner committed, from the checkout, and asks for no session and no terminal"
       }
     },
     {
@@ -1019,8 +1023,8 @@
         "team lock <name> [--for <text>] [--wait <seconds>] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "any caller may take a free machine lock from a folder whose team file loads; a lock another caller holds is refused, and unlock releases only the caller's own"
       }
     },
     {
@@ -1069,7 +1073,11 @@
           "subcommands": [],
           "usage": [
             "team mcp doctor [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the report writes nothing and asks for no caller"
+          }
         },
         {
           "flags": [
@@ -1104,7 +1112,11 @@
           "subcommands": [],
           "usage": [
             "team mcp serve --seat <seat> [--session <session>]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the launch line names its seat and session; the server reads and receipts only that seat's inbox, and asks for no caller"
+          }
         },
         {
           "flags": [
@@ -1133,7 +1145,11 @@
           "subcommands": [],
           "usage": [
             "team mcp status [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the report writes nothing and asks for no caller"
+          }
         }
       ],
       "usage": [
@@ -1142,8 +1158,8 @@
         "team mcp serve --seat <seat> [--session <session>]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat and asks for none either"
       }
     },
     {
@@ -1259,8 +1275,8 @@
         "team plan [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "seat-only",
+        "why": "a declared seat of this team plans, on the pane the state records for it; the owner and a run with no terminal are not admitted"
       }
     },
     {
@@ -1385,7 +1401,11 @@
           "subcommands": [],
           "usage": [
             "team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner alone sets the policy, from a terminal outside herdr, signed and logged"
+          }
         },
         {
           "flags": [
@@ -1455,7 +1475,11 @@
           "subcommands": [],
           "usage": [
             "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner alone unsets the policy, from a terminal outside herdr, signed and logged"
+          }
         }
       ],
       "usage": [
@@ -1464,8 +1488,8 @@
         "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-or-own-team",
+        "why": "the view is read by the owner, a seat of the team on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr"
       }
     },
     {
@@ -1526,15 +1550,19 @@
           "subcommands": [],
           "usage": [
             "team pr check <file> [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the check reads the pull request body and the checks only, from any folder, and asks for no session and no terminal"
+          }
         }
       ],
       "usage": [
         "team pr check <file> [--file <path>] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal"
       }
     },
     {
@@ -1601,7 +1629,11 @@
           "subcommands": [],
           "usage": [
             "team proc add <name> [--pid <pid>] [--note <text>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "the owner or a declared seat records its process; a seat of another team and a run with no terminal are refused"
+          }
         },
         {
           "flags": [
@@ -1636,7 +1668,11 @@
           "subcommands": [],
           "usage": [
             "team proc done <name> [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "a seat clears its own, a lead clears another seat's, and the owner clears any"
+          }
         },
         {
           "flags": [
@@ -1665,7 +1701,11 @@
           "subcommands": [],
           "usage": [
             "team proc list [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "the owner, a seat the state places on its own pane, or an approved delegate pane reads the list"
+          }
         }
       ],
       "usage": [
@@ -1674,8 +1714,8 @@
         "team proc done <name> [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-or-own-team",
+        "why": "add and done are the owner's or a declared seat's, and list reads what status does, so an approved delegate pane may list too"
       }
     },
     {
@@ -1707,8 +1747,8 @@
         "team projects [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "it reads the project registry and changes nothing, from any folder"
       }
     },
     {
@@ -1757,8 +1797,8 @@
         "team raise <kind> <text> [--dry-run] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "leads-only",
+        "why": "the line is the lead's: the orchestrator's seat or a seat the team marks `leads`, on its recorded pane, and the owner is not admitted"
       }
     },
     {
@@ -1876,15 +1916,19 @@
           "subcommands": [],
           "usage": [
             "team release check <package@version> [--json] [--file <path>]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the check reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain"
+          }
         }
       ],
       "usage": [
         "team release check <package@version> [--json] [--file <path>]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "it reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain"
       }
     },
     {
@@ -2111,8 +2155,8 @@
         "team reply <id> --close"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "admission",
+        "why": "a reply is judged by the send admission exactly as a send is, with the reply rule; the caller must be the record's addressee"
       }
     },
     {
@@ -2254,7 +2298,11 @@
           "subcommands": [],
           "usage": [
             "team revoke delegate <session/pane> [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing a standing delegation is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal"
+          }
         },
         {
           "flags": [
@@ -2289,7 +2337,11 @@
           "subcommands": [],
           "usage": [
             "team revoke grant [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal"
+          }
         }
       ],
       "usage": [
@@ -2343,8 +2395,8 @@
         "team route <seat> [--json] [--dry-run]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "admission",
+        "why": "a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused"
       }
     },
     {
@@ -2400,8 +2452,8 @@
         "team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-or-own-team",
+        "why": "the owner, a seat of the team on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone"
       }
     },
     {
@@ -2599,8 +2651,8 @@
         "team tempo <word> [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-only",
+        "why": "the tempo word is the owner's, from a terminal outside herdr"
       }
     },
     {
@@ -2638,8 +2690,8 @@
         "team unlock <name> [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "a lock is anyone's to take, and its release is the holder's alone: the caller the holder file names releases it, and anyone else is shown the holder"
       }
     },
     {
@@ -2791,8 +2843,8 @@
         "team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "any-caller",
+        "why": "anyone in a terminal or its own pane starts the watch; a run with no terminal is refused before it starts"
       }
     },
     {
@@ -2853,7 +2905,11 @@
           "subcommands": [],
           "usage": [
             "team worktree list [--session <name>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the owner or `leads` on its own seat lists the worktrees; --session and --file are the owner's"
+          }
         },
         {
           "flags": [
@@ -2912,7 +2968,11 @@
           "subcommands": [],
           "usage": [
             "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the owner or `leads` on its own seat creates a worktree; --session and --file are the owner's"
+          }
         },
         {
           "flags": [
@@ -2965,7 +3025,11 @@
           "subcommands": [],
           "usage": [
             "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the owner or `leads` on its own seat removes a worktree; --session and --file are the owner's"
+          }
         }
       ],
       "usage": [
@@ -2974,8 +3038,8 @@
         "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
       ],
       "who": {
-        "gate": "unlisted",
-        "why": "the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller"
+        "gate": "owner-or-leads",
+        "why": "the owner or `leads` on its own seat manages worktrees; --session and --file are the owner's"
       }
     }
   ],

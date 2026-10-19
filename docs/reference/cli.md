@@ -103,7 +103,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read
 
 ### Flags
 
@@ -132,7 +132,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-only` — the broker reads the tracker credential from the owner's keychain, one per clone, from a terminal outside herdr
 
 ### Flags
 
@@ -155,7 +155,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-only` — the bus reconciles the project's event log, and the owner runs it, one per clone, from a terminal outside herdr
 
 ### Flags
 
@@ -210,7 +210,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — it reads the commit range and the ledger only, from any folder, and asks for no session and no terminal
 
 ### Flags
 
@@ -230,6 +230,10 @@ Hidden: no
 Usage:
 
     team commits check <ref> [--since <ref>] [--file <path>] [--json]
+
+#### Who may run it
+
+`any-caller` — the check reads the commit range and the ledger only, from any folder, and asks for no session and no terminal
 
 #### Flags
 
@@ -255,7 +259,7 @@ Usage: none
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — the hidden port answers classify and yaml requests on stdin: it reads no team file and asks for no caller
 
 ### Flags
 
@@ -303,7 +307,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them
 
 ### Flags
 
@@ -360,7 +364,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`seat-only` — a drop folder is one seat's mailbox: the seat the team declares, on the pane the state records for it, and never the owner; --read is the launch line's own invocation and asks for no caller
 
 ### Flags
 
@@ -451,7 +455,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — the help text reads no team file and asks for no caller
 
 ### Flags
 
@@ -472,7 +476,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-or-leads` — a hold is the team's: the owner or `leads` on its own seat places and releases it
 
 ### Flags
 
@@ -525,7 +529,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — it lists the task file the owner committed, from the checkout, and asks for no session and no terminal
 
 ### Flags
 
@@ -576,7 +580,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — any caller may take a free machine lock from a folder whose team file loads; a lock another caller holds is refused, and unlock releases only the caller's own
 
 ### Flags
 
@@ -606,7 +610,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat and asks for none either
 
 ### Flags
 
@@ -626,6 +630,10 @@ Hidden: no
 Usage:
 
     team mcp doctor [--json]
+
+#### Who may run it
+
+`any-caller` — the report writes nothing and asks for no caller
 
 #### Flags
 
@@ -647,6 +655,10 @@ Usage:
 
     team mcp serve --seat <seat> [--session <session>]
 
+#### Who may run it
+
+`any-caller` — the launch line names its seat and session; the server reads and receipts only that seat's inbox, and asks for no caller
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -667,6 +679,10 @@ Hidden: no
 Usage:
 
     team mcp status [--json]
+
+#### Who may run it
+
+`any-caller` — the report writes nothing and asks for no caller
 
 #### Flags
 
@@ -741,7 +757,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`seat-only` — a declared seat of this team plans, on the pane the state records for it; the owner and a run with no terminal are not admitted
 
 ### Flags
 
@@ -767,7 +783,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-or-own-team` — the view is read by the owner, a seat of the team on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr
 
 ### Flags
 
@@ -790,6 +806,10 @@ Hidden: no
 Usage:
 
     team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — the owner alone sets the policy, from a terminal outside herdr, signed and logged
 
 #### Flags
 
@@ -822,6 +842,10 @@ Usage:
 
     team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
 
+#### Who may run it
+
+`owner-only` — the owner alone unsets the policy, from a terminal outside herdr, signed and logged
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -852,7 +876,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal
 
 ### Flags
 
@@ -872,6 +896,10 @@ Hidden: no
 Usage:
 
     team pr check <file> [--file <path>] [--json]
+
+#### Who may run it
+
+`any-caller` — the check reads the pull request body and the checks only, from any folder, and asks for no session and no terminal
 
 #### Flags
 
@@ -900,7 +928,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-or-own-team` — add and done are the owner's or a declared seat's, and list reads what status does, so an approved delegate pane may list too
 
 ### Flags
 
@@ -920,6 +948,10 @@ Hidden: no
 Usage:
 
     team proc add <name> [--pid <pid>] [--note <text>] [--json]
+
+#### Who may run it
+
+`owner-or-own-team` — the owner or a declared seat records its process; a seat of another team and a run with no terminal are refused
 
 #### Flags
 
@@ -945,6 +977,10 @@ Usage:
 
     team proc done <name> [--json]
 
+#### Who may run it
+
+`owner-or-own-team` — a seat clears its own, a lead clears another seat's, and the owner clears any
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -966,6 +1002,10 @@ Hidden: no
 Usage:
 
     team proc list [--json]
+
+#### Who may run it
+
+`owner-or-own-team` — the owner, a seat the state places on its own pane, or an approved delegate pane reads the list
 
 #### Flags
 
@@ -989,7 +1029,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — it reads the project registry and changes nothing, from any folder
 
 ### Flags
 
@@ -1013,7 +1053,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`leads-only` — the line is the lead's: the orchestrator's seat or a seat the team marks `leads`, on its recorded pane, and the owner is not admitted
 
 ### Flags
 
@@ -1070,7 +1110,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — it reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain
 
 ### Flags
 
@@ -1090,6 +1130,10 @@ Hidden: no
 Usage:
 
     team release check <package@version> [--json] [--file <path>]
+
+#### Who may run it
+
+`any-caller` — the check reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain
 
 #### Flags
 
@@ -1206,7 +1250,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`admission` — a reply is judged by the send admission exactly as a send is, with the reply rule; the caller must be the record's addressee
 
 ### Flags
 
@@ -1291,6 +1335,10 @@ Usage:
 
     team revoke delegate <session/pane> [--dry-run] [--json]
 
+#### Who may run it
+
+`owner-only` — removing a standing delegation is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal
+
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
@@ -1313,6 +1361,10 @@ Hidden: no
 Usage:
 
     team revoke grant [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal
 
 #### Flags
 
@@ -1337,7 +1389,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`admission` — a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused
 
 ### Flags
 
@@ -1364,7 +1416,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-or-own-team` — the owner, a seat of the team on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone
 
 ### Flags
 
@@ -1461,7 +1513,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-only` — the tempo word is the owner's, from a terminal outside herdr
 
 ### Flags
 
@@ -1487,7 +1539,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — a lock is anyone's to take, and its release is the holder's alone: the caller the holder file names releases it, and anyone else is shown the holder
 
 ### Flags
 
@@ -1567,7 +1619,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`any-caller` — anyone in a terminal or its own pane starts the watch; a run with no terminal is refused before it starts
 
 ### Flags
 
@@ -1596,7 +1648,7 @@ Usage:
 
 ### Who may run it
 
-`unlisted` — the command-to-capability map holds no row for this word: its own module decides who may run it, and no row here admits a caller
+`owner-or-leads` — the owner or `leads` on its own seat manages worktrees; --session and --file are the owner's
 
 ### Flags
 
@@ -1616,6 +1668,10 @@ Hidden: no
 Usage:
 
     team worktree list [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — the owner or `leads` on its own seat lists the worktrees; --session and --file are the owner's
 
 #### Flags
 
@@ -1638,6 +1694,10 @@ Hidden: no
 Usage:
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — the owner or `leads` on its own seat creates a worktree; --session and --file are the owner's
 
 #### Flags
 
@@ -1664,6 +1724,10 @@ Hidden: no
 Usage:
 
     team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — the owner or `leads` on its own seat removes a worktree; --session and --file are the owner's
 
 #### Flags
 
