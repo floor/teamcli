@@ -178,8 +178,12 @@ function boxText(profile: string, screen: string): string {
   return [box.first, ...box.rows.map((row) => (row.startsWith(pad) ? row.slice(pad.length) : row))].join('\n').trimEnd();
 }
 
-/** The drop file a trigger line names (`Read <path> and do that.`), or null for any other line. */
+/** The drop file a trigger line names, in the form this build types (`From
+ *  <seat>@<team>: read <path> and do that.`) or the one earlier builds typed (`Read <path> and
+ *  do that.`), which stays readable during the transition; null for any other line. */
 export function dropPathOf(line: string): string | null {
+  const from = /^From \S+: read (\S+) and do that\.$/.exec(line);
+  if (from !== null) return from[1] ?? null;
   return /^Read (\S+) and do that\.$/.exec(line)?.[1] ?? null;
 }
 

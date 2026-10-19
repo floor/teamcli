@@ -12,7 +12,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -95,7 +94,9 @@ delivery_order: [mcp-inbox, typed]
 }
 
 function setupWorld() {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-daemon-')));
+  // `/tmp` rather than the platform temp folder: the fixture's paths sit inside the wake line,
+  // and the measured 200-character ceiling has room for the sender only on the short base.
+  base = realpathSync(mkdtempSync(join('/tmp', 'team-send-daemon-')));
   const root = join(base, 'acme');
   const dir = join(root, '.agents');
   const sockets = join(base, 'sockets');
@@ -900,7 +901,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const files = readdirSync(drops);
     expect(files.length).toBe(1);
     const dropFile = join(drops, files[0]!);
-    expect(host.typed[0]?.text ?? null).toBe(triggerLine(dropFile));
+    expect(host.typed[0]?.text ?? null).toBe(triggerLine(dropFile, { seat: 'owner', team: 'acme' }));
     expect(readFileSync(dropFile, 'utf8')).toBe(filed('stored in state drops'));
   });
 

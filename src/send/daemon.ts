@@ -941,7 +941,9 @@ async function executeQueuedSend(
   // that a running watch scans, so no pending record is written beside it and these lines
   // promise no retry. When the daemon is wired in, write the record where the watch reads.
   const candidateDropPath = join(stateDropDir, msgId);
-  const trigger = triggerLine(candidateDropPath);
+  // The wake names the sender from the send's own record: the caller seat the daemon was asked
+  // to deliver for, and the team it runs under. Nothing in the body decides the name.
+  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project });
   if (trigger === null) {
     return {
       v: 1,
