@@ -34,6 +34,7 @@ import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
+import { dispatchIdleWork, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -187,6 +188,12 @@ export type WatchSources = {
   onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
   /** Optional herdr status-event source (`herdr wait agent-status` per seat). */
   statusSource?: StatusSource;
+  /**
+   * The direct route to an idle seat with takeable work (the dispatcher's `pushWork`). Absent,
+   * the watch dispatches nothing directly and types no old work nudge either: an episode the
+   * dispatcher owns is never typed at by the legacy path, and the one fallback record says so.
+   */
+  pushWork?: WorkPush;
 };
 
 export const realWatchSources: WatchSources = {
@@ -778,6 +785,31 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The seats this project's queue waits on, whoever queued them: the pass types no work
         // drop into one, so it takes no task while its swap waits (the design's work-drop rule).
         const waiting = new Set(queuedSwaps(readState(dir)).map(([seat]) => seat));
+        // The dispatcher: the watch's one path to an idle seat with takeable work. It reads the
+        // same snapshot `status` prints (no picker of its own, no claim) and calls the direct
+        // route when the sources wire one. Every episode it owns is dropped from the legacy typed
+        // work nudge, whether the route exists or not: with no route the seat is not typed at,
+        // and the pass says the one fallback line instead. `--no-nudge` is the watch that types
+        // nothing: it dispatches nothing at all rather than spending an episode on a route it was
+        // told not to use.
+        const idleDispatch: IdleDispatchResult = foreign || args.flags.has('no-nudge')
+          ? { pushed: [], suppressed: [] }
+          : await dispatchIdleWork({
+            root, team, state, live, now: sources.now(),
+            home: sources.home,
+            pause: whole.pause ?? null,
+            swaps: [...waiting],
+            body: (seat) => (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', seat),
+            push: sources.pushWork,
+          });
+        const suppressed = new Set(idleDispatch.suppressed ?? []);
+        for (const item of idleDispatch.pushed) {
+          if (item.ok) continue;
+          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); nothing was typed for it this episode`, false);
+        }
+        for (const line of idleDispatch.fallback?.failed ?? []) tell(line, true);
+        for (const line of idleDispatch.fallback?.missing ?? []) say(line, false);
+        if (suppressed.size > 0) result.work = result.work.filter((item) => !suppressed.has(item.seat));
         // A liveness word the chain set aside: said once per process, as a line, never typed
         // into a seat and never a desktop notice. The value in force stands.
         for (const refusal of result.refusals) {
@@ -824,6 +856,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign && statusEngine !== undefined) {
           for (const nudgedSeat of statusEngine.drainNudges()) {
             if (result.work.some((item) => item.seat === nudgedSeat)) continue;
+            // The dispatcher owns this seat's idle episode: the status nudge is not a second
+            // typed path into it, exactly as the pass's own work drop is dropped above.
+            if (suppressed.has(nudgedSeat)) continue;
             if (waiting.has(nudgedSeat)) continue;
             const fileSeat = team.seats.find((item) => item.name === nudgedSeat);
             const agent = live.agents.find((item) => item.name === nudgedSeat);
