@@ -40,7 +40,7 @@ restart.
 | Exit | When |
 | --- | --- |
 | 0 | the registry was listed |
-| 2 | the invocation, or the team file, cannot be read |
+| 2 | the invocation is not one of the command's forms |
 
 ## Example
 
