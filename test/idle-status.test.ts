@@ -22,6 +22,7 @@ import {
 import { updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { greenSlicesPath, pendingGreenSlices, recordGreenSliceReady } from '../src/tasks/green-slices.ts';
+import { idleWorkReport } from '../src/watch/idle-work.ts';
 import type { Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
@@ -49,12 +50,25 @@ const loaded = validateTeamFile(TEXT);
 if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
 const seat = loaded.team.seats[0]!;
 
+/** The same team with a non-lead worker, the seat the snapshot can count as idle. */
+const TEXT_WORKER = `${TEXT}  - role: builder
+    name: writer
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+const withWorker = validateTeamFile(TEXT_WORKER);
+if (!withWorker.ok) throw new Error(JSON.stringify(withWorker.errors));
+const writerSeat = withWorker.team.seats[1]!;
+
 const made: string[] = [];
 afterEach(() => {
   for (const base of made.splice(0)) rmSync(base, { recursive: true, force: true });
 });
 
-function place(): { root: string; dir: string; home: string } {
+function place(teamText = TEXT, seats = ['lead']): { root: string; dir: string; home: string } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-idle-status-')));
   made.push(base);
   const root = join(base, 'acme');
@@ -63,7 +77,7 @@ function place(): { root: string; dir: string; home: string } {
   mkdirSync(dir, { recursive: true });
   mkdirSync(home);
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(dir, 'team.yaml'), TEXT);
+  writeFileSync(join(dir, 'team.yaml'), teamText);
   updateState(dir, (state) => {
     state.sessions.acme = {
       seats: { lead: { stage: 'ready', pane: 'w1:p1', workspace: 'w1' } },
@@ -71,7 +85,7 @@ function place(): { root: string; dir: string; home: string } {
       watch: { pid: 1, heartbeat: AT },
     };
   });
-  deliverBriefs({ dir, root, session: 'acme', seats: ['lead'], home, at: AT });
+  deliverBriefs({ dir, root, session: 'acme', seats, home, at: AT });
   return { root, dir, home };
 }
 
@@ -279,4 +293,55 @@ test('a corrupt journal is named with its path, and changes no exit', async () =
   expect(doc.green_slices).toBeUndefined();
   expect(doc.green_notice).toBe(why);
   expect(doc.notes).toContain(`the green journal cannot be read, so ready slices are unknown (${why})`);
+});
+
+test('status and check read the real snapshot from persisted state and the local queue', async () => {
+  const at = place(TEXT_WORKER, ['lead', 'writer']);
+  updateState(at.dir, (state) => {
+    const session = state.sessions.acme;
+    if (session === undefined) throw new Error('the fixture session is missing');
+    session.seats.writer = {
+      stage: 'ready', pane: 'w2:p1', workspace: 'w2', last_active: '2026-10-19T08:50:00.000Z',
+    };
+  });
+  writeFileSync(join(at.dir, 'queue.yaml'), '- id: t1\n  title: "First"\n');
+  const scene: Live = {
+    running: true,
+    agents: [
+      { name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
+      { name: 'writer', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null },
+    ],
+    workspaces: [{ id: 'w1', label: workspaceLabel(seat) }, { id: 'w2', label: workspaceLabel(writerSeat) }],
+    screens: { 'w1:p1': CLAUDE_IDLE, 'w2:p1': CLAUDE_IDLE },
+  };
+  const since = '2026-10-19T08:50:00.000Z';
+  const line = `idle with work: 1 idle seat past 5 minutes, 1 takeable; writer idle since ${since}`;
+  const sources: StatusSources = {
+    live: () => scene,
+    branch: () => 'main',
+    standing: (root) => approvalStanding(root, at.home),
+    now: () => NOW,
+    home: at.home,
+    idleWork: idleWorkReport,
+    pendingGreen: pendingGreenSlices,
+  };
+  const io = testIo(at.root, { kind: 'owner' });
+  await runStatus(['--json'], io, sources);
+  const doc = JSON.parse(io.out) as { notes: string[]; idle_work: IdleWorkReport };
+  expect(doc.idle_work).toEqual({
+    format: 1, at: AT, threshold_seconds: 300, takeable: 1, idle: [{ seat: 'writer', since }],
+  });
+  expect(doc.notes).toContain(line);
+  const checked = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, checked, {
+    live: () => scene,
+    branch: () => 'main',
+    standing: (root) => approvalStanding(root, at.home),
+    now: () => NOW,
+    home: at.home,
+    idleWork: idleWorkReport,
+    pendingGreen: pendingGreenSlices,
+  });
+  expect(checked.out).toContain(line);
+  expect(code).toBe(0);
 });
