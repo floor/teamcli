@@ -3,8 +3,11 @@
 Shows what this machine holds: every team it keeps a store for, read as one report — each
 team's accounts and windows, with what is left and used, when each figure was last read and from
 which source — then one `SEAT  CLI  ACCOUNT` table per team. `--tree` adds a quota view per lab
-and per account with the pace margin and the seats drawing on it; the one advice line prints
-either way. The caller's
+and per account with the pace margin and the seats drawing on it, and under each team table the
+seats' own figures, each marked `measured` when this run read the seat's screen and `estimated`
+when it comes from the watch's per-seat record, with one spend line per seat: the amount the
+seat's own status row printed, or `unknown` with its reason. The one advice line prints either
+way. The caller's
 own project is one of those teams, whether or not it holds a store. Anyone may run it, from
 anywhere, and it only reads: no check runs and nothing is written. It reads the seat panes herdr
 records and may run the CLI's own usage command where a seat runs a CLI that has one, bounded by a
@@ -20,7 +23,7 @@ timeout; it opens no credential, key or CLI session file.
 | --- | --- | --- |
 | `--all` | — | include every team’s seat-to-account breakdown for the owner; other callers see only their own team |
 | `--json` | — | the same report as one document, format 1, for a script to read; every key is printed in both views |
-| `--tree` | — | add the quota view — one block per lab and per account, with each window’s margin — between the account lines and the team tables, its own `advice:` line inside it; without the flag the same advice line follows the account lines |
+| `--tree` | — | add the quota view — one block per lab and per account, with each window’s margin — between the account lines and the team tables, its own `advice:` line inside it, and under each team table each seat’s own window and spend lines; without the flag the same advice line follows the account lines |
 
 The owner can list shared subscriptions in `~/.config/team/accounts.yaml`:
 
@@ -76,7 +79,7 @@ screen`; a lab its seats draw on that no screen reads is one line instead of an 
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the report printed, whatever its figures, and whether or not this folder holds a project | the account table headed `ACCOUNT  WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE`, with `RESERVE` between `RESETS` and `READ` only when some row has a reserve to show, then one line per account with no screen reading and one line per lab no file declares — that lab's seats as one account named after the lab, or, when no screen reads that lab, its seat count in one line — the one `advice:` line, the caller's own team rows, one `SEAT  CLI  ACCOUNT` table per team, the collapsed notes, and the closing summary line (`usage on this machine, 1 team, 2 labs, 2 accounts`); `--tree` adds the quota view between the account lines and the team tables, with its own `advice:` line; in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
+| the report printed, whatever its figures, and whether or not this folder holds a project | the account table headed `ACCOUNT  WINDOW  LEFT  USED  RESETS  READ  SOURCE  STATE`, with `RESERVE` between `RESETS` and `READ` only when some row has a reserve to show, then one line per account with no screen reading and one line per lab no file declares — that lab's seats as one account named after the lab, or, when no screen reads that lab, its seat count in one line — the one `advice:` line, the caller's own team rows, one `SEAT  CLI  ACCOUNT` table per team, the collapsed notes, and the closing summary line (`usage on this machine, 1 team, 2 labs, 2 accounts`); `--tree` adds the quota view between the account lines and the team tables, with its own `advice:` line, and under each team table one line per seat window and one spend line per seat; in the restricted view — every caller but the owner at a terminal — a caller outside every project also reads shared machine subscriptions | 0 |
 | the invocation can't be read, or the stores folder can't be read | `team usage: <problem>`, with the usage for the invocation; the stores folder alone gets `team usage: the store folder cannot be read: the owner reads the reason` for every caller but the owner, who reads the read's own message, the folder among it | 2 |
 
 ## Example
@@ -217,5 +220,33 @@ every view (`the team "team" (~/Code/floor/team): its file could not be read.`).
 block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
 `advice`.
+
+## Each seat’s own figures
+
+Under each team’s `SEAT  CLI  ACCOUNT` table, `--tree` prints that team’s seats’ own figures:
+
+    beacon
+      SEAT           CLI          ACCOUNT
+      claude-keeper  claude-code  anthropic
+      claude-keeper  claude-code  anthropic  session  left 80%  used 20%  resets in 2h6m  margin +38%  measured  status line  read 1m ago
+      claude-keeper  claude-code  anthropic  weekly  left 88%  used 12%  resets in 125h26m  margin +13.3%  measured  status line  read 1m ago
+      claude-keeper  claude-code  anthropic  cost  $5.8  measured  status line  read 1m ago
+
+A window line carries the account the figure measures, the window, the same percentages, reset
+and margin the quota block prints, and the source with the reading’s age and its mark. `measured`
+is a figure this run read from the seat’s own screen; `estimated` is the watch’s per-seat record
+in the project state (source `state record`), which fills only the windows the live read did not
+answer. A seat with neither prints `unknown  no reading for this seat`.
+
+The spend line is the seat’s own money figure: the amount a Claude Code status row prints in its
+`S:` field (`S: $5.8` on a real 2.1.299 screen), read only from the row the profile’s status
+patterns recognize, and marked `measured` with its source and reading age. A seat whose screen
+printed no amount — any other CLI, an unread pane, or a row without the field — prints
+`cost  unknown` with one sentence, never `0`. The figure is per seat and per run: a seat’s
+figures and spend are attributed to the run (herdr session) its pane was read in, so two teams’
+same-named seats never borrow each other’s figures. In `--json` the same facts are `teams[].seats`:
+the seat, its CLI and paying account, its `run`, its `windows` (each with `mark`, `source`,
+`readAt`, `age` and `stale`), and its `cost` (`amount`, `currency`, `mark`, `source`, `readAt`,
+`age`; `why` when unknown).
 
 Rationale, behaviour, refusals and known limits: [docs/internal/usage.md](../internal/usage.md).

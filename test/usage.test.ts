@@ -110,7 +110,24 @@ const QUOTA = [
  *  the project block the table already ends with. The default view's one advice line is the quota
  *  block's own when the tree prints it, so it stands in the block, never twice. */
 const ADVICE = 'advice: no readings yet: no seat status line and no CLI usage command has answered';
-const REPORT = TABLE.replace(`${ADVICE}\n`, '').replace('\n\nacme\n', `\n\n${QUOTA}\n\nacme\n`);
+// Under the tree the seat table carries the seats' own figures: this fixture's watch record has
+// the lead's openai daily and weekly readings (the state `withState()` writes), both estimated,
+// one stale; no live source answered, and the spend is unknown with its reason.
+const SEAT_FIGURES = [
+  '  lead  claude-code  openai  daily  left 70%  used 30%  resets unknown  margin not known  estimated  state record  read 40m ago  stale',
+  '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  margin +4.6%  estimated  state record  read 2m ago',
+  "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
+].join('\n');
+const REPORT = TABLE.replace(`${ADVICE}\n`, '')
+  .replace('\n\nacme\n', `\n\n${QUOTA}\n\nacme\n`)
+  .replace('\n\nusage on this machine', `\n${SEAT_FIGURES}\n\nusage on this machine`);
+
+/** The tree's lines for one seat with no figure and its own spend line: a seat the report cannot
+ *  read prints `unknown` for both, never a zero. */
+const noFigure = (seat: string, cli: string, account: string) => [
+  `  ${seat}  ${cli}  ${account}  unknown  no reading for this seat`,
+  `  ${seat}  ${cli}  ${account}  cost  unknown  no money cost was read from this seat's screen this run`,
+];
 
 /** The zero-config account a lab its seats draw on prints before any reading: one account named
  *  after the lab, `unknown` with no window, and readable by the same rule a declared account's
@@ -519,7 +536,30 @@ describe('team usage', () => {
         ],
         advice: 'no readings yet: no seat status line and no CLI usage command has answered',
       },
-      teams: [{ team: 'acme', seats: [{ seat: 'lead', cli: 'claude-code', account: 'anthropic' }] }],
+      teams: [{
+        team: 'acme',
+        seats: [{
+          seat: 'lead',
+          cli: 'claude-code',
+          account: 'anthropic',
+          run: 'acme-web',
+          // The state's per-seat record, marked estimated: the daily point is older than five
+          // minutes and stale, the weekly one still inside its window.
+          windows: [
+            {
+              window: 'daily', account: 'openai', left: 70, used: 30, resetsAt: null, resetsIn: null,
+              margin: null, mark: 'estimated', source: 'state record', readAt: '2026-10-04T08:20:00.000Z',
+              age: '40m', stale: true,
+            },
+            {
+              window: 'weekly', account: 'openai', left: 5, used: 95, resetsAt: '2026-10-04T09:44:00.000Z',
+              resetsIn: '44m', margin: 4.6, mark: 'estimated', source: 'state record',
+              readAt: '2026-10-04T08:58:00.000Z', age: '2m', stale: false,
+            },
+          ],
+          cost: { amount: null, currency: 'USD', mark: 'unknown', why: "no money cost was read from this seat's screen this run" },
+        }],
+      }],
     });
   });
 
@@ -583,7 +623,7 @@ describe('team usage', () => {
     expect(Object.keys(report)).toEqual(['format', 'at', 'view', 'mine', 'counts', 'labs', 'quota', 'unknown', 'notes', 'teams']);
     for (const block of report.teams) {
       expect(Object.keys(block)).toEqual(['team', 'seats']);
-      for (const seat of block.seats) expect(Object.keys(seat)).toEqual(['seat', 'cli', 'account']);
+      for (const seat of block.seats) expect(Object.keys(seat)).toEqual(['seat', 'cli', 'account', 'run', 'windows', 'cost']);
     }
     expect(Object.keys(report.counts)).toEqual(['teams', 'labs', 'accounts']);
     const accountEntries = report.labs.flatMap((lab) => lab.accounts);
@@ -785,6 +825,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       'note: acme: .agents/team.state.json is not valid JSON; move it aside and run the command again',
       '',
       'usage on this machine, 1 team, 2 labs, 2 accounts',
@@ -821,6 +862,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       '',
       'usage on this machine, 1 team, 1 lab, 1 account',
     ].join('\n') + '\n');
@@ -846,6 +888,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       `note: acme: ${UNBOUND_ACCOUNT}`,
       '',
       'usage on this machine, 1 team, 1 lab, 1 account',
@@ -873,6 +916,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       '',
       'usage on this machine, 1 team, 1 lab, 2 accounts',
     ].join('\n') + '\n');
@@ -941,6 +985,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       'note: acme: the file was never approved on this machine',
       '',
       'usage on this machine, 1 team, 1 lab, 1 account',
@@ -965,6 +1010,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       'note: acme: the file was never approved on this machine',
       `note: acme: ${UNBOUND_ACCOUNT}`,
       '',
@@ -991,6 +1037,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       'note: acme: the file was never approved on this machine',
       '',
       'usage on this machine, 1 team, 1 lab, 2 accounts',
@@ -1352,6 +1399,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       `note: acme: ${UNBOUND_ACCOUNT}`,
       '',
       'usage on this machine, 1 team, 1 lab, 1 account',
@@ -1425,6 +1473,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       '',
       'usage on this machine, 1 team, 3 labs, 3 accounts',
     ].join('\n') + '\n');
@@ -1488,6 +1537,10 @@ describe('team usage', () => {
       '  SEAT   CLI          ACCOUNT',
       '  lead   claude-code  anthropic',
       '  ghost  claude-code  anthropic',
+      '  lead  claude-code  anthropic  unknown  no reading for this seat',
+      "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
+      '  ghost  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  margin +4.6%  estimated  state record  read 2m ago',
+      "  ghost  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
       '',
       'usage on this machine, 1 team, 2 labs, 2 accounts',
     ].join('\n') + '\n');
@@ -1659,6 +1712,7 @@ describe('team usage', () => {
       'acme',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      ...noFigure('lead', 'claude-code', 'anthropic'),
       `note: acme: ${UNBOUND_SHAPE}`,
       '',
       'usage on this machine, 1 team, 2 labs, 2 accounts',
@@ -1844,6 +1898,10 @@ describe('team usage', () => {
       'acme-7QK',
       '  SEAT  CLI          ACCOUNT',
       '  lead  claude-code  anthropic',
+      // The caller's own state holds this seat's weekly record; it is old enough to be stale, so
+      // the margin is not read from it, and the spend is unknown with its reason.
+      '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  margin not known  estimated  state record  read 10m ago  stale',
+      "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
       "note: acme-7QK: a stored reading names an account this team's file does not: not shown",
       "note: 2 teams' states cannot be read (not valid JSON; move it aside and run the command again)",
       '',
@@ -2226,6 +2284,7 @@ describe('team usage', () => {
           account: 'openai', window: 'session', left: 40, used: 60, resetsAt: null, resetText: null,
           observedAt: NOW.getTime() - 60_000, source: 'status line' as const, seat: 'lead', margin: -68.6, wall: false,
         }],
+        costs: [],
         notes: [],
       }),
     });
@@ -2235,6 +2294,49 @@ describe('team usage', () => {
     expect(line).not.toContain('fresh');
     expect(io.out).toContain('advice: near cap on openai (session used 60%, margin -68.6%)');
     expect(io.out).not.toContain('\nquota\n');
+  });
+
+  test('a spend a seat’s own row printed is measured for that seat and its run, and never for another run', async () => {
+    // The live case the owner asked for: the seat's row prints `S: $5.8`, and the report records
+    // it per seat and per run — measured, with the screen it came from — while a seat the screen
+    // did not answer for stays `unknown`, never a zero.
+    withoutReadings();
+    withState();
+    const cost = (session: string | null) => ({
+      seat: 'lead',
+      account: 'anthropic',
+      session,
+      amount: 5.8,
+      currency: 'USD' as const,
+      observedAt: NOW.getTime(),
+      source: 'status line' as const,
+    });
+    const io = testIo(root, SEAT);
+    const code = await runUsage(['--tree'], io, { home, now: () => NOW, observe: () => ({ observations: [], costs: [cost('acme-web')], notes: [] }) });
+    expect(code).toBe(0);
+    expect(io.out).toContain('  lead  claude-code  anthropic  cost  $5.8  measured  status line  read 0m ago');
+    const json = testIo(root, SEAT);
+    expect(await runUsage(['--json'], json, { home, now: () => NOW, observe: () => ({ observations: [], costs: [cost('acme-web')], notes: [] }) })).toBe(0);
+    const doc = JSON.parse(json.out) as { teams: { seats: { cost: Record<string, unknown> }[] }[] };
+    expect(doc.teams[0]?.seats[0]?.cost).toEqual({
+      amount: 5.8,
+      currency: 'USD',
+      mark: 'measured',
+      source: 'status line',
+      readAt: new Date(NOW.getTime()).toISOString(),
+      age: '0m',
+    });
+    // The figure is per run: the same name in another run's pane is another seat's spend, and
+    // this run reads unknown rather than borrowing it.
+    const stray = testIo(root, SEAT);
+    expect(await runUsage(['--json'], stray, { home, now: () => NOW, observe: () => ({ observations: [], costs: [cost('other-web')], notes: [] }) })).toBe(0);
+    const other = JSON.parse(stray.out) as { teams: { seats: { cost: { amount: number | null; currency: string; mark: string; why?: string } }[] }[] };
+    expect(other.teams[0]?.seats[0]?.cost).toEqual({
+      amount: null,
+      currency: 'USD',
+      mark: 'unknown',
+      why: "no money cost was read from this seat's screen this run",
+    });
   });
 
   test('a lab its seats draw on and no screen reads is one line with its seat count, never an `unknown` row', async () => {
