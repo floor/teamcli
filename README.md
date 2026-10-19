@@ -70,10 +70,15 @@ Every command, flag, refusal and exit code is in
 
 0.5.3 adds a client send path. An owner issues a send-only grant with `team grant --client`;
 `team client keygen --out <dir>` writes the client's Ed25519 key pair, and the client signs each
-request with it through `team send --client <grant-file> --key <key-file>`. A send is one signed
-record on disk, written to the orchestrator the grant names; the run prints
-`sent: <seat>@<entity> (drop <id>)` and types nothing. Every client invocation prints
-`key isolation: not enforced (pane guard pending)`.
+request with it through `team send --client <grant-file> --key <key-file> <address>`. A send is
+one signed record on disk, written to the orchestrator the grant names; the run prints
+`sent: <seat>@<entity> (drop <id>)` and types nothing. Every `send --client` and
+`messages --client` invocation prints `key isolation: not enforced (pane guard pending)`.
+
+This release admits client `grok-bot` for entity `floor`, addressed to
+`orchestrator@floor`; a grant written with `--inbox` also admits the client's own read and
+`--ack` through `team messages --client` (see
+[the grant reference](https://github.com/floor/teamcli/blob/main/docs/commands/grant.md)).
 
 Client reply publication is deferred to 0.5.4; the client send and read/ack paths remain
 available in 0.5.3. Seat replies and `--close` are unchanged.
@@ -82,8 +87,11 @@ available in 0.5.3. Seat replies and `--close` are unchanged.
 launch; the dry run is the default and `--apply` writes. Client grant revocation is recorded as
 owner-signed events, and a client request is revalidated against them when it lands.
 
-Key isolation is not enforced in 0.5.3, and the pane guard is deferred to 0.5.4:
-cross-session protection is NOT in this release. Downgrading to 0.5.2 after 0.5.3 has written revocations is NOT authority-preserving: 0.5.2 does not read those revocations, and a revoked grant can act again. No validated recovery; prefer a forward fix (0.5.3.x) over a downgrade.
+Key isolation is not enforced in 0.5.3, and the pane guard is deferred to 0.5.4.
+
+cross-session protection is NOT in this release.
+
+Downgrading to 0.5.2 after 0.5.3 has written revocations is NOT authority-preserving: 0.5.2 does not read those revocations, and a revoked grant can act again. No validated recovery; prefer a forward fix (0.5.3.x) over a downgrade.
 
 The full list is in [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
 
