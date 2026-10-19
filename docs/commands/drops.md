@@ -11,7 +11,8 @@ into a notification.
 A drop is not only a send's. Before a launch types anything into a seat, the launch writes the
 general seat brief — TeamCLI's built-in default, the first text every seat gets — into that
 seat's folder as the same signed message record, and nothing is ever typed for it. `team up`
-writes it to every declared seat, human seats included; `team add`, `team restart` and
+writes it to every seat it launches or relaunches and to every declared seat the session records
+no launch of, human seats among them; `team add`, `team restart` and
 `team reload` write it to the one seat they act on and refuse a human seat's pane before any
 launch. It is read here like any other drop: `team drops --read` verifies it, writes its
 receipt and prints the brief.
