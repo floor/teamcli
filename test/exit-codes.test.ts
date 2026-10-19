@@ -12,6 +12,7 @@ import { startBroker } from '../src/broker/server.ts';
 import { saveReadings, type Seen } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import type { CheckSources } from '../src/check/team.ts';
+import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
@@ -20,6 +21,7 @@ import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
+import { runClient } from '../src/commands/client.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
@@ -1038,6 +1040,46 @@ scene('check.state', async (place) => {
 scene('check.herdr', async (place) => {
   write(place, TEAM);
   return show(await checked(place, [], owner, checkSources(null)), "doesn't answer");
+});
+
+// The keygen scenes need a home outside the OS temp tree: the placement rule refuses a key
+// directory that overlaps it, and every other scene's place lives under mkdtemp's tree.
+function clientHome(label: string): string {
+  return realpathSync(mkdtempSync(join(process.cwd(), `.client-exit-${label}-`)));
+}
+
+function ranClient(place: Place, argv: string[], home: string = place.home): Ran {
+  const io = testIo(place.root, owner);
+  return { code: runClient(argv, io, home), out: io.out, err: io.err };
+}
+
+scene('client.usage', async (place) => show(ranClient(place, []), 'a subcommand is required'));
+scene('client.unknown', async (place) => show(ranClient(place, ['nope']), 'unknown subcommand'));
+scene('client.keygen.invocation', async (place) => show(ranClient(place, ['keygen']), '--out is required'));
+scene('client.keygen.refused', async (place) => show(ranClient(place, ['keygen', '--out', join(place.home, 'keys')]), 'is outside'));
+scene('client.keygen.write', async (place) => {
+  const home = clientHome('write');
+  try {
+    const held = join(home, '.config', 'team-client', 'held');
+    mkdirSync(dirname(held), { recursive: true });
+    writeFileSync(held, 'not a directory\n');
+    return show(ranClient(place, ['keygen', '--out', held], home), 'cannot be created');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+scene('client.keygen.done', async (place) => {
+  const home = clientHome('done');
+  try {
+    const dir = join(home, '.config', 'team-client', 'bot');
+    const ran = ranClient(place, ['keygen', '--out', dir], home);
+    if (ran.code !== 0) throw new Error(`${ran.err}${ran.out}`);
+    expect(existsSync(join(dir, 'client.key'))).toBe(true);
+    expect(existsSync(join(dir, 'client.pub'))).toBe(true);
+    return show(ran, 'key isolation: not enforced (pane guard pending)');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 scene('commits.invocation', async (place) => {
   const io = testIo(place.root, owner);
@@ -3788,6 +3830,95 @@ async function sent(place: Place, argv: string[], caller: Caller, host: SendHost
   const code = await runSend(argv, io, host);
   return { code, out: io.out, err: io.err };
 }
+
+/**
+ * A synthetic home for a client invocation: the owner key, one registered floor coordinator on
+ * `place.root`, one app key and one owner-signed grant. The key folder lives outside the OS temp
+ * directory, because the placement rules refuse a client key under tmpdir. The scene removes it.
+ */
+function clientWorld(place: Place): { base: string; home: string; grantPath: string; keyPath: string } {
+  const base = realpathSync(mkdtempSync(join(process.cwd(), '.team-exit-client-')));
+  const home = join(base, 'home');
+  mkdirSync(home, { recursive: true });
+  const ownerKey = keyOf(home);
+  const teamId = teamIdOf(place.root);
+  const agent = registerAgent(home, {
+    name: 'Orchestrator',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'true',
+    reach: { team: teamId, seat: 'orchestrator', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'test',
+  });
+  upsertTeam(home, teamId, {
+    project: 'floor',
+    entity: 'floor',
+    session: 'acme',
+    root: place.root,
+    lobby: join(base, 'lobby'),
+    roster: [{ agent: agent.id, seat: 'orchestrator', role: 'orchestrator', leads: true }],
+    lifecycle: 'running',
+  });
+  const pair = newClientKeyPair();
+  const keyDir = clientKeyDir(home, 'grok-bot');
+  const written = writeClientKeyFiles(keyDir, pair);
+  if (!written.ok) throw new Error(written.why);
+  const grant = writeClientGrant(
+    home,
+    { clientId: 'grok-bot', entity: 'floor', publicKey: pair.publicKey, keyId: pair.keyId, keyDir },
+    { now: NOW, key: ownerKey },
+  );
+  if (!grant.ok) throw new Error(grant.why);
+  return { base, home, grantPath: grant.path, keyPath: join(keyDir, 'client.key') };
+}
+
+async function sentClient(place: Place, home: string, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root, { kind: 'owner' });
+  const host = { home, now: () => NOW, sendId: () => '99999999-9999-4999-8999-999999999999' } as unknown as SendHost;
+  const code = await runSend(argv, io, host);
+  return { code, out: io.out, err: io.err };
+}
+
+scene('send.client-sent', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath, 'orchestrator@floor', 'hello']),
+      'sent: orchestrator@floor (drop ',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('send.client-refused', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', join(world.base, 'missing.json'), '--key', world.keyPath, 'orchestrator@floor', 'hello']),
+      'team send: refused: ',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('send.client-usage', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', world.grantPath, 'orchestrator@floor', 'hello']),
+      '--client needs --key',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
 
 const ASK_SHOW_MARKER =
   '{"v":1,"request_id":"req-ask-show-v1","question_sha256":"7fa2d11897a567998b667f4b453ac20b68a6813fde68222e583f90a5bf453b96","expires_at":"2026-10-12T18:00:00.000Z","mac":"8d53d07c074d438d6676e20b45b11ea021b54e30d36d840b48e4f7a41223cbce"}';

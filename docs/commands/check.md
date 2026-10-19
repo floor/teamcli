@@ -150,6 +150,9 @@ meet the refusal every command gives them and exit 1.
 
 ## Output and exit codes
 
+Every run prints the declared limitation of a client app key, on stdout in text mode and as
+the `key_isolation` field in JSON: `key isolation: not enforced (pane guard pending)`.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `no differences` | 0 |
@@ -216,6 +219,7 @@ housekeeping of a role word written the 0.3.5/0.4 way):
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
+key isolation: not enforced (pane guard pending)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0

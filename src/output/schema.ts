@@ -208,6 +208,8 @@ export const ERROR_OUTPUT_SCHEMA: CommandSchemaSpec = {
       },
     },
     notice: { type: ['string', 'null'] },
+    /** The declared limitation of a client app key, carried on a client invocation's usage error. */
+    key_isolation: { type: 'string', minLength: 1 },
   },
 };
 
@@ -491,11 +493,13 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.check',
   fileName: 'check.schema.json',
   title: 'team check --json output',
-  required: ['format', 'project', 'session', 'warnings', 'repaired', 'notes', 'differences', 'summary'],
+  required: ['format', 'project', 'session', 'key_isolation', 'warnings', 'repaired', 'notes', 'differences', 'summary'],
   properties: {
     format: { type: 'integer', const: 1 },
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
+    // The declared limitation of a client app key: the exact runtime line, never a claim of isolation.
+    key_isolation: { type: 'string', minLength: 1 },
     notice: { type: ['string', 'null'] },
     warnings: {
       type: 'array',
@@ -514,6 +518,23 @@ export const CHECK_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: DIFFERENCE_SCHEMA_FRAGMENT,
     },
     summary: SUMMARY_SCHEMA_FRAGMENT,
+  },
+};
+/** Published `--json` output schema for `team client keygen` (`schema/client.schema.json`). */
+export const CLIENT_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.client.keygen',
+  fileName: 'client.schema.json',
+  title: 'team client keygen --json output',
+  required: ['format', 'status', 'key_path', 'public_key_path', 'key_dir', 'public_key', 'key_id', 'key_isolation'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    status: { type: 'string', enum: ['created'] },
+    key_path: { type: 'string', minLength: 1 },
+    public_key_path: { type: 'string', minLength: 1 },
+    key_dir: { type: 'string', minLength: 1 },
+    public_key: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+    key_id: { type: 'string', pattern: '^[0-9a-f]{12}$' },
+    key_isolation: { type: 'string', minLength: 1 },
   },
 };
 /** Published `--json` output schema for `team reload` (`schema/reload.schema.json`). */
@@ -2376,6 +2397,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   PROJECTS_OUTPUT_SCHEMA,
   DOCTOR_OUTPUT_SCHEMA,
   CHECK_OUTPUT_SCHEMA,
+  CLIENT_OUTPUT_SCHEMA,
   LIST_OUTPUT_SCHEMA,
   GRANT_OUTPUT_SCHEMA,
   DELEGATE_OUTPUT_SCHEMA,

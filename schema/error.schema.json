@@ -64,6 +64,10 @@
         "string",
         "null"
       ]
+    },
+    "key_isolation": {
+      "type": "string",
+      "minLength": 1
     }
   }
 }

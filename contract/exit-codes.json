@@ -878,6 +878,48 @@
     },
     {
       "code": 0,
+      "command": "client",
+      "id": "client.keygen.done",
+      "meaning": "the client key pair was written in the named directory",
+      "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 1,
+      "command": "client",
+      "id": "client.keygen.refused",
+      "meaning": "the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked",
+      "trigger": "team client keygen --out ."
+    },
+    {
+      "code": 1,
+      "command": "client",
+      "id": "client.keygen.write",
+      "meaning": "the key directory already holds a key, or the pair could not be written 0600",
+      "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 2,
+      "command": "client",
+      "id": "client.keygen.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team client keygen"
+    },
+    {
+      "code": 2,
+      "command": "client",
+      "id": "client.unknown",
+      "meaning": "the subcommand is not one this command knows",
+      "trigger": "team client grant"
+    },
+    {
+      "code": 2,
+      "command": "client",
+      "id": "client.usage",
+      "meaning": "no subcommand was named",
+      "trigger": "team client"
+    },
+    {
+      "code": 0,
       "command": "commits",
       "id": "commits.passed",
       "meaning": "every commit passed",
@@ -3406,6 +3448,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.client-sent",
+      "meaning": "a client grant's signed drop was written to the entity orchestrator's drop folder",
+      "trigger": "team send --client grant.json --key client.key orchestrator@floor hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.confirmed",
       "meaning": "a native handoff was recorded to the history and its pending record cleared",
       "trigger": "team send --confirm 11111111-1111-4111-8111-111111111111"
@@ -3462,6 +3511,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.client-refused",
+      "meaning": "a client grant invocation was refused before any record was written",
+      "trigger": "team send --client missing.json --key client.key orchestrator@floor hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.detached",
       "meaning": "a run with no terminal",
       "trigger": "team send --list"
@@ -3507,6 +3563,13 @@
       "id": "send.unreachable",
       "meaning": "the seat was not reached",
       "trigger": "team send worker hello"
+    },
+    {
+      "code": 2,
+      "command": "send",
+      "id": "send.client-usage",
+      "meaning": "the client grant invocation can't be read",
+      "trigger": "team send --client grant.json orchestrator@floor hello"
     },
     {
       "code": 2,

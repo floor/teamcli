@@ -168,7 +168,11 @@ export async function check(argv: string[], io: Io, load: LoadConfig = loadConfi
     // exit: check.invocation
     return 2;
   }
-  if (parsed.kind === 'team') return runTeamCheck(parsed.args, io, sources);
+  if (parsed.kind === 'team') {
+    // The declared limitation is printed by the report itself, after the context line, so the
+    // text and JSON forms cannot drift apart; JSON carries it as `key_isolation`.
+    return runTeamCheck(parsed.args, io, sources);
+  }
   io.stderr('team check: `team check` is now `team commits check`, and is still read through 0.3.3\n');
   if (parsed.args.pr !== undefined) {
     io.stderr('team check: `team check --pr` is now `team pr check`, and is still read through 0.3.3\n');

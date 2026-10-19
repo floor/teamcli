@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { check, loadConfig, USAGE as CHECK_USAGE, type LoadConfig } from '../../src/commands/check.ts';
 import type { CheckSources } from '../../src/check/team.ts';
+import { KEY_ISOLATION_LINE } from '../../src/client/records.ts';
 import { commits, USAGE as COMMITS_USAGE } from '../../src/commands/commits.ts';
 import { pr } from '../../src/commands/pr.ts';
 import type { Io } from '../../src/io.ts';
@@ -157,6 +158,7 @@ describe('the old spelling is the new run, one notice line first', () => {
       // the file's state alone.
       expect(ran.stdout).toBe(
         'team acme-web, session "acme-web"\n' +
+          `${KEY_ISOLATION_LINE}\n` +
           'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
           'difference: lead is in the file and is not running\n' +
           '  repair: team up\n' +
@@ -176,6 +178,7 @@ describe('the old spelling is the new run, one notice line first', () => {
       expect(refused.code).toBe(1);
       expect(refused.stdout).toBe(
         'team acme-web, session "acme-web"\n' +
+          `${KEY_ISOLATION_LINE}\n` +
           'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
           `difference: ${REFUSED_WHY}\n` +
           '  repair: the live file is what the commands read\n' +

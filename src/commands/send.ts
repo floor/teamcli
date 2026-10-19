@@ -4,6 +4,8 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { runClientSend } from '../client/send.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
@@ -13,7 +15,7 @@ import type { Command, Io } from '../io.ts';
 import { rulesOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
-import { contextLine, hasJsonFlag, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
+import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
 import { readAgents, type Agent } from '../registry/agents.ts';
@@ -42,6 +44,8 @@ import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send --client <grant-file> --key <key-file> <address> [--request-id <id>] <message>
+       team send --client <grant-file> --key <key-file> <address> [--request-id <id>] --file <path>
        team send --confirm <id> [--json] [--dry-run]
        team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
        team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
@@ -175,8 +179,16 @@ delivery is never a way around the rules — and the body is optional: given, it
 recorded verbatim, and without it the line says the text did not pass through this
 CLI. \`team route <seat>\` answers the address such a delivery uses.
 
-Not in this build: broadcast.
+--client sends as an external client principal named by an owner-signed grant, never
+as the owner or a seat: the request is signed with the client's own key and one
+signed drop is written to the entity's orchestrator — \`orchestrator@floor\` is the only
+address this build admits. The grant names the destination
+entity and the orchestrator role, expires within 7 days and is refused once revoked.
+A request id is used once. The key file is mode 0600 in the client's own
+configuration folder. Key isolation is not enforced: every process running as the
+same user can read that file, and each client send says so on stderr.
 
+Not in this build: broadcast.
 Exits 0 when delivered, answered, listed, recorded, or resolved by --dry-run,
 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when
 the invocation or team file can't be read.
@@ -204,6 +216,9 @@ export type SendHost = {
   newId?: () => string;
   /** The id a send record is written under when a test pins it; the real host mints a UUID. */
   sendId?: () => string;
+  /** How long a client send waits for the shared grant lock before refusing busy. The real host
+   *  leaves it at the client module's own bound; a test sets a short wait. */
+  clientLockWaitMs?: number;
   home: string;
   /** The project registry, for the project each seat's team sits in. The real one when absent;
    *  a test stands in for it. */
@@ -453,13 +468,25 @@ function declaredSeatNamed(
 }
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms', 'confirm'], ['wait', 'json', 'list', 'dry-run']);
+  const args = readArgs(argv, ['file', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
+  const clientFlag = argv.some((arg) => arg === '--client' || arg.startsWith('--client='));
   const report: Report = { json, seat: seatName ?? null, sent: null, project: null, session: null };
-  if (args.error) return usage(io, args.error, report);
+  if (args.error) {
+    // The declared limitation is printed on every client invocation, including one the parser
+    // refuses: a caller must never read a client path without it.
+    if (clientFlag) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    return usage(io, args.error, report, clientFlag);
+  }
+  // The client path comes before any caller placement: a TTY can never make this run the owner,
+  // and no leg but the signed drop is walked. `runClientSend` prints the declared limitation.
+  if (clientFlag) return runClientSend(args, io, host, json);
+  if (args.values.key !== undefined || args.values['request-id'] !== undefined) {
+    return usage(io, '--key and --request-id are only meaningful with --client', report);
+  }
   const detached = detachedRefusal(callerOf(io), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     if (report.json) writeJsonError(io, 'send.detached', detached, 'run team send from a terminal outside herdr');
@@ -2672,9 +2699,13 @@ function stoppedSeat(io: Io, dir: string, who: string, seat: string, host: SendH
   return 1; // exit: send.stopped
 }
 
-function usage(io: Io, message: string, report: Report): number {
-  if (report.json) writeJsonError(io, 'send.usage', message);
-  else io.stderr(`team send: ${message}\n${USAGE}`);
+function usage(io: Io, message: string, report: Report, keyIsolation = false): number {
+  if (report.json) {
+    // A client invocation's usage refusal carries the same declared limitation as its other
+    // outcomes, so no JSON reader sees a client document without it (the error schema admits it).
+    if (keyIsolation) io.stdout(`${JSON.stringify({ ...jsonError('send.usage', message), key_isolation: KEY_ISOLATION_LINE }, null, 2)}\n`);
+    else writeJsonError(io, 'send.usage', message);
+  } else io.stderr(`team send: ${message}\n${USAGE}`);
   return 2; // exit: send.usage
 }
 

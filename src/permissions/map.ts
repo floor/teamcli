@@ -160,6 +160,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'the bus reconciles the project\'s event log, and the owner runs it, one per clone, from a terminal outside herdr',
     },
+    client: {
+      kind: 'any-caller',
+      why: 'its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',
+    },
+    'client:keygen': {
+      kind: 'any-caller',
+      why: 'it writes a fresh app key pair into a directory the caller names, and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',
+    },
     commits: {
       kind: 'any-caller',
       why: 'it reads the commit range and the ledger only, from any folder, and asks for no session and no terminal',

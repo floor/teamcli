@@ -250,6 +250,54 @@ Usage:
 | --- | --- | --- |
 | `ref` | yes | no |
 
+## `client`
+
+Hidden: no
+
+Usage:
+
+    team client keygen --out <dir> [--json]
+
+### Who may run it
+
+`any-caller` — its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller's own, and only the owner's signed grant makes it authoritative
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `keygen`
+
+Hidden: no
+
+Usage:
+
+    team client keygen --out <dir> [--json]
+
+#### Who may run it
+
+`any-caller` — it writes a fresh app key pair into a directory the caller names, and reads no team file, seat or terminal: the key is the caller's own, and only the owner's signed grant makes it authoritative
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--out` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `commits`
 
 Hidden: no
@@ -520,6 +568,7 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--json]
 
 ### Who may run it
 
@@ -530,11 +579,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--capabilities` | yes | no | no |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--entity` | yes | no | no |
 | `--expires` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--name` | yes | no | no |
+| `--public-key` | yes | no | no |
 | `--scope` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1474,6 +1526,8 @@ Usage:
     team revoke grant [--dry-run] [--json]
     team revoke delegate <session/pane> [--dry-run] [--json]
     team revoke <name> [--dry-run] [--json]
+    team revoke <client-grant-id> [--json]
+    team revoke --client <client-grant-id> [--json]
 
 ### Who may run it
 
@@ -1483,6 +1537,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
@@ -1492,7 +1547,8 @@ Usage:
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `name` | no | no |
+| `name` | yes | no |
+| `client-grant-id` | yes | no |
 
 ### `delegate`
 
@@ -1754,6 +1810,8 @@ Usage:
 
     team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
     team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send --client <grant-file> --key <key-file> <address> [--request-id <id>] <message>
+    team send --client <grant-file> --key <key-file> <address> [--request-id <id>] --file <path>
     team send --confirm <id> [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
@@ -1768,14 +1826,17 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--channel` | yes | no | no |
+| `--client` | yes | no | no |
 | `--confirm` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--list` | no | no | no |
 | `--ms` | yes | no | no |
 | `--record` | yes | no | no |
+| `--request-id` | yes | no | no |
 | `--timeout` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |
@@ -1786,6 +1847,7 @@ Usage:
 | --- | --- | --- |
 | `seat` | yes | no |
 | `message` | yes | no |
+| `address` | yes | no |
 
 ## `sessions`
 

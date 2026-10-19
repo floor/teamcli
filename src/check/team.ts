@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, watchInForceOf } from '../approve/approval.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
 import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
@@ -380,6 +381,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       format: 1,
       project: team.project,
       session,
+      // The declared limitation of a client app key, carried as a field so the one JSON
+      // document on stdout stays valid; text mode prints the same line on stdout (commands/check.ts).
+      key_isolation: KEY_ISOLATION_LINE,
       ...(notice !== undefined ? { notice } : {}),
       warnings,
       repaired,
@@ -391,6 +395,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   } else {
     const style = ttyStyle(io);
     io.stdout(`${contextLine(team.project, session)}\n`);
+    io.stdout(`${KEY_ISOLATION_LINE}\n`);
     for (const warning of warnings) io.stdout(`${warning}\n`);
     for (const line of repaired) io.stdout(`repaired: ${line}\n`);
     for (const line of renderNotes(notes, { home: sources.home })) io.stdout(`${line}\n`);

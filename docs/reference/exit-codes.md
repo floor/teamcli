@@ -131,6 +131,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-a-repo` | `check` | 2 | not inside a git repository and no team file here | `team check` |
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
+| `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.keygen.refused` | `client` | 1 | the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked | `team client keygen --out .` |
+| `client.keygen.write` | `client` | 1 | the key directory already holds a key, or the pair could not be written 0600 | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.keygen.invocation` | `client` | 2 | the command arguments are invalid | `team client keygen` |
+| `client.unknown` | `client` | 2 | the subcommand is not one this command knows | `team client grant` |
+| `client.usage` | `client` | 2 | no subcommand was named | `team client` |
 | `commits.passed` | `commits` | 0 | every commit passed | `team commits check HEAD` |
 | `commits.refused` | `commits` | 1 | a commit was refused | `team commits check HEAD` |
 | `commits.threw` | `commits` | 1 | a forbidden pattern is not a regular expression | `team commits check HEAD` |
@@ -492,6 +498,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `seats.not-a-repo` | `seats` | 2 | not inside a git repository | `team seats` |
 | `seats.not-yours` | `seats` | 2 | the caller may not read this team | `team seats` |
 | `send.answered` | `send` | 0 | a reply record on the thread arrived within the window | `team send worker hello --wait` |
+| `send.client-sent` | `send` | 0 | a client grant's signed drop was written to the entity orchestrator's drop folder | `team send --client grant.json --key client.key orchestrator@floor hello` |
 | `send.confirmed` | `send` | 0 | a native handoff was recorded to the history and its pending record cleared | `team send --confirm 11111111-1111-4111-8111-111111111111` |
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
@@ -500,6 +507,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
@@ -507,6 +515,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
 | `send.timeout` | `send` | 1 | the record was sent, and the wait window closed with no reply on the thread (the thread stays open) | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
+| `send.client-usage` | `send` | 2 | the client grant invocation can't be read | `team send --client grant.json orchestrator@floor hello` |
 | `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `sessions.none` | `sessions` | 0 | no session record matched | `team sessions` |

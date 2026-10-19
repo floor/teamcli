@@ -11,6 +11,7 @@ import { description, homepage, license, version } from './version.ts';
 export const commands: Record<string, () => Promise<{ default: Command; USAGE: string }>> = {
   brief: () => import('./commands/brief.ts'),
   check: () => import('./commands/check.ts'),
+  client: () => import('./commands/client.ts'),
   commits: () => import('./commands/commits.ts'),
   doctor: () => import('./commands/doctor.ts'),
   down: () => import('./commands/down.ts'),

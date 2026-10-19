@@ -71,6 +71,9 @@ export type RecordPayload = {
    *  to. Ordinary messages carry neither; a brief's record carries both. */
   brief_sha256?: string;
   incarnation?: string;
+  /** The external client principal that wrote the record, when one did: its client id and the
+   *  grant id that admitted it. A record from a seat or the owner carries none. */
+  from_client?: { client_id: string; grant_id: string };
 };
 
 export type SignedRecord = { payload: RecordPayload; signature: string };
@@ -179,6 +182,14 @@ export function recordPayloadOf(value: unknown): RecordPayload | null {
   if (brief) {
     payload.brief_sha256 = value.brief_sha256 as string;
     payload.incarnation = value.incarnation as string;
+  }
+  if (value.from_client !== undefined) {
+    if (!isRecordValue(value.from_client)) return null;
+    const fromClient = value.from_client;
+    if (typeof fromClient.client_id !== 'string' || !nonEmpty(fromClient.client_id)) return null;
+    if (typeof fromClient.grant_id !== 'string' || !nonEmpty(fromClient.grant_id)) return null;
+    if (Object.keys(fromClient).some((key) => key !== 'client_id' && key !== 'grant_id')) return null;
+    payload.from_client = { client_id: fromClient.client_id, grant_id: fromClient.grant_id };
   }
   return payload;
 }
@@ -408,6 +419,7 @@ export function recordHolds(path: string, expected: RecordPayload, home: string,
     if (field === 'to_id' && options?.to_id === false) continue;
     if (held[field] !== expected[field]) return false;
   }
+  if (JSON.stringify(held.from_client) !== JSON.stringify(expected.from_client)) return false;
   if (!sameFolder(held.root, expected.root)) return false;
   return verifyRecord(read.record, key.key);
 }
