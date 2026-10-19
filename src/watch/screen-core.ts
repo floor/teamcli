@@ -1231,12 +1231,15 @@ function floorHits(lines: string[], from: number, input: number, chrome: RegExp[
   return false;
 }
 
-/** The floor's nearest matching line reading up from the bottom of the window, or null. Asked
- *  only when a composer read failed — the screen is unknown whatever the answer — for the row a
- *  reader may quote; a dialog sits at the foot of the window, above any older transcript row that
- *  happens to carry the same words. */
+/** The floor's nearest matching line reading up from the bottom of the live screen, or null.
+ *  Asked only when a composer read failed — the screen is unknown whatever the answer — for the
+ *  row a reader may quote. Only what lies below the composer's last rule line is read: a row above
+ *  it is transcript the pane has scrolled past, whatever its words, and never the dialog that
+ *  stopped the read. A window with no rule line is a dialog that fills the pane, and all of it is
+ *  live. */
 function floorLast(lines: string[], chrome: RegExp[], tick: () => boolean): false | 'stop' | string {
-  for (let i = lines.length - 1; i >= 0; i--) {
+  const rule = findLast(lines, (line) => RULE_LINE.test(line));
+  for (let i = lines.length - 1; i > rule; i--) {
     if (tick()) return 'stop';
     const hit = floorLine(lines, i, -1, chrome);
     if (hit !== null) return hit;

@@ -107,8 +107,13 @@ launch's own act.
 The same pass names a seat held at a prompt it can read (`attentionDifferences`,
 `src/check/team.ts`). The pane is the one this project's state records for the seat, and only
 where herdr lists that seat on it — the same gate the watch's report lines use — read through the
-watch's own reader (`readScreen`, `src/watch/screen.ts`). One line per held seat, by the screen's
-kind:
+watch's own reader (`readScreen`, `src/watch/screen.ts`). The pane must still hold the process
+team launched, read as `compare()` reads it (`seatProcessVerdict`, `replacedSeat`,
+`src/launch/identity.ts`): a pane back at its shell, one running a process the record does not
+name with no stored session showing continuity, or a record with no identity whose pane holds a
+bare shell, is not read for a prompt at all. `compare()`'s process row already says what that pane
+is, and a dialog left in the scrollback of a dead or replaced pane is not a seat held at one.
+One line per held seat, by the screen's kind:
 
 - a **permission** prompt: `<seat>: stuck at a permission prompt (last active 4m ago):
   Write(note.txt)`, its lead's to answer in the pane;
@@ -127,7 +132,13 @@ The command after the kind is the last tool row the screen shows (`toolTrace`,
 and no command on a CLI whose captures hold no such row. No new grammar is read: the kinds are the
 watch's own screen kinds, and the unrecognised row is its safety floor's (`floorLine`,
 `src/watch/screen-core.ts`); the floor's line is asked for even when the composer read failed, but
-only to quote it — the screen was unknown already, and nothing is typed from it either way.
+only to quote it — the screen was unknown already, and nothing is typed from it either way. The
+failed read asks the floor for the row nearest the foot of the live screen only: what lies below
+the composer's last rule line. A row above that rule is transcript the pane has scrolled past —
+whatever words it holds, it is never the dialog and is never quoted; a window with no rule line is
+a dialog that fills the pane, and all of it is live. Every detail read from the screen — the
+quoted row, the command, the reset time — is cleaned with the report's own `plainLine` when the
+line is built, so the same string is safe in `--json`, which renders `what` as it stands.
 
 The age is the seat record's `last_active` (`last active 4m ago`), the only instant a seat record
 carries. A record without one gives the line no age clause. The line dates the record, not the
@@ -143,7 +154,10 @@ written, and the `waiting` record is neither consulted nor moved. `compare()` em
 permission and trust rows for `status` and marks them with the seat's name (`promptSeat`); the
 check drops that row for every seat it names itself, so the seat appears once, in the check's
 line. A temporary seat is read with its like-seat's CLI, as its row reads the like-seat's model,
-and its plain prompt row is replaced the same way.
+and its plain prompt row is replaced the same way. A temporary seat is a seat of the team by its
+record alone (`team add --temporary` never writes one into the file), so the real live read
+collects its recorded pane on the same terms as a declared seat's: a held temporary seat is named
+in a real run, not only where a scene hands the check its screen.
 
 ## Who the check answers
 
