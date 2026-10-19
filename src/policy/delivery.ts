@@ -2,7 +2,9 @@
 // attempt budget per route) and `delivery-escalation` (the main fallback delay). The values,
 // their grammar and their release defaults live in `src/policy/types.ts`; this module reads a
 // resolved chain and hands callers numbers. B2's fallback events consume `deliveryEscalationDelay`
-// for the due instant; B1's send path consumes `deliveryTimeoutInForce` per route.
+// for the due instant; B1's send path consumes `deliveryTimeoutInForce` per route. Every route
+// the map names has a live attempt to bound — `native` included, which has no read
+// acknowledgement but can still hang on the CLI's enqueue or spawn.
 //
 // Both readers fail closed. A chain that will not load, or a value that is not the shape the
 // catalogue admits, comes back as `ok: false` with the reason: a fallback episode stays pending

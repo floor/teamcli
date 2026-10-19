@@ -143,7 +143,7 @@ function word(name: string, value: Policy['value'], level: PolicyLevel): Policy[
 describe('the delivery timing policies', () => {
   test('the reviewed values are the catalogue defaults and only entity, project and team may set them', () => {
     expect(DELIVERY_ESCALATION_SECONDS).toBe(300);
-    expect(DELIVERY_TIMEOUT_DEFAULTS).toEqual({ socket: 15, 'mcp-inbox': 15, typed: 15 });
+    expect(DELIVERY_TIMEOUT_DEFAULTS).toEqual({ socket: 15, 'mcp-inbox': 15, typed: 15, native: 15 });
     expect(DELIVERY_PREPROBE_MS).toBe(400);
     expect(DELIVERY_RECEIPT_SECONDS).toBe(120);
     expect(DELIVERY_LEGACY_ESCALATION_DEFAULT_SECONDS).toBe(600);
@@ -153,7 +153,7 @@ describe('the delivery timing policies', () => {
     }
     const timeout = getPolicySpec('delivery-timeout');
     expect(timeout?.levels).toEqual(['entity', 'project', 'team']);
-    expect(timeout?.defaultValue).toBe('socket=15,mcp-inbox=15,typed=15');
+    expect(timeout?.defaultValue).toBe('socket=15,mcp-inbox=15,typed=15,native=15');
     const escalation = getPolicySpec('delivery-escalation');
     expect(escalation?.levels).toEqual(['entity', 'project', 'team']);
     expect(escalation?.defaultValue).toBe(300);
@@ -161,14 +161,20 @@ describe('the delivery timing policies', () => {
     expect(getPolicySpec('delivery_escalation')?.name).toBe('delivery-escalation');
   });
 
-  test('a delivery-timeout word names any route and keeps the release default for the rest', () => {
+  test('a delivery-timeout word names any route and inherits the release default for the rest', () => {
     const result = resolvePolicy('delivery-timeout', word('delivery-timeout', 'typed=5', 'team'));
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.effective.value).toBe('socket=15,mcp-inbox=15,typed=5');
+    if (result.ok) expect(result.effective.value).toBe('socket=15,mcp-inbox=15,typed=5,native=15');
   });
 
-  test('a route with no live receipt wait is refused with its reason', () => {
-    for (const route of ['durable-copy', 'drop', 'native']) {
+  test('native is a live route with an attempt budget even without a read acknowledgement', () => {
+    const result = resolvePolicy('delivery-timeout', word('delivery-timeout', 'native=20', 'team'));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.effective.value).toBe('socket=15,mcp-inbox=15,typed=15,native=20');
+  });
+
+  test('a route with no live attempt is refused with its reason', () => {
+    for (const route of ['durable-copy', 'drop']) {
       const result = resolvePolicy('delivery-timeout', word('delivery-timeout', `${route}=5`, 'team'));
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -194,7 +200,7 @@ describe('the delivery timing policies', () => {
       ...word('delivery-timeout', 'socket=4,mcp-inbox=15,typed=15', 'team'),
     ]);
     expect(shortened.ok).toBe(true);
-    if (shortened.ok) expect(shortened.effective.value).toBe('socket=4,mcp-inbox=15,typed=15');
+    if (shortened.ok) expect(shortened.effective.value).toBe('socket=4,mcp-inbox=15,typed=15,native=15');
 
     const lengthened = resolvePolicy('delivery-timeout', [
       ...word('delivery-timeout', 'socket=10,mcp-inbox=15,typed=15', 'entity'),
@@ -207,6 +213,34 @@ describe('the delivery timing policies', () => {
         policy: 'delivery-timeout',
         lowerLevel: 'team',
         higherLevel: 'entity',
+      });
+    }
+  });
+
+  test('a sparse lower word inherits the parent budgets it does not name', () => {
+    const inherited = resolvePolicy('delivery-timeout', [
+      ...word('delivery-timeout', 'socket=5', 'entity'),
+      ...word('delivery-timeout', 'typed=4', 'team'),
+    ]);
+    expect(inherited.ok).toBe(true);
+    if (inherited.ok) expect(inherited.effective.value).toBe('socket=5,mcp-inbox=15,typed=4,native=15');
+
+    // Inheriting does not loosen the check: a route the parent tightened stays tightened even
+    // when a nearer level names it alone and a middle level is sparse.
+    const lengthened = resolvePolicy('delivery-timeout', [
+      ...word('delivery-timeout', 'socket=5', 'entity'),
+      ...word('delivery-timeout', 'typed=4', 'project'),
+      ...word('delivery-timeout', 'socket=7', 'team'),
+    ]);
+    expect(lengthened.ok).toBe(false);
+    if (!lengthened.ok) {
+      expect(lengthened.refusals[0]).toMatchObject({
+        kind: 'loosening',
+        policy: 'delivery-timeout',
+        lowerLevel: 'team',
+        // The value in force is the project word's merged map, which carries the entity's socket.
+        higherLevel: 'project',
+        higherValue: 'socket=5,mcp-inbox=15,typed=4,native=15',
       });
     }
   });
@@ -249,7 +283,7 @@ describe('the delivery readers', () => {
       const base = { home: fx.home, entity: 'floor', projectId: 'beacon', root: fx.root, team: fx.team, seat: 'worker', now: NOW };
       expect(deliveryTimeoutInForce(base)).toEqual({
         ok: true,
-        budgets: { socket: 15, 'mcp-inbox': 15, typed: 15 },
+        budgets: { socket: 15, 'mcp-inbox': 15, typed: 15, native: 15 },
         level: 'default',
       });
       expect(deliveryEscalationDelay(base)).toEqual({ ok: true, seconds: 300, source: 'release-default' });
@@ -277,10 +311,37 @@ describe('the delivery readers', () => {
 
       expect(deliveryTimeoutInForce(base)).toEqual({
         ok: true,
-        budgets: { socket: 5, 'mcp-inbox': 15, typed: 10 },
+        budgets: { socket: 5, 'mcp-inbox': 15, typed: 10, native: 15 },
         level: 'team',
       });
       expect(deliveryEscalationDelay(base)).toEqual({ ok: true, seconds: 240, source: 'delivery-escalation' });
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('a sparse child word inherits the parent route budget and a native budget is read back', () => {
+    const fx = makeFixture();
+    try {
+      const base = { home: fx.home, entity: 'floor', projectId: 'beacon', root: fx.root, team: fx.team, seat: 'worker', now: NOW };
+      const parent = writePolicySet(
+        fx.home,
+        { level: 'entity', target: 'floor', name: 'delivery-timeout', value: 'socket=5,native=20' },
+        { now: NOW },
+      );
+      expect(parent.ok).toBe(true);
+      const child = writePolicySet(
+        fx.home,
+        { level: 'team', target: fx.teamId, teamRoot: fx.root, name: 'delivery-timeout', value: 'typed=4' },
+        { now: NOW },
+      );
+      expect(child.ok).toBe(true);
+
+      expect(deliveryTimeoutInForce(base)).toEqual({
+        ok: true,
+        budgets: { socket: 5, 'mcp-inbox': 15, typed: 4, native: 20 },
+        level: 'team',
+      });
     } finally {
       fx.cleanup();
     }

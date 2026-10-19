@@ -204,7 +204,13 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
           });
           continue;
         }
-        const normalizedDecl: Policy = { ...decl, name, value: parsed };
+        // A sparse value inherits the fields it leaves out from the value in force above it (the
+        // release default for the first declaration), so a lower level never resets an
+        // unmentioned field. The merge also keeps the active bound complete for the next level.
+        const inherited = spec.inherit
+          ? spec.inherit(activeDeclaration?.value ?? (spec.gateLifting ? 'off' : spec.defaultValue), parsed)
+          : parsed;
+        const normalizedDecl: Policy = { ...decl, name, value: inherited };
         if (isExpired(normalizedDecl, now)) {
           expired.push(normalizedDecl);
           continue;
