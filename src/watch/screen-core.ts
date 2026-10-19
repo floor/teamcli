@@ -429,17 +429,17 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const composerFn = getProfileFn(data.profile, 'composer');
     if (composerFn !== undefined) {
       const composed = callComposer(composerFn, plain);
-      if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
+      if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
       const marked = floorHits(plain, 0, -1, data.chrome, tick);
-      if (marked === 'stop' || marked) return { kind: 'unknown' };
+      if (marked) return floorScreen(marked);
       return asScreen(composed.kind, plain);
     }
 
     const composed = compose(data, plain, lines, tick, expectedCwd, home);
-    if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
+    if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
     if (composed.kind !== 'idle' && composed.kind !== 'unsent') return asScreen(composed.kind, plain);
     const marked = floorHits(plain, composed.from, composed.input, data.chrome, tick);
-    if (marked === 'stop' || marked) return { kind: 'unknown' };
+    if (marked) return floorScreen(marked);
     return asScreen(composed.kind, plain);
   } catch {
     return { kind: 'unknown' };
@@ -493,9 +493,9 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
         }
       }
       const composed = callComposer(composerFn, plain);
-      if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
+      if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
       const marked = floorHits(plain, 0, -1, data.chrome, tick);
-      if (marked === 'stop' || marked) return { kind: 'unknown' };
+      if (marked) return floorScreen(marked);
       return asScreen(composed.kind, plain);
     }
 
@@ -535,10 +535,10 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
     }
 
     const composed = compose(data, plain, lines, tick, expectedCwd, home);
-    if (composed.kind === 'stop' || composed.kind === 'unknown') return { kind: 'unknown' };
+    if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
     if (composed.kind !== 'idle' && composed.kind !== 'unsent') return asScreen(composed.kind, plain);
     const marked = floorHits(plain, composed.from, composed.input, data.chrome, tick);
-    if (marked === 'stop' || marked) return { kind: 'unknown' };
+    if (marked) return floorScreen(marked);
     return asScreen(composed.kind, plain);
   } catch {
     return { kind: 'unknown' };
@@ -1207,16 +1207,55 @@ function placeholder(
   return composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : typed.startsWith(entry.prefix)));
 }
 
-function floorHits(lines: string[], from: number, input: number, chrome: RegExp[], tick: () => boolean): boolean | 'stop' {
+/** One line's floor hit, as the line's plain text trimmed — the only part of an unrecognised
+ *  screen a reader may quote — or null. The chrome vocabulary is skipped, the input row is not a
+ *  numbered choice (its text was typed), and a numbered choice needs its second row below it. */
+function floorLine(lines: string[], i: number, input: number, chrome: RegExp[]): string | null {
+  const line = lines[i] ?? '';
+  if (chrome.some((pattern) => pattern.test(line))) return null;
+  if (i !== input && choiceLine(line) && lines.slice(i + 1).some((later) => twoLine(later))) return line.trim();
+  const lower = line.toLowerCase();
+  if (FLOOR_PHRASES.some((phrase) => lower.includes(phrase))) return line.trim();
+  return null;
+}
+
+/** The safety floor's verdict: no hit, a hit on the first matching line from `from` (the line's
+ *  plain text, trimmed), or `'stop'` when the budget ran out. `'stop'` is a hit a reader may not
+ *  act on; a string hit is the floor's own row. */
+function floorHits(lines: string[], from: number, input: number, chrome: RegExp[], tick: () => boolean): false | 'stop' | string {
   for (let i = Math.max(0, from); i < lines.length; i++) {
     if (tick()) return 'stop';
-    const line = lines[i] ?? '';
-    if (chrome.some((pattern) => pattern.test(line))) continue;
-    if (i !== input && choiceLine(line) && lines.slice(i + 1).some((later) => twoLine(later))) return true;
-    const lower = line.toLowerCase();
-    if (FLOOR_PHRASES.some((phrase) => lower.includes(phrase))) return true;
+    const hit = floorLine(lines, i, input, chrome);
+    if (hit !== null) return hit;
   }
   return false;
+}
+
+/** The floor's nearest matching line reading up from the bottom of the window, or null. Asked
+ *  only when a composer read failed — the screen is unknown whatever the answer — for the row a
+ *  reader may quote; a dialog sits at the foot of the window, above any older transcript row that
+ *  happens to carry the same words. */
+function floorLast(lines: string[], chrome: RegExp[], tick: () => boolean): false | 'stop' | string {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (tick()) return 'stop';
+    const hit = floorLine(lines, i, -1, chrome);
+    if (hit !== null) return hit;
+  }
+  return false;
+}
+
+/** The unknown screen a floor hit leaves. A budget stop carries no line: nothing was read to
+ *  quote, and the screen is unknown all the same. */
+function floorScreen(marked: false | 'stop' | string): Screen {
+  return typeof marked === 'string' && marked !== 'stop' ? { kind: 'unknown', matched: marked } : { kind: 'unknown' };
+}
+
+/** A composer read that failed is unknown whatever the floor says. The floor is asked only for
+ *  the row it matched, so a reader can quote the prompt-like line it saw — never to change the
+ *  kind, never to type, and never to move a stage: an unknown screen is one nothing is typed
+ *  into. */
+function failedComposer(data: ScreenData, plain: string[], tick: () => boolean): Screen {
+  return floorScreen(floorLast(plain, data.chrome, tick));
 }
 
 function choiceLine(line: string): boolean {

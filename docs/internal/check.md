@@ -102,6 +102,49 @@ naming another id, or a file there that is missing, unsigned, foreign or another
 repair is a reload or an up, never `--repair`: the difference is advice, and the delivery is the
 launch's own act.
 
+## Seats held at a prompt
+
+The same pass names a seat held at a prompt it can read (`attentionDifferences`,
+`src/check/team.ts`). The pane is the one this project's state records for the seat, and only
+where herdr lists that seat on it — the same gate the watch's report lines use — read through the
+watch's own reader (`readScreen`, `src/watch/screen.ts`). One line per held seat, by the screen's
+kind:
+
+- a **permission** prompt: `<seat>: stuck at a permission prompt (last active 4m ago):
+  Write(note.txt)`, its lead's to answer in the pane;
+- a **trust** prompt: `stuck at a trust prompt`, the owner's to answer in the pane;
+- a **quota** prompt, the watch's rate limit: `stuck at a quota prompt`, with `resets at 11:00`
+  when the screen names a reset, the owner's — `team` never types into that screen;
+- a **confirm** prompt, the CLI's own exit question: `stuck at a confirm prompt`, the owner's to
+  answer in the pane, or `team down --abandon` closes it;
+- an **unrecognised** prompt: a screen no profile reads whose safety floor carries a prompt row.
+  The line says `stuck at an unrecognised prompt` and quotes that row — `matched "Do you want to
+  continue?"` — and the owner looks at the pane. It is the only line that quotes screen text. An
+  unknown screen the floor did not catch keeps the watch's `blocked` line instead, as before.
+
+The command after the kind is the last tool row the screen shows (`toolTrace`,
+`src/labels/traces.ts`) — `Write(note.txt)` on a Claude Code pane, `Bash(...)` on Antigravity's —
+and no command on a CLI whose captures hold no such row. No new grammar is read: the kinds are the
+watch's own screen kinds, and the unrecognised row is its safety floor's (`floorLine`,
+`src/watch/screen-core.ts`); the floor's line is asked for even when the composer read failed, but
+only to quote it — the screen was unknown already, and nothing is typed from it either way.
+
+The age is the seat record's `last_active` (`last active 4m ago`), the only instant a seat record
+carries. A record without one gives the line no age clause. The line dates the record, not the
+prompt: the prompt appeared after that moment, so it says when the seat was last active, never how
+long the prompt itself has stood.
+
+A seat whose state carries the launch's own `waiting` record is not named again: that record's
+difference (`waitingView`) already names the seat and the dialog it stopped at, with the repair
+that resumes the launch.
+
+The reading is read-only: nothing answers the prompt or types into the pane, the state is not
+written, and the `waiting` record is neither consulted nor moved. `compare()` emits the plain
+permission and trust rows for `status` and marks them with the seat's name (`promptSeat`); the
+check drops that row for every seat it names itself, so the seat appears once, in the check's
+line. A temporary seat is read with its like-seat's CLI, as its row reads the like-seat's model,
+and its plain prompt row is replaced the same way.
+
 ## Who the check answers
 
 The caller decides, not the flags. Three callers get the answer:

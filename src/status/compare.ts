@@ -62,6 +62,11 @@ export type Difference = {
   needs?: 'approve';
   owner?: true;
   approval?: true;
+  /** The seat this row's prompt belongs to. `team check` names that seat itself — one line with
+   *  the prompt's kind, the command the screen shows and its age — and drops this row for it, so
+   *  a held seat is named once. `status` prints the row as it stands, and nothing serializes the
+   *  mark. */
+  promptSeat?: string;
 };
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
@@ -329,11 +334,13 @@ export function compare(
           ? {
               what: `${seat.name} waits at a permission prompt: its lead's to answer, or its owner's`,
               repair: 'its lead answers it in the pane',
+              promptSeat: seat.name,
             }
           : {
               what: `${seat.name} waits at a trust prompt: the owner's to answer`,
               repair: 'the owner answers it in the pane',
               owner: true,
+              promptSeat: seat.name,
             });
       }
       if (recorded?.rules === 'undelivered') {
@@ -494,11 +501,13 @@ export function compare(
           ? {
               what: `${name} waits at a permission prompt: its lead's to answer, or its owner's`,
               repair: 'its lead answers it in the pane',
+              promptSeat: name,
             }
           : {
               what: `${name} waits at a trust prompt: the owner's to answer`,
               repair: 'the owner answers it in the pane',
               owner: true,
+              promptSeat: name,
             });
       }
       notes.push(`${name} is temporary, until ${recorded.temporary.until}`);
