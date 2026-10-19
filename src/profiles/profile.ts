@@ -270,10 +270,13 @@ export function withLaunchSession(cli: string, command: string): { command: stri
  * id is appended after every other argument, as `withLaunchSession` appends a new one. The
  * measured line is Claude Code's (`-r, --resume [value] Resume a conversation - provide a
  * session ID`, `claude --help` 2.1.303, quoted on `supportsSessionResume`). Null when the CLI
- * cannot resume: the caller hands over instead.
+ * cannot resume: the caller hands over instead. Null, too, for a launch line that already names
+ * a session (`--session-id`, `--resume`/`-r`, `--continue`/`-c`): appending ours would leave two
+ * of the flag on the line, and the line's own choice is the one the file records.
  */
 export function withResume(cli: string, command: string, sessionId: string): string | null {
   if (!supportsSessionResume(cli)) return null;
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return null;
   return `${command} --resume ${sessionId}`;
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
-import { exitClearKey, launchCommand, lobbyFilesList, startupReadsList } from '../src/profiles/profile.ts';
+import { exitClearKey, launchCommand, lobbyFilesList, startupReadsList, withResume } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
@@ -329,5 +329,17 @@ describe('the startup_reads a profile may name', () => {
       { path: 'GEMINI.md', directory: false, clis: ['antigravity', 'gemini'] },
       { path: '.gemini/settings.json', directory: false, clis: ['gemini'] },
     ]);
+  });
+});
+
+describe('the resume line a swap appends', () => {
+  test('a launch line that already names a session is left as it is', () => {
+    for (const line of ['claude --resume abc', 'claude -r abc', 'claude --continue', 'claude -c', 'claude --session-id abc']) {
+      expect(withResume('claude-code', line, 'ses_1')).toBeNull();
+    }
+  });
+
+  test('a plain launch line takes the recorded id', () => {
+    expect(withResume('claude-code', 'claude --model deepseek-flash', 'ses_1')).toBe('claude --model deepseek-flash --resume ses_1');
   });
 });
