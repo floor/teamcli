@@ -329,13 +329,16 @@ it, and the header says the record is missing; it is never granted. Every other 
 
 `delivered` means the message reached the seat by a path that reports its own receipt: the
 socket frame was written, or a `--confirm` run found the handoff's nonce in the recipient's
-transcript. The typed leg never claims it. There the trigger line left the seat's input box
-after that one line and Enter — the pane's status reported the seat working (or done or blocked,
-and not the status read before Enter), or the transcript shows the drop being read — and that is
-a trigger sent, reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a
-message read (`src/send/deliver.ts`). A line that left the box with no status or transcript
-evidence inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed
-send, and never a read. Only a signed read receipt makes a message `delivered (read)`. A seat
+transcript. The typed leg claims it only through the seat's own receipt: the line it types is
+`Run team drops --read --seat <seat> --session <session> and do that.`, whose first act is the
+signed read receipt, and a receipt that verifies inside the delivery's window is
+`delivered (read)`. Without one, a trigger line that left the seat's input box after that one
+line and Enter — the pane's status reported the seat working (or done or blocked, and not the
+status read before Enter), or the transcript shows the drop being read — is a trigger sent,
+reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a message read
+(`src/send/deliver.ts`). A line that left the box with no status, transcript or receipt evidence
+inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed send, and
+never a read. Only a signed read receipt makes a message `delivered (read)`. A seat
 whose CLI builds its own work item from its screens gets the drop file but the body typed
 through those screens; `delivered` there means the CLI printed the line that creates the item. A
 hold on the receiver's side — a message that reached

@@ -22,14 +22,14 @@
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadTeamFile } from '../file/load.ts';
-import { inboxLive } from '../mcp/inbox.ts';
+import { inboxLive, receiptHeld } from '../mcp/inbox.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
-import { triggerLine } from '../send/native.ts';
+import { readTriggerLine } from '../send/native.ts';
 import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
 import {
   dropTaken,
@@ -307,14 +307,14 @@ async function expireOne(
             return;
           }
         }
-        let dropPath: string;
+        let recordPath: string;
         try {
-          dropPath = writeRecordFile(record, home);
+          recordPath = writeRecordFile(record, home);
         } catch {
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
         }
-        const line = triggerLine(dropPath);
+        const line = readTriggerLine(record.to, record.session);
         if (pane !== undefined && line !== null) {
           const status = scene.sources.status(pane, record.session);
           const screen = scene.sources.screen(pane, record.session);
@@ -327,8 +327,32 @@ async function expireOne(
             (status === 'idle' || status === 'done') &&
             (kind === 'idle' || kind === 'unsent');
           if (free) {
-            const result = await deliverTrigger(hostOf(scene, record.session), pane, line, record.cli);
+            const receipt = (): boolean => receiptHeld(dropDir, record.id, { to: record.to, root: record.root, session: record.session }, home);
+            const result = await deliverTrigger(hostOf(scene, record.session), pane, line, record.cli, { receipt, dropPath: recordPath });
             if (result.outcome === 'delivered') {
+              // The fallback's trigger is the seat's own receipt-writing read. A receipt that
+              // landed inside the window — or just after its last poll — is the read itself.
+              if (result.evidence === 'receipt' || receipt()) {
+                appendHistory(record.project, record.root, home, {
+                  ts: scene.now.toISOString(),
+                  from: record.from,
+                  to: record.to,
+                  ...sentAs,
+                  body: record.body,
+                  id: record.id,
+                  thread: record.thread ?? record.id,
+                  outcome: 'delivered (read)',
+                  ms: elapsedMs,
+                  via: 'typed',
+                  failed: [...failures],
+                });
+                dropTaken(taken.taken);
+                scene.say(
+                  `${record.to}: a native handoff from ${record.from} was unconfirmed after 10m; read on fallback (receipt)`,
+                  false,
+                );
+                return;
+              }
               const isTaken = result.evidence === 'taken';
               if (isTaken) {
                 markTaken(dropDir, {

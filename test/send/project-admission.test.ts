@@ -9,7 +9,7 @@
 // is read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
@@ -179,11 +179,14 @@ function sendHost(world: SendWorld, seats: Record<string, { name?: string; sessi
   };
 }
 
-/** The drop the trigger names: the typed line's whitespace-free token that is a path. */
-function dropOf(typed: string): { path: string; text: string } {
-  const word = typed.split(/\s+/).find((part) => part.startsWith('/'));
-  if (!word) throw new Error(`no absolute path in the typed trigger: ${typed}`);
-  return { path: word, text: readFileSync(word, 'utf8') };
+/** The one drop in a seat's folder — the record the send wrote. The typed trigger is the seat's
+ *  own receipt-writing read and names no path, so the folder is read, not the line. */
+function dropOf(root: string, session: string, seat: string): { path: string; text: string } {
+  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const name = readdirSync(dir).find((one) => !one.includes('.'));
+  if (name === undefined) throw new Error(`no drop was written in ${dir}`);
+  const path = join(dir, name);
+  return { path, text: readFileSync(path, 'utf8') };
 }
 
 /** The scene's world: teamcli and teamcli.io, each with a seat named `lead`, both registered,
@@ -251,7 +254,7 @@ describe('the project level admits a pair the team rules refuse', () => {
     const typed = ioPane.typed[0] as Typed;
     expect(typed.session).toBe('teamcli.io');
     expect(typed.pane).toBe('pane-io-lead');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(world.roots.io as string, 'teamcli.io', 'lead');
     // The signed record keeps the sender's identity — its seat and registry id — and the rule the
     // project admitted the write under; the message inside opens with its sender, read by
     // address, one line before the body.

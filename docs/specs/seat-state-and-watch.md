@@ -222,13 +222,16 @@ The watch types fixed lines and never a report.
   the file omits it.
 - **The ring**: `Team: run team messages`, typed when a message already waits for a seat and the
   seat's box is an empty idle prompt.
-- **The held-send retry**: `Read <path> and do that.`, naming the drop of a send held while a
-  pane was busy, typed on a local pass unless `--no-nudge` is set. It requires the seat's status
-  to be `idle` or `done` and a readable screen that is either an idle prompt or holds exactly
-  that trigger unsent, and it takes the seat lock before delivering. The pending marker beside
-  the drop is its ownership evidence: a trigger another sender process left may be submitted,
-  and another person's draft is never typed. The retry is bounded, and giving up says the
-  drop's path. The default nudge body `NUDGE_TEXT` is never typed.
+- **The held-send retry**: `Run team drops --read --seat <seat> --session <session> and do
+  that.`, the seat's own drop read for the drop of a send held while a pane was busy, typed on a
+  local pass unless `--no-nudge` is set. It is the same line a typed send types, so a seat that
+  runs it writes the signed read receipt beside the drop; a receipt inside the retry's window is
+  `delivered (read)`, and a line taken with no receipt is `sent (unconfirmed)`. It requires the
+  seat's status to be `idle` or `done` and a readable screen that is either an idle prompt or
+  holds exactly that trigger unsent, and it takes the seat lock before delivering. The pending
+  marker beside the drop is its ownership evidence: a trigger another sender process left may be
+  submitted, and another person's draft is never typed. The retry is bounded, and giving up says
+  the drop's path. The default nudge body `NUDGE_TEXT` is never typed.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
 orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that

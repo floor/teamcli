@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
-import type { NativePane } from '../../src/send/native.ts';
+import { readTriggerLine, type NativePane } from '../../src/send/native.ts';
 import { sendFrame, type SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
 
@@ -171,7 +171,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     expect(received).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops)[0] as string);
-    expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
+    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
     expect(host.pane.enters).toBe(1);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
@@ -215,7 +215,7 @@ describe('team send: a typed send with no socket at all', () => {
     expect(host.pane.enters).toBe(1);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops)[0] as string);
-    expect(host.pane.typed[0]).toContain(path);
+    expect(host.pane.typed[0]).toBe(readTriggerLine('lead', 'acme') as string);
     expect(host.pane.typed[0]).not.toContain('hello');
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });

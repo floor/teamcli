@@ -2,10 +2,12 @@
 //
 // The seam's word is `delivered`: the seat began processing the line, not that the line was
 // typed — the box was read with its ANSI styling after Enter, the trigger had left it, and herdr
-// reported the seat working. Every caller reports that to a person as `sent (unconfirmed)`: a
-// trigger sent, never a message read, because only a signed read receipt is a read. A review
-// brief once sat typed and never submitted in a Codex reviewer's box for hours; a typed line that
-// nobody submitted must never read as a success.
+// reported the seat working. A caller with no receipt reports that to a person as
+// `sent (unconfirmed)`: a trigger sent, never a message read, because only a signed read receipt
+// is a read. A caller whose message's receipt lands inside the window gets `receipt` evidence and
+// reports `delivered (read)`: the line the seat ran wrote the receipt. A review brief once sat
+// typed and never submitted in a Codex reviewer's box for hours; a typed line that nobody
+// submitted must never read as a success.
 //
 // The box is read the way the rest of the program reads a composer (`readScreen`, `readBox`): a
 // greyed suggestion or placeholder is faint (SGR 2), the screen reads it `idle`, and so it counts
@@ -79,10 +81,11 @@ export type DeliverResult = {
   /** One line saying why, for a log or a receipt. */
   reason?: string;
   /** What showed the seat took the line, with `delivered`: herdr's status or the transcript — or
-   *  `taken`, a line that left the box with no status or transcript evidence inside the window.
-   *  Every one of them is a trigger sent, not a message read: no signed receipt came back. */
+   *  `taken`, a line that left the box with no status, transcript or receipt evidence inside the
+   *  window. `receipt` is the one that is a read: the signed read receipt for the message landed
+   *  while the window was open. Every other evidence is a trigger sent, not a message read. */
   status?: string;
-  evidence?: 'status' | 'transcript' | 'taken';
+  evidence?: 'status' | 'transcript' | 'taken' | 'receipt';
   /** The status herdr read before Enter, with `taken` when the box cleared: a later reader (the
    *  watch) compares a status against it to confirm the seat acted. */
   prior?: string;
@@ -260,19 +263,18 @@ export function pasteDraftBack(
   return pasteBack(host, pane, profile, text);
 }
 
-/** The copy of an unsent draft, kept beside the drop file it was moved for. Null for a line
- *  that names no drop file: without a place to keep the copy, nothing is cleared. */
-export function draftCopyPath(line: string): string | null {
-  const path = dropPathOf(line);
-  return path === null ? null : `${path}.draft`;
+/** The copy of an unsent draft, kept beside the drop file it was moved for. */
+export function draftCopyPath(dropPath: string): string {
+  return `${dropPath}.draft`;
 }
 
 /** Keeps `text` beside the drop file: the copy the owner's text cannot be lost from. A copy
  *  already there is reused only when it holds the same text; one holding different text is an
- *  earlier delivery's and is never overwritten. */
-function keepDraft(line: string, text: string): { copy: string } | { why: string } {
-  const copy = draftCopyPath(line);
-  if (copy === null) return { why: 'the line names no drop file to keep the text beside' };
+ *  earlier delivery's and is never overwritten. A delivery with no drop file has no place to
+ *  keep the text and clears nothing. */
+function keepDraft(dropPath: string | null, text: string): { copy: string } | { why: string } {
+  if (dropPath === null) return { why: 'the delivery names no drop file to keep the text beside' };
+  const copy = draftCopyPath(dropPath);
   try {
     if (readFileSync(copy, 'utf8') === text) return { copy };
     return { why: `a different copy already sits at ${copy}` };
@@ -415,7 +417,7 @@ type Prep =
  *  clear sequence and paste surface for the CLI, a copy it can keep, a working turn the CLI's
  *  keys were measured in, and a text that can be copied faithfully. Refusals name what is in
  *  the way and leave the box untouched. */
-function prepareDraft(host: DeliverHost, line: string, profile: string, seen: Look & { state: 'other' }): Prep {
+function prepareDraft(host: DeliverHost, dropPath: string | null, line: string, profile: string, seen: Look & { state: 'other' }): Prep {
   const held = 'the composer already holds unsent text';
   if (host.sendKey === undefined) return { ok: false, reason: held };
   const input = profileFor(profile)?.input ?? null;
@@ -426,7 +428,7 @@ function prepareDraft(host: DeliverHost, line: string, profile: string, seen: Lo
   }
   const capture = captureBox(profile, seen.screen);
   if ('why' in capture) return { ok: false, reason: `${held} ${capture.why}; it was left as it is` };
-  const copy = keepDraft(line, capture.text);
+  const copy = keepDraft(dropPath, capture.text);
   if ('why' in copy) return { ok: false, reason: `${held}, and ${copy.why}; the box was left as it is` };
   return { ok: true, text: capture.text, copy: copy.copy, input, working };
 }
@@ -463,10 +465,11 @@ export function showsTranscriptToken(screen: string, token: string, excludeLine?
  * Whether the screen shows the seat reading the drop: a row that names the drop's id and is not the
  * trigger's own echo. A submitted line stays in the transcript (whole, or wrapped over several
  * rows, behind a bullet or a border), and that echo says the line was sent, not that anyone read
- * the file; a row such as `Explored 1 file (<id>)` does.
+ * the file; a row such as `Explored 1 file (<id>)` does. A `dropPath` given says where the drop is
+ * when the line names no path; without one, the line's own path is read.
  */
-export function showsDrop(screen: string, line: string): boolean {
-  const id = dropIdOf(line);
+export function showsDrop(screen: string, line: string, dropPath: string | null = null): boolean {
+  const id = dropPath === null ? dropIdOf(line) : basename(dropPath);
   if (id === null) return false;
   return showsTranscriptToken(screen, id, line);
 }
@@ -488,6 +491,17 @@ export type DeliverOptions = {
    *  trigger and left it unsent (a `not-submitted` send). That line gets the Enter and is never
    *  typed over. Without the record the line is someone else's, and the outcome is `held`. */
   submitHeld?: boolean;
+  /** The caller's own read receipt for the message this line is for: a signed `<id>.read.json`
+   *  that verifies for the message, seat, checkout and session. It is looked at on every poll of
+   *  the verify window, and one that verifies ends the window with `receipt` evidence — the line
+   *  was read, not merely taken. Absent for a line that is not a message (a work nudge) or whose
+   *  drop is not where the seat's own read serves it. */
+  receipt?: () => boolean;
+  /** The drop file the line is for. A receipt-writing trigger (`Run team drops --read …`) names
+   *  no path, so the delivery is told where its drop is: the draft it moves is kept beside that
+   *  file, and the transcript's drop id is read from its name. Absent, the line's own path is
+   *  taken (`Read <path> and do that.`), and a line naming none gets neither. */
+  dropPath?: string;
 };
 
 /**
@@ -495,19 +509,22 @@ export type DeliverOptions = {
  *
  * A screen that is a dialog is never typed into (`unreachable`). A box that holds unsent text
  * of someone else's is never typed over: when the CLI's profile carries the measured way into
- * its box (`input`), the text is copied beside the drop file, the box is cleared with the
+ * its box (`input`), the text is copied beside the drop file the delivery is for — the caller's
+ * `dropPath`, or the path a `Read <path> and do that.` line names — the box is cleared with the
  * profile's keys, the trigger is typed and submitted, and the text is pasted back — bracketed
  * paste — and read back as its rows before the copy is removed. A box this version cannot
  * empty or copy exactly is left untouched (`held`), as it was before that surface existed.
  * Only a `submitHeld` caller's own unsent trigger is entered without a copy.
  *
  * After Enter, a submission is verified when herdr shows the seat working (or a new
- * `done`/`blocked`) and the trigger has left the box. A try that is not verified is followed
+ * `done`/`blocked`) and the trigger has left the box; a caller that passes its own `receipt`
+ * check is also verified the moment that signed receipt verifies, which is the read itself. A try
+ * that is not verified is followed
  * by a re-read: another Enter goes only to a box that still holds exactly the trigger line, never
  * to an empty one, to one that holds something else, to one that cannot be read, or to a dialog; at
  * most `MAX_TRIES` Enters, each waiting longer than the last (`BACKOFF_MS`). Evidence has to come
- * from this line: a status that moved after Enter (never the one a seat already had), or the drop
- * in the transcript. After the last Enter the box itself is the verdict: a trigger still in it is
+ * from this line: a status that moved after Enter (never the one a seat already had), the drop
+ * in the transcript, or the caller's read receipt. After the last Enter the box itself is the verdict: a trigger still in it is
  * `not-submitted`; one that has left it — an empty box, one holding a pasted-back draft, or other
  * text — is `delivered` with `taken` evidence, taken but not yet confirmed, because a busy CLI can
  * clear its box while herdr's status lags or stays idle. A box that cannot be read keeps the first
@@ -521,6 +538,10 @@ export async function deliverTrigger(
 ): Promise<DeliverResult> {
   const before = host.status(pane);
   if (before === null) return { outcome: 'unreachable', tries: 0, reason: "the seat's status could not be read" };
+  // The drop this line is for: the caller's own when the receipt-writing trigger names no path,
+  // else the path the `Read <path> and do that.` line carries. The draft copy and the
+  // transcript's drop id both need it, never the line's spelling alone.
+  const dropPath = options.dropPath ?? dropPathOf(line);
 
   const start = look(host, pane, line, profile);
   if (start.state === 'dialog') return dialogStop(start.kind, 0);
@@ -535,7 +556,7 @@ export async function deliverTrigger(
   let restored = false;
 
   if (start.state === 'other') {
-    const prep = prepareDraft(host, line, profile, start);
+    const prep = prepareDraft(host, dropPath, line, profile, start);
     if (!prep.ok) return { outcome: 'held', box: start.text, tries: 0, reason: prep.reason };
     draftText = prep.text;
     copyPath = prep.copy;
@@ -652,7 +673,7 @@ export async function deliverTrigger(
       tries += 1;
     }
     await maybeRestore();
-    const verified = await verify(host, pane, line, profile, before, BACKOFF_MS[round] ?? 9000, afterDraft());
+    const verified = await verify(host, pane, line, profile, before, BACKOFF_MS[round] ?? 9000, dropPath, afterDraft(), options.receipt);
     if (verified !== null) {
       await restoreOnDelivered();
       return { outcome: 'delivered', tries, ...verified, ...(draft === undefined ? {} : { draft }) };
@@ -673,7 +694,7 @@ export async function deliverTrigger(
   // may be working while herdr still reads it idle.
   if (seen.state === 'empty' || seen.state === 'unread') {
     const spent = BACKOFF_MS.slice(0, MAX_TRIES).reduce((sum, ms) => sum + ms, 0);
-    const late = await verify(host, pane, line, profile, before, Math.max(0, VERIFY_TOTAL_MS - spent), afterDraft());
+    const late = await verify(host, pane, line, profile, before, Math.max(0, VERIFY_TOTAL_MS - spent), dropPath, afterDraft(), options.receipt);
     if (late !== null) {
       await restoreOnDelivered();
       return { outcome: 'delivered', tries, ...late, ...(draft === undefined ? {} : { draft }) };
@@ -717,9 +738,10 @@ export async function deliverTrigger(
 }
 
 /**
- * What showed the seat took the line, once the box no longer holds it; else null. Either herdr's
- * status changed (working, or a new done/blocked), or the box is empty and the transcript shows
- * the drop being read, which does not wait on a status that can lag.
+ * What showed the seat took the line, once the box no longer holds it; else null. The strongest
+ * sign is the caller's own read receipt, which is a read and ends the window at once; short of
+ * that, either herdr's status changed (working, or a new done/blocked), or the box is empty and
+ * the transcript shows the drop being read, which does not wait on a status that can lag.
  */
 async function verify(
   host: DeliverHost,
@@ -728,13 +750,18 @@ async function verify(
   profile: string,
   before: string | null,
   window: number,
+  dropPath: string | null,
   draft?: string,
-): Promise<{ status: string; evidence: 'status' | 'transcript' } | null> {
+  receipt?: () => boolean,
+): Promise<{ status: string; evidence: 'status' | 'transcript' | 'receipt' } | null> {
   const samples: string[] = [];
   let polls = 0;
   for (let waited = 0; waited < window; waited += POLL_MS) {
     await host.wait(POLL_MS);
     polls += 1;
+    // The receipt is the seat's own command's proof, so it can land while herdr still reads the
+    // seat idle; it is looked at on every poll, before the status is even read.
+    if (receipt?.() === true) return { status: 'receipt', evidence: 'receipt' };
     const sample = host.status(pane);
     let changed = false;
     if (sample !== null) {
@@ -748,7 +775,7 @@ async function verify(
     if (changed && sample !== null && seen.state !== 'trigger' && seen.state !== 'dialog') {
       return { status: sample, evidence: 'status' };
     }
-    if (seen.state === 'empty' && showsDrop(seen.screen, line)) return { status: 'transcript', evidence: 'transcript' };
+    if (seen.state === 'empty' && showsDrop(seen.screen, line, dropPath)) return { status: 'transcript', evidence: 'transcript' };
   }
   return null;
 }

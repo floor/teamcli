@@ -13,8 +13,10 @@ import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { upsertProject } from '../src/registry/projects.ts';
-import { historyPath } from '../src/send/history.ts';
-import { dropMessage, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
+import { historyPath, readHistory } from '../src/send/history.ts';
+import { receiptPath } from '../src/mcp/inbox.ts';
+import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { dropMessage, readTriggerLine, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
 import { readReply } from '../src/send/reply.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
@@ -217,7 +219,7 @@ describe('team send: the typed trigger', () => {
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello world');
-    expect(pane.typed[0]).toContain(path);
+    expect(pane.typed[0]).toBe(readTriggerLine('lead', 'acme') as string);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('send [owner] lead: sent (unconfirmed)');
     expect(log).not.toContain('hello world');
@@ -925,10 +927,62 @@ describe('team send: native drop', () => {
     expect(statSync(sessionDir).mode & 0o777).toBe(0o700);
     expect(statSync(drops).mode & 0o777).toBe(0o700);
     expect(recordBody(path)).toBe(`from the owner — admitted by: the owner\n\n${body}`);
-    expect(trigger).toContain(path);
+    expect(trigger).toBe(readTriggerLine('native', 'acme') as string);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('herdr status working');
     expect(log).not.toContain(body);
+  });
+
+  test('a seat that writes its signed receipt is delivered (read): the receipt ends the window', async () => {
+    const { root, dir, sockets } = world();
+    const dropDir = join(dir, 'send-drops', 'acme', 'native');
+    // In an object, so the closure's write is a property write the compiler does not narrow away.
+    const written = { at: null as string | null };
+    const pane = scripted(['idle', 'working']);
+    const enter = pane.pressEnter;
+    // The trigger is the seat's own `team drops --read`, whose first act is the signed receipt:
+    // a seat that runs it has read the message before the line even leaves the box. The status
+    // never has to move, because the receipt — not the status — is the read.
+    pane.pressEnter = () => {
+      const id = readdirSync(dropDir).find((entry) => !entry.includes('.'));
+      if (id === undefined) throw new Error(`no drop was written in ${dropDir}`);
+      const receipt = writeReceipt(dropDir, signReceiptPayload({
+        kind: 'receipt',
+        status: 'read',
+        id,
+        to: 'native',
+        root,
+        session: 'acme',
+        at: NOW.toISOString(),
+      }, host.home), host.home);
+      written.at = receipt.ok ? receipt.path : receipt.reason;
+      return enter('acme', 'w9:p1');
+    };
+    const host = fake(sockets, {
+      agents: () => [{ name: 'native', pane: 'w9:p1' }],
+      native: pane,
+    });
+    const io = owner(root);
+
+    const code = await runSend(['native', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    // A read receipt is the one word a typed line earns: never merely `delivered`, and never
+    // `sent` — the receipt is a signed proof, not the line having left the box.
+    expect(io.out).toBe('team acme, session "acme"\nnative: delivered (read)\n');
+    expect(pane.typed).toEqual([readTriggerLine('native', 'acme') as string]);
+    expect(pane.enters).toBe(1);
+    const name = readdirSync(dropDir).find((entry) => !entry.includes('.')) as string;
+    expect(written.at).toBe(receiptPath(dropDir, name));
+    const log = readFileSync(join(dir, LOG_FILE), 'utf8');
+    expect(log).toContain('native: delivered (read)');
+    const history = readHistory('acme', root, host.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toMatchObject([
+      { from: 'owner', to: 'native', id: name, outcome: 'delivered (read)', via: 'typed' },
+    ]);
   });
 
   test('cursor, grok and antigravity take the same drop path', async () => {

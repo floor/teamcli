@@ -20,8 +20,9 @@ import { installCliHooks } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
-import { dropMessage, triggerLine, type NativePane } from '../src/send/native.ts';
+import { dropMessage, readTriggerLine, type NativePane } from '../src/send/native.ts';
 import {
+  clearPending,
   markPending,
   PENDING_MAX_AGE_MS,
   PENDING_MAX_TRIES,
@@ -30,7 +31,7 @@ import {
   type PendingDrop,
 } from '../src/send/pending.ts';
 import { signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, writeReceipt } from '../src/send/record.ts';
-import { readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
+import { markTaken, readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
 import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage, receiptPath } from '../src/mcp/inbox.ts';
@@ -273,7 +274,7 @@ describe('retryHeldDrops', () => {
 
     one.screen = claudeBox('');
     await retryHeldDrops(at);
-    expect(one.typed).toEqual([triggerLine(join(dropDir, 'drop-1')) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
     expect(recordBody(join(dropDir, 'drop-1'))).toBe('from the owner\n\nhello');
@@ -293,6 +294,57 @@ describe('retryHeldDrops', () => {
       },
     ]);
     expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
+  });
+
+  test('a retry whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-receipt', 'from the owner\n\nhello');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const base = scripts(one);
+    const at = {
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      // The retry's trigger is the seat's own `team drops --read`: a seat that runs it writes the
+      // signed receipt before the line leaves the box, and that receipt is the read itself.
+      sources: {
+        ...base,
+        pressEnter: () => {
+          readByHook(made, dropDir, 'drop-receipt', 'lead', 'acme');
+          return base.pressEnter('w1:p1', 'acme');
+        },
+      },
+      now: NOW,
+      say: (text: string) => said.push(text),
+    };
+
+    await retryHeldDrops(at);
+
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+    expect(one.enters).toBe(1);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(existsSync(receiptPath(dropDir, 'drop-receipt'))).toBe(true);
+    expect(said).toEqual(['lead: a held send from owner was read on retry (receipt)']);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([
+      {
+        ts: NOW.toISOString(),
+        from: 'owner',
+        to: 'lead',
+        body: 'from the owner\n\nhello',
+        id: 'drop-receipt',
+        outcome: 'delivered (read)',
+        via: 'typed',
+      },
+    ]);
   });
 
   test('a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
@@ -318,7 +370,7 @@ describe('retryHeldDrops', () => {
     // One clear, the trigger, one Enter, then the owner's text back as one bracketed paste.
     expect(one.keys).toEqual(['ctrl+c']);
     expect(one.typed).toEqual([
-      triggerLine(join(dropDir, 'drop-draft')) as string,
+      readTriggerLine('lead', 'acme') as string,
       '\x1b[200~a draft for the retry\x1b[201~',
     ]);
     expect(readPending(dropDir)).toEqual([]);
@@ -397,7 +449,7 @@ describe('retryHeldDrops', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-2', 'from the owner\n\nagain');
-    const line = triggerLine(join(dropDir, 'drop-2')) as string;
+    const line = readTriggerLine('lead', 'acme') as string;
     const one = pane(claudeBox(line));
     const said: string[] = [];
 
@@ -763,7 +815,7 @@ describe('an inbox send past its fallback window', () => {
       say: (text: string) => said.push(text),
     });
 
-    expect(one.typed).toEqual([triggerLine(join(dropDir, INBOX_C)) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
     const history = readHistory('acme', made.root, made.home);
@@ -801,7 +853,7 @@ describe('an inbox send past its fallback window', () => {
 
     // One delivery per seat per pass, and it is the typed marker's: the inbox marker is due but
     // waits behind the retry's own kind.
-    expect(one.typed).toEqual([triggerLine(join(dropDir, 'held-now')) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir).map((drop) => drop.id)).toEqual([INBOX_D]);
   });
@@ -925,6 +977,47 @@ describe('a retry that ends taken', () => {
       `lead: a send from owner was taken but never acted on; the record is at ${join(dropDir, id)}`,
     );
   });
+
+  test('a receipt the seat wrote after the retry is delivered (read), and the confirmation types nothing', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const body = 'from the owner\n\nread after the fact';
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-taken-receipt', body);
+    markTaken(dropDir, { id: 'drop-taken-receipt', from: 'owner', to: 'lead', body, ts: NOW.toISOString(), before: 'idle' });
+    clearPending(dropDir, 'drop-taken-receipt');
+    readByHook(made, dropDir, 'drop-taken-receipt', 'lead', 'acme');
+
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const at = {
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one),
+      now: new Date(NOW.getTime() + TAKEN_IDLE_GRACE_MS + 1_000),
+      say: (text: string) => said.push(text),
+    };
+    confirmTakenDrops(at);
+
+    // The receipt is the sign the retry's own window missed: the marker goes and the send is a
+    // read, with no keystroke and no dependence on which pane the seat now stands on.
+    expect(readTaken(dropDir)).toEqual([]);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(said).toEqual(['lead: a typed send from owner was read (receipt)']);
+    expect(readHistory('acme', made.root, made.home)).toMatchObject({
+      ok: true,
+      entries: [
+        {
+          ts: at.now.toISOString(),
+          from: 'owner',
+          to: 'lead',
+          body,
+          id: 'drop-taken-receipt',
+          outcome: 'delivered (read)',
+          via: 'typed',
+        },
+      ],
+    });
+  });
 });
 
 describe('team send leaves the record the retry reads', () => {
@@ -973,7 +1066,7 @@ describe('team send leaves the record the retry reads', () => {
       live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
       say: (text: string) => said.push(text),
     });
-    expect(one.typed).toEqual([triggerLine(join(dropDir, drop.id)) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
@@ -1020,7 +1113,7 @@ describe('team send leaves the record the retry reads', () => {
     });
 
     expect(one.keys).toEqual(['ctrl+c']);
-    expect(one.typed).toEqual([triggerLine(join(dropDir, drop.id)) as string, `\x1b[200~${draft}\x1b[201~`]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string, `\x1b[200~${draft}\x1b[201~`]);
     expect(one.screen).toBe(claudeBox(draft));
     expect(existsSync(join(dropDir, `${drop.id}.draft`))).toBe(false);
     expect(readPending(dropDir)).toEqual([]);
@@ -1073,7 +1166,7 @@ describe('team send leaves the record the retry reads', () => {
     });
 
     expect(readPending(dropDir)).toEqual([]);
-    expect(one.typed).toEqual([triggerLine(join(dropDir, drop.id)) as string, triggerLine(join(dropDir, drop.id)) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme') as string, readTriggerLine('lead', 'acme') as string]);
     expect(one.enters).toBe(1);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
@@ -1121,7 +1214,7 @@ describe('team watch retries a held drop', () => {
     const code = await runWatch(['--file', file], io, sources);
 
     expect(code).toBe(0);
-    const line = triggerLine(join(dropDir, 'drop-5')) as string;
+    const line = readTriggerLine('deepseek-acme', 'acme-web') as string;
     expect(typed).toEqual([line]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);

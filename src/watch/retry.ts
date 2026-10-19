@@ -35,7 +35,7 @@ import {
 } from '../send/pending.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
-import { triggerLine } from '../send/native.ts';
+import { readTriggerLine } from '../send/native.ts';
 import { markTaken } from '../send/taken.ts';
 import type { Live } from '../status/compare.ts';
 import { readScreen } from './screen.ts';
@@ -128,7 +128,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
     giveUp(scene, dropDir, drop, `its drop file is gone from ${dropDir}`, true);
     return;
   }
-  const line = triggerLine(join(dropDir, drop.id));
+  const line = readTriggerLine(drop.to, scene.session);
   if (line === null) {
     giveUp(scene, dropDir, drop, 'its trigger line would not fit in a pane');
     return;
@@ -154,16 +154,46 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
       giveUp(scene, dropDir, drop, 'the seat is back at its shell; nothing was typed');
       return;
     }
-    const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, { submitHeld: true });
+    const home = scene.home;
+    const receipt = home === undefined
+      ? undefined
+      : (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home);
+    const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, {
+      submitHeld: true,
+      dropPath: join(dropDir, drop.id),
+      ...(receipt === undefined ? {} : { receipt }),
+    });
     if (result.outcome === 'delivered') {
       clearPending(dropDir, drop.id);
+      // The retry moved an unsent draft out of the box and back (or kept its copy): the receipt
+      // the sender would have had travels with the retry's line and its history entry too.
+      const draft = result.draft === undefined ? undefined : draftNote(result.draft);
+      // The retry's trigger is the seat's own receipt-writing read. A receipt that landed inside
+      // the window — or just after its last poll — is the read itself: `delivered (read)`, and
+      // nothing is ever typed again.
+      if (receipt !== undefined && (result.evidence === 'receipt' || (result.evidence === 'taken' && receipt()))) {
+        if (home !== undefined) {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: scene.now.toISOString(),
+            from: drop.from,
+            to: drop.to,
+            body: drop.body,
+            id: drop.id,
+            outcome: 'delivered (read)',
+            ...(draft === undefined ? {} : { note: draft }),
+            via: 'typed',
+            // A typed fall-through is the inbox leg's own bound ending: the history line says why
+            // the same drop file was typed after the seat's client left it unread.
+            ...(drop.leg === 'mcp-inbox' ? { failed: [INBOX_FALLBACK_REASON] } : {}),
+          });
+        }
+        scene.say(`${drop.to}: ${heldWords(drop)} was read on retry (receipt)`, false);
+        return;
+      }
       // A retry that took the line is a trigger sent, never a message read: no signed receipt has
       // come back, and it is never typed again — the marker is gone, and the history says how the
       // send stands.
       const taken = result.evidence === 'taken';
-      // The retry moved an unsent draft out of the box and back (or kept its copy): the receipt
-      // the sender would have had travels with the retry's line and its history entry too.
-      const draft = result.draft === undefined ? undefined : draftNote(result.draft);
       const note = [TRIGGER_TAKEN_NOTE, draft].filter((one): one is string => one !== undefined).join('; ');
       if (taken) {
         // The retry left a taken line: the same marker the send writes, so the watch's later

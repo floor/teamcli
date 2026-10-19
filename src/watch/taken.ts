@@ -3,12 +3,15 @@
 // A send whose box cleared with no status or transcript evidence is `sent (unconfirmed)` with the
 // note `trigger taken, no read receipt yet`, and leaves a marker beside its drop. The watch is the
 // one reader with a live view of every seat, so its later passes look for the sign the send's own
-// window missed: a transcript row naming the drop, or a status that moved from the one read before
-// Enter. The marker goes once either is seen. A seat that sits free past the grace with no sign,
-// or a record the age bound runs out on, is the last case: the sender is told the line was taken
-// but never acted on, one history line keeps it, and the line is still never typed again.
+// window missed: the signed read receipt the trigger's own drop read writes — which is a read,
+// `delivered (read)` — then a transcript row naming the drop, or a status that moved from the one
+// read before Enter. The marker goes once any is seen. A seat that sits free past the grace with
+// no sign, or a record the age bound runs out on, is the last case: the sender is told the line
+// was taken but never acted on, one history line keeps it, and the line is still never typed
+// again.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { receiptHeld } from '../mcp/inbox.ts';
 import { showsDrop } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { sawSubmission, triggerLine } from '../send/native.ts';
@@ -29,12 +32,30 @@ const FREE = new Set(['idle', 'done']);
  *  passes with none. Nothing here ever types: a taken line is never submitted again. */
 function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string, drop: TakenDrop): void {
   const age = scene.now.getTime() - Date.parse(drop.ts);
+  // The read itself: the trigger the send typed is the seat's own drop read, so a signed receipt
+  // that verifies for this message, seat, checkout and session is the sign the send's window
+  // missed. It needs no pane — a seat that already ran the read is done, not unconfirmed.
+  if (scene.home !== undefined && receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, scene.home)) {
+    clearTaken(dropDir, drop.id);
+    appendHistory(scene.team.project, scene.root, scene.home, {
+      ts: scene.now.toISOString(),
+      from: drop.from,
+      to: drop.to,
+      body: drop.body,
+      id: drop.id,
+      outcome: 'delivered (read)',
+      via: 'typed',
+    });
+    scene.say(`${drop.to}: a typed send from ${drop.from} was read (receipt)`, false);
+    return;
+  }
   if (pane !== undefined) {
     const screen = scene.sources.screen(pane, scene.session);
     const status = scene.sources.status(pane, scene.session);
     const line = triggerLine(join(dropDir, drop.id));
-    // The transcript's sign: a row that names the drop's id and is not the trigger's own echo. The
-    // trigger line may be unreadable (a path too long to have been typed); the status still counts.
+    // The transcript's sign, for a trigger that names the drop's path: a row that names the
+    // drop's id and is not the trigger's own echo. The trigger line may be unreadable (a path too
+    // long to have been typed); the status still counts.
     if (screen !== null && line !== null && showsDrop(screen, line)) {
       clearTaken(dropDir, drop.id);
       return;

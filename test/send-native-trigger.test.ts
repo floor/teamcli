@@ -4,7 +4,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { TRIGGER_MAX, triggerLine } from '../src/send/native.ts';
+import { TRIGGER_MAX, readTriggerLine } from '../src/send/native.ts';
 import { recordBody } from './helpers.ts';
 import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 
@@ -34,8 +34,8 @@ test('a multi-line body is filed whole and the pane gets one short line', async 
   const names = readdirSync(drops);
   expect(names.length).toBe(1);
   const path = join(drops, names[0] as string);
-  const line = triggerLine(path);
-  if (line === null) throw new Error(`no trigger for ${path}`);
+  const line = readTriggerLine('native', 'acme');
+  if (line === null) throw new Error('the trigger line did not fit');
   expect(trigger).toBe(line);
   expect(recordBody(path)).toBe(filed(body));
   expect(host.frames).toEqual([]);

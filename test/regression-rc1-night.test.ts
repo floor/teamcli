@@ -232,7 +232,7 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     );
     expect(host.typed).toHaveLength(1);
     expect(host.typed[0]?.pane).toBe('w1:p1');
-    expect(host.typed[0]?.text).toContain('send-drops');
+    expect(host.typed[0]?.text).toBe('Run team drops --read --seat lead --session acme and do that.');
     expect(host.enters).toEqual(['w1:p1']);
     expect(host.dials()).toBe(0);
   });

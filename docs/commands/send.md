@@ -67,12 +67,15 @@ records it `unavailable`. The native leg is a call the sender's own process make
 from the owner, or from a sender whose own file does not declare `cli: claude-code`, records it
 `unavailable` too; a sender whose own file does declare it gets [the native
 handoff](#the-native-channel) instead — one pending record, the exact target, the body and the
-`--confirm` line — and makes the call itself. A typed send ends
-`sent (unconfirmed)` when the line has left the seat's input box after that one trigger line and
-Enter — either herdr reported the seat `working` (or `done` or `blocked`, and not the status read
-before Enter), or the transcript shows the drop being read (a CLI's status can lag while it
-works) — and the pane was not a dialog this command already classifies: question, permission,
-trust, vendor notice, provider error, or rate limit. The console line carries
+`--confirm` line — and makes the call itself. The typed leg types `Run team drops --read --seat <seat> --session
+<session> and do that.` — the seat's own drop read, whose first act is the signed read receipt
+beside the drop — and a receipt that verifies inside the window is `delivered (read)`, the one
+word that line earns. Without one, a typed send ends `sent (unconfirmed)` when the line has left
+the seat's input box after that one trigger line and Enter — either herdr reported the seat
+`working` (or `done` or `blocked`, and not the status read before Enter), or the transcript shows
+the drop being read (a CLI's status can lag while it works) — and the pane was not a dialog this
+command already classifies: question, permission, trust, vendor notice, provider error, or rate
+limit. The console line carries
 `trigger taken, no read receipt yet`, and the history line records the leg `typed` with the same
 note: the trigger was sent, and no signed receipt has come back, so the message is never called
 read. A box that cleared with no status or transcript evidence inside the window is also
@@ -392,7 +395,7 @@ line on stderr and has none.
 | Outcome | Exit | Printed |
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
-| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for the mcp-inbox leg's receipt: the seat read the message, which is not a claim that it acted on it |
+| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the typed leg's own `team drops --read`, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms)` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms)` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (typed, <n> ms; trigger taken, no read receipt yet)` on stdout, for the typed leg: the trigger line left the seat's input box, and no signed receipt has come back, so the message is not called read |

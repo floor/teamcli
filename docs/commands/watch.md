@@ -261,8 +261,9 @@ already made is not repeated when the event's copy comes back on the bus, and th
 the one in the mailbox.
 
 The watch types two fixed lines, and never a report: the ring, when a message waits for a seat,
-and a work drop's line, when an idle worker is due one. A retry types a third, the sender's own
-trigger line for a drop this watch is delivering. The lines around them:
+and a work drop's line, when an idle worker is due one. A retry types a third, the seat's own
+drop read — `Run team drops --read --seat <seat> --session <session> and do that.` — for a drop
+this watch is delivering. The lines around them:
 
 | Line | Made when |
 | --- | --- |
@@ -286,6 +287,7 @@ trigger line for a drop this watch is delivering. The lines around them:
 | `<seat>: a dropped send from <from> was read in its drop folder` | the seat's own turn-start read (`team drops --read`) wrote its signed receipt; the history records `delivered (read)` and the marker beside the record is cleared, and nothing is typed |
 | `<seat>: a dropped send from <from> was not read (no receipt within 30m); the drop file is at <path>` | thirty minutes passed with no signed receipt on a `drop`-leg marker: the marker is cleared, the record stays in the folder, and nothing is ever typed for it |
 | `<seat>: a held send from <from> was sent on retry (trigger taken, no read receipt yet)` / `<seat>: an inbox send from <from> was sent on retry (trigger taken, no read receipt yet)` | this pass typed the drop's trigger line and sent it: a held send once the box was free, or an inbox message still unread past its ten-minute fallback window; the history records `sent (unconfirmed)`, never a read; when the retry moved an unsent draft, its receipt follows on the same line (`; the unsent text was pasted back`, or `; the unsent text could not be put back; its copy is at <path>`) and in the history note |
+| `<seat>: a held send from <from> was read on retry (receipt)` / `<seat>: an inbox send from <from> was read on retry (receipt)` | the retry's line is the seat's own `team drops --read`, and its signed receipt landed inside the retry's window: the history records `delivered (read)`, the marker is cleared, and nothing is ever typed again |
 | `<seat>: a held send from <from> was not delivered (<why>); the drop file is at <path>; send it again` (the word is `an inbox send` for the fallback) | the retry's bound ended — three typed tries, thirty minutes, a trigger that would not fit in a pane, or a drop file moved away — and the message waits where the line names it |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |

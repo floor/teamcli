@@ -33,7 +33,7 @@ import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendRespon
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor } from '../send/names.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
-import { POLL_MS, triggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
@@ -701,7 +701,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // record within the timeout window.
   const msgId = host.sendId?.() ?? randomUUID();
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
-  const dropPath = join(dropDir, msgId);
   const record = recordOf(msgId, to, body, from, admission, host.now().toISOString());
   const callerRoot = { root, session: team.session };
   if (dry) {
@@ -787,11 +786,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot);
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
-    // trigger past the measured line before anything is written. A compose seat's typed leg is
+    // trigger past the measured line before anything is written. The line is the seat's own
+    // receipt-writing drop read, so the command that wakes it is the one that proves it read: the
+    // signed `<id>.read.json` lands before the body is printed. A compose seat's typed leg is
     // its CLI's own screens instead: there is no drop-file trigger to build, and the walk is
     // run in this process (below), not handed to the daemon.
     const compose = profileFor(to.cli)?.compose ?? null;
-    const trigger = triggerLine(dropPath);
+    const trigger = readTriggerLine(to.seat, to.session);
     if (trigger === null && compose === null) {
       return refuse(io, dir, who, `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`, host, report);
     }
@@ -1666,14 +1667,16 @@ async function deliverDropped(
 }
 
 /**
- * Writes the drop file under the seat lock, types the one trigger, and reports what it knows: the
- * trigger left the box (`deliverTrigger`), so the message is `sent (unconfirmed)`, never
- * `delivered` — no signed read receipt has come back, and only a receipt earns that word. A line
- * that was typed but not taken is `not-submitted`, never a success. A line that left the box with
- * no status or transcript evidence inside the window is `sent (unconfirmed)` with the trigger note
- * `trigger taken, no read receipt yet`: the seat took it, the watch looks for the later sign, and
- * the line is never typed again. The lock is held across the typing so a second send cannot append
- * into the same composer.
+ * Writes the drop file under the seat lock, types the one trigger, and reports what it knows. The
+ * trigger is the seat's own receipt-writing read, so when the signed `<id>.read.json` verifies
+ * inside the wait the message is `delivered (read)` — the seat ran it, and the receipt is the
+ * read. Short of that, a trigger that left the box is `sent (unconfirmed)`, never `delivered`: no
+ * receipt has come back, and only a receipt earns that word. A line that was typed but not taken
+ * is `not-submitted`, never a success. A line that left the box with no status, transcript or
+ * receipt evidence inside the window is `sent (unconfirmed)` with the trigger note `trigger taken,
+ * no read receipt yet`: the seat took it, the watch looks for the later sign, and the line is
+ * never typed again. The lock is held across the typing so a second send cannot append into the
+ * same composer.
  */
 async function deliverNative(
   io: Io,
@@ -1725,7 +1728,8 @@ async function deliverNative(
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
     }
     path = written.path;
-    const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli);
+    const receipt = (): boolean => receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home);
+    const result = await deliverTrigger(bindPane(host.native, session), pane, trigger, cli, { receipt, dropPath: path });
     const where = `the record is at ${path}`;
     draft = result.draft === undefined ? undefined : draftNote(result.draft);
     // A held drop gets a record beside it, for the watch to deliver once the seat is free. The
@@ -1751,6 +1755,23 @@ async function deliverNative(
       appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'not-submitted', ms: host.now().getTime() - startedAt, via: 'typed', ...failed });
       markPending(dropDir, entry);
       return notSubmitted(io, dir, who, seatName, result, `${where}; ${retry}${draft === undefined ? '' : `; ${draft}`}`, host, report);
+    }
+    // A signed read receipt that landed inside the window — or between its last poll and this
+    // line — is the read itself: the seat ran the trigger's own drop read and the receipt is on
+    // disk. That is `delivered (read)`, the one word a typed line earns only this way; the seat
+    // read the message, which is not a claim that it acted on it.
+    if (result.evidence === 'receipt' || (result.evidence === 'taken' && receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home))) {
+      logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, typed, receipt${draft === undefined ? '' : `; ${draft}`})`, host.now());
+      appendHistory(project, root, host.home, {
+        ...entry,
+        ...historySender(report),
+        outcome: 'delivered (read)',
+        ...(draft === undefined ? {} : { note: draft }),
+        ms: host.now().getTime() - startedAt,
+        via: 'typed',
+        ...failed,
+      });
+      return delivered(io, seatName, report, 'read', 'typed');
     }
     taken = result.evidence === 'taken';
     logLine(dir, 'send', who, `${seatName}: sent (unconfirmed) (drop ${String(body.length)} characters, typed, ${evidenceOf(result)}${draft === undefined ? '' : `; ${draft}`})`, host.now());
@@ -2570,19 +2591,19 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** The socket frame was taken, or the seat's inbox server returned the message. Exit 0, always.
- *  The note names the path — `socket` — and `read` for the mcp-inbox leg's receipt, whose own
- *  words are `delivered (read)`: the seat read the message, which is not a claim that it acted on
- *  it. A trigger typed into a composer is never this word: it is `sent (unconfirmed)`, and only a
- *  signed receipt makes it `delivered (read)`. */
-function delivered(io: Io, seat: string, report: Report, note?: string): number {
+/** The socket frame was taken, the seat's inbox server returned the message, or the typed
+ *  trigger's own drop read wrote a signed receipt. Exit 0, always. The note names the path —
+ *  `socket` — and `read` for a signed receipt (the mcp-inbox leg's, or a typed trigger's own),
+ *  whose own words are `delivered (read)`: the seat read the message, which is not a claim that
+ *  it acted on it. `via` names the channel for a read that came through the typed leg. */
+function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed'): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   const read = note === 'read';
   if (report.json) {
     writeAction(io, report, {
       status: read ? 'delivered (read)' : 'delivered',
       summary,
-      channel: read ? 'mcp-inbox' : note === 'socket' ? 'socket' : 'typed',
+      channel: read ? (via ?? 'mcp-inbox') : note === 'socket' ? 'socket' : 'typed',
     });
   } else {
     openText(io, report);

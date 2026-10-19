@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readHistory } from '../../src/send/history.ts';
-import type { NativePane } from '../../src/send/native.ts';
+import { readTriggerLine, type NativePane } from '../../src/send/native.ts';
 import type { SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
 
@@ -189,7 +189,7 @@ describe('team send: the plain send is the typed trigger again', () => {
     expect(host.socketsTried).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops)[0] as string);
-    expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
+    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
     expect(host.pane.enters).toBe(1);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
     const read = readHistory('acme', root, host.home);

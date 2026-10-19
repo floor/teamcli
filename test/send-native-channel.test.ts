@@ -13,6 +13,8 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
+import { readTriggerLine } from '../src/send/native.ts';
+import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import {
   PENDING_NATIVE_CONFIRM_WINDOW_MS,
   PENDING_NATIVE_TTL_MS,
@@ -887,6 +889,65 @@ test('cross-team expiry binds typing and read-back to record.session and verifie
   expect(statusSessions.every((s) => s === 'other')).toBe(true);
   expect(screenSessions.every((s) => s === 'other')).toBe(true);
   expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; sent on fallback (trigger taken, no read receipt yet)']);
+});
+
+test('expiry typed leg whose trigger writes the read receipt is delivered (read), not sent', async () => {
+  const made = nativeWorld();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane, newId: () => ID });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  expect(existsSync(pending(made))).toBe(true);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const drops = dropDir(made.dir, 'lead');
+  // In an object, so the closure's write is a property write the compiler does not narrow away.
+  const receipt = { at: null as string | null };
+  const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
+  // The fallback's trigger is the seat's own `team drops --read`: the seat that runs it writes
+  // the signed receipt, so the fallback ends as a read rather than as a line left in a box.
+  scene.sources.pressEnter = () => {
+    const written = writeReceipt(drops, signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: ID,
+      to: 'lead',
+      root: made.root,
+      session: 'acme',
+      at: expiredAt.toISOString(),
+    }, made.home), made.home);
+    receipt.at = written.ok ? written.path : written.reason;
+    return watchPane.pressEnter('acme', 'w1:p1');
+  };
+  await expirePendingNative(scene);
+
+  expect(existsSync(pending(made))).toBe(false);
+  expect(watchPane.typed).toEqual([readTriggerLine('lead', 'acme') as string]);
+  expect(watchPane.enters).toBe(1);
+  expect(receipt.at).toBe(join(drops, `${ID}.read.json`));
+  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.read.json`]);
+  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; read on fallback (receipt)']);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok && history.entries).toEqual([
+    {
+      ts: expiredAt.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      body: HANDOFF_BODY,
+      id: ID,
+      thread: ID,
+      outcome: 'delivered (read)',
+      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
+      via: 'typed',
+      failed: [
+        'native: unconfirmed after 10m',
+        'mcp-inbox: no live inbox listener',
+      ],
+    },
+  ]);
 });
 
 test('expiry typed leg refuses to type when the recipient pane process identity was replaced', async () => {

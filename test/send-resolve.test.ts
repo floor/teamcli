@@ -6,7 +6,7 @@
 // registry refuses types nowhere.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -672,10 +672,14 @@ function sendHost(w: World, session: string, seats: Record<string, { pane: strin
 
 /** The record the trigger names: the typed line's whitespace-free token that is a path, and
  *  the signed record's body. */
-function dropOf(typed: string): { path: string; text: string } {
-  const word = typed.split(/\s+/).find((part) => part.startsWith('/'));
-  if (!word) throw new Error(`no absolute path in the typed trigger: ${typed}`);
-  return { path: word, text: recordBody(word) };
+/** The one drop in a seat's folder — the message the send wrote. The typed trigger is the
+ *  seat's own receipt-writing read and names no path, so the folder is read, not the line. */
+function dropOf(root: string, session: string, seat: string): { path: string; text: string } {
+  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const name = readdirSync(dir).find((one) => !one.includes('.'));
+  if (name === undefined) throw new Error(`no drop was written in ${dir}`);
+  const path = join(dir, name);
+  return { path, text: recordBody(path) };
 }
 
 describe('the whole command on a registry-resolved spec', () => {
@@ -699,7 +703,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const typed = betaPane.typed[0] as Typed;
     expect(typed.session).toBe('beta');
     expect(typed.pane).toBe('pane-beta-lead');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(beta.root, 'beta', 'lead');
     const admitted = admitSend('owner', betaAgent, readTeams(beta.home));
     if (!admitted.ok) throw new Error(`the owner's send is not admitted: ${admitted.why}`);
     expect(drop.text).toBe(`${senderHeader('owner', admitted.rule)}\n${BODY}`);
@@ -758,7 +762,7 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(builderPane.typed.length).toBe(1);
     const typed = builderPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-live-builder');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text.split('\n')[0]).toBe(senderHeader('owner', admitRuleFor(alpha.home, builder)).trimEnd());
     expect(drop.text).toContain(BODY);
   });
@@ -797,7 +801,7 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(builderPane.typed.length).toBe(1);
     const typed = builderPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-new');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text).toContain(BODY);
   });
 
@@ -819,7 +823,8 @@ describe('the whole command on a registry-resolved spec', () => {
 
     expect(code).toBe(0);
     const typed = builderPane.typed[0] as Typed;
-    const drop = dropOf(typed.text);
+    expect(typed.pane).toBe('pane-builder');
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text.split('\n')[0]).toBe(
       "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team",
     );
@@ -898,7 +903,7 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(helperPane.typed.length).toBe(1);
     const typed = helperPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-builder');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
     expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
   });
@@ -922,7 +927,7 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(helperPane.typed.length).toBe(1);
     const typed = helperPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-builder');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
 
     // The native handoff names the same seat: the recorded run resolves the word as the send
@@ -974,7 +979,7 @@ describe('the whole command from a folder that is no team', () => {
       const typed = sent.panes['builder-1'].typed;
       expect(typed.length).toBe(1);
       expect((typed[0] as Typed).pane).toBe('pane-builder');
-      const drop = dropOf((typed[0] as Typed).text);
+      const drop = dropOf(w.root, 'alpha', 'builder-1');
       expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
       expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
       expect(sent.panes.atlas.typed).toEqual([]);
@@ -1021,7 +1026,7 @@ describe('the whole command on a legacy seat named lead', () => {
     expect(leadPane.typed.length).toBe(1);
     const typed = leadPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-alpha-lead');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(w.root, 'alpha', 'lead');
     expect(drop.text).toContain(BODY);
     expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'lead'))).toBe(true);
     expect(AGENT_ID.test(lead.id)).toBe(true);
