@@ -34,8 +34,9 @@ import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './routes.ts';
-import { createHostedWatch, type HostedWatch } from './watch.ts';
+import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
+import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import {
   ensureMachineDir,
@@ -61,8 +62,9 @@ export type MachineDaemon = {
  *  is the shared watch loop, or a test's stand-in for it. */
 export type HostedWatchBuild = {
   run(loop: HostedLoop): Promise<number>;
-  /** `open` only when the caller injected a verified admitted sender; closed otherwise. */
-  effects?: 'blocked' | 'open';
+  /** `open` only while the route's own gate admits effects; a getter keeps the recorded state
+   *  truthful as that gate closes and opens. */
+  effects?: HostedEffects | (() => HostedEffects);
   /** Defaults to true: a host is created only when the route was started to carry a watch. */
   required?: boolean;
   /** The route cannot host a watch: the watch starts standing down with this reason. */
@@ -505,7 +507,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const teamFile = teamFiles.get(route.root);
       if (teamFile === undefined) continue;
       const build = input.hostedWatch?.(route, log)
-        ?? hostedWatchAuthority({ route, teamFile, log });
+        ?? hostedWatchAuthority({
+          route,
+          teamFile,
+          log,
+          // The shared verifier judges the captured identity against the record under its own
+          // lock immediately before every effect; a lifecycle report is never a substitute.
+          verifyAuthority: (check) => verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK }),
+        });
       hostedWatches.push({
         status,
         watch: createHostedWatch({

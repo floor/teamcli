@@ -14,8 +14,10 @@ export type HostedWatchInput = {
   route: HostedRoute;
   /** Runs the shared watch loop under this host; resolves with the loop's own exit code. */
   run(loop: HostedLoop): Promise<number>;
-  /** Whether the caller injected a verified admitted sender. Absent reads as blocked. */
-  effects?: 'blocked' | 'open';
+  /** Whether a route may emit an effect now. A getter makes the recorded state truthful: a
+   *  route that has not acquired its authority, or has lost it, reads `blocked`. Absent reads
+   *  as blocked. */
+  effects?: HostedEffects | (() => HostedEffects);
   /** Whether this route was started with a hosted watch on purpose. Defaults to true. */
   required?: boolean;
   /** Start standing down because a live pane watch already owns the session. */
@@ -31,12 +33,16 @@ export type HostedWatch = HostedWatchHandle & {
   route: HostedRoute;
 };
 
+/** What a hosted route may do outbound right now. */
+export type HostedEffects = 'blocked' | 'open';
+
 type Waiter = { due: number; resolve(ok: boolean): void };
 
 export function createHostedWatch(input: HostedWatchInput): HostedWatch {
   const now = input.now ?? (() => new Date());
   const startedAt = now().toISOString();
-  const effects = input.effects ?? 'blocked';
+  const effectsOf = (): HostedEffects =>
+    (typeof input.effects === 'function' ? input.effects() : input.effects ?? 'blocked');
   const required = input.required ?? true;
   let phase: HostedWatchState['phase'] = input.standby === undefined ? 'starting' : 'standby';
   let why: string | null = input.standby ?? null;
@@ -157,7 +163,7 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     lastCycleOutcome,
     cycles,
     failures,
-    effects,
+    effects: effectsOf(),
     required,
     why,
   });

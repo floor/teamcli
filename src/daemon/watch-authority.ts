@@ -19,9 +19,11 @@
 // root/session/epoch immediately before the sender runs; neither a fresh report nor a renew result
 // alone admits an effect.
 //
-// Outbound effects stay blocked until both a sender factory and the shared verifier are injected.
-// This wrapper makes no exactly-once handoff claim and adds no queue, identity or WorkPush
-// request change: drain holds ambiguous work for explicit recovery.
+// Outbound effects stay blocked until both a sender factory and the shared verifier are injected,
+// and the recorded effects state says blocked until the run has actually built its sender under
+// the captured epoch; loss, standby and the end of the run close it again. This wrapper makes no
+// exactly-once handoff claim and adds no queue, identity or WorkPush request change: drain holds
+// ambiguous work for explicit recovery.
 
 import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -32,6 +34,7 @@ import type { WorkPush } from '../watch/dispatch.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import type { HostedWatchBuild } from './host.ts';
 import type { HostedRoute } from './routes.ts';
+import type { HostedEffects } from './watch.ts';
 import { hostedWatchRun } from './watch-run.ts';
 
 /** The daemon's existing heartbeat: a busy acquire is retried on the next tick, never parked. */
@@ -59,9 +62,9 @@ export type WatchSenderFactoryInput = {
   log(text: string): void;
 };
 
-/** Builds the route's outbound sender. Absent, the watch runs with outbound effects closed.
- *  Present, it is called once after acquire and its push is wrapped for per-effect verification. */
-export type WatchSenderFactory = (input: WatchSenderFactoryInput) => WorkPush | undefined;
+/** Builds the route's outbound sender. When both the factory and the shared verifier are
+ *  injected, the factory's result is required; absent either, effects stay blocked. */
+export type WatchSenderFactory = (input: WatchSenderFactoryInput) => WorkPush;
 
 export type HostedWatchAuthorityInput = {
   route: HostedRoute;
@@ -136,6 +139,7 @@ async function runAuthoritativeHost(
   stateDir: string,
   loop: HostedLoop,
   setPulse: (pulse: ((at: Date) => boolean) | undefined) => void,
+  setEffects: (effects: HostedEffects) => void,
 ): Promise<number> {
   const host = createWatchHost(stateDir, input.route.session, {
     now: input.now ?? (() => new Date()),
@@ -145,20 +149,42 @@ async function runAuthoritativeHost(
   let lost = false;
   let epoch: string | undefined;
 
+  const fail = (why: string): void => {
+    if (lost) return;
+    lost = true;
+    setEffects('blocked');
+    input.log(`root ${input.route.root}: the hosted watch cannot continue: ${why}`);
+    loss.abort();
+  };
+
   const markLost = (why: string): void => {
     if (lost) return;
     lost = true;
+    setEffects('blocked');
     input.log(`root ${input.route.root}: the hosted watch's authority was lost: ${why}`);
     loss.abort();
   };
 
-  // A pulse renews the captured record. Before acquire completes there is no authority to lose:
-  // the beat only drives the same acquisition the acquire loop would, and the loop reads the
-  // report itself. After acquire, any non-authoritative report is a loss, at once. The boolean
-  // tells the host whether effects are still live, so it never settles a wait true after a loss.
+  /** The route's own binding, re-read from state: a cleared, repointed or unreadable record
+   *  ends the run. The binding is never rewritten here. */
+  const bindingLoss = (): string | undefined =>
+    bindingRefusal(stateDir, input.route.session, input.teamFile);
+
+  // A pulse renews the captured record and rechecks the route's binding. Before acquire
+  // completes there is no authority to lose: the beat only drives the same acquisition the
+  // acquire loop would, and the loop reads the report itself; a binding that changed or a pulse
+  // that failed there ends the run rather than retrying forever. After acquire, any
+  // non-authoritative report or changed binding is a loss, at once. The boolean tells the host
+  // whether effects are still live, so it never settles a wait true after a loss.
   const pulse = (_at: Date): boolean => {
     if (lost) return false;
     try {
+      const changed = bindingLoss();
+      if (changed !== undefined) {
+        if (epoch === undefined) fail(`the watchdog file binding changed: ${changed}`);
+        else markLost(`the watchdog file binding changed: ${changed}`);
+        return false;
+      }
       if (epoch === undefined) {
         host.tick();
         return true;
@@ -170,17 +196,15 @@ async function runAuthoritativeHost(
       }
       return true;
     } catch (error) {
-      if (epoch === undefined) {
-        input.log(`root ${input.route.root}: the authority pulse failed before acquire: ${textOf(error)}`);
-        return true;
-      }
-      markLost(`the authority pulse failed: ${textOf(error)}`);
+      if (epoch === undefined) fail(`the authority pulse failed before acquire: ${textOf(error)}`);
+      else markLost(`the authority pulse failed: ${textOf(error)}`);
       return false;
     }
   };
 
-  // The per-effect gate: renew first, then the shared verifier for the captured identity.
-  const verifyEffect = (): boolean => {
+  // The lifecycle gate: renew the captured record and answer whether this host still holds a
+  // fresh authority. It is enough to continue a quiet sweep; it admits no effect.
+  const checkOwn = (): boolean => {
     if (lost) return false;
     let report: WatchHostReport;
     try {
@@ -197,6 +221,20 @@ async function runAuthoritativeHost(
       markLost('the captured epoch is not readable');
       return false;
     }
+    return true;
+  };
+
+  // The per-effect gate: renew first, then the shared verifier for the captured identity. An
+  // absent verifier keeps effects closed without draining the read-only loop.
+  //
+  // Availability limitation: the shared verifier reads the state under its own lock, and a busy
+  // lock is reported as a refusal. This wrapper cannot tell that transient contention from a real
+  // refusal, so it fails closed and drains rather than retrying or parsing the verifier's words.
+  // A busy state folder at the moment of an effect therefore costs the watch its run; a typed
+  // busy verdict in the verifier is the later fix, not a why-string heuristic here.
+  const verifyEffect = (): boolean => {
+    if (!checkOwn()) return false;
+    if (epoch === undefined) return false;
     let verdict: WatchAuthorityVerdict | undefined;
     try {
       verdict = input.verifyAuthority?.({ root: input.route.root, session: input.route.session, epoch });
@@ -217,8 +255,15 @@ async function runAuthoritativeHost(
 
   setPulse(pulse);
   try {
-    // Acquire before the first pass. Only lock contention is retried, on the existing fixed tick.
+    // Acquire before the first pass. Only lock contention is retried, on the existing fixed tick;
+    // the route's binding is re-read before every attempt so a record cleared or repointed while
+    // this host waited stands the watch down instead of acquiring on a stale claim.
     for (;;) {
+      const changed = bindingLoss();
+      if (changed !== undefined) {
+        fail(`the watchdog file binding changed: ${changed}`);
+        return 0;
+      }
       const report = host.start();
       if (report.phase === 'authoritative') {
         epoch = report.epoch;
@@ -249,32 +294,37 @@ async function runAuthoritativeHost(
         const ok = await loop.wait(ms);
         if (!ok) return false;
         // Second gate before the next cycle: the beat that released this wait has already run,
-        // and the captured authority must still be the record's.
-        return verifyEffect();
+        // and the captured authority must still be the record's. This is the liveness gate
+        // only; admitting an effect needs the shared verifier as well.
+        return checkOwn();
       },
       cycled(at) {
         loop.cycled(at);
       },
       standby(why) {
+        // A standing-down watch emits nothing from here on.
+        setEffects('blocked');
         loop.standby(why);
       },
     };
 
     // Effects need both halves: the sender and the shared verifier. With either absent the watch
-    // still reads and cycles, but no effect leaves this host.
+    // still reads and cycles under its captured authority, but no effect leaves this host.
     const canSend = input.sender !== undefined && input.verifyAuthority !== undefined;
     if (input.sender !== undefined && !canSend) {
       input.log(`root ${input.route.root}: the shared watch authority verifier is not wired; outbound effects stay closed`);
     }
-    const built = canSend ? input.sender?.({ route: input.route, stateDir, epoch, verify: verifyEffect, log: input.log }) : undefined;
-    if (canSend && built === undefined) {
-      input.log(`root ${input.route.root}: the watch sender factory built no sender; outbound effects stay closed`);
+    let sender: WorkPush | undefined;
+    if (canSend && input.sender !== undefined) {
+      sender = input.sender({ route: input.route, stateDir, epoch, verify: verifyEffect, log: input.log });
     }
-    const sender = built;
     const pushWork: WorkPush | undefined = sender === undefined ? undefined : async (request) => {
       if (!verifyEffect()) return { ok: false, refused: 'the watch authority is not current' };
       return sender(request);
     };
+    // Open only now: the sender exists under this captured epoch. Until here the recorded state
+    // said blocked, and it says blocked again the moment this host stops holding the authority.
+    if (sender !== undefined) setEffects('open');
 
     const run = hostedWatchRun({
       route: input.route,
@@ -284,9 +334,16 @@ async function runAuthoritativeHost(
       // The record carries this runtime's pid; the shared loop must read it as its own.
       pid: process.pid,
     });
+    // Before the first pass: a binding that changed between acquire and this line drains now.
+    const changed = bindingLoss();
+    if (changed !== undefined) {
+      markLost(`the watchdog file binding changed: ${changed}`);
+      return 0;
+    }
     return await run(proxy);
   } finally {
     setPulse(undefined);
+    setEffects('blocked');
     const stopped = host.stop();
     if (stopped.phase === 'releasing') {
       // Honest cleanup: busy or unreadable is not released, and the record does not age out
@@ -329,12 +386,18 @@ export function hostedWatchAuthority(input: HostedWatchAuthorityInput): HostedWa
   // The daemon's fixed tick reaches the lifecycle host through this seam; the run installs it
   // when it starts and clears it when it leaves.
   let pulse: ((at: Date) => boolean) | undefined;
-  const canSend = input.sender !== undefined && input.verifyAuthority !== undefined;
+  // Effects start closed and open only once the run has built its sender under the captured
+  // epoch. The recorded state is read through this getter on every read, so it can never claim a
+  // send this host cannot make: before acquire, on standby, on loss and after the run all read
+  // blocked.
+  let effects: HostedEffects = 'blocked';
   return {
-    effects: canSend ? 'open' : 'blocked',
+    effects: () => effects,
     tick: (at) => pulse?.(at),
     run: (loop) => runAuthoritativeHost(input, stateDir, loop, (next) => {
       pulse = next;
+    }, (next) => {
+      effects = next;
     }),
   };
 }
