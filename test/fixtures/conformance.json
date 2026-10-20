@@ -687,11 +687,46 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/near-context-used-follower.txt",
+      "cli": "codex",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/near-context-used-nostatus.txt",
+      "cli": "codex",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/near-context-used-typed.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/permission.txt",
       "cli": "codex",
       "classify": "permission",
       "composer": "unknown",
       "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/ready-context-used-bare.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/ready-context-used.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
     },
     {
       "file": "codex/0.161.0/trust.txt",
