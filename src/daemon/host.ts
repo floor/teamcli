@@ -25,16 +25,18 @@ import { dirname } from 'node:path';
 import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
+import type { TeamFile } from '../file/types.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
-import { plainLine } from '../launch/plain.ts';
+import { plainLine, plainText } from '../launch/plain.ts';
 import { isSeatId, pidAlive, readState } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
-import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRootHealthSnapshot } from './protocol.ts';
+import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
-import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './routes.ts';
+import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
+import type { NextAnswer, NextClaim, NextHandlerInput } from './next.ts';
 import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
@@ -93,6 +95,30 @@ export type HostedWatchBuild = {
  *  present only when this daemon hosts the broker and a reader was built for the route; it is
  *  the watch's only way to count a tracker team's takeable work. */
 export type HostedWatchExtras = { brokerWork?: BrokerWorkSource };
+
+/** The caller one `next` request is proved to be. The pane is what the verifier proved, never
+ *  the frame's claim; the host dispatches only when the two agree. */
+export type NextPrincipalVerdict =
+  | { kind: 'verified'; seat: string; pane: string }
+  | { kind: 'refused'; why: string };
+
+/**
+ * Proves who a `next` request's caller is from evidence the daemon owns, given the untrusted
+ * claim the frame carried. The frame's `scope` is an argument, never a proof: an honest check
+ * consults the route's state, placement or pane evidence and returns the identity it proved.
+ * The host runs a handler only when this verdict names exactly the claimed (seat, pane), so a
+ * verifier that cannot bind the caller must refuse instead of echoing the claim back.
+ */
+export type NextPrincipalCheck = (input: {
+  route: HostedRoute;
+  team: TeamFile;
+  claim: NextClaim;
+  now: Date;
+}) => NextPrincipalVerdict | Promise<NextPrincipalVerdict>;
+
+/** Serves one proved `next` request. `handleNext` is this shape; a caller that needs its own
+ *  broker proxy or deadline binds it and passes the bound function. */
+export type NextDispatchHandler = (input: NextHandlerInput) => Promise<NextAnswer>;
 
 export type StartMachineDaemonInput = {
   home?: string;
@@ -176,6 +202,19 @@ export type StartMachineDaemonInput = {
    * throws is unresolved classification and holds the whole route.
    */
   presenceUnproven?: (route: HostedRoute, stateDir: string) => Array<{ seat: string; why: string }>;
+  /**
+   * Proves one `next` request's caller. Absent in production until a verified principal binding
+   * lands, and then every `next` request is refused with `daemon.auth-unsupported` and nothing
+   * runs; no frame's own claim ever stands in for it. The host only calls the handler when this
+   * check names exactly the claimed (seat, pane).
+   */
+  nextPrincipal?: NextPrincipalCheck;
+  /**
+   * Serves one proved `next` request. It is the caller's wiring, including any broker proxy: this
+   * daemon opens no tracker socket itself. Absent, every `next` request is refused exactly as
+   * with no verifier, so the two seams are only ever open together.
+   */
+  nextHandler?: NextDispatchHandler;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
 };
@@ -491,6 +530,91 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
+  /**
+   * One v2 `op=next` frame, from the frame to the handler's answer. The route is resolved and its
+   * file reloaded first, so the handler serves the checkout the daemon hosts now, not the one it
+   * hosted at start. Everything after that fails closed: a missing claim, verifier or handler, a
+   * refused or mismatched proof, or a handler failure leaves the request refused with nothing
+   * dispatched. Without a verifier and a handler the answer is the pinned default refusal.
+   */
+  const answerNext = async (request: DaemonRequest): Promise<DaemonResponse> => {
+    const nextRefusal = (message: string): DaemonResponse => ({
+      v: request.v,
+      id: request.id,
+      ok: false,
+      error: { code: 'daemon.auth-unsupported', message },
+    });
+    const nextInternal = (message: string): DaemonResponse => ({
+      v: request.v,
+      id: request.id,
+      ok: false,
+      error: { code: 'daemon.internal', message },
+    });
+    const scope = request.scope ?? {};
+    const resolved = resolveScope(routes, scope);
+    if (resolved.kind !== 'one') {
+      return {
+        v: request.v,
+        id: request.id,
+        ok: false,
+        error: { code: 'daemon.scope-mismatch', message: resolved.why },
+      };
+    }
+    const route = resolved.route;
+    const teamFile = teamFiles.get(route.root);
+    if (teamFile === undefined) {
+      return nextInternal('the resolved route has no recorded team file');
+    }
+    let loaded;
+    try {
+      loaded = loadTeamFile(dirname(teamFile), { file: teamFile, home });
+    } catch (error) {
+      return nextInternal(`the route's team file could not be read: ${plainText(error instanceof Error ? error.message : String(error))}`);
+    }
+    if (!loaded.ok) {
+      return nextInternal(`the route's team file could not be read: ${loaded.errors[0]?.message ?? 'unknown error'}`);
+    }
+    const seat = scope.seat;
+    const pane = scope.pane;
+    const principal = input.nextPrincipal;
+    const handler = input.nextHandler;
+    if (seat === undefined || pane === undefined || principal === undefined || handler === undefined) {
+      // No claim, no verifier or no handler: the same refusal the default dispatcher gives, so
+      // the seam being closed is indistinguishable from the op never being served here.
+      return answerDaemonRequest(request, health());
+    }
+    const at = now();
+    let verdict: NextPrincipalVerdict;
+    try {
+      verdict = await principal({ route, team: loaded.team, claim: { seat, pane }, now: at });
+    } catch (error) {
+      return nextRefusal(
+        `next: the caller could not be verified (${plainText(error instanceof Error ? error.message : String(error))}); nothing was done`,
+      );
+    }
+    if (verdict.kind !== 'verified') {
+      return nextRefusal(`next: ${verdict.why}; nothing was done`);
+    }
+    if (verdict.seat !== seat || verdict.pane !== pane) {
+      return nextRefusal('next: the verified principal does not match the seat and pane the request claimed; nothing was done');
+    }
+    try {
+      const answer = await handler({
+        route,
+        team: loaded.team,
+        caller: { seat: verdict.seat, pane: verdict.pane },
+        action: request.action ?? 'claim',
+        mine: request.mine ?? false,
+        now: at.getTime(),
+      });
+      return { v: request.v, id: request.id, ok: true, next: answer };
+    } catch (error) {
+      return nextInternal(
+        `next: the handler failed (${plainText(error instanceof Error ? error.message : String(error))}); the state it reached is unknown`,
+      );
+    }
+  };
+
   // The accept, frame and close mechanics live in the relay package's framing host; this process
   // keeps the protocol: the same line parser and refusal bytes, the same health answer and
   // in-flight tracking, and the same socket file, permission and stale-path ownership below.
@@ -503,27 +627,32 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     },
     // The daemon's parser owns validation and takes the exact framed line; the decoded value the
     // host also offers is never a principal and is not needed here.
-    onRequest: (_input, line) => {
+    onRequest: async (_input, line) => {
       const parsed = parseDaemonRequest(line);
       if (!parsed.ok) {
         return formatDaemonResponse({ v: DAEMON_PROTOCOL_VERSION, id: parsed.id, ok: false, error: parsed.error });
       }
+      const request = parsed.request;
       if (closed) {
         // Admission is closed while the presence drain runs: the endpoint still owns its socket
         // and refuses work until the drain is truthful and the release below unlinks it.
         return formatDaemonResponse({
-          v: DAEMON_PROTOCOL_VERSION,
-          id: parsed.request.id,
+          v: request.v,
+          id: request.id,
           ok: false,
           error: { code: 'daemon.internal', message: 'the daemon is closing' },
         });
       }
       const started = now().getTime();
-      inFlight.set(parsed.request.id, { op: parsed.request.op, since: started });
+      inFlight.set(request.id, { op: request.op, since: started });
       try {
-        return formatDaemonResponse(answerDaemonRequest(parsed.request, health()));
+        // Only a v2 frame can reach the next boundary; a v1 `next` keeps the default refusal.
+        if (request.op === 'next' && request.v === 2) {
+          return formatDaemonResponse(await answerNext(request));
+        }
+        return formatDaemonResponse(answerDaemonRequest(request, health()));
       } finally {
-        inFlight.delete(parsed.request.id);
+        inFlight.delete(request.id);
       }
     },
     onRefused: (reason) => {

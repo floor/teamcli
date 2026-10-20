@@ -16,7 +16,7 @@ import { STATE_FILE } from '../src/state.ts';
 import { daemonSocketPath as sendSocketPath, startSendDaemon } from '../src/send/daemon.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram, ServiceRunResult } from '../src/daemon/service.ts';
-import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
+import { DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
 import { testIo } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -273,8 +273,10 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     if (started.kind !== 'serving') return;
     try {
       const machine = daemonSocketPath(home);
+      // A line that never parsed carries no version of its own, so the refusal names this
+      // daemon's current protocol version.
       const refusal = (message: string): Record<string, unknown> => ({
-        v: 1,
+        v: DAEMON_PROTOCOL_VERSION,
         id: '',
         ok: false,
         error: { code: 'daemon.bad-frame', message },
