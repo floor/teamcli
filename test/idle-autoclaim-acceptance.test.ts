@@ -749,15 +749,27 @@ async function waitForPass(check: () => boolean, ms = 3000, state?: () => unknow
  *  no timer of its own; the receiving runtime pumps beside the pass, driven only by the
  *  transport's delivery signal. */
 async function hostedPickup(options: {
-  channelHealthy: boolean;
+  /** `true` answers healthy for every seat; `false` supplies no provider at all, as a route the
+   *  daemon does not host; a function is the daemon's per-seat answer. */
+  channelHealthy: boolean | ((seat: string) => boolean);
   runtime: ReturnType<typeof workerRuntime>;
   sent: ReturnType<typeof pushViaSend>;
   passes: number;
-}): Promise<void> {
+}): Promise<string[]> {
   const route = routeOf(root, 'acme', SESSION, ['lead', SEAT]);
   // The base is this same world, minus the status-event source: a hosted loop's waits are its
   // host's, so an event waiter here would never be settled inside the pass.
   const base: WatchSources = { ...watchSources({ workerStatus: 'idle', screen: BUSY, passes: 13 }).sources, statusSource: undefined };
+  // Which seats the daemon was asked about, so a hold can be shown to be an answer it gave, not
+  // a question it was never asked.
+  const asked: string[] = [];
+  const policy = options.channelHealthy;
+  const presenceChannelHealthy = policy === false
+    ? undefined
+    : (seat: string) => {
+      asked.push(seat);
+      return typeof policy === 'boolean' ? policy : policy(seat);
+    };
   const log: string[] = [];
   const host = createHostedWatch({
     route,
@@ -769,7 +781,7 @@ async function hostedPickup(options: {
       base,
       pushWork: options.sent.push,
       pid: 4242,
-      ...(options.channelHealthy ? { presenceChannelHealthy: () => true } : {}),
+      ...(presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy }),
     }),
   });
   try {
@@ -786,6 +798,7 @@ async function hostedPickup(options: {
   } finally {
     await host.stop('the scene is done');
   }
+  return asked;
 }
 
 // The same end-to-end pickup under the production hosted binding: the daemon's own loop and
@@ -838,6 +851,22 @@ describe('the hosted watch pickup under the native proof', () => {
     // The daemon hosts this route but answers nothing for the channel: the projection is
     // default-closed, exactly as with no provider at all.
     await hostedPickup({ channelHealthy: false, runtime, sent, passes: 3 });
+    expect(sent.pushed).toEqual([]);
+    expect(sent.frames).toEqual([]);
+    expect(workerInbox()).toEqual([]);
+    expect(runtime.claims).toEqual([]);
+    expect(leases()).toEqual([]);
+  });
+
+  test('the hosted pass asks its daemon about this seat, and its unhealthy answer holds', async () => {
+    await nativeReading('turn-end');
+    directRoute();
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    // The daemon answers per seat: every channel is healthy here except the worker's. The
+    // projection is a valid native idle, but the pass must not borrow another seat's health.
+    const asked = await hostedPickup({ channelHealthy: (seat) => seat !== SEAT, runtime, sent, passes: 2 });
+    expect(asked).toContain(SEAT);
     expect(sent.pushed).toEqual([]);
     expect(sent.frames).toEqual([]);
     expect(workerInbox()).toEqual([]);
