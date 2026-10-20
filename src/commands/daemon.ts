@@ -1,8 +1,10 @@
 // `team daemon`: the one machine-wide TeamCLI daemon. `run` is the foreground process the
 // system service manager starts (it hosts the existing send and bus servers in this one process
-// and serves the machine socket); `install` and `uninstall` write and register the user service
-// unit through a neutral interface, with the platform's own file and command only inside the
-// adapter. `status` is the one-line health reading every other command and person reads.
+// and serves the machine socket); `run --presence` additionally hosts the presence pipeline, and
+// without the flag the daemon does not read presence at all. `install` and `uninstall` write and
+// register the user service unit through a neutral interface, with the platform's own file and
+// command only inside the adapter. `status` is the one-line health reading every other command
+// and person reads.
 //
 // The machine daemon holds no credential and reads no credential store. The broker feature is
 // not hosted in this build, and the catalogue's `daemon.broker` policy is off by default, so a
@@ -23,7 +25,7 @@ import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { version as installedVersion } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
-       team daemon run [--root <folder>] [--started-by <source>]
+       team daemon run [--root <folder>] [--started-by <source>] [--presence]
        team daemon install [--root <folder>] [--dry-run] [--json]
        team daemon uninstall [--json]
 
@@ -31,6 +33,9 @@ One machine-wide daemon serves every team and clone on this machine. It answers 
 protocol on the one machine socket, and for now it also hosts each checkout's existing send
 and bus endpoints in the same process, so no second or third daemon process runs. Repeat
 \`--root\` to host more than one checkout.
+\`run --presence\` additionally hosts each checkout's presence pipeline: the spool ingester, the
+activity reconciler, the publisher and the per-seat health answer. Without the flag the daemon
+does not read presence at all.
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
 it after a failure; \`uninstall\` removes it. \`status\` prints one line: running, not running, or
 unknown.
@@ -71,13 +76,14 @@ type Parsed = {
   roots: string[];
   json: boolean;
   dryRun: boolean;
+  presence: boolean;
   startedBy: string | undefined;
   extra: string | undefined;
   error: string | null;
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['root', 'started-by'], ['json', 'dry-run']);
+  const args = readArgs(argv, ['root', 'started-by'], ['json', 'dry-run', 'presence']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`.
@@ -108,6 +114,7 @@ function parse(argv: string[]): Parsed {
     roots,
     json: args.flags.has('json'),
     dryRun: args.flags.has('dry-run'),
+    presence: args.flags.has('presence'),
     startedBy: args.values['started-by'],
     extra: args.rest[1],
     error: args.error ?? null,
@@ -121,6 +128,7 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.extra !== undefined) return `unexpected "${parsed.extra}"`;
   if (parsed.verb === 'run' && parsed.json) return '--json belongs to status, install or uninstall';
   if (parsed.verb === 'run' && parsed.dryRun) return '--dry-run belongs to install';
+  if (parsed.verb !== 'run' && parsed.presence) return '--presence belongs to run';
   if (parsed.verb === 'status' && parsed.dryRun) return '--dry-run belongs to install';
   if (parsed.verb === 'status' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'status' && parsed.startedBy !== undefined) return '--started-by belongs to run';
@@ -299,6 +307,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       ...(sources.now !== undefined ? { now: sources.now } : {}),
       ...(sources.heartbeatMs !== undefined ? { heartbeatMs: sources.heartbeatMs } : {}),
       ...(sources.sendHost !== undefined ? { sendHost: sources.sendHost } : {}),
+      ...(parsed.presence ? { presenceHosting: true } : {}),
     });
     if (started.kind === 'already-running') {
       io.stdout(`team daemon: already running${started.pid === null ? '' : ` (pid ${String(started.pid)})`}\n`);

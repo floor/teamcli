@@ -713,6 +713,12 @@
             },
             {
               "hidden": false,
+              "name": "--presence",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--root",
               "repeatable": false,
               "takesValue": true
@@ -735,7 +741,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon run [--root <folder>] [--started-by <source>]"
+            "team daemon run [--root <folder>] [--started-by <source>] [--presence]"
           ],
           "who": {
             "gate": "owner-only",
@@ -811,7 +817,7 @@
       ],
       "usage": [
         "team daemon status [--json]",
-        "team daemon run [--root <folder>] [--started-by <source>]",
+        "team daemon run [--root <folder>] [--started-by <source>] [--presence]",
         "team daemon install [--root <folder>] [--dry-run] [--json]",
         "team daemon uninstall [--json]"
       ],

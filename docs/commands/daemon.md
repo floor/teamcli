@@ -13,7 +13,7 @@ machine with no broker handler never falls back to a per-clone broker.
 ## Synopsis
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence]
     team daemon install [--root <folder>] [--dry-run] [--json]
     team daemon uninstall [--json]
 
@@ -42,6 +42,12 @@ hosted`, and on a signal closes the machine socket, appends `daemon stopped` to 
 the machine lock says so, starts nothing and exits 1. `--started-by` names the launcher in the
 record: `manual` (the default), `service-manager` (the unit), or `team-up`.
 
+`run --presence` also hosts each checkout's presence pipeline: the spool ingester, the activity
+reconciler, the publisher and the per-seat health answer. Without the flag the daemon does not
+read presence at all, and a start without it behaves exactly as before. The opt-in is a `run`
+flag alone; there is no second policy key for it. A seat whose native attachment is expected but
+cannot be proven is answered as unproven for that seat, never silently as its route's hook seat.
+
 `install` writes the user service unit and registers it with the system service manager. It
 prints `team daemon: installed for <n> checkout(s); the system service manager starts it at login
 and restarts it after a failure`. `--dry-run` prints what it would do, including the unit path
@@ -57,6 +63,7 @@ under `--json`, and writes nothing: `… would install …; nothing was written`
 | --- | --- | --- |
 | `--root` | a checkout folder | host that checkout; repeatable, and validated when the unit is written; belongs to `run` and `install` |
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
+| `--presence` | — | host each checkout's presence pipeline; belongs to `run`, and is off by default |
 | `--dry-run` | — | print the install plan and write nothing; belongs to `install` |
 | `--json` | — | one JSON document instead of the line; belongs to `status`, `install` and `uninstall` |
 | `--help`, `-h` | — | the usage, and exit 0 |
@@ -69,7 +76,12 @@ stuck requests), the Unix socket `daemon.sock` (mode 0600 in a 0700 folder), the
 `daemon.log`, and the single-instance lock `daemon.lock`. `install` and `uninstall` write and
 remove the user service unit the platform adapter owns; no command prints that path as prose
 except under `--json`. Each hosted checkout's team file is read to find its send and bus
-endpoints. Nothing in this command reads a credential store.
+endpoints. Under `run --presence` the daemon additionally reads each hosted checkout's presence
+folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of staged records, the
+append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,
+`current.json` and session `status.json`, and writes the applied fence
+(`presence_applied`) into the seat's state record. Nothing in this command reads a credential
+store.
 
 ## Who may run it
 

@@ -424,7 +424,7 @@ Hidden: no
 Usage:
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence]
     team daemon install [--root <folder>] [--dry-run] [--json]
     team daemon uninstall [--json]
 
@@ -475,7 +475,7 @@ Hidden: no
 
 Usage:
 
-    team daemon run [--root <folder>] [--started-by <source>]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence]
 
 #### Who may run it
 
@@ -486,6 +486,7 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
+| `--presence` | no | no | no |
 | `--root` | yes | no | no |
 | `--started-by` | yes | no | no |
 | `-h` | no | no | yes |

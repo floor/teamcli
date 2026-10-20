@@ -7,6 +7,9 @@ import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts'
 import { daemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath, machineConfigDir } from '../src/daemon/paths.ts';
+import { mintPresenceBinding } from '../src/daemon/presence/contract.ts';
+import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
+import { STATE_FILE } from '../src/state.ts';
 import { daemonSocketPath as sendSocketPath } from '../src/send/daemon.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceRunResult } from '../src/daemon/service.ts';
@@ -62,6 +65,17 @@ async function waitFor(check: () => Promise<boolean> | boolean, ms = 3000): Prom
   for (;;) {
     if (await check()) return;
     if (Date.now() > deadline) throw new Error('timed out waiting for the daemon state');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/** The same poll, for a reading the scene needs to inspect rather than a yes/no. */
+async function waitForValue<T>(check: () => Promise<T | null>, ms = 3000): Promise<T> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const value = await check();
+    if (value !== null) return value;
+    if (Date.now() > deadline) throw new Error('timed out waiting for the daemon reading');
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -495,6 +509,79 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(io.err).toContain('--started-by takes service-manager, manual or team-up');
     expect(started).toEqual([]);
   });
+
+  test('run hosts presence only when --presence is given; --presence belongs to run', async () => {
+    const { root, home } = scratch();
+    const seen: Array<{ presenceHosting?: boolean }> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(['run', '--presence'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
+    expect(seen.map((input) => input.presenceHosting)).toEqual([undefined, true]);
+
+    const refused = testIo(root, owner);
+    expect(await runDaemon(['status', '--presence'], refused, sourcesOf(home))).toBe(2);
+    expect(refused.err).toContain('--presence belongs to run');
+  });
+
+  test('run --presence hosts the real spool-to-health presence pipeline for its route', async () => {
+    const { root, home } = scratch();
+    const dir = join(root, '.agents');
+    const binding = mintPresenceBinding();
+    const seatId = 'seat_0123456789ab';
+    writeFileSync(join(dir, STATE_FILE), `${JSON.stringify({
+      format: 1,
+      sessions: {
+        acme: {
+          seats: { clerk: { id: seatId, stage: 'ready', presence_binding: binding } },
+          worktrees: {},
+        },
+      },
+    })}\n`);
+    const io = testIo(root, owner);
+    let release: (() => void) | undefined;
+    const run = runDaemon(['run', '--presence', '--root', root], io, {
+      ...sourcesOf(home),
+      stop: (end) => {
+        release = end;
+        return () => {};
+      },
+    });
+    try {
+      await waitFor(async () => (await daemonHealth(home)).state === 'running', 8_000);
+      const staged = stagePresenceRecord(dir, {
+        session: 'acme',
+        seat: 'clerk',
+        binding,
+        source: 'runtime-hook',
+        event: 'turn-end',
+        ts: new Date().toISOString(),
+      });
+      expect(staged.kind).toBe('staged');
+      // The default ingester, activity reconciler and publisher are what the flag switched on:
+      // this record travels the real spool and the health socket names the serving hook seat.
+      const seat = await waitForValue(async () => {
+        const reading = await daemonHealth(home);
+        const presence = reading.roots?.[0]?.presence;
+        const seats = presence !== undefined && 'seats' in presence ? presence.seats : undefined;
+        return presence?.state === 'serving'
+          ? seats?.find((one) => one.seat === 'clerk') ?? null
+          : null;
+      }, 8_000);
+      expect(seat).toMatchObject({
+        seat: 'clerk', state: 'serving', healthy: true, source: 'hook', binding,
+        appliedEventId: null, why: null,
+      });
+      release?.();
+      expect(await run).toBe(0);
+    } finally {
+      release?.();
+      await run.catch(() => {});
+    }
+    expect(io.out).toContain('team daemon: stopped');
+  }, 20_000);
 
   test('run starts one daemon, prints its line, and stops cleanly', async () => {
     const { root, home } = scratch();

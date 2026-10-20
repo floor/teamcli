@@ -25,6 +25,8 @@ import {
 import { createPresenceIngester, type PresenceIngestResult, type PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import type { PresencePublishResult } from '../src/daemon/presence/publish.ts';
 import { presencePaths, stagePresenceRecord } from '../src/daemon/presence/spool.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { STATE_FILE } from '../src/state.ts';
 
 const CREW = `format: 1
@@ -56,6 +58,39 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude
+`;
+
+/** The same route with one Codex seat beside its Claude hook seats, for the production source
+ *  factory: the Codex seat is the only one whose attachment the daemon must prove. */
+const MIXED = `format: 1
+project: acme-web
+session: crew
+coordinator: crew-lead
+operator: crew-op
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: crew-lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+  - role: operator
+    name: crew-op
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+  - role: worker
+    name: worker-1
+    cli: codex
+    vendor: openai
+    model: GPT-5
+    version: "5"
+    launch: codex
 `;
 
 function emptyIngest(): PresenceIngestResult {
@@ -1014,4 +1049,77 @@ describe('the per-seat runtime sources', () => {
     expect(closedHung).toBe(true);
     expect(existsSync(daemonLockPath(world.home))).toBe(false);
   }, 20_000);
+
+  // The production factory runs here: no `presenceSubscriptions` injection. A Codex seat whose
+  // managed session is recorded but whose explicit endpoint is missing is an unproven attachment
+  // for that seat alone; the route's hook seats keep their own fresh-ingest answer. Only a
+  // factory that throws (or an unnamed adoption failure) makes the whole route `unknown`.
+  test('a Codex seat with no explicit endpoint holds only itself; its hook siblings serve', async () => {
+    const clock = new Date('2026-10-20T00:00:00.000Z');
+    const LEAD_BINDING = 'prs_fedcba987654';
+    const AGENT_SESSION = 'thread-1';
+    writeFileSync(join(world.root, '.agents', 'team.yaml'), MIXED);
+    writeFileSync(join(world.root, '.agents', STATE_FILE), `${JSON.stringify({
+      format: 1,
+      sessions: {
+        crew: {
+          seats: {
+            'crew-lead': { stage: 'ready', presence_binding: LEAD_BINDING },
+            'worker-1': {
+              id: 'seat_0123456789ab', stage: 'ready', presence_binding: BINDING,
+              agent_session: AGENT_SESSION,
+            },
+          },
+          worktrees: {},
+        },
+      },
+    })}\n`);
+    // The seat's own records agree on one Codex session; only the endpoint is missing.
+    registerAgent(world.home, {
+      name: 'worker-1',
+      signing: { model: 'GPT-5', version: '5', role: 'worker' },
+      lab: 'openai',
+      cli: 'codex',
+      launcher: null,
+      launch: 'codex',
+      reach: {
+        team: teamIdOf(world.root), seat: 'worker-1', session: 'crew',
+        pane: null, address: null, agent_session: AGENT_SESSION,
+      },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'test',
+    });
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => servingIngester(),
+      presenceActivity: () => async () => activityResult(),
+      // No presenceCodexEndpoint: the production default resolves no endpoint, and it must not
+      // guess one from a home, a pane or a discovery pass.
+    });
+    const seatOf = (name: string) => daemon.health().roots?.[0]?.presence?.seats
+      ?.find((seat) => seat.seat === name);
+    await waitUntil(() => seatOf('worker-1')?.why
+      === 'no explicit unix app-server endpoint was resolved for this seat');
+    expect(seatOf('worker-1')).toEqual({
+      seat: 'worker-1', state: 'pending', healthy: false, source: 'runtime', binding: BINDING,
+      appliedEventId: null, why: 'no explicit unix app-server endpoint was resolved for this seat',
+    });
+    // The hook sibling serves on the route's fresh ingest: one seat's missing attachment is not
+    // a route-wide classification failure, and it is never inferred to be a hook seat either.
+    expect(seatOf('crew-lead')).toEqual({
+      seat: 'crew-lead', state: 'serving', healthy: true, source: 'hook', binding: LEAD_BINDING,
+      appliedEventId: null, why: null,
+    });
+    // A hook seat with no recorded binding is pending for its own reason, still `hook`.
+    expect(seatOf('crew-op')).toEqual({
+      seat: 'crew-op', state: 'pending', healthy: false, source: 'hook', binding: null,
+      appliedEventId: null, why: 'the seat records no presence binding',
+    });
+    expect(daemon.health().roots?.[0]?.presence).toMatchObject({ state: 'serving', healthy: true });
+    await daemon.close();
+  }, 15_000);
 });
