@@ -83,6 +83,8 @@ const ID = {
   legacyBuilder: 'agt_000000050019',
   stray: 'agt_00000005001a',
   visitor: 'agt_00000005001b',
+  studioLead: 'agt_00000005001c',
+  studioAssistant: 'agt_00000005001d',
 } as const;
 
 // The floor team's seats, one per role a live file has shown: the lead place, the operator
@@ -120,6 +122,11 @@ const stray = agent(ID.stray, 'builder-1', 'nowhere');
 // A registered record whose seat the floor roster does not declare: the sender-side check of
 // the declared-seat rule.
 const visitor = agent(ID.visitor, 'visitor', 'floor');
+// A second team of the floor entity, used only by the assistant-edge scene below: the head team
+// without its assistant line makes this seat the entity's assistant, and the coordinator it
+// reaches is the head team's lead.
+const studioLead = agent(ID.studioLead, 'orchestrator', 'studio');
+const studioAssistant = agent(ID.studioAssistant, 'assistant', 'studio');
 
 // Two entities: floor owns floor, teamcli and material; radio is its own. `word` and `legacy`
 // hold the shapes a role word or a legacy lead key gets wrong; neither names an entity, so no
@@ -367,8 +374,9 @@ describe('team relations: what crosses an edge', () => {
     { id: 'other-entity-writer', side: radioWriter },
     { id: 'unregistered', side: stray },
   ];
-  // One crossing pair, the lead pair of one entity. Every other role pair crossing a team edge
-  // is refused, same entity or not.
+  // In the cross grid one crossing pair is admitted: the lead pair of one entity. Every other
+  // role pair crossing a team edge is refused, same entity or not. The documented assistant
+  // reach is the one further exception, and it needs its own edge fixture below.
   const admittedCrossing: Record<string, Partial<Record<string, string>>> = {
     lead: { 'entity-lead': RULE.leads },
   };
@@ -397,6 +405,30 @@ describe('team relations: what crosses an edge', () => {
     expect(admitSend(cliLead, operatorPlace, teams).ok).toBe(false);
     expect(admitSend(cliWriter, floorLead, teams).ok).toBe(false);
     expect(admitSend(architect, cliLead, teams).ok).toBe(false);
+  });
+
+  test('the assistant reach crosses to the entity coordinator; arbitrary peers stay refused', () => {
+    // The head team of the floor entity carries no assistant line, so the studio team's assistant
+    // is the entity's assistant and the coordinator it reaches is the head team's lead — a
+    // crossing pair the documented reach admits.
+    const headWithoutAssistant: AdmitTeams = {
+      ...teams,
+      floor: { ...teams.floor!, roster: teams.floor!.roster.filter((entry) => entry.assistant !== true) },
+      studio: {
+        project: 'studio',
+        entity: 'floor',
+        roster: [
+          { agent: ID.studioLead, seat: 'orchestrator', role: 'orchestrator', leads: true },
+          { agent: ID.studioAssistant, seat: 'assistant', role: 'assistant', assistant: true },
+        ],
+      },
+    };
+    expect(admitSend(studioAssistant, floorLead, headWithoutAssistant)).toEqual({ ok: true, rule: RULE.assistant });
+    // Inside its own team the assistant reaches its own lead and every declared seat.
+    expect(admitSend(studioAssistant, studioLead, headWithoutAssistant)).toEqual({ ok: true, rule: RULE.seat });
+    // Any other same-entity peer stays refused, in both directions.
+    expect(admitSend(studioAssistant, cliWriter, headWithoutAssistant).ok).toBe(false);
+    expect(admitSend(cliWriter, studioAssistant, headWithoutAssistant).ok).toBe(false);
   });
 
   test('a seat the registry does not place is refused either way', () => {
