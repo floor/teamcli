@@ -221,14 +221,15 @@ function dropped(root: string, seat: string): string {
 /** A live listener beside the lead's inbox: this process's pid and the fixture's own seat,
  *  session and root — the record a running inbox server leaves. */
 function liveInbox(w: { root: string }, over: { seat?: string; session?: string; root?: string; pid?: number } = {}): string {
-  const dir = dropDir(w.root, 'lead');
+  const seat = over.seat ?? 'lead';
+  const dir = dropDir(w.root, seat);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({
     v: 1,
-    seat: over.seat ?? 'lead',
+    seat,
     session: over.session ?? 'acme',
     root: over.root ?? w.root,
-    cli: 'claude-code',
+    cli: seat === 'native' ? 'codex' : 'claude-code',
     pid: over.pid ?? process.pid,
     ts: NOW.toISOString(),
   })}\n`);
@@ -358,7 +359,7 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'from_team', 'id', 'ms', 'note', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
-  test('a codex seat walks the implied native-first order: no bound thread, the inbox is skipped, the typed trigger takes it', async () => {
+  test('a codex seat walks the implied native-first order: native fails and the typed trigger wakes it before inbox', async () => {
     const w = world();
     const host = walker(w);
     const io = owner(w.root);
@@ -366,12 +367,28 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
 
     // The implied default names the seat's runtime queue first while its `codex-daemon` policy
-    // is on; this fixture records no thread for the seat, so the route stands down and the rest
-    // of the default order follows it.
-    expect(lastEntry(w.root, w.home).failed).toEqual(['native: no trusted runtime session is recorded for this seat (no agent record for this seat)', MCP_SKIP]);
+    // is on; this fixture records no thread for the seat, so the route stands down and the typed
+    // trigger wakes the idle pane before the inbox can accept a silent write.
+    expect(lastEntry(w.root, w.home).failed).toEqual(['native: no trusted runtime session is recorded for this seat (no agent record for this seat)']);
     expect(lastEntry(w.root, w.home).via).toBe('typed');
     expect(host.typed.map((one) => one.pane)).toEqual(['pane-native']);
     expect(existsSync(dropped(w.root, 'native'))).toBe(true);
+  });
+
+  test('a live Codex inbox does not swallow an idle send before its typed wake', async () => {
+    const w = world();
+    const dir = liveInbox(w, { seat: 'native' });
+    const host = walker(w, undefined, 0);
+    const io = owner(w.root);
+
+    expect(await runSend(['native', 'hello'], io, host)).toBe(0);
+
+    expect(io.out).toContain('native: sent (unconfirmed) (typed,');
+    expect(host.typed.map((one) => one.pane)).toEqual(['pane-native']);
+    expect(lastEntry(w.root, w.home).via).toBe('typed');
+    expect(lastEntry(w.root, w.home).failed).toEqual([
+      'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+    ]);
   });
 
   test('a word adding a leg other than native is set aside and the walk in force stands', async () => {
@@ -826,7 +843,7 @@ describe('a seat that declares no word takes the one its shape implies', () => {
       .toEqual({});
   });
 
-  test('a codex seat has an inbox to watch, so it keeps the default order', () => {
+  test('Codex ordering is decided by the send route, not the generic chain', () => {
     const w = world();
     expect(deliveryChainOf({ root: w.root, seat: 'native', home: w.home, projectOfTeam: () => null }))
       .toEqual({});
@@ -1171,7 +1188,7 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
     const code = await runSend(['native', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via its native runtime queue, falling back to the seat\'s own MCP inbox, then a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line, then the seat\'s own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
     expect(io.err).toBe('');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropDir(w.root, 'native'))).toBe(false);

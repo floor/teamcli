@@ -49,7 +49,7 @@ describe("team send: the file's seat, before its record", () => {
       'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
     );
     const drops = dropDir(one.dir, 'lead');
-    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
+    expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
       "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
     );
   });
@@ -83,7 +83,7 @@ describe("team send: the file's seat, before its record", () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('drifter: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('sender drifter has no agent record on this machine, so no rule admits the send');
     expect(io.err).toContain('`team up` registers a seat it leaves standing');
     expect(host.frames).toEqual([]);
     expect(existsSync(join(one.dir, 'send-drops'))).toBe(false);
@@ -134,7 +134,7 @@ describe("team send: the file's seat, before its record", () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toContain('helper: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('sender helper has no agent record on this machine, so no rule admits the send');
     expect(io.err).toContain('`team up` registers a seat it leaves standing');
     expect(host.frames).toEqual([]);
     expect(existsSync(join(one.dir, 'send-drops'))).toBe(false);

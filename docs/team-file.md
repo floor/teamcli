@@ -428,8 +428,12 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
 is an ordinary change, and a file that writes none reads as the default order.
-Omitted, the order is `mcp-inbox`, then `typed`, then `drop`; neither `native` nor
-`headless-resume` is ever in the default, and only a declared word can add either. A typed leg
+Omitted, the general order is `mcp-inbox`, then `typed`, then `drop`; neither `native` nor
+`headless-resume` is ever in that default. A Codex receiver with no declared order has an
+implicit runtime queue first while its signed `codex-daemon` setting is on, then the typed wake,
+then the inbox and remaining default legs. If that setting is off or unavailable, the typed wake
+leads so an idle Codex inbox is not left unread. A declared `delivery_order` is followed as
+written. Only a declared word can add `native` or `headless-resume` to the general order. A typed leg
 that finds no live agent types nothing and
 hands the send to the leg behind it, recording `typed: <reason>`; a walk reaches `drop` when
 the legs before it did not take the send, or when the order puts `drop` before `typed`.

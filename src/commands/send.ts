@@ -104,8 +104,11 @@ names every leg in order with \`eligible\` and the reason it would be skipped, i
 the socket leg a Claude receiver's files keep out.
 
 A send walks the receiving seat's delivery order — mcp-inbox, typed, drop by
-default. A level of that seat's own chain, entity, project, team, seat, may drop
-legs from the order or put the legs it keeps in a different order, and may add
+default. For Codex with no declared order, the runtime queue leads when its signed
+codex-daemon setting is on, followed by a typed wake before the inbox fallback; when off,
+the typed wake leads. A declared order is followed as written. A level of that seat's own
+chain, entity, project, team, seat, may drop legs from the order or put the legs it keeps in a
+different order, and may add
 native, the sender's own frame, headless-resume, a headless runtime's own turn,
 or place socket anywhere: a word naming a leg the order does not have, or naming
 one twice, is set aside and the order in force stands. Each leg in turn
@@ -963,13 +966,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       session: to.session,
       now: host.now(),
     }) === 'on';
-  // The socket default keeps the held-box and dual-declaration gate: only a receiver whose box
-  // is not holding a frame is walked socket first. The two defaults are exclusive by runtime.
+  // Codex must receive a typed wake before its inbox can take a message: an inbox write alone
+  // does not wake its idle TUI. Keep the native runtime route first when its signed default is
+  // active, then rank typed ahead of the inbox as its fallback. If that route is off, typed leads.
+  // A declared order is still walked as written. The socket default keeps its held-box and
+  // dual-declaration gate; only a receiver whose box is not holding a frame is walked socket first.
+  const codexWakeOrder: readonly DeliveryLeg[] =
+    nativeFirst
+      ? ['native', 'typed', ...order.filter((leg) => leg !== 'typed')]
+      : ['typed', ...order.filter((leg) => leg !== 'typed')];
   const ordered: readonly DeliveryLeg[] =
     !declaredOrder && to.cli === 'claude-code' && socketNow
       ? ['socket', ...order]
-      : nativeFirst
-        ? ['native', ...order]
+      : !declaredOrder && to.cli === 'codex'
+        ? codexWakeOrder
         : order;
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
@@ -3956,7 +3966,7 @@ function exactWatchTarget(host: SendHost, to: Aim, bound: { pane: string; cli: s
  *  would refuse a name that file does not hold. */
 function noAgentRecord(caller: Caller, declared: DeclaredSender | null): string {
   const register = declared === null ? '' : `\`team register ${declared.seat}\` records the seat where it already runs, or `;
-  return `${describeCaller(caller)}: no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); ${register}\`team up\` registers a seat it leaves standing`;
+  return `sender ${describeCaller(caller)} has no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); ${register}\`team up\` registers a seat it leaves standing`;
 }
 
 /** Why a call may not act as the agent record its name found: null when it may — the call is a

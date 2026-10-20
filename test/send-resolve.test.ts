@@ -846,7 +846,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const code = await runSend([chief.id, BODY], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('lead: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('sender lead has no agent record on this machine, so no rule admits the send');
     // The file declares this caller's seat, so the refusal names both commands that record it:
     // `register` is the one that does it where the seat already runs, and it is named first.
     expect(io.err).toContain('`team register lead` records the seat where it already runs, or `team up` registers a seat it leaves standing');
@@ -1060,4 +1060,3 @@ describe('the whole command on a legacy seat named lead', () => {
     expect(atlasPane.typed.length).toBe(1);
   });
 });
-

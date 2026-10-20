@@ -304,7 +304,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native@other'));
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
-    expect(err()).toContain('no agent record on this machine, so no rule admits the send');
+    expect(err()).toContain('sender helper has no agent record on this machine, so no rule admits the send');
     expect(err()).toContain('an owner-signed grant naming send');
     expect(existsSync(join(dir, 'send-drops'))).toBe(false);
   });

@@ -338,7 +338,7 @@ describe('team send: refused', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('drifter: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('sender drifter has no agent record on this machine, so no rule admits the send');
     expect(io.err).toContain('`team up` registers a seat it leaves standing');
     // The file declares no seat "drifter", so `register` is not named: it reads the same file and
     // would refuse a name the file does not hold.

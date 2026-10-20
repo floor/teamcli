@@ -1067,7 +1067,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     expect(entry.failed).toBeUndefined();
   });
 
-  test('a signed off at the team level adds no native attempt: the live inbox takes it', async () => {
+  test('a signed off at the team level ranks the typed wake ahead of a live inbox', async () => {
     const scene = makeScene(null);
     const wrote = writePolicySet(
       scene.home,
@@ -1076,17 +1076,12 @@ describe('the implied native-first default for a Codex receiver', () => {
     );
     expect(wrote.ok).toBe(true);
     liveInbox(scene);
-    const server = await acceptingServer(scene);
+    const io = testIo(scene.root, { kind: 'owner' });
 
-    const { code, out, calls } = await sendWith(scene, server);
+    expect(await runSend([SEAT, 'hello', '--dry-run'], io, hostFor(scene))).toBe(0);
 
-    expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
-    expect(calls).toEqual([]);
-    expect(server.requests).toEqual([]);
-    const entry = lastEntry(scene);
-    expect(entry).toEqual(expect.objectContaining({ via: 'mcp-inbox' }));
-    expect(entry.failed).toBeUndefined();
+    expect(io.out).toContain('via a 0600 drop file and one trigger line, falling back to the seat\'s own MCP inbox');
+    expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
   });
 
   test('a declared order that leaves native out is walked as written', async () => {
@@ -1123,7 +1118,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     const code = await runSend([SEAT, 'hello', '--dry-run'], io, hostFor(scene));
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
+    expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line, then the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
     expect(queueCalls(scene.queueLog)).toEqual([]);
   });
