@@ -25,6 +25,7 @@ import {
 } from '../daemon/presence/contract.ts';
 import { readPresenceCurrent } from '../daemon/presence/read.ts';
 import { presencePaths } from '../daemon/presence/spool.ts';
+import type { SessionState } from '../state.ts';
 
 /** The seat facts a presence verdict is taken against. `fence` is the canonical activity fence as
  *  persisted on the seat record (`presence_applied`), never a value carried by the projection. */
@@ -100,6 +101,28 @@ export async function prefetchPresence(input: {
     }
   }
   return reads;
+}
+
+/** The seat facts a verdict is taken against, read from the one state record every caller shares,
+ *  so the watch gate and an independent caller (a swap run, the send daemon) cannot construct
+ *  the proof differently. A missing session or seat record is simply unfenced and unbound: the
+ *  verdict then holds unless the read itself is an explicit absence or unsupported channel. */
+export function presenceSeatOf(
+  session: SessionState | undefined,
+  name: string,
+  channelHealthy: ((seat: string) => boolean) | undefined,
+): PresenceSeat {
+  const record = session?.seats[name];
+  return {
+    seat: name,
+    seatId: record?.id ?? null,
+    binding: record?.presence_binding ?? null,
+    fence: fenceAt(record),
+    lastActive: record?.last_active,
+    // The health answer is the caller's, per seat: a route-wide answer cannot prove this
+    // seat's stream, and a seat the caller cannot prove is held on its own.
+    channelHealthy: channelHealthy?.(name) === true,
+  };
 }
 
 /** The persisted canonical fence, read structurally: the field belongs to the reconciler that

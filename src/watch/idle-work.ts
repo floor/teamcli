@@ -10,7 +10,7 @@ import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { takeable } from '../commands/next.ts';
 import { liveLeases } from '../tasks/lease.ts';
 import { fileSourceOf, readFileSource } from '../tasks/queue.ts';
-import { fenceAt, nativeAllowsTyping, presenceVerdict, type PresenceRead, type PresenceSeat, type PresenceVerdict } from './presence.ts';
+import { nativeAllowsTyping, presenceSeatOf, presenceVerdict, type PresenceRead, type PresenceVerdict } from './presence.ts';
 import { readScreen } from './screen.ts';
 
 /**
@@ -185,26 +185,6 @@ export function nativeHeldSeats(input: {
     if (!nativeAllowsTyping(verdict)) held.add(seat.name);
   }
   return held;
-}
-
-/** The seat facts a verdict is taken against, read from the same state record `idleSeatsOf`
- *  proves: one construction, so the gate and the snapshot cannot disagree. */
-function presenceSeatOf(
-  state: IdleWorkInput['state'],
-  name: string,
-  channelHealthy: ((seat: string) => boolean) | undefined,
-): PresenceSeat {
-  const record = state.seats[name];
-  return {
-    seat: name,
-    seatId: record?.id ?? null,
-    binding: record?.presence_binding ?? null,
-    fence: fenceAt(record),
-    lastActive: record?.last_active,
-    // The health answer is the caller's, per seat: a route-wide answer cannot prove this
-    // seat's stream, and a seat the caller cannot prove is held on its own.
-    channelHealthy: channelHealthy?.(name) === true,
-  };
 }
 
 /** The persisted idle clock, or null when the state records no stamp the reader can parse: a
