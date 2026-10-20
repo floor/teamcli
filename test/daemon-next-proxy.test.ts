@@ -12,6 +12,7 @@ import { runNext, type NextSources } from '../src/commands/next.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { askDaemonNext, daemonNextRequest, type DaemonNextRequest } from '../src/daemon/next-client.ts';
 import { daemonSocketPath } from '../src/daemon/paths.ts';
+import { DAEMON_PROTOCOL_VERSION } from '../src/daemon/protocol.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 
@@ -106,7 +107,7 @@ describe('askDaemonNext over the machine socket', () => {
     const { base, root } = scratch();
     const socketPath = join(base, 'next.sock');
     await oneShot(socketPath, (asked) => JSON.stringify({
-      v: 1,
+      v: DAEMON_PROTOCOL_VERSION,
       id: asked.id,
       ok: true,
       next: { ok: true, kind: 'claimed', record: { id: 'm1', title: 'the task title' } },
@@ -119,7 +120,7 @@ describe('askDaemonNext over the machine socket', () => {
     const { base, root } = scratch();
     const socketPath = join(base, 'next.sock');
     await oneShot(socketPath, (asked) => JSON.stringify({
-      v: 1,
+      v: DAEMON_PROTOCOL_VERSION,
       id: asked.id,
       ok: false,
       error: { code: 'daemon.auth-unsupported', message: 'next: not accepted' },
