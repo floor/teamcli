@@ -3126,6 +3126,13 @@
     {
       "code": 1,
       "command": "remove",
+      "id": "remove.endpoint",
+      "meaning": "the seat's managed Codex endpoint cannot be stopped or kept",
+      "trigger": "team remove worker, on a seat whose pane is left running or whose endpoint cannot be proven"
+    },
+    {
+      "code": 1,
+      "command": "remove",
       "id": "remove.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team remove worker --file .agents/team.yaml"

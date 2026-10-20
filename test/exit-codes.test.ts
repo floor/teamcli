@@ -1643,6 +1643,27 @@ scene('remove.edit', async (place) => {
   approve(place, TWO);
   return show(await removed(place, ['lead'], owner, downSources({ home: place.home })), 'coordinator "lead"');
 });
+scene('remove.endpoint', async (place) => {
+  // A managed seat whose pane is left running keeps its endpoint record, so the seat stays too.
+  const humanWorker = WORKER.replace('    stopped: true\n', '    human: true\n');
+  approve(place, TWO.replace(WORKER, humanWorker));
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = {
+      stage: 'ready',
+      pane: 'w1:p1',
+      presence_binding: 'prs_ab12cd34ef56',
+      codex_endpoint: {
+        url: 'unix:///tmp/acme/run/acme/worker/ab12cd34ef56.sock',
+        binding: 'prs_ab12cd34ef56',
+        pid: 4242,
+        started_at: '2026-10-04T08:00:00Z',
+      },
+    };
+  });
+  return show(await removed(place, ['worker'], owner, downSources({
+    sessionRunning: () => true, agents: () => [agent('worker')], home: place.home,
+  })), 'records a managed Codex endpoint');
+});
 scene('remove.unverified', async (place) => {
   approve(place, TEAM);
   updateState(join(place.root, '.agents'), (state) => {

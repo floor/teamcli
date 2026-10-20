@@ -25,6 +25,7 @@ import { downPlan, type DownSeat } from '../launch/plan.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { readCodexEndpointRecord } from '../daemon/presence/endpoint-record.ts';
 import { emptySession, readState, updateState, withLock } from '../state.ts';
 import { registerEnd } from '../registry/sync.ts';
 import { keyExit, paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
@@ -91,6 +92,26 @@ const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
   // here because the type names a clause for every state.
   exited: 'its CLI had exited; closed without typing',
 };
+
+/** Whether the seat's state carries a readable managed Codex endpoint record. Shape alone is
+ *  enough here: the record names an ownership claim, and this command either proves the claim
+ *  before stopping the process or refuses to go on. */
+function recordedEndpointOf(dir: string, session: string, seat: string): boolean {
+  try {
+    return readCodexEndpointRecord(readState(dir).sessions[session]?.seats[seat]?.codex_endpoint) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** The one refusal a managed Codex seat's endpoint can end a removal with: a path that leaves
+ *  the pane running cannot keep the record, and a stop that cannot prove the recorded process
+ *  is never forced. Both leave the seat, its record and the endpoint as they are. */
+function refuseEndpoint(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'remove', { id: 'remove.endpoint', message, repair: null });
+  // exit: remove.endpoint
+  return 1;
+}
 
 export const remove: Command = (argv, io) => runRemove(argv, io, realSources);
 export default remove;
@@ -541,6 +562,18 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
 
+  // A managed Codex seat records the endpoint its launch owns. A removal that leaves the pane
+  // running keeps that client attached, so the record cannot go with the seat: this run has
+  // nowhere else to keep it, and dropping it would orphan a live server. The seat is left as it
+  // is, with its record and endpoint intact, rather than removed without them.
+  if (leave && recordedEndpointOf(dir, session, name)) {
+    return refuseEndpoint(
+      io,
+      json,
+      `${name} records a managed Codex endpoint and this run would leave its pane running; the endpoint record cannot be kept with the seat removed, so it is left as it is`,
+    );
+  }
+
   // An edit that will not validate is refused before the seat is stopped. Stopping first would
   // end the live session and then report that nothing was written.
   if (!temporary && !swap) {
@@ -567,6 +600,15 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   try {
+    // A seat herdr no longer lists has no CLI left to stop, but the endpoint its launch started
+    // may still be alive. It is stopped before the file and state are written; a stop that
+    // cannot prove the recorded process refuses the removal and keeps the record that names it.
+    if (!agent && sources.codexEndpoint !== undefined && recordedEndpointOf(dir, session, name)) {
+      const endpoint = sources.codexEndpoint.stop({ dir, session, seat: name });
+      if (!endpoint.stopped) {
+        return refuseEndpoint(io, json, `${name}: ${endpoint.why ?? 'its managed Codex endpoint could not be stopped'}; left as it is`);
+      }
+    }
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
     // committed to its effects — the stop below when the seat runs, the file edit after it. Every
     // refusal came sooner; a `--keep` run never got past the gate.
@@ -780,6 +822,7 @@ export async function stopRunning(input: {
   }
   const { seat, session, sources } = input;
   let stopped = false;
+  let endpointRefused = false;
   const steps = downPlan({
     session,
     seats: [seat],
@@ -849,6 +892,17 @@ export async function stopRunning(input: {
     running() {},
     drop(dropped) {
       if (dropped !== seat.name) return;
+      // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
+      // now that the CLI has exited, before the record that names it goes. A stop that cannot
+      // prove the recorded process is never forced; the record stays and the removal fails.
+      if (input.sources.codexEndpoint !== undefined && recordedEndpointOf(input.dir, session, dropped)) {
+        const endpoint = input.sources.codexEndpoint.stop({ dir: input.dir, session, seat: dropped });
+        if (!endpoint.stopped) {
+          endpointRefused = true;
+          input.io.stderr(`team remove: ${dropped}: ${endpoint.why ?? 'its managed Codex endpoint could not be stopped'}; left as it is\n`);
+          return;
+        }
+      }
       stopped = true;
       updateState(input.dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
@@ -868,5 +922,5 @@ export async function stopRunning(input: {
     log: (who, what) => logLine(input.dir, input.logCommand, input.caller, `${who}: ${what}`, sources.now()),
   };
   await executePlan(steps, session, host);
-  return stopped;
+  return stopped && !endpointRefused;
 }

@@ -452,6 +452,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.delegate-flag` | `remove` | 1 | the delegate may not use this flag | `team remove worker --keep` |
 | `remove.delegate-placement` | `remove` | 1 | the approved delegate must be an external non-seat pane | `team remove worker` |
 | `remove.detached` | `remove` | 1 | a run with no terminal | `team remove worker` |
+| `remove.endpoint` | `remove` | 1 | the seat's managed Codex endpoint cannot be stopped or kept | `team remove worker, on a seat whose pane is left running or whose endpoint cannot be proven` |
 | `remove.file-owner` | `remove` | 1 | --file is the owner's | `team remove worker --file .agents/team.yaml` |
 | `remove.herdr` | `remove` | 1 | herdr doesn't answer | `team remove worker` |
 | `remove.keep-temporary` | `remove` | 1 | a temporary seat is not kept in the file | `team remove worker --keep` |
