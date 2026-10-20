@@ -1,6 +1,7 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
+import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
@@ -188,6 +189,9 @@ export interface UpSeat {
    * wrote it.
    */
   sessionName?: string;
+  /** The resolved `codex-daemon` policy (`on | off`) for a Codex seat. When omitted, `upPlan`
+   *  resolves it from the signed policy chain (`entity -> project -> team -> seat`). */
+  codexDaemon?: CodexDaemonValue;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
    *  one line typed in its pane. Absent when the path can't be typed safely. */
   rulesFile?: { path: string; line: string };
@@ -332,6 +336,8 @@ export interface UpInput {
    * this file. Absent on a plan built by hand, whose launches register from the seat's folder.
    */
   teamFile?: string;
+  /** The home directory used to resolve signed policies (`entity`, `project`, `team`, `seat`). */
+  home?: string;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -627,13 +633,23 @@ export function upPlan(input: UpInput): Step[] {
     // team file's own session instead (`mcp/register.ts`), read from the file this run read:
     // the server refuses any other. A launch-line route names the same file to its server, so
     // both resolve the team from it rather than from the seat's folder.
+    let codexDaemon: CodexDaemonValue | undefined = seat.codexDaemon;
+    if (codexDaemon === undefined && profile.cli === 'codex' && input.home !== undefined) {
+      codexDaemon = codexDaemonForSeat({
+        home: input.home,
+        root: input.root,
+        ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+        seat: seat.name,
+        session,
+      });
+    }
     const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName);
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon });
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {

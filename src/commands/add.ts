@@ -779,6 +779,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           cliHooks: plannedCliHooks(dir, session, [planned]),
           briefEpochs: currentBriefEpochs(dir, session),
           watchLabel: watchLabel(prepared.team.project),
+          home: sources.home,
         });
         out.stdout(plainText(formatPlan(preview)));
       } else {
@@ -883,6 +884,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(prepared.team.project),
+      home: sources.home,
     });
     if (json) {
       writeJson(io, 'team.add', {
@@ -1011,7 +1013,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false };

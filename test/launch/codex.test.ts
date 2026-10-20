@@ -1,12 +1,25 @@
-import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { entitiesPath } from '../../src/entities.ts';
+import { grantsDir } from '../../src/grant.ts';
+import { boxHoldsText, deliverRules, refusalReport, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
+import { upPlan } from '../../src/launch/plan.ts';
+import { rulesLine } from '../../src/launch/rules-file.ts';
+import { resolveCodexDaemonPolicy } from '../../src/policy/codex-daemon.ts';
+import { policySignaturePayload } from '../../src/policy/sources.ts';
+import { POLICY_DOMAIN, type PolicyLevel } from '../../src/policy/types.ts';
 import { profileFor } from '../../src/profiles/index.ts';
 import { launchCommand, versionVerdict } from '../../src/profiles/profile.ts';
-import { classify, classifyComposer, readScreen } from '../../src/watch/screen.ts';
+import { registerAgent, updateAgent } from '../../src/registry/agents.ts';
+import { upsertProject } from '../../src/registry/projects.ts';
+import { teamIdOf } from '../../src/registry/teams.ts';
 import { runningModel } from '../../src/status/statusline.ts';
-import { boxHoldsText, deliverRules, refusalReport, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
-import { rulesLine } from '../../src/launch/rules-file.ts';
-import { upPlan } from '../../src/launch/plan.ts';
+import { bumpGeneration, keyOf, signDomain } from '../../src/store/keys.ts';
+import { classify, classifyComposer, readScreen } from '../../src/watch/screen.ts';
+import type { YamlValue } from '../../src/yaml.ts';
 import { SAMPLE_RULES, wordWrap } from '../helpers.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/codex/0.157.0/${name}.txt`, import.meta.url), 'utf8');
@@ -16,7 +29,9 @@ if (!codex) throw new Error('codex has no profile');
 
 describe('Codex launch and captured screens', () => {
   test('unattended flags are launch arguments; rules are a first message', () => {
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.')).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.')).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'on' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'off' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen');
     expect(codex.rulesOption).toBeNull();
     expect(codex.loginCheck).toEqual(['login', 'status']);
     expect(codex.exit).toBe('/exit');
@@ -31,7 +46,7 @@ describe('Codex launch and captured screens', () => {
         '-c',
         'mcp_servers.team_inbox.command="{command_json}"',
         '-c',
-        'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}]',
+        'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}{epoch_args}]',
       ],
       add: null,
       target: null,
@@ -45,7 +60,7 @@ describe('Codex launch and captured screens', () => {
         entry: '/src/cli.ts',
       }),
     ).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen'
+      'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
       + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper"]\'',
     );
@@ -59,7 +74,7 @@ describe('Codex launch and captured screens', () => {
         entry: '/src/with \\ backslash/cli.ts',
       }),
     ).toBe(
-      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-daemon --no-alt-screen'
+      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/my \\"bun\\""\''
       + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper"]\'',
     );
@@ -74,7 +89,7 @@ describe('Codex launch and captured screens', () => {
         file: '/tmp/my project/.agents/team.yaml',
       }),
     ).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen'
+      'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
       + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--file","/tmp/my project/.agents/team.yaml"]\'',
     );
@@ -837,3 +852,346 @@ describe('Codex rules delivery of the one line (0.160.0 capture)', () => {
     expect(d.calls).toEqual([capturedLine, 'Enter']);
   });
 });
+
+const tempPolicyDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tempPolicyDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+type PolicyLaunchScene = {
+  base: string;
+  root: string;
+  home: string;
+  teamFile: string;
+  agentId: string;
+};
+
+function makePolicyLaunchScene(): PolicyLaunchScene {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'codex-policy-launch-')));
+  tempPolicyDirs.push(base);
+  const root = join(base, 'acme');
+  const home = join(base, 'home');
+  const agentsFolder = join(root, '.agents');
+  mkdirSync(agentsFolder, { recursive: true });
+  mkdirSync(dirname(entitiesPath(home)), { recursive: true });
+  writeFileSync(
+    entitiesPath(home),
+    `floor:\n  roots:\n    - ${JSON.stringify(base)}\n`,
+  );
+  execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  const teamFile = join(agentsFolder, 'team.yaml');
+  writeFileSync(
+    teamFile,
+    `format: 1
+project: acme
+entity: floor
+coordinator: lead
+operator: lead
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus 4.7
+    version: "4.7"
+    launch: claude
+  - role: implementer
+    name: coder
+    cli: codex
+    vendor: openai
+    model: GPT 6 Sol
+    version: "6"
+    launch: codex -m gpt-6-sol
+`,
+  );
+  const agent = registerAgent(home, {
+    name: 'coder',
+    signing: { model: 'GPT 6 Sol', version: '6', role: 'implementer' },
+    lab: 'openai',
+    cli: 'codex',
+    launcher: null,
+    launch: 'codex -m gpt-6-sol',
+    reach: {
+      team: teamIdOf(root),
+      seat: 'coder',
+      session: 'acme',
+      agent_session: '019a0000-1111-7222-8333-444455556666',
+      pane: 'w1:p2',
+      address: null,
+    },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'owner',
+  });
+  return { base, root, home, teamFile, agentId: agent.id };
+}
+
+function signedPolicyDiskEntry(
+  home: string,
+  level: PolicyLevel,
+  target: string,
+  name: string,
+  value: YamlValue,
+  tamperSignature = false,
+): Record<string, YamlValue> {
+  const key = keyOf(home);
+  const folder = grantsDir(home);
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const now = new Date('2026-10-19T12:00:00.000Z');
+  const generation = bumpGeneration(folder, home, now);
+  const date = now.toISOString();
+  const payload = policySignaturePayload({
+    name,
+    value: value as string,
+    level,
+    target,
+    setter: 'owner',
+    date,
+    expiry: null,
+    kind: 'enforced',
+    generation,
+  });
+  const sig = signDomain(POLICY_DOMAIN, payload, key);
+  return {
+    value,
+    setter: 'owner',
+    date,
+    expiry: null,
+    kind: 'enforced',
+    target,
+    generation,
+    signature: tamperSignature ? `${sig.slice(0, -4)}AAAA` : sig,
+  };
+}
+
+function writeEntityCodexDaemon(
+  scene: PolicyLaunchScene,
+  value: YamlValue,
+  options: { name?: string; tamperSignature?: boolean } = {},
+): void {
+  const name = options.name ?? 'codex-daemon';
+  const entry = signedPolicyDiskEntry(scene.home, 'entity', 'floor', name, value, options.tamperSignature);
+  const path = entitiesPath(scene.home);
+  mkdirSync(dirname(path), { recursive: true });
+  const lines = [
+    'floor:',
+    '  roots:',
+    `    - ${JSON.stringify(scene.base)}`,
+    '  policies:',
+    `    ${JSON.stringify(name)}:`,
+    ...Object.entries(entry).map(([k, v]) => `      ${k}: ${v === null ? 'null' : JSON.stringify(v)}`),
+  ];
+  writeFileSync(path, `${lines.join('\n')}\n`);
+}
+
+function writeProjectCodexDaemon(
+  scene: PolicyLaunchScene,
+  value: YamlValue,
+  options: { name?: string; tamperSignature?: boolean } = {},
+): void {
+  const name = options.name ?? 'codex-daemon';
+  const entry = signedPolicyDiskEntry(scene.home, 'project', 'acme', name, value, options.tamperSignature);
+  upsertProject(scene.home, 'acme', {
+    name: 'acme',
+    entity: 'floor',
+    policies: { [name]: entry },
+    by: 'owner',
+  });
+}
+
+function writeTeamCodexDaemon(
+  scene: PolicyLaunchScene,
+  value: YamlValue,
+  options: { name?: string; tamperSignature?: boolean } = {},
+): void {
+  const name = options.name ?? 'codex-daemon';
+  const entry = signedPolicyDiskEntry(scene.home, 'team', teamIdOf(scene.root), name, value, options.tamperSignature);
+  const current = readFileSync(scene.teamFile, 'utf8').replace(/\npolicies:\n[\s\S]*$/, '\n');
+  const policyLines = [
+    'policies:',
+    `  ${JSON.stringify(name)}:`,
+    ...Object.entries(entry).map(([k, v]) => `    ${k}: ${v === null ? 'null' : JSON.stringify(v)}`),
+  ];
+  writeFileSync(scene.teamFile, `${current}${policyLines.join('\n')}\n`);
+}
+
+function writeSeatCodexDaemon(
+  scene: PolicyLaunchScene,
+  value: YamlValue,
+  options: { name?: string; tamperSignature?: boolean } = {},
+): void {
+  const name = options.name ?? 'codex-daemon';
+  const entry = signedPolicyDiskEntry(scene.home, 'seat', scene.agentId, name, value, options.tamperSignature);
+  updateAgent(scene.home, scene.agentId, {
+    policies: { [name]: entry },
+  });
+}
+
+function plannedCodexLaunchLine(scene: PolicyLaunchScene): string {
+  const plan = upPlan({
+    root: scene.root,
+    home: scene.home,
+    session: 'acme',
+    sessionRunning: true,
+    watchAlive: true,
+    watchLabel: 'Watch · acme',
+    teamFile: scene.teamFile,
+    seats: [
+      {
+        name: 'coder',
+        cli: 'codex',
+        launch: 'codex -m gpt-6-sol',
+        cwd: scene.root,
+        label: 'coder',
+        stopped: false,
+        rules: 'Rules.',
+        repairLine: '`team remove coder --keep` then `team add coder`',
+      },
+    ],
+  });
+  const launch = plan.find((step) => step.do?.do === 'launch');
+  return launch?.kind === 'run' ? launch.argv.at(-1) ?? '' : '';
+}
+
+describe('Codex launch policy (codex-daemon on | off across 4 signed levels in upPlan)', () => {
+  test('default (on) launches codex without --no-daemon when no signed policy overrides it', () => {
+    const scene = makePolicyLaunchScene();
+    const resolved = resolveCodexDaemonPolicy({
+      home: scene.home,
+      root: scene.root,
+      seat: 'coder',
+      session: 'acme',
+    });
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: 'on',
+      level: 'default',
+      refusals: [],
+    });
+    const command = plannedCodexLaunchLine(scene);
+    expect(command).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen');
+    expect(command).not.toContain('--no-daemon');
+  });
+
+  test.each(['entity', 'project', 'team', 'seat'] as const)(
+    'signed codex-daemon: off at %s level reinjects --no-daemon in upPlan without manual option injection',
+    (level) => {
+      const scene = makePolicyLaunchScene();
+      if (level === 'entity') writeEntityCodexDaemon(scene, 'off');
+      if (level === 'project') writeProjectCodexDaemon(scene, 'off');
+      if (level === 'team') writeTeamCodexDaemon(scene, 'off');
+      if (level === 'seat') writeSeatCodexDaemon(scene, 'off');
+
+      const resolved = resolveCodexDaemonPolicy({
+        home: scene.home,
+        root: scene.root,
+        seat: 'coder',
+        session: 'acme',
+      });
+      expect(resolved.ok).toBe(true);
+      expect(resolved.value).toBe('off');
+      if (resolved.ok) {
+        expect(resolved.level).toBe(level);
+      }
+
+      const command = plannedCodexLaunchLine(scene);
+      expect(command).toContain(
+        'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen',
+      );
+    },
+  );
+
+  test('accepts snake_case codex_daemon alias and blocks lower-level on when higher level is off', () => {
+    const aliasScene = makePolicyLaunchScene();
+    writeTeamCodexDaemon(aliasScene, 'off', { name: 'codex_daemon' });
+    expect(plannedCodexLaunchLine(aliasScene)).toContain('--no-daemon');
+
+    const tightenScene = makePolicyLaunchScene();
+    writeEntityCodexDaemon(tightenScene, 'on');
+    writeSeatCodexDaemon(tightenScene, 'off');
+    const tightened = resolveCodexDaemonPolicy({
+      home: tightenScene.home,
+      root: tightenScene.root,
+      seat: 'coder',
+      session: 'acme',
+    });
+    expect(tightened.ok).toBe(true);
+    expect(tightened.value).toBe('off');
+    if (tightened.ok) {
+      expect(tightened.level).toBe('seat');
+    }
+    expect(plannedCodexLaunchLine(tightenScene)).toContain('--no-daemon');
+
+    const reopenScene = makePolicyLaunchScene();
+    writeEntityCodexDaemon(reopenScene, 'off');
+    writeTeamCodexDaemon(reopenScene, 'on');
+    const reopened = resolveCodexDaemonPolicy({
+      home: reopenScene.home,
+      root: reopenScene.root,
+      seat: 'coder',
+      session: 'acme',
+    });
+    expect(reopened.ok).toBe(false);
+    expect(reopened.value).toBe('off');
+    if (!reopened.ok) {
+      expect(reopened.why).toContain('loosens level');
+    }
+    expect(plannedCodexLaunchLine(reopenScene)).toContain('--no-daemon');
+  });
+
+  test('invalid signature, invalid policy value, missing context, or unreadable policy YAML fails closed with --no-daemon on launch', () => {
+    const tamperedScene = makePolicyLaunchScene();
+    writeTeamCodexDaemon(tamperedScene, 'on', { tamperSignature: true });
+    const tampered = resolveCodexDaemonPolicy({
+      home: tamperedScene.home,
+      root: tamperedScene.root,
+      seat: 'coder',
+      session: 'acme',
+    });
+    expect(tampered.ok).toBe(false);
+    expect(tampered.value).toBe('off');
+    if (!tampered.ok) {
+      expect(tampered.why).toContain('signature verification failed');
+    }
+    expect(plannedCodexLaunchLine(tamperedScene)).toContain('--no-daemon');
+
+    const badValueScene = makePolicyLaunchScene();
+    writeSeatCodexDaemon(badValueScene, 'maybe');
+    const badValue = resolveCodexDaemonPolicy({
+      home: badValueScene.home,
+      root: badValueScene.root,
+      seat: 'coder',
+      session: 'acme',
+    });
+    expect(badValue.ok).toBe(false);
+    expect(badValue.value).toBe('off');
+    expect(plannedCodexLaunchLine(badValueScene)).toContain('--no-daemon');
+
+    const corruptScene = makePolicyLaunchScene();
+    const entitiesFile = entitiesPath(corruptScene.home);
+    mkdirSync(dirname(entitiesFile), { recursive: true });
+    writeFileSync(entitiesFile, 'floor:\n  policies: "not-a-map"\n');
+    const corrupt = resolveCodexDaemonPolicy({
+      home: corruptScene.home,
+      root: corruptScene.root,
+      seat: 'coder',
+      session: 'acme',
+    });
+    expect(corrupt.ok).toBe(false);
+    expect(corrupt.value).toBe('off');
+    expect(plannedCodexLaunchLine(corruptScene)).toContain('--no-daemon');
+
+    const missingContext = resolveCodexDaemonPolicy({
+      home: tamperedScene.home,
+    });
+    expect(missingContext.ok).toBe(false);
+    expect(missingContext.value).toBe('off');
+  });
+});
+

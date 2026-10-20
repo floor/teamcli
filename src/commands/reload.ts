@@ -573,6 +573,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
+      ...(home === undefined ? {} : { home }),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.
