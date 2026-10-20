@@ -8,6 +8,12 @@
 // One signed request with its history line, exactly one lease, within one virtual minute and with
 // no manual step after the watch starts. The world is three queued items, a worker idle since T0
 // minus the 300-second default idle threshold, and a virtual clock that never really sleeps.
+//
+// The last group takes the idle proof from the runtime's own projection instead of the terminal:
+// a healthy channel and the exact binding/fence proof make the seat eligible while its screen
+// shows a turn, and the same production walk still yields one signed request and one claim. A
+// native turn, or a projection this pass cannot prove healthy, holds the pickup exactly as an
+// unreadable terminal does.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -15,6 +21,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runNext } from '../src/commands/next.ts';
+import { presenceId } from '../src/daemon/presence/contract.ts';
+import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
+import { readPresenceCurrent } from '../src/daemon/presence/read.ts';
+import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
 import { sendDirect, type SendHost } from '../src/commands/send.ts';
 import { runWatch, workPushResultOf, type WatchSources } from '../src/commands/watch.ts';
 import type { WorkPush, WorkPushRequest } from '../src/watch/dispatch.ts';
@@ -82,12 +92,21 @@ const QUEUE = `- id: t1
 const RULE = '─'.repeat(40);
 const STATUS = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
 const IDLE = `● Done.\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
+// A terminal mid-turn: the screen path can never call this seat quiet, whatever herdr says about
+// the pane's idle/done word.
+const BUSY = `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
 const START = Date.parse('2026-10-19T10:00:00.000Z');
 const MINUTE = 60_000;
 const THRESHOLD_MS = 300_000;
 // The persisted idle clock the producer reads: the worker reached ready five seconds before the
 // default threshold closed, so at T0 it is already past it.
 const IDLE_SINCE = START - THRESHOLD_MS - 5_000;
+// The managed identity and runtime incarnation a native scene proves its projection against.
+const SEAT_ID = 'seat_0123456789ab';
+const BINDING = 'prs_0123456789ab';
+// The runtime's own idle transition: ten minutes before the watch's first pass, so both the
+// persisted clock and the native clock have cleared the threshold by T0.
+const NATIVE_SINCE = new Date(START - 10 * MINUTE).toISOString();
 
 // The dispatch contract is the production one now (`src/watch/dispatch.ts`): the seam the watch
 // pushes through, and the two shapes it exchanges. The result's `outcome` is the transport's own
@@ -294,6 +313,8 @@ function watchSources(options: {
   passes: number;
   onPass?: () => Promise<void>;
   pushWork?: WorkPush;
+  screen?: string;
+  presenceChannelHealthy?: () => boolean;
 }): { sources: WatchSources; typed: string[]; paneRuns: string[] } {
   const typed: string[] = [];
   const paneRuns: string[] = [];
@@ -313,7 +334,7 @@ function watchSources(options: {
     machine: () => fine,
     standing: () => verifiedOf(teamOf(TEAM), TEAM, root),
     readChecks: () => [],
-    screen: () => IDLE,
+    screen: () => options.screen ?? IDLE,
     status: () => options.workerStatus,
     foreground: () => ['claude'],
     typeText: (pane, text) => { typed.push(`${pane} ${text}`); return true; },
@@ -341,7 +362,52 @@ function watchSources(options: {
   };
   // The dispatcher's own seam: the watch hands this to dispatchIdleWork on every pass.
   if (options.pushWork !== undefined) sources.pushWork = options.pushWork;
+  // The caller's fresh channel answer for a native seat. Absent, the dispatcher holds every
+  // native projection rather than believing it.
+  if (options.presenceChannelHealthy !== undefined) {
+    sources.presenceChannelHealthy = options.presenceChannelHealthy;
+  }
   return { sources, typed, paneRuns };
+}
+
+/** Writes this world's one native projection through the real ingester and then records the
+ *  canonical fence the daemon's reconciler would apply for it: the exact seat id, incarnation,
+ *  sequence and ingest instant. The seat's persisted idle clock is the one `beforeEach` wrote. */
+async function nativeReading(event: 'turn-end' | 'turn-start'): Promise<void> {
+  const dir = join(root, '.agents');
+  // The managed incarnation first: the ingester qualifies the staged line against it, and the
+  // consumer later requires the projection's binding to equal it exactly.
+  updateState(dir, (state) => {
+    const seat = (state.sessions[SESSION] ??= emptySession()).seats[SEAT]!;
+    seat.id = SEAT_ID;
+    seat.presence_binding = BINDING;
+  });
+  const id = presenceId(NATIVE_SINCE, 'a1b2c3d4');
+  if (id === null) throw new Error('the scene instant is not a presence instant');
+  const staged = stagePresenceRecord(dir, {
+    session: SESSION,
+    seat: SEAT,
+    binding: BINDING,
+    source: 'runtime-hook',
+    event,
+    ts: NATIVE_SINCE,
+    id,
+  });
+  if (staged.kind !== 'staged') throw new Error(staged.why);
+  const ingester = createPresenceIngester({ stateDir: dir, session: SESSION, now: () => new Date(clock) });
+  const step = await ingester.step();
+  if (step.errors.length > 0) throw new Error(`the ingester refused its own projection: ${JSON.stringify(step.errors)}`);
+  await ingester.close();
+  const current = await readPresenceCurrent(dir, SESSION, SEAT);
+  if (current.kind !== 'ok') throw new Error(`the projection is ${current.kind}`);
+  updateState(dir, (state) => {
+    state.sessions[SESSION]!.seats[SEAT]!.presence_applied = {
+      seat_id: SEAT_ID,
+      binding: BINDING,
+      seq: current.value.seq,
+      applied_at: current.value.observedAt,
+    };
+  });
 }
 
 describe('the real team next receiver path', () => {
@@ -568,5 +634,99 @@ describe('the watch gives an idle worker its queued work', () => {
     expect(runtime.claims).toEqual([]);
     expect(leases()).toEqual([]);
     expect(dropNames().filter((name) => name.startsWith('work-'))).toEqual([]);
+  });
+});
+
+// The same end-to-end pickup, with the idle proof taken from the runtime's own projection rather
+// than the terminal. The terminal here never shows a quiet screen, so the screen reading alone
+// would dispatch nothing; a healthy channel plus the exact binding/fence proof is what makes the
+// seat eligible, and the real receiver then claims one queued item with no manual step.
+describe('the native presence proof drives the same pickup', () => {
+  test('a proven native idle wakes a seat whose terminal cannot show it, and the task is claimed', async () => {
+    await nativeReading('turn-end');
+    directRoute();
+    const io = testIo(root, { kind: 'owner' });
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    const { sources, typed, paneRuns } = watchSources({
+      workerStatus: 'idle',
+      screen: BUSY,
+      presenceChannelHealthy: () => true,
+      passes: 13,
+      onPass: runtime.pump,
+      pushWork: sent.push,
+    });
+    const code = await runWatch(['--file', file], io, sources);
+    expect(code).toBe(0);
+    // No keystroke, key or pane run reached any pane: the wake was the signed direct request.
+    expect(typed).toEqual([]);
+    expect(paneRuns).toEqual([]);
+    expect(sent.pushed).toHaveLength(1);
+    expect(sent.frames).toHaveLength(1);
+    expect(sent.typed).toEqual([]);
+    const inbox = workerInbox();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.payload.to).toBe(SEAT);
+    // The receiver ran the production read gate and the real `team next` once: one lease, held
+    // by this seat on its own pane, within the pickup window.
+    expect(runtime.claims).toHaveLength(1);
+    expect(runtime.claims[0]).toContain('claimed t1');
+    const held = leases();
+    expect(held.map((lease) => lease.id)).toEqual(['t1']);
+    expect(held[0]?.seat).toBe(SEAT);
+    expect(held[0]?.pane).toBe(PANE);
+    expect(Date.parse(held[0]?.acquiredAt ?? '')).toBeLessThanOrEqual(START + MINUTE);
+    expect(dropNames().filter((name) => name.startsWith('work-'))).toEqual([]);
+  });
+
+  test('a native turn holds the pickup: no request, no inbox copy and no claim', async () => {
+    await nativeReading('turn-start');
+    directRoute();
+    const io = testIo(root, { kind: 'owner' });
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    const { sources, typed, paneRuns } = watchSources({
+      workerStatus: 'idle',
+      screen: BUSY,
+      presenceChannelHealthy: () => true,
+      passes: 13,
+      onPass: runtime.pump,
+      pushWork: sent.push,
+    });
+    const code = await runWatch(['--file', file], io, sources);
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
+    expect(paneRuns).toEqual([]);
+    expect(sent.pushed).toEqual([]);
+    expect(sent.frames).toEqual([]);
+    expect(workerInbox()).toEqual([]);
+    expect(runtime.claims).toEqual([]);
+    expect(leases()).toEqual([]);
+  });
+
+  test('a native idle proof on a channel this pass cannot call healthy holds the pickup', async () => {
+    await nativeReading('turn-end');
+    directRoute();
+    const io = testIo(root, { kind: 'owner' });
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    // No health answer is supplied: the present projection is default-closed, and the busy
+    // screen beside it is never borrowed as a quiet reading.
+    const { sources, typed, paneRuns } = watchSources({
+      workerStatus: 'idle',
+      screen: BUSY,
+      passes: 13,
+      onPass: runtime.pump,
+      pushWork: sent.push,
+    });
+    const code = await runWatch(['--file', file], io, sources);
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
+    expect(paneRuns).toEqual([]);
+    expect(sent.pushed).toEqual([]);
+    expect(sent.frames).toEqual([]);
+    expect(workerInbox()).toEqual([]);
+    expect(runtime.claims).toEqual([]);
+    expect(leases()).toEqual([]);
   });
 });
