@@ -364,7 +364,8 @@ describe('canonical activity transitions between beats', () => {
 // ---------------------------------------------------------------- host fixtures
 
 function emptyIngest(): PresenceIngestResult {
-  return { ingested: [], rejected: [], stale: [], repaired: [], errors: [], pending: false, closed: false };
+  // A fake closed result is not the ingester's verdict on a live channel: it is never healthy.
+  return { ingested: [], rejected: [], stale: [], repaired: [], errors: [], healthy: false, pending: false, closed: false };
 }
 
 function activityResult(): PresenceActivityResult {
