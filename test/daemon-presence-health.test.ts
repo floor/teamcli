@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { hostedWatchSources } from '../src/daemon/watch-run.ts';
 import {
-  PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth,
+  PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth, presenceStepHealth,
 } from '../src/daemon/presence/health.ts';
 import type { HostedRoute } from '../src/daemon/routes.ts';
 import type { HostedLoop } from '../src/watch/hosted.ts';
@@ -43,6 +43,33 @@ describe('the channel health answer', () => {
     const health = createPresenceChannelHealth();
     health.stepped(true, after(PRESENCE_HEALTH_GRACE_MS));
     expect(health.healthy(START)).toBe(false);
+  });
+});
+
+describe('a step is not healthy just because it finished', () => {
+  test('only the ingester\'s own healthy answer with no known backlog counts', () => {
+    expect(presenceStepHealth({ healthy: true, pending: false })).toBe(true);
+  });
+
+  test('a faulted or unconvincing answer is not healthy, even with no reported errors', () => {
+    expect(presenceStepHealth({ pending: false })).toBe(false);
+    expect(presenceStepHealth({ healthy: false, pending: false })).toBe(false);
+    expect(presenceStepHealth({ healthy: 'yes', pending: false })).toBe(false);
+    expect(presenceStepHealth({})).toBe(false);
+  });
+
+  test('a known backlog pending holds the channel unhealthy until it catches up', () => {
+    expect(presenceStepHealth({ healthy: true, pending: true })).toBe(false);
+    expect(presenceStepHealth({ healthy: true })).toBe(false);
+  });
+
+  test('a step that throws records no success', () => {
+    const health = createPresenceChannelHealth();
+    health.stepped(true, START);
+    expect(health.healthy(START)).toBe(true);
+    // The host passes the typed answer, which a throwing step never produces.
+    health.stepped(presenceStepHealth({}), after(10));
+    expect(health.healthy(after(10))).toBe(false);
   });
 });
 

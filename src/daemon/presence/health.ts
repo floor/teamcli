@@ -12,9 +12,21 @@
  */
 export const PRESENCE_HEALTH_GRACE_MS = 2_000;
 
+/**
+ * The ingester's own typed answer for one finished step. Completion is never success: a step can
+ * resolve while the log is faulted, the index is unreadable or an append is unrecovered, and the
+ * ingester reports failures through its result rather than by throwing. Until the ingester module
+ * carries `healthy`, an absent answer is not healthy, so a faulted log can never keep an old
+ * projection trusted. A step that still has known backlog pending is not current either: the
+ * consumer must see false until the channel has caught up.
+ */
+export function presenceStepHealth(result: { healthy?: unknown; pending?: unknown }): boolean {
+  return result.healthy === true && result.pending === false;
+}
+
 export type PresenceChannelHealth = {
-  /** Records the outcome of one ingester step at the instant it finished. A refusal is a step
-   *  that threw; the store refusing individual records is not a dead channel and stays healthy. */
+  /** Records one finished step's typed channel answer at the instant it finished. The answer is
+   *  the ingester's own (`presenceStepHealth`), never inferred from the step merely resolving. */
   stepped(ok: boolean, at: Date): void;
   /** Whether a successful step finished inside the grace window and nothing failed since. */
   healthy(at: Date): boolean;

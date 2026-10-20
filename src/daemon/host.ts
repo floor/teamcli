@@ -39,7 +39,9 @@ import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
-import { createPresenceChannelHealth, type PresenceChannelHealth } from './presence/health.ts';
+import {
+  createPresenceChannelHealth, presenceStepHealth, type PresenceChannelHealth,
+} from './presence/health.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
@@ -624,17 +626,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
     run = (async () => {
-      let stepped = false;
+      let healthy = false;
       try {
         const step = await one.ingester.step();
-        stepped = true;
+        // A resolved step is not a healthy channel: faults are reported in the step's own typed
+        // outcome, and an absent or unconvincing answer is not known, which is not healthy.
+        healthy = presenceStepHealth(step);
         logPresenceOnce(one.route, step.errors[0]?.why ?? '');
       } catch (error) {
         logPresenceOnce(one.route, `the presence step failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-      // The channel's fixed liveness is this step's own outcome: a step that finished vouches
-      // for the grace window, a step that threw or hung does not.
-      one.health.stepped(stepped, now());
+      // The channel's fixed liveness is that typed outcome: only a step that finished with no
+      // persistent fault and no known backlog vouches for the grace window.
+      one.health.stepped(healthy, now());
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.
