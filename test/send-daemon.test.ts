@@ -12,6 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { connect } from 'node:net';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -223,6 +224,92 @@ describe('send daemon lifecycle and single-instance locking', () => {
 
     const res = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
     expect(res.kind).toBe('bind-failed');
+  });
+});
+
+describe('the hosted send socket and its durable copy, through the relay package', () => {
+  /** One raw line to the daemon socket, and the parsed answer line. */
+  function rawRequest(socketPath: string, line: string): Promise<Record<string, unknown> | null> {
+    return new Promise((resolve) => {
+      const socket = connect({ path: socketPath });
+      let buffer = '';
+      let settled = false;
+      const finish = (answer: Record<string, unknown> | null): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(answer);
+      };
+      const timer = setTimeout(() => finish(null), 5_000);
+      socket.on('error', () => finish(null));
+      socket.on('close', () => finish(null));
+      socket.on('connect', () => socket.write(`${line}\n`));
+      socket.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf8');
+        const nl = buffer.indexOf('\n');
+        if (nl === -1) return;
+        try {
+          finish(JSON.parse(buffer.slice(0, nl)) as Record<string, unknown>);
+        } catch {
+          finish(null);
+        }
+      });
+    });
+  }
+
+  test('frames through the relay host with the same refusal bytes, and a body past the machine limit still lands', async () => {
+    const w = setupWorld();
+    const host = makeHost(w);
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+    const sock = started.handle.socketPath;
+
+    const refused = { v: 1, ok: false, id: null, seat: '', outcome: 'refused', detail: 'invalid daemon request' };
+    expect(await rawRequest(sock, 'this is not json')).toEqual(refused);
+    // An unknown op used to leave the caller waiting for its own deadline; the framing host
+    // answers it with the same refusal a malformed line gets.
+    expect(await rawRequest(sock, JSON.stringify({ v: 1, op: 'nonsense' }))).toEqual(refused);
+
+    // The send request carries the message body, which is written to a drop and never typed.
+    // This socket carried no measured frame limit, so a body past the machine protocol's
+    // 65,536 characters is still accepted, exactly as it was before the framing host.
+    const big = 'x'.repeat(70_000);
+    const asked = await requestDaemon(sock, { v: 1, op: 'send', id: 'big-body', from: 'owner', to: 'native', body: big });
+    expect(asked && 'outcome' in asked ? asked.outcome : null).toBe('delivered');
+    expect(host.typed.length).toBe(1);
+    expect(readFileSync(join(daemonDropDir('acme', w.root, w.home, 'acme', 'native'), 'big-body'), 'utf8')).toBe(big);
+  });
+
+  test('the drop is the relay durable write: a different holder is refused and left untouched, the same bytes are reused', async () => {
+    const w = setupWorld();
+    const host = makeHost(w);
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+    const sock = started.handle.socketPath;
+
+    const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'native');
+    mkdirSync(drops, { recursive: true, mode: 0o700 });
+    const held = join(drops, 'held-id');
+    writeFileSync(held, 'an earlier holder\n', { mode: 0o600 });
+
+    const refused = await requestDaemon(sock, { v: 1, op: 'send', id: 'held-id', from: 'owner', to: 'native', body: 'a different body' });
+    expect(refused && 'outcome' in refused ? refused.outcome : null).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toBe('native: the drop file could not be written; nothing was typed');
+    expect(readFileSync(held, 'utf8')).toBe('an earlier holder\n');
+    expect(host.typed).toEqual([]);
+
+    // The same bytes at the name are this message's copy: the write is reused and the delivery
+    // proceeds, rather than being refused as a different holder.
+    const samePath = join(drops, 'same-id');
+    writeFileSync(samePath, 'the same body', { mode: 0o600 });
+    const same = await requestDaemon(sock, { v: 1, op: 'send', id: 'same-id', from: 'owner', to: 'native', body: 'the same body' });
+    expect(same && 'outcome' in same ? same.outcome : null).toBe('delivered');
+    expect(host.typed.length).toBe(1);
+    expect(readdirSync(drops).sort()).toEqual(['held-id', 'same-id']);
+    expect(readFileSync(samePath, 'utf8')).toBe('the same body');
   });
 });
 

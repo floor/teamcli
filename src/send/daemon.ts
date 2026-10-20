@@ -4,9 +4,9 @@
 // (`working`) or its per-seat lock (`seat-locks/<session>/<seat>`) is held by `up` or
 // `answer`, checks process identity (`paneHoldsShell` and `seatProcessVerdict`) so a trigger
 // is never typed into a bare shell, checks composer state (`readScreen`) so a trigger is never
-// typed over a dialog screen and unsent text is copied and put back by the delivery, writes `0600`
-// drop files under `<storeDir>/drops/<session>/<seat>/<id>`, and appends `0600` JSONL records
-// to `<storeDir>/messages.jsonl`.
+// typed over a dialog screen and unsent text is copied and put back by the delivery, writes the
+// durable copy through the relay package under `<storeDir>/drops/<session>/<seat>/<id>`, and
+// appends `0600` JSONL records to `<storeDir>/messages.jsonl`.
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -14,20 +14,20 @@ import {
   constants,
   existsSync,
   fchmodSync,
-  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { connect, createServer, type Server, type Socket } from 'node:net';
+import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { stage as relayStage } from '../../packages/relay/index.js';
+import { createHostServer } from '../../packages/relay/host/server.js';
 import type { TeamFile } from '../file/types.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -242,40 +242,6 @@ function ensureLadder(home: string, store: string, subdirs: string[]): { ok: tru
     }
   }
   return { ok: true, leaf: current };
-}
-
-/** Writes `body` to a `0600` drop file in `directory`, rejecting any symlink or FIFO in place. */
-export function writeSecureDrop(directory: string, id: string, body: string): string {
-  const dirSeen = heldAt(directory);
-  if (dirSeen !== 'missing' && dirSeen !== 'directory') {
-    throw new Error(`drop directory is a ${dirSeen}`);
-  }
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
-  const finalPath = join(directory, id);
-  const finalSeen = heldAt(finalPath);
-  if (finalSeen !== 'missing' && finalSeen !== 'file') {
-    throw new Error(`drop path is a ${finalSeen}`);
-  }
-  const tmp = `${finalPath}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
-  const fd = openSync(tmp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | NOFOLLOW, 0o600);
-  try {
-    if (!fstatSync(fd).isFile()) throw new Error('drop temp is not a regular file');
-    fchmodSync(fd, 0o600);
-    writeSync(fd, Buffer.from(body, 'utf8'));
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    renameSync(tmp, finalPath);
-    chmodSync(finalPath, 0o600);
-  } catch (error) {
-    try {
-      unlinkSync(tmp);
-    } catch {}
-    throw error;
-  }
-  return finalPath;
 }
 
 export function isAlivePid(pid: number): boolean {
@@ -558,7 +524,6 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
   // Per-seat FIFO queues and active worker flags.
   const queues = new Map<string, QueuedItem[]>();
   const activeWorkers = new Map<string, Promise<void>>();
-  const connections = new Set<Socket>();
 
   const drainSeat = async (seatName: string): Promise<void> => {
     const queue = queues.get(seatName);
@@ -681,81 +646,60 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
   const deliver = enqueueSend;
 
   let closed = false;
-  let server: Server;
 
   const closeHandle = async (): Promise<void> => {
     if (closed) return;
     closed = true;
     await Promise.allSettled([...activeWorkers.values()]);
-    for (const sock of connections) sock.destroy();
-    connections.clear();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    // The framing host destroys its open connections and stops accepting; Node removes the
+    // socket path this listener bound. The stale-path unlink stays this command's own, exactly
+    // as the machine daemon keeps it beside the same host.
+    await server.close();
     try {
       if (heldAt(socketPath) === 'socket') unlinkSync(socketPath);
     } catch {}
     lock.release();
   };
 
-  server = createServer((socket) => {
-    connections.add(socket);
-    socket.on('close', () => connections.delete(socket));
-    socket.on('error', () => {});
-    let buffer = '';
-    let handled = false;
-    socket.on('data', (chunk: Buffer) => {
-      if (handled) return;
-      buffer += chunk.toString('utf8');
-      const nl = buffer.indexOf('\n');
-      if (nl === -1) return;
-      handled = true;
-      const line = buffer.slice(0, nl);
-      let req: DaemonRequest;
-      try {
-        req = JSON.parse(line) as DaemonRequest;
-      } catch {
-        socket.end(
-          `${JSON.stringify({ v: 1, ok: false, id: null, seat: '', outcome: 'refused', detail: 'invalid daemon request' })}\n`,
-        );
-        return;
-      }
-      if (req.op === 'ping') {
-        socket.end(`${JSON.stringify({ v: 1, ok: true, pong: true, pid })}\n`);
-        return;
-      }
-      if (req.op === 'shutdown') {
-        socket.end(`${JSON.stringify({ v: 1, ok: true, shutdown: true })}\n`, () => {
+  const refusalLine = (detail: string): string =>
+    `${JSON.stringify({ v: 1, ok: false, id: null, seat: '', outcome: 'refused', detail })}\n`;
+
+  // The accept, frame and close mechanics are the relay package's framing host. This command
+  // keeps its own protocol: the same `ping`, `shutdown` and `send` answers, the same refusal
+  // bytes, the per-seat admission and queue, and the socket file's mode and cleanup.
+  const server = createHostServer({
+    socketPath,
+    // This socket carried no measured request-frame limit before: the body it carries is
+    // written to a drop file and never typed into a pane. The host requires a positive integer,
+    // so the caller keeps that acceptance rather than imposing the machine protocol's limit on
+    // a message body.
+    frameLimit: Number.MAX_SAFE_INTEGER,
+    onRequest: (input) => {
+      const req = input as { op?: unknown } | null;
+      const op = req !== null && typeof req === 'object' ? req.op : undefined;
+      if (op === 'ping') return `${JSON.stringify({ v: 1, ok: true, pong: true, pid })}\n`;
+      if (op === 'shutdown') {
+        // The host writes this answer; the listener stops just behind it.
+        setImmediate(() => {
           void closeHandle();
         });
-        return;
+        return `${JSON.stringify({ v: 1, ok: true, shutdown: true })}\n`;
       }
-      if (req.op === 'send') {
-        void deliver(req).then((res) => {
-          if (!socket.destroyed) {
-            socket.end(`${JSON.stringify(res)}\n`);
-          }
-        });
+      if (op === 'send') {
+        return deliver(input as DaemonSendRequest).then((res) => `${JSON.stringify(res)}\n`);
       }
-    });
+      return refusalLine('invalid daemon request');
+    },
+    onRefused: (reason) =>
+      refusalLine(reason === 'frame-limit' ? 'the daemon request is too large' : 'invalid daemon request'),
   });
 
-  const bound = await new Promise<{ ok: true } | { ok: false; reason: string }>((resolve) => {
-    const onError = (error: Error) => {
-      resolve({ ok: false, reason: error.message });
-    };
-    server.once('error', onError);
-    server.listen(socketPath, () => {
-      server.off('error', onError);
-      try {
-        chmodSync(socketPath, 0o600);
-      } catch {}
-      resolve({ ok: true });
-    });
-  });
-
-  if (!bound.ok) {
+  const listening = await server.listen();
+  if (!listening.ok) {
     lock.release();
-    return { kind: 'bind-failed', reason: bound.reason };
+    return { kind: 'bind-failed', reason: listening.reason };
   }
+  chmodSync(socketPath, 0o600);
 
   return {
     kind: 'serving',
@@ -1018,10 +962,15 @@ async function executeQueuedSend(
   // promise no retry. When the daemon is wired in, write the record where the watch reads.
   const candidateDropPath = join(stateDropDir, msgId);
 
-  let dropPath: string;
-  try {
-    dropPath = writeSecureDrop(stateDropDir, msgId, body);
-  } catch {
+  // The copy is the relay package's durable write: whole bytes, 0600 in a 0700 folder, published
+  // by an exclusive link, so a holder already at the name is never replaced. The ladder above
+  // stays this command's path policy; admission, history and the typed leg all stay here.
+  const staged = await relayStage(
+    { dir: stateDropDir, name: msgId },
+    { id: msgId, record: body },
+    { now: host.now },
+  );
+  if (staged.outcome === 'refused') {
     return {
       v: 1,
       ok: false,
@@ -1031,6 +980,7 @@ async function executeQueuedSend(
       detail: `${seatName}: the drop file could not be written; nothing was typed`,
     };
   }
+  const dropPath = staged.receipt.copy ?? candidateDropPath;
 
   const recordHeld = (detail: string, via?: 'typed'): DaemonSendResponse => {
     const entry: HistoryEntry = {
