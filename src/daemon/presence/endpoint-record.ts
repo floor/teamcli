@@ -11,7 +11,7 @@
 // A consumer that reports what it found asks the classifying door (`inspectRecordedCodexEndpoint`)
 // and is told absent from invalid; one that only needs the endpoint uses the strict reader
 // (`readRecordedCodexEndpoint`). Both apply the same checks.
-import { isPresenceBinding } from './contract.ts';
+import { isPresenceBinding, isPresenceTime } from './contract.ts';
 
 export type CodexEndpointRecord = {
   url: string;
@@ -44,7 +44,8 @@ export function readCodexEndpointRecord(value: unknown): CodexEndpointRecord | n
 type RecordCheck = { ok: true; record: CodexEndpointRecord } | { ok: false; why: string };
 
 function checkCodexEndpointRecord(value: unknown): RecordCheck {
-  if (typeof value !== 'object' || value === null) {
+  // An array is an object; it is not a record. Neither is anything a launch did not write.
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return { ok: false, why: 'the endpoint record is not an object' };
   }
   const one = value as Partial<CodexEndpointRecord>;
@@ -52,14 +53,13 @@ function checkCodexEndpointRecord(value: unknown): RecordCheck {
     return { ok: false, why: 'the endpoint record names no valid presence binding' };
   }
   if (typeof one.url !== 'string') return { ok: false, why: 'the endpoint record has no URL' };
-  if (typeof one.pid !== 'number' || !Number.isInteger(one.pid) || one.pid <= 0) {
+  // A pid this build could have written is a positive safe integer; anything else cannot name
+  // a process, and a value past the safe range would silently become another number.
+  if (typeof one.pid !== 'number' || !Number.isSafeInteger(one.pid) || one.pid <= 0) {
     return { ok: false, why: 'the endpoint record names no positive integer process' };
   }
-  if (typeof one.started_at !== 'string' || one.started_at === '') {
-    return { ok: false, why: 'the endpoint record has no start instant' };
-  }
-  if (!Number.isFinite(Date.parse(one.started_at))) {
-    return { ok: false, why: 'the endpoint record’s start instant does not parse' };
+  if (typeof one.started_at !== 'string' || !isPresenceTime(one.started_at)) {
+    return { ok: false, why: 'the endpoint record’s start instant is not a contract timestamp' };
   }
   const record: CodexEndpointRecord = {
     url: one.url,

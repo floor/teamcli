@@ -45,6 +45,8 @@ describe('the endpoint record reader', () => {
     expect(invalid.kind).toBe('invalid');
     if (invalid.kind !== 'invalid') throw new Error('expected a refusal');
     expect(invalid.why).toBe('the endpoint record is not an object');
+    // An array is an object; it is still not a record.
+    expect(inspectRecordedCodexEndpoint([record()], BINDING).kind).toBe('invalid');
   });
 
   test('refuses every URL that is not an absolute unix endpoint', () => {
@@ -70,8 +72,12 @@ describe('the endpoint record reader', () => {
       { pid: -1 },
       { pid: 4.5 },
       { pid: '4242' },
+      { pid: Number.MAX_SAFE_INTEGER + 2 },
       { started_at: '' },
       { started_at: 'not a time' },
+      // The contract's own spelling is required; a value with no zone or no calendar day is out.
+      { started_at: '2026-10-01T10:00:00' },
+      { started_at: '2026-02-30T00:00:00.000Z' },
       { binding: 'binding' },
       { binding: OTHER.toUpperCase() },
     ]) {
