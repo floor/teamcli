@@ -1,13 +1,14 @@
 // Independent acceptance of the route-bound hosted watch wrapper (`src/daemon/watch-authority.ts`)
 // on the actual source: the binding, the fixed five-second renewal that rides the daemon's own
-// beat, the per-effect gate, successor loss and the cleanup retry. Everything below drives the
+// beat, the per-effect gate and its truthful report, successor loss, the cleanup retry, and the
+// binding while a quiet watch runs. Everything below drives the
 // product surface — `hostedWatchAuthority`, `createHostedWatch` composed exactly as
 // `startMachineDaemon` composes it, and `startMachineDaemon` itself once — with synthetic homes,
 // a virtual clock and a scratch checkout. Nothing reads or writes a real pane, home or session.
 //
-// The two scenes marked `test.failing` state the behaviour the wrapper owes and that this source
-// does not yet deliver; they are promoted to `test` when the followup lands. Every other scene is
-// green on this source.
+// The scenes marked `test.failing` state the behaviour the wrapper owes and that this source does
+// not yet deliver; they are promoted to `test` in a later commit once the unchanged bodies pass.
+// Every other scene is green on this source.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -325,6 +326,137 @@ describe('the reported effects', () => {
     } finally {
       await started.daemon.close();
     }
+  });
+});
+
+describe('the honest effect report', () => {
+  test.failing('reads blocked while a standing watch holds the session', async () => {
+    bind();
+    const clock = { at: NOW };
+    const heartbeat = iso(NOW);
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = { pane: 'w1:p1', heartbeat };
+    });
+    const build = buildWith(clock, quietSources(clock), {
+      verifyAuthority: () => ({ ok: true }),
+      sender: () => async () => ({ ok: true, outcome: 'typed (unconfirmed)' }),
+    });
+    const host = composed(build, clock);
+    await waitUntil(() => host.state().phase === 'standby');
+    // Another watch holds the session: this host cannot push, whatever was injected.
+    expect(host.state().effects).toBe('blocked');
+    expect(host.state().why).toContain('stands for the session');
+    expect(record()).toEqual({ pane: 'w1:p1', heartbeat });
+    await host.stop('done');
+  });
+
+  test.failing('reads blocked when the acquisition is refused', async () => {
+    bind();
+    const clock = { at: NOW };
+    const build = hostedWatchAuthority({
+      route: route(),
+      teamFile,
+      log: () => {},
+      now: () => {
+        throw new Error('clock unavailable');
+      },
+      base: quietSources(clock),
+      verifyAuthority: () => ({ ok: true }),
+      sender: () => async () => ({ ok: true, outcome: 'typed (unconfirmed)' }),
+    });
+    const host = createHostedWatch({
+      route: route(),
+      now: () => new Date(clock.at),
+      ...build,
+      onTick: build.tick,
+    });
+    await waitUntil(() => host.state().phase === 'standby');
+    expect(host.state().why).toContain('refused');
+    expect(host.state().effects).toBe('blocked');
+    expect(record()).toBeUndefined();
+    await host.stop('done');
+  });
+
+  test.failing('reads blocked once the captured authority is lost', async () => {
+    bind();
+    const clock = { at: NOW };
+    const build = buildWith(clock, quietSources(clock), {
+      verifyAuthority: () => ({ ok: true }),
+      sender: () => async () => ({ ok: true, outcome: 'typed (unconfirmed)' }),
+    });
+    const host = composed(build, clock);
+    await waitUntil(() => host.state().cycles === 1);
+    expect(host.state().effects).toBe('open');
+    const successor = mintWatchEpoch();
+    const heartbeat = iso(clock.at);
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = { pid: process.pid, epoch: successor, heartbeat };
+    });
+    clock.at += HOSTED_AUTHORITY_TICK_MS;
+    host.tick(new Date(clock.at));
+    await waitUntil(() => host.state().phase === 'stopped');
+    // The record is another epoch's: the report may not still claim a live push.
+    expect(host.state().effects).toBe('blocked');
+    expect(record()).toEqual({ pid: process.pid, epoch: successor, heartbeat });
+    await host.stop('done');
+  });
+
+  test.failing('reads blocked after the run has finished', async () => {
+    bind();
+    const clock = { at: NOW };
+    const build = buildWith(clock, quietSources(clock), {
+      verifyAuthority: () => ({ ok: true }),
+      sender: () => async () => ({ ok: true, outcome: 'typed (unconfirmed)' }),
+    });
+    const host = composed(build, clock);
+    await waitUntil(() => host.state().cycles === 1);
+    expect(host.state().effects).toBe('open');
+    await host.stop('done');
+    expect(record()).toBeUndefined();
+    expect(host.state().effects).toBe('blocked');
+  });
+});
+
+describe('the binding while a quiet watch runs', () => {
+  /** Runs a quiet watch to its first cycle, changes the recorded binding, and expects one beat
+   *  to stand the authority down: no further pass, effects closed, the record released. */
+  async function standDownAfter(
+    change: (session: ReturnType<typeof emptySession>) => void,
+  ): Promise<void> {
+    bind();
+    const clock = { at: NOW };
+    const build = buildWith(clock, quietSources(clock), {
+      verifyAuthority: () => ({ ok: true }),
+      sender: () => async () => ({ ok: true, outcome: 'typed (unconfirmed)' }),
+    });
+    const host = composed(build, clock);
+    await waitUntil(() => host.state().cycles === 1);
+    expect(host.state().effects).toBe('open');
+    updateState(agents, (state) => {
+      change(state.sessions.crew ??= emptySession());
+    });
+    clock.at += HOSTED_AUTHORITY_TICK_MS;
+    host.tick(new Date(clock.at));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The binding is re-read every beat: a quiet watch may not keep carrying the authority
+    // under a watchdog record that was moved out from under it.
+    expect(host.state().phase).not.toBe('running');
+    expect(host.state().effects).toBe('blocked');
+    expect(host.state().cycles).toBe(1);
+    expect(record()).toBeUndefined();
+    await host.stop('done');
+  }
+
+  test.failing('a repointed watchdog file stands the authority down', async () => {
+    await standDownAfter((session) => {
+      session.watchdog = { file: join(agents, 'other.yaml') };
+    });
+  });
+
+  test.failing('a cleared watchdog binding stands the authority down', async () => {
+    await standDownAfter((session) => {
+      delete session.watchdog;
+    });
   });
 });
 
