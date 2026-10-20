@@ -24,7 +24,9 @@ run succeeds, and no `read` receipt is written. Acknowledging a message that is 
 idempotent: the run succeeds, the first receipt stays byte for byte, and the JSON document says
 this run wrote nothing. A record a client wrote is refused — its read belongs to the client inbox
 — and a message an earlier build left in `.agents/messages/` is read with `team messages`, not
-acknowledged.
+acknowledged. The general seat brief is read by the seat's own turn-start reader, not
+acknowledged: its receipt is bound to the seat's brief claim, and a plain receipt at its name
+would hold the name that reader needs.
 
 ## Synopsis
 
@@ -79,6 +81,7 @@ Refusals name what stopped them, and nothing is written:
     team ack: record <id> does not verify against this message key
     team ack: record <id> is addressed to <seat>, not to <caller>
     team ack: record <id> is written by a client; its read belongs to the client inbox, not to this command
+    team ack: record <id> is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged
     team ack: <id>: not marked read: the read receipt name is held by a file that does not verify for this message
     team ack: <id>: not marked read: the read receipt path is held by something that is not a file
 

@@ -24,6 +24,7 @@ import {
   standingOf,
 } from '../caller.ts';
 import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { recordNameOk } from '../send/record.ts';
@@ -158,6 +159,12 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   // this command serves only the seat folders of its own session.
   if (acknowledged.from_client !== undefined) {
     return refused(io, json, `record ${id} was written by a client; its read belongs to the client inbox, not to this command`);
+  }
+  // A general seat brief's read is bound to the seat's current claim, and its reader verifies the
+  // receipt against that binding: a plain receipt here would hold the receipt name the seat's own
+  // turn-start reader needs, so the brief would never be served. Read it there, not here.
+  if (isGeneralBriefRecord(acknowledged)) {
+    return refused(io, json, `record ${id} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged`);
   }
   if (acknowledged.session !== session) {
     return refused(io, json, `record ${id} is bound to session "${acknowledged.session}", not to "${session}"`);

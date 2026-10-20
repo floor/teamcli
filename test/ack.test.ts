@@ -186,6 +186,16 @@ describe('team ack marks one message read without printing it', () => {
     expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), SENT, 'read'))).toBe(false);
   });
 
+  test('the general seat brief is refused: its read belongs to the seat\'s own turn-start reader', async () => {
+    sentTo('worker', SENT, { from: 'the launch', rule: 'the launch delivers it to every seat of its team' });
+    place('worker', 'w2:p1');
+    const result = await run([SENT], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' });
+
+    expect(result.code).toBe(1);
+    expect(result.err).toBe(`team ack: record ${SENT} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged\n`);
+    expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), SENT, 'read'))).toBe(false);
+  });
+
   test('an unsigned file at the read receipt name is held, never replaced', async () => {
     sentTo('owner', SENT);
     const held = receiptFile(recordDir(root, 'acme', 'owner'), SENT, 'read');
