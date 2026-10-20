@@ -1,8 +1,9 @@
 // Cross-team send acceptance for a team's leads, from the requested behaviour and not from the
 // implementation: a lead reaches another team's lead inside one entity; the entity's coordinator
 // — the lead of the team whose own project is the entity — is reached as any other team lead, both
-// ways; a lead pair across entities is refused; and a seat that leads nothing is refused across
-// teams, same entity or not. A lead is the file's `leads` mark, a place in the chain, never a role
+// ways; a lead pair across entities is refused; and a seat that leads nothing reaches the teams of
+// its entity like any other seat, while no seat of another entity is in reach. A lead is the
+// file's `leads` mark, a place in the chain, never a role
 // word: every lead here is spelled with an everyday role, and one non-lead is spelled `lead`, so a
 // rule reading words instead of marks would show.
 //
@@ -272,10 +273,11 @@ describe('cross-team sends inside an entity', () => {
     refused(await send({ team: 'data', seat: 'data-lead' }, 'api-lead@api'));
   });
 
-  test('a seat that leads nothing is refused across teams, same entity or not', async () => {
-    // Same entity: to a team's lead, and to a plain seat.
-    refused(await send({ team: 'web', seat: 'web-helper' }, 'api-lead@api'));
-    refused(await send({ team: 'web', seat: 'web-helper' }, 'api-helper@api'));
+  test('a seat that leads nothing reaches the teams of its entity, and another entity is out of reach', async () => {
+    // Same entity: to a team's lead, and to a plain seat — the entity's seat rule admits both,
+    // whatever the caller leads.
+    admitted(await send({ team: 'web', seat: 'web-helper' }, 'api-lead@api'));
+    admitted(await send({ team: 'web', seat: 'web-helper' }, 'api-helper@api'));
     // Another entity: to a team's lead, and to a plain seat.
     refused(await send({ team: 'web', seat: 'web-helper' }, 'data-lead@data'));
     refused(await send({ team: 'web', seat: 'web-helper' }, 'data-helper@data'));
@@ -285,9 +287,9 @@ describe('cross-team sends inside an entity', () => {
     // The lead by its human name, from a lead of the same entity: the seat `zeus@api` would
     // reach is the one the rule judges.
     admitted(await send({ team: 'web', seat: 'web-lead' }, 'zeus@api'));
-    // A seat that leads nothing is refused by nickname exactly as by seat: the name confers
-    // nothing, and admission never reads it.
-    refused(await send({ team: 'web', seat: 'web-helper' }, 'zeus@api'));
+    // The same name from a seat that leads nothing: the name confers nothing, and admission
+    // reads the seat it names — a seat of the entity, so the entity's rule admits it.
+    admitted(await send({ team: 'web', seat: 'web-helper' }, 'zeus@api'));
     // Another entity's lead, by its own nickname: the same cross-entity refusal the seat form
     // gets.
     refused(await send({ team: 'api', seat: 'api-lead' }, 'hermes@beta'));
@@ -311,10 +313,12 @@ describe('a team upgraded from 0.3.5/0.4: its lead is the file\'s seat, never th
     admitted(await send({ team: 'legacy', seat: 'steward' }, 'web-lead@web'));
   });
 
-  test("a non-lead seat is still refused the legacy lead, and the legacy lead another team's plain seat", async () => {
-    refused(await send({ team: 'web', seat: 'web-helper' }, 'lead@legacy'));
-    refused(await send({ team: 'web', seat: 'web-helper' }, 'steward@legacy'));
-    refused(await send({ team: 'web', seat: 'web-lead' }, 'legacy-helper@legacy'));
+  test("a seat that leads nothing reaches the legacy team of its entity like any other", async () => {
+    // The upgraded team is a team of the entity, so its seats are reached by the entity's seat
+    // rule — the `leads` mark the pre-0.5 roster never wrote is no part of the caller's reach.
+    admitted(await send({ team: 'web', seat: 'web-helper' }, 'lead@legacy'));
+    admitted(await send({ team: 'web', seat: 'web-helper' }, 'steward@legacy'));
+    admitted(await send({ team: 'web', seat: 'web-lead' }, 'legacy-helper@legacy'));
   });
 
   test('another entity is refused the legacy lead', async () => {

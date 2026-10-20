@@ -8,8 +8,9 @@
 // `team add`, `team remove` and `team grant` each refuse it in their own words, writing nothing.
 //
 // The one thing the standing holds is admission — the project lead writes to its project's team
-// leads, by the project rules, and to nothing else of them — and it holds only where the records
-// say so: the same pair, judged over the registry alone, with no pane and no file in it.
+// leads by the project rules, and a plain seat of another team of its entity by the entity's seat
+// rule, never through the project — and it holds only where the records say so: the same pair,
+// judged over the registry alone, with no pane and no file in it.
 
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -25,7 +26,7 @@ import type { Terminal } from '../src/launch/terminal.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { readProjects, upsertProject } from '../src/registry/projects.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { admitSend, PROJECT_RULES, type AdmitContext } from '../src/send/admit.ts';
+import { admitSend, ENTITY_RULE, PROJECT_RULES, type AdmitContext } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { testIo } from './helpers.ts';
@@ -355,7 +356,7 @@ describe('the same seat over its own team', () => {
 });
 
 describe('the one standing the project lead holds: admission', () => {
-  test('the project record names the lead, and the lead writes to its teams\' leads — to nothing else of them', () => {
+  test('the project record names the lead, and the lead writes to its teams\' leads — a plain seat by the entity rule', () => {
     const here = world();
     const team = register(here);
     const teams = readTeams(here.home);
@@ -372,12 +373,16 @@ describe('the one standing the project lead holds: admission', () => {
       rule: PROJECT_RULES[0],
     });
 
-    // And nothing more: the project's seats do not reach through the project, either way.
-    const down = admitSend(team.leadA, team.builderB, teams, undefined, context);
-    expect(down.ok).toBe(false);
-    if (!down.ok) expect(down.why).toContain('no rule admits it');
-    const up = admitSend(team.builderB, team.leadA, teams, undefined, context);
-    expect(up.ok).toBe(false);
+    // And nothing more through the project: a plain seat of the other team is reached by the
+    // entity's seat rule, in its own name, and never by a project pair — either way.
+    expect(admitSend(team.leadA, team.builderB, teams, undefined, context)).toEqual({
+      ok: true,
+      rule: ENTITY_RULE,
+    });
+    expect(admitSend(team.builderB, team.leadA, teams, undefined, context)).toEqual({
+      ok: true,
+      rule: ENTITY_RULE,
+    });
   });
 
   test('without the project records the pair still writes, but as two orchestrators: the record decides which row admits', () => {
@@ -390,7 +395,8 @@ describe('the one standing the project lead holds: admission', () => {
       ok: true,
       rule: 'an orchestrator to another orchestrator',
     });
-    // And with no project in hand the lead still reaches nothing else of the other team.
-    expect(admitSend(team.leadA, team.builderB, teams).ok).toBe(false);
+    // And with no project in hand the lead still reaches the other team of its entity, but as a
+    // seat of the entity: the entity's own rule names the pair.
+    expect(admitSend(team.leadA, team.builderB, teams)).toEqual({ ok: true, rule: ENTITY_RULE });
   });
 });

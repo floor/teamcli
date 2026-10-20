@@ -14,7 +14,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { Agent } from '../src/registry/agents.ts';
-import { admitSend, RULE_SUMMARY, type AdmitTeam, type DeclaredSender, type SendSeat } from '../src/send/admit.ts';
+import { admitSend, ENTITY_RULE, RULE_SUMMARY, type AdmitTeam, type DeclaredSender, type SendSeat } from '../src/send/admit.ts';
 
 // One agent record, the shape a launch writes: the fixture form of test/send-admit.test.ts.
 function agent(id: string, seat: string, team: string, role = 'builder', pane: string | null = 'w1:p1'): Agent {
@@ -123,21 +123,24 @@ function registry(labs: Team): Record<string, Team> {
 const ADMITTED = { ok: true, rule: "an assistant seat to its entity's coordinator" } as const;
 
 describe("the entity's first assistant is a place in the chain, never a role word", () => {
-  test('the role word alone admits nothing', () => {
+  test('the role word alone does not name the assistant: the entity rule admits the pair instead', () => {
     const teams = registry(labsUndeclared);
-    const judged = admitSend(assistant, orch, teams);
-    expect(judged).toEqual({
+    // The word is not the capability, so the assistant rule does not fire; the pair is reached
+    // across teams of one entity by the seat rule, and the verdict names that rule.
+    expect(admitSend(assistant, orch, teams)).toEqual({ ok: true, rule: ENTITY_RULE });
+    // Outside the entity nothing reaches the pair: the refusal names every rule.
+    expect(admitSend(assistant, orchRadio, teams)).toEqual({
       ok: false,
-      why: `assistant@labs may not send to orchestrator@floor: no rule admits it (${RULE_SUMMARY})`,
+      why: `assistant@labs may not send to orchestrator@radio: no rule admits it (${RULE_SUMMARY})`,
     });
   });
 
-  test("the record's own signing role is a word too: a seat on no roster line is refused", () => {
+  test("the record's own signing role is a word too: a seat on no roster line is not the assistant", () => {
     // The record's signing role reads 'assistant', but no line of the entity declares this seat:
     // a signing role is a word the record carries, not a place in the chain.
     const envoy = agent(ENVOY, 'envoy', 'labs', 'assistant');
     const teams = registry(labsUndeclared);
-    expect(admitSend(envoy, orch, teams).ok).toBe(false);
+    expect(admitSend(envoy, orch, teams)).toEqual({ ok: true, rule: ENTITY_RULE });
   });
 
   test('the declared first assistant is admitted, whatever its role word', () => {
@@ -157,9 +160,10 @@ describe("the entity's first assistant is a place in the chain, never a role wor
     // The declared seat under another role word: still the declared seat.
     const renamed = agent(ASSISTANT, 'assistant', 'labs', 'aide');
     expect(admitSend(renamed, orch, registry(labsDeclared))).toEqual(ADMITTED);
-    // The undeclared seat under another role word: still undeclared, still refused.
+    // The undeclared seat under another role word: still undeclared — the assistant rule never
+    // fires for it. The pair is reached across the entity, and only that rule admits it.
     const sidelined = agent(ASSISTANT, 'assistant', 'labs', 'aide');
-    expect(admitSend(sidelined, orch, registry(labsUndeclared)).ok).toBe(false);
+    expect(admitSend(sidelined, orch, registry(labsUndeclared))).toEqual({ ok: true, rule: ENTITY_RULE });
   });
 
   test('a role word from another language is a word like any other', () => {
@@ -167,7 +171,7 @@ describe("the entity's first assistant is a place in the chain, never a role wor
     // holds the slot all the same: nothing reads the word.
     const elsewhere = agent(ASSISTANT, 'assistant', 'labs', 'adjoint');
     expect(admitSend(elsewhere, orch, registry(labsDeclared))).toEqual(ADMITTED);
-    expect(admitSend(elsewhere, orch, registry(labsUndeclared)).ok).toBe(false);
+    expect(admitSend(elsewhere, orch, registry(labsUndeclared))).toEqual({ ok: true, rule: ENTITY_RULE });
   });
 });
 
@@ -182,11 +186,13 @@ describe("the registry's identity, read through admission", () => {
     expect(admitSend(paneless, orch, teams)).toEqual(ADMITTED);
   });
 
-  test('a seat of the same name in another team is another agent: undeclared there, refused there', () => {
+  test('a seat of the same name in another team is another agent: the declaration never travels with the name', () => {
     const shopAssistant = agent(SHOP_ASSISTANT, 'assistant', 'shop', 'assistant');
-    expect(admitSend(shopAssistant, orch, registry(labsDeclared)).ok).toBe(false);
+    // Both teams belong to the entity, so the pair is reached — but by the seat rule, never by
+    // the assistant rule the labs file declares: the word and the name carry no declaration.
+    expect(admitSend(shopAssistant, orch, registry(labsDeclared))).toEqual({ ok: true, rule: ENTITY_RULE });
     // The declaration of the labs seat never travels with the name.
-    expect(admitSend(shopAssistant, orch, registry(labsUndeclared)).ok).toBe(false);
+    expect(admitSend(shopAssistant, orch, registry(labsUndeclared))).toEqual({ ok: true, rule: ENTITY_RULE });
   });
 
   test('a record confers no right: the same pair judges the same with records as with bare seats', () => {
@@ -206,7 +212,8 @@ describe('the declared assistant reaches the coordinator, and nothing else', () 
   test("the main team's ordinary seat is not its coordinator", () => {
     const teams = registry(labsDeclared);
     const mainBuilder = { seat: 'builder-1', team: ENTITY, role: 'builder' } as const;
-    expect(admitSend(assistant, mainBuilder, teams).ok).toBe(false);
+    // The assistant rule does not name the pair; the entity's seat rule does, and names itself.
+    expect(admitSend(assistant, mainBuilder, teams)).toEqual({ ok: true, rule: ENTITY_RULE });
   });
 
   test("another entity's coordinator is not this entity's", () => {
