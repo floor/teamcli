@@ -6,9 +6,8 @@
 // `startMachineDaemon` composes it, and `startMachineDaemon` itself once — with synthetic homes,
 // a virtual clock and a scratch checkout. Nothing reads or writes a real pane, home or session.
 //
-// The scenes marked `test.failing` state the behaviour the wrapper owes and that this source does
-// not yet deliver; they are promoted to `test` in a later commit once the unchanged bodies pass.
-// Every other scene is green on this source.
+// The scenes first measured red on 7cb78f1a6 stated the behaviour the wrapper owes. The corrected
+// source 34437b0b9 delivers every unchanged body, so the whole file now runs as ordinary tests.
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -233,7 +232,7 @@ describe('the fixed daemon beat', () => {
 });
 
 describe('a blocked quiet watch', () => {
-  test.failing('reads a second time after the sweep instead of draining', async () => {
+  test('reads a second time after the sweep instead of draining', async () => {
     bind();
     const clock = { at: NOW };
     const started = await startMachineDaemon({
@@ -283,7 +282,7 @@ describe('a blocked quiet watch', () => {
 });
 
 describe('the reported effects', () => {
-  test.failing('are never open when the sender factory builds no sender', async () => {
+  test('are never open when the sender factory builds no sender', async () => {
     bind();
     const clock = { at: NOW };
     const started = await startMachineDaemon({
@@ -329,7 +328,7 @@ describe('the reported effects', () => {
 });
 
 describe('the honest effect report', () => {
-  test.failing('reads blocked while a standing watch holds the session', async () => {
+  test('reads blocked while a standing watch holds the session', async () => {
     bind();
     const clock = { at: NOW };
     const heartbeat = iso(NOW);
@@ -349,7 +348,7 @@ describe('the honest effect report', () => {
     await host.stop('done');
   });
 
-  test.failing('reads blocked when the acquisition is refused', async () => {
+  test('reads blocked when the acquisition is refused', async () => {
     bind();
     const clock = { at: NOW };
     const build = hostedWatchAuthority({
@@ -376,7 +375,7 @@ describe('the honest effect report', () => {
     await host.stop('done');
   });
 
-  test.failing('reads blocked once the captured authority is lost', async () => {
+  test('reads blocked once the captured authority is lost', async () => {
     bind();
     const clock = { at: NOW };
     const build = buildWith(clock, quietSources(clock), {
@@ -400,7 +399,7 @@ describe('the honest effect report', () => {
     await host.stop('done');
   });
 
-  test.failing('reads blocked after the run has finished', async () => {
+  test('reads blocked after the run has finished', async () => {
     bind();
     const clock = { at: NOW };
     const build = buildWith(clock, quietSources(clock), {
@@ -446,13 +445,13 @@ describe('the binding while a quiet watch runs', () => {
     await host.stop('done');
   }
 
-  test.failing('a repointed watchdog file stands the authority down', async () => {
+  test('a repointed watchdog file stands the authority down', async () => {
     await standDownAfter((session) => {
       session.watchdog = { file: join(agents, 'other.yaml') };
     });
   });
 
-  test.failing('a cleared watchdog binding stands the authority down', async () => {
+  test('a cleared watchdog binding stands the authority down', async () => {
     await standDownAfter((session) => {
       delete session.watchdog;
     });
