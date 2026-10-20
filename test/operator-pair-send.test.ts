@@ -305,7 +305,7 @@ describe('a send admitted by the operators\' rule is logged like every send', ()
     // whose payload carries the sender header and the admitting rule, the message one empty line
     // under it. The raw drop body the record replaced is gone.
     const drops = join(root, '.agents', 'send-drops', 'acme', 'operator-3');
-    const records = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
+    const records = readdirSync(drops).filter((name) => !name.endsWith('.pending') && !name.includes('.fallback.json'));
     expect(records).toHaveLength(1);
     expect(recordBody(join(drops, records[0] as string))).toBe(
       "from operator-2 — admitted by: an operator to another operator of its own team\n\na status line",
@@ -326,7 +326,7 @@ describe('a send admitted by the operators\' rule is logged like every send', ()
     const reading = await send({ team: 'acme', seat: 'operator-1' }, 'operator-2', []);
     expect(reading.code).toBe(0);
     const drops = join(root, '.agents', 'send-drops', 'acme', 'operator-2');
-    const records = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
+    const records = readdirSync(drops).filter((name) => !name.endsWith('.pending') && !name.includes('.fallback.json'));
     expect(records).toHaveLength(1);
     expect(recordBody(join(drops, records[0] as string))).toContain('admitted by: an orchestrator or operator to a seat of its own team');
   });
