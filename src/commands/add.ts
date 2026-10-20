@@ -10,7 +10,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -318,6 +318,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const dev = resolveDevMode('add', io, { home: sources.home, team, root, now: sources.now() });
   if (!dry) logDevModeState(dir, 'add', describeCaller(shown), dev, sources.now());
   let devFolded = false;
+  // The approval sentence dev mode stood in for, when the standing check below folded: the
+  // doctor's own approval finding repeats it, and that finding does not stop the add any more
+  // than the never-approved miss does.
+  let devApprovalRefusal: string | null = null;
   // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
   // speak: the `add` row is the owner's alone in 0.5.0, so every seat is refused here whatever
   // pane it sits on, and the delegate gate below is the one standing grant that opens a seat's
@@ -403,19 +407,31 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   // A missing record is the live file, and so is a verified one: the edit starts from the live
   // text, and a seat is read from the file as it stands. A legacy or refused record is still not
-  // in force.
+  // in force — unless dev mode is on, where the live file this run edits counts as approved, with
+  // the warning saying so and the caller in the audit log, exactly as the caller gate above folds.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    refuse(io, json, 'add', {
-      // Both kinds that reach here — `legacy` and `refused` — are a record not in force; a file
-      // never approved is still run, so this site's document is `add.ceilings`.
-      id: 'add.ceilings',
-      message: notInForce(standing),
-      repair: null,
-    });
-    // exit: add.never-approved
-    // exit: add.ceilings
-    return 1;
+    const said = notInForce(standing);
+    const folded = devModeFileApproval(dev, said, path);
+    if (folded !== null) {
+      devFolded = true;
+      devApprovalRefusal = said;
+      if (json) (dry ? finalRecords : jsonNotes).push(folded);
+      else if (dry) out.stdout(`! ${folded}\n`);
+      else out.stderr(`team add: ${plainText(folded)}\n`);
+      if (!dry) logDevMode(dir, 'add', describeCaller(caller), folded, sources.now());
+    } else {
+      refuse(io, json, 'add', {
+        // Both kinds that reach here — `legacy` and `refused` — are a record not in force; a file
+        // never approved is still run, so this site's document is `add.ceilings`.
+        id: 'add.ceilings',
+        message: said,
+        repair: null,
+      });
+      // exit: add.never-approved
+      // exit: add.ceilings
+      return 1;
+    }
   }
   const ceilings = ceilingsOf(team);
 
@@ -751,6 +767,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // A missing approval record is the live file, the same way `up` reads it. The doctor's
       // never-approved miss is that record's absence, and it does not stop this add.
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
+      // The approval miss dev mode's fold answered is that same absence: the live file counts
+      // as approved, so the sentence the fold took does not stop the add either.
+      if (devApprovalRefusal !== null && finding.text === devApprovalRefusal) continue;
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {

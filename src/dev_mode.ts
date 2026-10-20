@@ -489,6 +489,19 @@ export function devModeCallerGate(run: DevModeRun, refusal: string): string | nu
   return `warning: ${refusal}; dev mode continues${devModeLevelNote(run)}`;
 }
 
+/**
+ * The approval gate of a team-file edit, folded: while dev mode is on, the live team file stands
+ * in for the verified approval the gate asks for, and the run says so — the refusal's own words,
+ * the file that counted, then `; dev mode continues` and, under a policy, the level that set it.
+ * Null otherwise, leaving the gate to refuse. Only the approval precondition is lifted: the
+ * grant's seat and scope, the caller's placement, the target and the file itself stay checks.
+ * The caller logs the line it prints, with the run's caller, through {@link logDevMode}.
+ */
+export function devModeFileApproval(run: DevModeRun, refusal: string, liveFile: string): string | null {
+  if (!run.on) return null;
+  return `warning: ${refusal}; the live team file ${liveFile} counts as approved; dev mode continues${devModeLevelNote(run)}`;
+}
+
 /** Whether a run's record wears the dev mark: the variable's own runs always do (today's
  *  behaviour); a policy's run only when a gate was actually folded, so an owner's run under
  *  `on` is not said to have been admitted by an agent. */

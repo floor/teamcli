@@ -155,6 +155,38 @@ describe('team remove', () => {
     expect(text).toContain('name: lead');
   });
 
+  test('dev mode stands the live file in for the approval remove asks for, and only dev mode does', async () => {
+    // The record is signed, but its key is gone: no verified approval stands for this folder.
+    rmSync(join(home, '.config', 'team-key', 'key.json'));
+    const said = 'the record is signed, but its key is missing';
+    const live = readFileSync(file, 'utf8');
+
+    // Unset: the standing refusal ends the run before anything is typed or closed.
+    const bare = world();
+    bare.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
+    const refused = testIo(dir, owner);
+    expect(await runRemove(['worker', '--file', file], refused, bare.sources)).toBe(1);
+    expect(refused.err).toBe(`team remove: ${said}\n`);
+    expect(bare.typed).toEqual([]);
+    expect(bare.closed).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toBe(live);
+
+    // Set to exactly 1: the live file this run edits counts as approved, the warning names it,
+    // and the audit log records the caller the fold admitted before the effects.
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null });
+    const io = testIo(dir, owner);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(0);
+    expect(io.err).toBe(`team remove: warning: ${said}; the live team file ${file} counts as approved; dev mode continues\n`);
+    expect(made.typed).toEqual(['/exit']);
+    expect(made.closed).toEqual(['w1']);
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+    expect(readFileSync(join(dir, '.agents', 'team.log'), 'utf8')).toContain(
+      `remove [owner] warning: ${said}; the live team file ${file} counts as approved; dev mode continues`,
+    );
+  });
+
   test('a pane with no live agent is not typed into', async () => {
     const made = world();
     made.running.push(false);

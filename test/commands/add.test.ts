@@ -423,6 +423,49 @@ describe('team add', () => {
     expect(record?.provenance.registered_by).toBe('helper');
   });
 
+  test('dev mode stands the live file in for the approval add asks for, and only dev mode does', async () => {
+    // The record is signed, but its key is gone: no verified approval stands for this folder.
+    rmSync(join(home, '.config', 'team-key', 'key.json'));
+    const said = 'the record is signed, but its key is missing';
+    const live = join(project, '.agents', 'team.yaml');
+
+    // Unset: the standing refusal ends the run before anything is launched or edited.
+    const bare = testIo(project, owner);
+    const refused = world();
+    expect(await runAdd(['worker'], bare, sources(refused))).toBe(1);
+    expect(bare.err).toBe(`team add: ${said}\n`);
+    expect(refused.creates).toEqual([]);
+    expect(readFileSync(live, 'utf8')).toContain('stopped: true');
+
+    // A dry run says the fold beside its plan and writes no audit line: nothing was run.
+    const preview = testIo(project, owner);
+    preview.env = { TEAMCLI_DEV_MODE: '1' };
+    const none = world();
+    const previewed = await runAdd(['worker', '--dry-run'], preview, sources(none));
+    expect(preview.err).toBe('');
+    expect(previewed).toBe(0);
+    expect(preview.out).toContain(`! warning: ${said}; the live team file ${live} counts as approved; dev mode continues\n`);
+    expect(preview.err).toBe('');
+    expect(none.creates).toEqual([]);
+    expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
+
+    // Set to exactly 1: the live file this run edits counts as approved, the warning names it,
+    // and the audit log records the caller the fold admitted before the edit.
+    const io = testIo(project, owner);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const made = world();
+    expect(await runAdd(['worker'], io, sources(made))).toBe(0);
+    expect(io.err).toBe(`team add: warning: ${said}; the live team file ${live} counts as approved; dev mode continues\n`);
+    expect(made.creates).toEqual(['worker']);
+    expect(readFileSync(live, 'utf8')).not.toMatch(/# the seat stays in this order\n    stopped: true/);
+    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toContain(
+      `add [owner] warning: ${said}; the live team file ${live} counts as approved; dev mode continues`,
+    );
+    const record = readAgents(home).find((agent) => agent.reach.seat === 'worker');
+    expect(record?.provenance.dev_mode).toBe(true);
+    expect(record?.provenance.dev_mode_by).toBe('owner');
+  });
+
   test('a dry run previews a launch-line refusal, creates nothing, and edits nothing', async () => {
     approve(FILE.replace(
       'launch: claude --model claude-opus-5-5\n    # the seat stays in this order',

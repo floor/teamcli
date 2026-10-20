@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -386,7 +386,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       return 1;
     }
     if (delegatePane === null) {
-      const said = (sources.grantGate ?? grantGate)({ act: 'swap', io, home: sources.home });
+      const said = (sources.grantGate ?? grantGate)({ act: 'swap', io, home: sources.home, dev });
       if (said.kind === 'refused') {
         refuse(io, json, 'remove', {
           id: 'remove.swap-grant',
@@ -395,6 +395,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         });
         // exit: remove.swap-grant
         return 1;
+      }
+      // The gate folded its approval in dev mode: the warning names the file, and the audit log
+      // records the caller it admitted before the swap has effects.
+      if (said.devApproval !== undefined) {
+        if (json) collect(said.devApproval);
+        else io.stderr(`team remove: ${said.devApproval}\n`);
+        logDevMode(dir, 'remove', describeCaller(shown), said.devApproval, sources.now());
       }
       // The grant names the orchestrator, and the self-swap was refused above: what passes here
       // is the orchestrator swapping the operator's seat.
@@ -432,9 +439,19 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const home = sources.home ?? homedir();
   const standing = sources.standing?.(root) ?? approvalStanding(root, home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    refuse(io, json, 'remove', { id: 'remove.never-approved', message: notInForce(standing), repair: null });
-    // exit: remove.never-approved
-    return 1;
+    // Dev mode's approval fold: on, the live team file this run edits counts as approved, the
+    // warning names the file and the caller goes to the audit log; off, today's refusal. The
+    // later gates below still refuse.
+    const said = notInForce(standing);
+    const folded = devModeFileApproval(dev, said, path);
+    if (folded === null) {
+      refuse(io, json, 'remove', { id: 'remove.never-approved', message: said, repair: null });
+      // exit: remove.never-approved
+      return 1;
+    }
+    if (json) collect(folded);
+    else io.stderr(`team remove: ${folded}\n`);
+    logDevMode(dir, 'remove', describeCaller(shown), folded, sources.now());
   }
   // The live file names the seat. A stored copy is not a second roster.
   const copySeat = team.seats.find((seat) => seat.name === name);

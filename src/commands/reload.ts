@@ -34,7 +34,7 @@ import {
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
-import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
@@ -186,7 +186,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   let grantSeat: string | null = null;
   let said: GrantVerdict | null = null;
   if (!owner) {
-    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
+    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home, dev });
     // A grant that cannot be read is the refusal it was, before any other reading: the rest is
     // judged with the team file in hand, where the map's `reload` row admits a lead.
     if (said.kind === 'refused' && said.id === 'grant.file') {
@@ -198,7 +198,15 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       // exit: reload.grant-file
       return 1;
     }
-    if (said.kind === 'passed') grantSeat = said.grant.seat;
+    if (said.kind === 'passed') {
+      grantSeat = said.grant.seat;
+      // The gate's approval was folded in dev mode: say so where the caller reads it, and let
+      // the audit line below carry it once the run has passed every later refusal.
+      if (said.devApproval !== undefined) {
+        out.stderr(`team reload: ${said.devApproval}\n`);
+        devWarning = said.devApproval;
+      }
+    }
   }
 
   const loaded = loadTeamFile(io.cwd, {

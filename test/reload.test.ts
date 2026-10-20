@@ -541,6 +541,32 @@ describe('team reload', () => {
     expect(logText()).toContain('reload [helper] warning: the file grants nothing; dev mode continues\n');
   });
 
+  test('dev mode stands the live file in for the approval the grant gate asks for', async () => {
+    remember('lead', 'high');
+    remember('worker', 'low');
+    // The record is signed, but its key is gone: no verified approval stands for this folder.
+    rmSync(join(home, '.config', 'team-key', 'key.json'));
+    const path = join(dir, 'team.yaml');
+    const said = 'a grant needs a verified approval: the record is signed, but its key is missing';
+
+    // Unset: the gate's approval sentence refuses and nothing closes.
+    const bare = testIo(root, LEAD);
+    const refused = harness();
+    expect(await runReload(['worker'], bare, refused.sources)).toBe(1);
+    expect(bare.err).toBe(`team reload: ${said}\n`);
+    expect(refused.closed).toEqual([]);
+
+    // Set to exactly 1: the live file the run edits counts as approved, the warning names it,
+    // and the audit log records the caller the fold admitted before the close.
+    const io = testIo(root, LEAD);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const { sources, closed } = harness();
+    expect(await runReload(['worker'], io, sources)).toBe(0);
+    expect(io.err).toBe(`team reload: warning: ${said}; the live team file ${path} counts as approved; dev mode continues\n`);
+    expect(closed).toEqual(['worker-ws']);
+    expect(logText()).toContain(`reload [lead] warning: ${said}; the live team file ${path} counts as approved; dev mode continues\n`);
+  });
+
   test('--json carries the action envelope under the registered schema', async () => {
     remember('worker', 'low');
     const { sources } = harness();

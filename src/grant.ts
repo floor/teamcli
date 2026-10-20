@@ -5,6 +5,7 @@ import { approvedFingerprints, notInForce } from './approve/approval.ts';
 import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, noPaneRefusal, standingOf, type Caller } from './caller.ts';
 import { ORDINARY_SECTIONS } from './delegate.ts';
+import { devModeFileApproval, type DevModeRun } from './dev_mode.ts';
 import { declaredRoots } from './entities.ts';
 import { loadTeamFile } from './file/load.ts';
 import type { GrantScope, LoadResult } from './file/types.ts';
@@ -377,7 +378,7 @@ export function entityGrantAdmits(
  * a command records when it refuses on this verdict.
  */
 export type GrantVerdict =
-  | { kind: 'passed'; grant: { session: string; seat: string; scope: GrantScope[] } }
+  | { kind: 'passed'; grant: { session: string; seat: string; scope: GrantScope[] }; devApproval?: string }
   | { kind: 'refused'; id: string; text: string };
 
 /**
@@ -413,12 +414,19 @@ export function logGranted(dir: string, seat: string, act: GrantScope, now?: Dat
  * last approval is not a refusal. `approve` still refuses every owner section outside
  * `ORDINARY_SECTIONS`, `grant` included — read from the record's own fingerprints, never
  * from a stored copy.
+ *
+ * A caller that has resolved dev mode passes `dev`: then a file no verified approval stands
+ * for passes this gate for every act but `approve`, and the verdict carries `devApproval`,
+ * the warning line the caller prints and logs. Everything after the approval — the grant's
+ * presence, the caller's placement, the scope — still refuses.
  */
 export function grantGate(input: {
   act: GrantScope;
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources' | 'cwd'>;
   /** Approval store home. Absent: the owner's home, the same default the store uses. */
   home?: string;
+  /** The run's dev-mode resolution; when on, the live file counts as approved for non-approve acts. */
+  dev?: DevModeRun;
   sources?: GrantSources;
 }): GrantVerdict {
   const { act, io, home } = input;
@@ -431,12 +439,22 @@ export function grantGate(input: {
   }
 
   const standing = sources.standing ? sources.standing(loaded.root) : approvalStanding(loaded.root, home);
+  let devApproval: string | null = null;
   if (standing.kind !== 'verified') {
-    return refuse('approval', `a grant needs a verified approval: ${notInForce(standing)}`);
+    const text = `a grant needs a verified approval: ${notInForce(standing)}`;
+    // `approve` writes the verified record and reads its fingerprints, so it never runs on a
+    // file only dev mode stands behind.
+    devApproval = act === 'approve' || input.dev === undefined ? null : devModeFileApproval(input.dev, text, loaded.path);
+    if (devApproval === null) return refuse('approval', text);
   }
 
   const grant = loaded.team.grant;
   if (act === 'approve') {
+    // Unreachable: `approve` never folds, so the approval check above already returned. It is
+    // spelled again here because the record read needs the narrowed standing.
+    if (standing.kind !== 'verified') {
+      return refuse('approval', `a grant needs a verified approval: ${notInForce(standing)}`);
+    }
     const differences = compare(approvedFingerprints(standing.record), fingerprints(loaded.team));
     const kept = differences.filter((difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name));
     if (kept.length > 0) {
@@ -457,6 +475,6 @@ export function grantGate(input: {
     return refuse('caller', `only the seat the grant names runs this: this call is ${describeCaller(caller)}`);
   }
   if (!grant.scope.includes(act)) return refuse('scope', `the grant does not list \`${act}\``);
-  return { kind: 'passed', grant };
+  return { kind: 'passed', grant, ...(devApproval === null ? {} : { devApproval }) };
 }
 
