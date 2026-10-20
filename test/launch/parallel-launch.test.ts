@@ -100,7 +100,7 @@ describe('launchConcurrency', () => {
     expect(launchConcurrency(moderateMemory, limits)).toBe(3);
   });
 
-  test('falls back to serial (1) when --serial is requested, machine is absent, or figures are near start limits', () => {
+  test('falls back to serial (1) when --serial is requested, machine is absent, figures are near start limits, or pressure is warn', () => {
     const ample: Machine = {
       loadPerCore: 0.3,
       memoryFree: 60,
@@ -116,6 +116,11 @@ describe('launchConcurrency', () => {
     expect(launchConcurrency({ ...ample, loadPerCore: 2.0 }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, memoryFree: 20 }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, swapFree: 2.5e9 }, limits)).toBe(1);
+    // A warning level does not refuse a launch, but it runs the seats one at a time; a level that
+    // wasn't read leaves the headroom rules to decide.
+    expect(launchConcurrency({ ...ample, pressure: 'warn' }, limits)).toBe(1);
+    expect(launchConcurrency({ ...ample, pressure: 'normal' }, limits)).toBe(8);
+    expect(launchConcurrency({ ...ample, pressure: null }, limits)).toBe(8);
   });
 });
 

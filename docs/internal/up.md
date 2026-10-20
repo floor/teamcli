@@ -59,7 +59,8 @@ until the owner trusts the lobby once in that CLI. Then it starts.
 
 Reads the team file (or the one `--file` names), this machine's approval store, the session's state
 (`.agents/team.state.json`, for each seat's stage), herdr (whether the session is up, its agents and
-workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
+workspaces), the doctor's findings, and the machine's load, free memory, free disk, free swap and
+the OS's memory-pressure level.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
 with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
 heartbeat; and, under the session's `briefs`, each seat's general-brief claim — its record id,
@@ -610,7 +611,7 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``approved before records were signed`` — the record was written by an earlier `team` |
 | the case a refused record names — a signed record that does not verify |
 | a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |
-| `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `free swap is 1.0 GB, below 2.0 GB` |
+| `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `memory pressure is critical` — the OS's own level, where the platform reports one; free swap is the watch's reading and never refuses a launch on its own |
 | `herdr doesn't answer` |
 | `session beacon is stopped` — herdr lists it stopped and this team's state does not record it, so `up` does not clear it |
 | `session <session> is stopped and did not clear` — herdr lists it stopped, this team's state records it, and the clear did not happen |

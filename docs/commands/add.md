@@ -28,7 +28,8 @@ Reads the team file (or the one `--file` names), this machine's record store (th
 if any), the session's state (`.agents/team.state.json`, including
 the project's stored budget readings), herdr (the session's state, its agents and their workspaces),
 the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
-and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
+and, like `up`: the doctor's findings and the machine's load, free memory, free disk, free swap
+and the OS's memory-pressure level.
 
 Writes the team file when the seat has to be put back into it, `.agents/team.state.json` (the seat's
 stage, pane and workspace; a seat stopped at a dialog's `waiting-owner` record, with the process
@@ -228,7 +229,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | `team add: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` — the CLI's own record for the lobby can't be written, so the seat would open that folder untrusted; `grok` and `cursor` seats are told their own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`) | 1 |
 | ``team add: seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` | 1 |
 | `team add: the file changed while add was checking; nothing was written` | 1 |
-| `team add: the load is <n> per core, above <n>` / `team add: free memory is <n>%, below <n>%` | 1 |
+| `team add: the load is <n> per core, above <n>` / `team add: free memory is <n>%, below <n>%` / `team add: memory pressure is critical` | 1 |
 | a `MISS` finding from [team doctor](doctor.md), the seat's own launch line among them | 1 |
 | ``team add: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; `--dry-run` takes no lock and never shows it | 1 |
 | ``team add: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |
