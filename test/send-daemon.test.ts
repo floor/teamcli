@@ -38,6 +38,7 @@ import {
 import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
 import { readPending } from '../src/send/pending.ts';
+import { signReceiptPayload } from '../src/send/record.ts';
 import { LOG_FILE, readState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { filed } from './send-native-fixtures.ts';
@@ -1003,6 +1004,155 @@ describe('working seat retry and seat-lock coexistence', () => {
       }
     } finally {
       julesLock.release();
+    }
+  });
+
+  test('stages the signed copy (create-or-match) before answering queued and refuses on conflicting bytes without touching the held file or typing', async () => {
+    const w = setupWorld();
+    const activeDeliveredIds: string[] = [];
+    let pendingTake = 0;
+    const dropDir = daemonDropDir('acme', w.root, w.home, 'acme', 'native');
+
+    const host = makeHost(w, {
+      deliverWaitMs: 40,
+      pollReadyMs: 5,
+      native: {
+        typeText: (_s, pane, text) => {
+          host.typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: (_s, pane) => {
+          host.enters.push(pane);
+          pendingTake++;
+          const nextId = activeDeliveredIds.shift();
+          if (nextId) {
+            const signedReceipt = signReceiptPayload(
+              {
+                kind: 'receipt',
+                status: 'read',
+                id: nextId,
+                to: 'native',
+                root: realpathSync(w.root),
+                session: 'acme',
+                at: NOW.toISOString(),
+              },
+              w.home,
+            );
+            writeFileSync(join(dropDir, `${nextId}.read.json`), `${JSON.stringify(signedReceipt)}\n`, { mode: 0o600 });
+          }
+          return true;
+        },
+        status: () => {
+          if (pendingTake > 0) {
+            pendingTake--;
+            return 'working';
+          }
+          return 'idle';
+        },
+        wait: async (ms) => {
+          await new Promise((r) => setTimeout(r, Math.min(ms, 5)));
+        },
+      },
+    });
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    mkdirSync(dropDir, { recursive: true, mode: 0o700 });
+
+    // Pre-populate a matching copy (`prestage-match-id`) and a conflicting copy (`prestage-conflict-id`).
+    const matchingPath = join(dropDir, 'prestage-match-id');
+    writeFileSync(matchingPath, 'matching body across retries', { mode: 0o600 });
+    const conflictPath = join(dropDir, 'prestage-conflict-id');
+    writeFileSync(conflictPath, 'original held record that must not be overwritten', { mode: 0o600 });
+
+    // Hold the recipient seat lock so enqueueSend takes the busy pre-stage + queued path.
+    const heldLock = acquireSeatLock(w.dir, 'acme', 'native');
+    if (!('release' in heldLock)) throw new Error('expected seat lock');
+
+    try {
+      // 1a. Create-on-stage before queued: a fresh id stages the signed copy on disk BEFORE answering queued.
+      const createRes = await started.handle.deliver({
+        v: 1,
+        op: 'send',
+        id: 'prestage-create-id',
+        from: 'owner',
+        to: 'native',
+        body: 'freshly staged while busy',
+        session: 'acme',
+      });
+      expect(createRes.ok).toBe(true);
+      expect(createRes.outcome).toBe('queued');
+      expect(createRes.id).toBe('prestage-create-id');
+
+      const createdDropPath = join(dropDir, 'prestage-create-id');
+      expect(existsSync(createdDropPath)).toBe(true);
+      expect(readFileSync(createdDropPath, 'utf-8')).toBe('freshly staged while busy');
+      expect(lstatSync(createdDropPath).mode & 0o777).toBe(0o600);
+
+      // 1b. Match-on-stage before queued: identical bytes at an existing id succeed via create-or-match.
+      const matchRes = await started.handle.deliver({
+        v: 1,
+        op: 'send',
+        id: 'prestage-match-id',
+        from: 'owner',
+        to: 'native',
+        body: 'matching body across retries',
+        session: 'acme',
+      });
+      expect(matchRes.ok).toBe(true);
+      expect(matchRes.outcome).toBe('queued');
+      expect(matchRes.id).toBe('prestage-match-id');
+      expect(readFileSync(matchingPath, 'utf-8')).toBe('matching body across retries');
+      expect(lstatSync(matchingPath).mode & 0o777).toBe(0o600);
+
+      // 2. Conflicting bytes at the id refuse BEFORE answering queued; nothing is queued or typed and the held file is unchanged.
+      const conflictRes = await started.handle.deliver({
+        v: 1,
+        op: 'send',
+        id: 'prestage-conflict-id',
+        from: 'owner',
+        to: 'native',
+        body: 'conflicting replacement attempt',
+        session: 'acme',
+      });
+      expect(conflictRes.ok).toBe(false);
+      expect(conflictRes.outcome).toBe('refused');
+      expect(conflictRes.id).toBeNull();
+      if (conflictRes.outcome === 'refused') {
+        expect(conflictRes.detail).toBe('native: the drop file could not be written; nothing was typed');
+      }
+      expect(readFileSync(conflictPath, 'utf-8')).toBe('original held record that must not be overwritten');
+      expect(lstatSync(conflictPath).mode & 0o777).toBe(0o600);
+
+      // While the lock is still held, nothing has been typed at all.
+      expect(host.typed).toEqual([]);
+      expect(host.enters).toEqual([]);
+    } finally {
+      activeDeliveredIds.push('prestage-create-id', 'prestage-match-id');
+      heldLock.release();
+    }
+
+    // Releasing the lock delivers only the two valid queued messages (once each, preserving msgId and read-receipt promotion),
+    // and never types the refused conflicting payload.
+    await until(() => host.enters.length === 2);
+    await until(() => {
+      const h = readHistory('acme', w.root, w.home);
+      return h.ok && h.entries.length === 2;
+    });
+    expect(host.typed).toHaveLength(2);
+    expect(host.enters).toHaveLength(2);
+    expect(host.typed.some((t: { pane: string; text: string }) => t.text.includes('prestage-conflict-id'))).toBe(false);
+    expect(readFileSync(conflictPath, 'utf-8')).toBe('original held record that must not be overwritten');
+
+    const historyAfter = readHistory('acme', w.root, w.home);
+    expect(historyAfter.ok).toBe(true);
+    if (historyAfter.ok) {
+      expect(historyAfter.entries.map((e) => ({ id: e.id, outcome: e.outcome, via: e.via }))).toEqual([
+        { id: 'prestage-create-id', outcome: 'delivered (read)', via: 'typed' },
+        { id: 'prestage-match-id', outcome: 'delivered (read)', via: 'typed' },
+      ]);
     }
   });
 });

@@ -709,28 +709,53 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         }
       });
     }
-    // The receiver is busy: the signed copy was staged before the dial, the message takes one
-    // place in this seat's FIFO queue, and the sender is answered at once with the id and the
-    // reason. The delivery is the worker's, after the seat frees; its answer has no sender to
-    // return to, so it resolves this item's promise to nobody and writes the history line as
-    // every other ending does.
+    // The receiver is busy: stage the signed copy (create-or-match) in `<storeDir>/drops/<session>/<seat>/<id>`
+    // BEFORE answering `queued`, so a conflicting holder at the id still refuses with the held
+    // file untouched and `queued` means the durable copy is stored in the daemon's drop folder.
     const queuedId = request.id ?? randomUUID();
-    const accepted: DaemonSendResponse = {
-      v: 1,
-      ok: true,
-      id: queuedId,
-      seat: seatName,
-      outcome: 'queued',
-      status: 'receiver busy',
-      detail: `${seatName}: queued (receiver busy): ${busy}; the signed copy is stored and delivery follows when the seat is free`,
-    };
-    logLine(input.dir, 'send', request.from, `${seatName}: queued (receiver busy) (${busy}; id ${queuedId})`, host.now());
-    queue.push({ request: { ...request, id: queuedId }, resolve: () => {}, queued: true });
-    if (!activeWorkers.has(seatName)) {
-      const worker = drainSeat(seatName);
-      activeWorkers.set(seatName, worker);
+    const dropLadder = ensureLadder(host.home, store, ['drops', input.team.session, seatName]);
+    if (!dropLadder.ok) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`,
+      });
     }
-    return Promise.resolve(accepted);
+    return relayStage(
+      { dir: dropLadder.leaf, name: queuedId },
+      { id: queuedId, record: request.body },
+      { now: host.now },
+    ).then((staged): DaemonSendResponse => {
+      if (staged.outcome === 'refused') {
+        return {
+          v: 1,
+          ok: false,
+          id: null,
+          seat: seatName,
+          outcome: 'refused',
+          detail: `${seatName}: the drop file could not be written; nothing was typed`,
+        };
+      }
+      const accepted: DaemonSendResponse = {
+        v: 1,
+        ok: true,
+        id: queuedId,
+        seat: seatName,
+        outcome: 'queued',
+        status: 'receiver busy',
+        detail: `${seatName}: queued (receiver busy): ${busy}; the signed copy is stored and delivery follows when the seat is free`,
+      };
+      logLine(input.dir, 'send', request.from, `${seatName}: queued (receiver busy) (${busy}; id ${queuedId})`, host.now());
+      queue.push({ request: { ...request, id: queuedId }, resolve: () => {}, queued: true });
+      if (!activeWorkers.has(seatName)) {
+        const worker = drainSeat(seatName);
+        activeWorkers.set(seatName, worker);
+      }
+      return accepted;
+    });
   };
 
   // One dispatcher for this root: the socket server's `send` branch and the returned handle
