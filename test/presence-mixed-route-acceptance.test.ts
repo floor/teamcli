@@ -4,16 +4,16 @@
 // `seatRegistryRows`; the projections and state records are synthetic files under /private/tmp.
 // No live pane, session, daemon or credential is touched.
 //
-// The scenes hold the display to the consumer's required answer:
-//   - the daemon's seat list is its native-source answers, not a census of the route: a hook seat
-//     sharing a healthy route with a listed Codex seat is absent from that list and still live;
-//   - an expected native seat the list does not name — including an absent or undefined whole
-//     list — has no classified source to inherit: its existing projection is held as last known,
-//     never live;
-//   - a listed entry decides over the expectation, so a healthy Codex entry is live under its
-//     recorded binding, and a missing, mismatched or pending one is not;
-//   - a malformed whole list, a stale route, and a genuinely absent or unreadable projection keep
-//     the display's fail-closed fallback.
+// The final source-class contract (2556c4518) makes that answer complete: every declared seat is
+// listed with its source class, so the scenes hold the display to that contract:
+//   - a mixed route lists its runtime seat and its hook sibling: the runtime seat is live only
+//     with the binding and applied transition its answer proves, the hook sibling only under the
+//     binding its own answer names;
+//   - a seat the complete list does not name is held as last known, never live;
+//   - an absent, undefined or malformed whole list is an incomplete answer, so no seat is live by
+//     route health alone (this supersedes the pre-classification hook-only expectation);
+//   - a stale route and a genuinely absent or unreadable projection keep the display's
+//     fail-closed fallback.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,17 +40,15 @@ const HOOK_BINDING = 'prs_ba9876543210';
 const NOW = new Date('2026-10-20T05:00:00.000Z');
 const ago = (seconds: number): string => new Date(NOW.getTime() - seconds * 1000).toISOString();
 
-/** The followup adds the expectation flag as a fourth argument. This wrapper keeps the file's
- *  scenes on the same boolean answer while the display's newer proof also returns the applied
- *  transition the answer names; no assertion changes. */
+/** The final source-class contract drops the caller-side expectation flag: the answer itself
+ *  states each seat's class. This wrapper keeps the scenes on the proof's boolean answer. */
 type Qualification = (
   seats: PresenceSeatsRead | undefined,
   seat: string,
   binding: unknown,
-  nativeExpected: boolean,
 ) => boolean;
-const qualified: Qualification = (seats, seat, binding, nativeExpected) =>
-  seatPresenceProof(seats, seat, binding, nativeExpected).qualified;
+const qualified: Qualification = (seats, seat, binding) =>
+  seatPresenceProof(seats, seat, binding).qualified;
 
 /** One fresh answered probe for ROOT. `seats` is the route's raw per-seat list, omitted for a
  *  hook-only route; `at` moves both the snapshot and the probe answer into the past. */
@@ -75,19 +73,31 @@ function healthReading(seats?: unknown, at: Date = NOW): PresenceHealthReading {
 /** The projection id every scene writes; a serving answer must vouch for exactly it. */
 const APPLIED = `${ago(5)}-ab12cd34`;
 
+/** A listed runtime entry: serving, fenced by its binding, and naming the applied transition the
+ *  daemon reconciled for it. */
 const serving = (
   seat: string,
   binding: string = CODEX_BINDING,
   appliedEventId: string = APPLIED,
 ): Record<string, unknown> =>
-  ({ seat, state: 'serving', healthy: true, binding, appliedEventId, why: null });
+  ({ seat, state: 'serving', healthy: true, source: 'runtime', binding, appliedEventId, why: null });
+
+/** A listed hook entry: serving under its binding, carrying no applied transition of its own. */
+const servingHook = (
+  seat: string,
+  binding: string = HOOK_BINDING,
+): Record<string, unknown> =>
+  ({ seat, state: 'serving', healthy: true, source: 'hook', binding, appliedEventId: null, why: null });
 
 const listed = (
-  entries: Array<[string, { healthy: boolean; binding: string | null; appliedEventId?: string | null }]>,
+  entries: Array<[string, {
+    healthy: boolean; binding: string | null;
+    source?: 'runtime' | 'hook' | 'unknown'; appliedEventId?: string | null;
+  }]>,
 ): PresenceSeatsRead => ({
   kind: 'listed',
   seats: new Map(entries.map(([seat, entry]): [string, PresenceSeatHealth] =>
-    [seat, { appliedEventId: null, ...entry }])),
+    [seat, { source: 'runtime', appliedEventId: null, ...entry }])),
 });
 
 function projection(binding: string, state: 'working' | 'idle'): string {
@@ -190,66 +200,66 @@ function presenceOf(rows: Map<string, SeatRegistryRow>, seat: string): {
   return { state: row.presence.state, source: row.presence.source, live: row.presence.live };
 }
 
-describe('a mixed route lists only its native source', () => {
-  test('an unlisted hook seat stays live beside the listed Codex seat', () => {
+describe('a mixed route lists both of its source classes', () => {
+  test('the listed runtime seat and hook sibling are each live under their own answer', () => {
     writeProjection(CODEX, projection(CODEX_BINDING, 'working'));
     writeProjection(HOOK, projection(HOOK_BINDING, 'working'));
-    const reading = healthReading([serving(CODEX, CODEX_BINDING)]);
+    const reading = healthReading([serving(CODEX, CODEX_BINDING), servingHook(HOOK, HOOK_BINDING)]);
     expect(presenceChannelHealthy(reading, ROOT, SESSION, NOW)).toBe(true);
     const rows = rowsFor(presenceSeatsOf(reading, ROOT, SESSION, NOW));
 
-    // The listed native source is live under the binding the seat records.
+    // The listed runtime source is live under the binding and applied identity it proves.
     expect(presenceOf(rows, CODEX)).toEqual({ state: 'working', source: 'runtime-hook', live: true });
-    // The hook seat is expected absent from the daemon's native-source list; the healthy route's
-    // own verdict still answers it, so it is live rather than held.
+    // The hook sibling is classified in the same answer and live through the route's own ingest.
     expect(presenceOf(rows, HOOK)).toEqual({ state: 'working', source: 'runtime-hook', live: true });
 
     const seats = presenceSeatsOf(reading, ROOT, SESSION, NOW);
-    expect(qualified(seats, HOOK, HOOK_BINDING, false)).toBe(true);
-    expect(qualified(seats, CODEX, CODEX_BINDING, true)).toBe(true);
+    expect(qualified(seats, HOOK, HOOK_BINDING)).toBe(true);
+    expect(qualified(seats, CODEX, CODEX_BINDING)).toBe(true);
   });
 
-  test('an expected Codex seat the listed route does not name is not live', () => {
+  test('a seat the complete list does not name is held', () => {
     writeProjection(CODEX, projection(CODEX_BINDING, 'working'));
     writeProjection(HOOK, projection(HOOK_BINDING, 'working'));
-    // The route lists the hook seat explicitly; the Codex seat's source was never classified.
-    const seats = presenceSeatsOf(healthReading([serving(HOOK, HOOK_BINDING)]), ROOT, SESSION, NOW);
+    // The list names the hook seat; the Codex seat's source was never classified, so it is held.
+    const seats = presenceSeatsOf(healthReading([servingHook(HOOK, HOOK_BINDING)]), ROOT, SESSION, NOW);
     const rows = rowsFor(seats);
     expect(presenceOf(rows, CODEX)).toEqual({ state: 'working', source: 'runtime-hook', live: false });
     expect(presenceOf(rows, HOOK)).toEqual({ state: 'working', source: 'runtime-hook', live: true });
 
-    expect(qualified(seats, CODEX, CODEX_BINDING, true)).toBe(false);
-    // A listed entry decides over the expectation.
-    expect(qualified(seats, HOOK, HOOK_BINDING, true)).toBe(true);
+    expect(qualified(seats, CODEX, CODEX_BINDING)).toBe(false);
+    // A listed entry decides on its own class, binding and applied identity.
+    expect(qualified(seats, HOOK, HOOK_BINDING)).toBe(true);
     // A listed entry under another binding, or a pending one, is not proof either.
-    expect(qualified(seats, HOOK, CODEX_BINDING, true)).toBe(false);
+    expect(qualified(seats, HOOK, CODEX_BINDING)).toBe(false);
     const mismatched = listed([[CODEX, { healthy: true, binding: HOOK_BINDING }]]);
-    expect(qualified(mismatched, CODEX, CODEX_BINDING, true)).toBe(false);
+    expect(qualified(mismatched, CODEX, CODEX_BINDING)).toBe(false);
     const pending = listed([[CODEX, { healthy: false, binding: null }]]);
-    expect(qualified(pending, CODEX, CODEX_BINDING, true)).toBe(false);
+    expect(qualified(pending, CODEX, CODEX_BINDING)).toBe(false);
   });
 
-  test('an absent or undefined whole list holds the expected Codex seat and keeps the hook live', () => {
+  test('an absent or undefined whole list is an incomplete answer and holds every seat', () => {
     writeProjection(CODEX, projection(CODEX_BINDING, 'idle'));
     writeProjection(HOOK, projection(HOOK_BINDING, 'working'));
-    // Both shapes of "the route carries no list": an explicit absent reader answer, and no seat
-    // answer handed to the rows at all.
-    for (const seats of [{ kind: 'absent' } as const, undefined]) {
+    // Both shapes of "the route carries no list" are an incomplete answer under the complete-list
+    // contract: with no classification, neither the expected runtime seat nor the hook sibling is
+    // live by route health alone.
+    for (const seats of [{ kind: 'invalid', why: 'the route carries no seat list' } as const, undefined]) {
       const rows = rowsFor(seats);
-      // The old Codex projection on a fresh healthy route is the runtime's last known word: it
-      // still answers the row, but without the source it expected it is never live.
+      // The old Codex projection is the runtime's last known word: it still answers the row, but
+      // without the source it expected it is never live.
       expect(presenceOf(rows, CODEX)).toEqual({ state: 'idle', source: 'runtime-hook', live: false });
-      // A hook-only route is the hook seat's own route verdict.
-      expect(presenceOf(rows, HOOK)).toEqual({ state: 'working', source: 'runtime-hook', live: true });
+      // The hook sibling is held too: an unclassified list cannot prove its ingest.
+      expect(presenceOf(rows, HOOK)).toEqual({ state: 'working', source: 'runtime-hook', live: false });
     }
 
     const absent = presenceSeatsOf(healthReading(), ROOT, SESSION, NOW);
-    expect(absent).toEqual({ kind: 'absent' });
-    expect(presenceChannelHealthy(healthReading(), ROOT, SESSION, NOW)).toBe(true);
-    expect(qualified(absent, CODEX, CODEX_BINDING, true)).toBe(false);
-    expect(qualified(absent, HOOK, HOOK_BINDING, false)).toBe(true);
-    expect(qualified(undefined, CODEX, CODEX_BINDING, true)).toBe(false);
-    expect(qualified(undefined, HOOK, HOOK_BINDING, false)).toBe(true);
+    expect(absent).toEqual({ kind: 'invalid', why: 'the route carries no seat list' });
+    expect(presenceChannelHealthy(healthReading(), ROOT, SESSION, NOW)).toBe(false);
+    expect(qualified(absent, CODEX, CODEX_BINDING)).toBe(false);
+    expect(qualified(absent, HOOK, HOOK_BINDING)).toBe(false);
+    expect(qualified(undefined, CODEX, CODEX_BINDING)).toBe(false);
+    expect(qualified(undefined, HOOK, HOOK_BINDING)).toBe(false);
   });
 
   test('a malformed list and an absent or unreadable projection keep the fail-closed fallback', () => {
@@ -264,17 +274,17 @@ describe('a mixed route lists only its native source', () => {
     expect(presenceChannelHealthy(malformed, ROOT, SESSION, NOW)).toBe(false);
     const invalid = presenceSeatsOf(malformed, ROOT, SESSION, NOW);
     expect(invalid.kind).toBe('invalid');
-    expect(qualified(invalid, CODEX, CODEX_BINDING, true)).toBe(false);
-    expect(qualified(invalid, HOOK, HOOK_BINDING, false)).toBe(false);
+    expect(qualified(invalid, CODEX, CODEX_BINDING)).toBe(false);
+    expect(qualified(invalid, HOOK, HOOK_BINDING)).toBe(false);
 
     // A stale route is invalid too, never a projection's proof of live.
     const stale = new Date(NOW.getTime() - 5_000);
     expect(presenceSeatsOf(healthReading([serving(CODEX)], stale), ROOT, SESSION, NOW).kind).toBe('invalid');
 
-    // A genuinely absent projection is the one case another source may answer in; the absent
-    // list does not turn that fallback into a hold.
+    // A genuinely absent projection is the one case another source may answer in; an
+    // unclassified seat list does not turn that fallback into a hold.
     rmSync(projectionPath(CODEX));
-    const absentRows = rowsFor({ kind: 'absent' });
+    const absentRows = rowsFor({ kind: 'invalid', why: 'the route carries no seat list' });
     const absentRow = absentRows.get(CODEX);
     if (absentRow === undefined) throw new Error('the display emitted no Codex row');
     expect(absentRow.presence).toBeUndefined();
@@ -283,7 +293,7 @@ describe('a mixed route lists only its native source', () => {
 
     // An existing but malformed projection is unreadable from presence, never a screen's answer.
     writeProjection(CODEX, 'not a projection');
-    const badRow = rowsFor({ kind: 'absent' }).get(CODEX);
+    const badRow = rowsFor({ kind: 'invalid', why: 'the route carries no seat list' }).get(CODEX);
     if (badRow === undefined) throw new Error('the display emitted no Codex row');
     expect(badRow.presence_unreadable).toBe(true);
     expect(badRow.state_source).toBe('presence');
