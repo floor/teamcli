@@ -680,6 +680,13 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/idle-wide-warning.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/idle.txt",
       "cli": "codex",
       "classify": "idle",
