@@ -51,6 +51,7 @@
             "delivered",
             "delivered (read)",
             "sent (unconfirmed)",
+            "queued (receiver busy)",
             "answered",
             "recorded",
             "native",
@@ -200,6 +201,7 @@
                 "type": "string",
                 "enum": [
                   "attempted",
+                  "queued",
                   "skipped",
                   "refused",
                   "not-reached",

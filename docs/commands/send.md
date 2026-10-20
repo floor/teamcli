@@ -37,6 +37,18 @@ hands the body to the turn. A running `team watch` promotes the send on that rec
 when thirty minutes have passed is given up on with the file's path: the marker is cleared, the
 watch says the send was not read, and the record stays in the folder — never typed, and never
 called lost.
+
+When another command holds the seat's lock, the send is queued rather than refused: the reachable
+legs — `mcp-inbox`, `typed` and `drop` — write the signed record and its `<id>.pending` marker
+without that lock, type nothing and dial nothing, and answer
+`<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>)`, exit 0. The id on that line is the id
+the delivery keeps, and the marker is the one the watch already delivers — the typed retry for a
+typed marker, the inbox window's fallback for an `mcp-inbox` one, and the seat's own watcher read
+for the `drop` leg's — so the queue ends in the retry's or the watcher's own word, with its own
+history line beside the acceptance the send wrote, and the message is never delivered twice. A queued send is an acceptance, never a delivery: no receipt is
+claimed, and nothing says `delivered` until one comes back. A compose seat has no queued leg —
+nothing on the watch's side walks its screens — so its held lock stays a refusal, and its line
+says the send was not queued and to run it again when the seat is free.
 A walk reaches `drop` when the legs before it did not take the send — the inbox had no live
 listener and the typed leg found no live agent — or when the order puts `drop` before `typed`. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
 from the order or put the legs it keeps in a different order, and may add only `native`, the
@@ -129,11 +141,11 @@ The socket frame — the channel the native leg will carry — is a measured obs
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
 characters. A frame over that limit is refused, never truncated. The message's body is written
 down: a run that ends `delivered`, `delivered (read)`, `sent (unconfirmed)`, `answered`, `held`,
-`not-submitted`, `timeout` or `unreachable` appends one line
+`queued (receiver busy)`, `not-submitted`, `timeout` or `unreachable` appends one line
 to the project's message history, which [team feed](feed.md) reads. The daily log keeps the seat and the sizes.
 
 The outcome is always one of `delivered` (or `delivered (read)`), `sent (unconfirmed)`,
-`answered`, `held`, `not-submitted`, `timeout`,
+`answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`,
 `unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster,
 each seat's human name as its `@<nickname>` address (the name a seat signed standing where the
@@ -189,7 +201,9 @@ record's own, when there is one (`thread` is the thread id on an answered wait);
 `plan` is the dry run's own step; a handoff's document also carries the exact `to:` target, the
 `confirm` line and the body the sender's own call carries. `delivery` is the resolved walk's
 legs, in order: a real send marks each `attempted` (its transport was reached, with a `reason`
-when the transport did not take the send), `skipped` (a rule kept it out, with the `reason`),
+when the transport did not take the send), `queued` (the seat's lock is another command's, so the
+leg stored the record and its marker for the delivery that follows when the seat is free),
+`skipped` (a rule kept it out, with the `reason`),
 `refused` (a rule ended the walk, with the `reason`) or leaves it `not-reached` (the walk ended
 before it), and a Claude receiver whose files keep the implied socket default out gets a
 `skipped` socket entry naming the word that did. `--list` prints its own document —
@@ -432,6 +446,7 @@ line on stderr and has none.
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms)` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms)` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (typed, <n> ms; trigger taken, no read receipt yet)` on stdout, for the typed leg: the trigger line left the seat's input box, and no signed receipt has come back, so the message is not called read |
+| queued (receiver busy) | 0 | `<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>)` on stdout, when another command holds the seat's lock: the leg named on the line wrote the signed record and its marker without typing, and the delivery follows when the seat is free — the id is the one it keeps |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
@@ -467,8 +482,8 @@ Under `--json` the same outcomes are one document: the action surface for a send
 document for `--list`, and the structured error document for an exit 1 or 2 — `error.id` is the
 outcome's own (`send.refused`, `send.not-submitted`, …), `error.message` the text the plain run
 prints without its `team send: ` prefix, and `error.repair` a way out when there is one. Exit
-codes are the outcome's: 0 when delivered, delivered (read), sent (unconfirmed), answered,
-listed, recorded, or resolved by
+codes are the outcome's: 0 when delivered, delivered (read), sent (unconfirmed), queued
+(receiver busy), answered, listed, recorded, or resolved by
 `--dry-run`, 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when the
 invocation or team file can't be read.
 
@@ -534,8 +549,8 @@ too, printing `no leg of its delivery order took the send` with the legs that fa
 is a waited send whose record was written and whose window closed with no reply record on the
 thread; the thread stays open. `refused` is nothing
 being sent on purpose: an unknown seat (the file's seats are named), a frame over the
-socket limit, a trigger longer than the measured line, a lock another command holds, or a caller
-that may not send.
+socket limit, a trigger longer than the measured line, a lock another command holds on a compose
+seat (its walk has no queued leg), or a caller that may not send.
 
 ## Examples
 

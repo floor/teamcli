@@ -3792,7 +3792,7 @@
       "code": 0,
       "command": "send",
       "id": "send.queued",
-      "meaning": "the receiver was busy, so the signed copy is stored and the message holds one place in that seat's FIFO; the daemon delivers it when the seat's lock clears",
+      "meaning": "the receiver was busy, so the signed copy is stored and nothing was typed; the message is delivered when the seat's lock clears, and the id on the line is the one the delivery keeps",
       "trigger": "team send lead hello"
     },
     {

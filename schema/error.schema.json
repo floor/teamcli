@@ -94,6 +94,7 @@
             "type": "string",
             "enum": [
               "attempted",
+              "queued",
               "skipped",
               "refused",
               "not-reached",
