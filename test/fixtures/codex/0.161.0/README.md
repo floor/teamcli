@@ -48,6 +48,11 @@ Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
   `› /exit  exit Codex` sits above the input row.
 - `exit.txt`: the pane after Enter, read `unknown`. Codex asks no exit question; the
   shell is back with the task's own advice above it.
+- `idle-wide-warning.txt`: supplied by Floor, not captured here — a sanitized 8-line frame
+  from a wide pane running a vlist build (`»` prompt). The status row is
+  `GPT-6.1-Sol ultra · Context 100% left · weekly 94% left`, with the account's
+  `⚠ 1 warning · f2 to view` right-aligned on the same row and no chrome row under it. It
+  read `unknown` until the warning tail counted as the row's own end.
 
 ## Constructed
 

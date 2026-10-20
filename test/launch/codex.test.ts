@@ -188,6 +188,30 @@ describe('Codex launch and captured screens', () => {
     expect(readScreen('codex', latest('near-context-used-follower')).kind).toBe('unknown');
     expect(readScreen('codex', latest('near-context-used-nostatus')).kind).toBe('unknown');
   });
+
+  test('the wide vlist frame with the warning on the status row reads idle', () => {
+    // Floor's supplied sanitized 8-line capture of a vlist build on a wide pane: the account's
+    // warning is right-aligned on the status row itself and no chrome row sits under it. Read
+    // before the fix: `unknown` — status-then-one read the row's place by the ellipsis row the
+    // narrow captures draw under a wrapped row, and this frame draws none.
+    const latest = (name: string) => readFileSync(new URL(`../fixtures/codex/0.161.0/${name}.txt`, import.meta.url), 'utf8');
+    const captured = latest('idle-wide-warning');
+    const row = captured.trimEnd().split('\n').at(-1) ?? '';
+    expect(row.startsWith('  GPT-6.1-Sol ultra · Context 100% left · weekly 94% left')).toBe(true);
+    expect(row.endsWith('⚠ 1 warning · f2 to view')).toBe(true);
+    expect(readScreen('codex', captured).kind).toBe('idle');
+    expect(classifyComposer('codex', captured.split('\n')).kind).toBe('idle');
+    expect(runningModel('codex', captured)).toEqual({ model: 'GPT Sol', version: '6.1' });
+    // The report's own drawing of the row: ASCII dots stand in for the alignment gap.
+    const dotted = captured.replace(/(% left) +⚠/, '$1 ... ⚠');
+    expect(dotted).not.toBe(captured);
+    expect(readScreen('codex', dotted).kind).toBe('idle');
+    expect(classifyComposer('codex', dotted.split('\n')).kind).toBe('idle');
+    // The narrow captures keep the chrome row under the status line; the wide allowance takes
+    // nothing from them.
+    expect(readScreen('codex', latest('idle-hint')).kind).toBe('idle');
+    expect(readScreen('codex', latest('unsent')).kind).toBe('unsent');
+  });
   test('a dialog above the status row and its chrome row is still the dialog', () => {
     // Constructed from the captures: permission.txt's dialog with idle-hint.txt's last two
     // lines (the status row and its chrome row) under it. Read before the mode changed:
