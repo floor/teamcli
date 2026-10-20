@@ -27,6 +27,12 @@ export type DaemonRootState = {
    * says `required`; a route without it was never started to carry a watch.
    */
   watch?: HostedWatchState;
+  /**
+   * The route's presence lifecycle. Present only when the daemon was started to ingest presence
+   * and could not finish a truthful drain at close: `pending` means the daemon kept its lock,
+   * socket and state record rather than claim a closure it had not reached, and names why.
+   */
+  presence?: { state: 'pending'; why: string };
 };
 
 export type DaemonState = {
@@ -129,6 +135,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     if (!['serving', 'failed'].includes(entry.bus as string)) return null;
     if (!(entry.why === null || typeof entry.why === 'string')) return null;
     const watch = watchOf(entry.watch);
+    const presence = presenceOf(entry.presence);
     roots.push({
       root: entry.root,
       team: entry.team as string | null,
@@ -136,6 +143,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
       bus: entry.bus as DaemonRootState['bus'],
       why: entry.why as string | null,
       ...(watch === null ? {} : { watch }),
+      ...(presence === null ? {} : { presence }),
     });
   }
   return roots;
@@ -181,6 +189,16 @@ function watchOf(raw: unknown): HostedWatchState | null {
 
 function positiveInt(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+/** A presence lifecycle record is display evidence for an operator, not a hosting fact: a
+ *  malformed one is left out rather than making the whole daemon record unreadable. */
+function presenceOf(raw: unknown): DaemonRootState['presence'] | null {
+  if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (entry.state !== 'pending') return null;
+  if (typeof entry.why !== 'string' || entry.why === '') return null;
+  return { state: 'pending', why: entry.why };
 }
 
 /** Writes the state record atomically, 0600, in a 0700 machine folder. */

@@ -21,6 +21,7 @@ import {
 } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -36,6 +37,8 @@ import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './routes.ts';
 import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
+import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
+import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
@@ -101,6 +104,20 @@ export type StartMachineDaemonInput = {
    *  sources with mutating sources closed and outbound effects blocked; a test injects its
    *  own run and clock and, only with a verified admitted sender, `open` effects. */
   hostedWatch?: (route: HostedRoute, log: (text: string) => void) => HostedWatchBuild;
+  /**
+   * Whether each hosted route also runs the presence ingester and the activity reconciler on the
+   * daemon's own 250 ms pass. Off by default: the integration lands closed, and a daemon started
+   * only to host endpoints ingests nothing. Internal, like `watchHosting`; not a setting and not
+   * printed.
+   */
+  presenceHosting?: boolean;
+  /** Builds one canonical route's ingester. The default builds the real module; a test injects
+   *  its own handle to observe steps, coalescing and close. */
+  presenceIngest?: (route: HostedRoute, stateDir: string) => PresenceIngester;
+  /** Builds one route's activity reconciler step. The default walks the transition reader. */
+  presenceActivity?: (route: HostedRoute, stateDir: string) => PresenceActivityStep;
+  /** The presence pass interval; 250 ms in production. A test shortens it. */
+  presenceEveryMs?: number;
 };
 
 export type StartMachineDaemonResult =
@@ -111,8 +128,13 @@ export type StartMachineDaemonResult =
 
 const HEARTBEAT_MS = 5_000;
 const STUCK_MS = 10_000;
+const PRESENCE_EVERY_MS = 250;
 
 type InFlight = { op: string; since: number };
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 type LockResult = { ok: true } | { ok: false; holder: number | null };
 
@@ -275,6 +297,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // Filled once the roots loop has resolved every route; a status entry gains its `watch`
   // record on each state write, and only entries that actually got a host ever have one.
   const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
+  /** The presence pair per accepted route, and this process's one in-flight run per route. */
+  const presenceWork: { route: HostedRoute; ingester: PresenceIngester; activity: PresenceActivityStep }[] = [];
+  const presenceRuns = new Map<string, Promise<void>>();
+  const presenceLogged = new Set<string>();
   let heartbeatAt = since;
   let closed = false;
 
@@ -301,8 +327,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       stuck: stuckNow(),
     });
 
-  const writeState = (): void => {
-    if (closed) return;
+  const writeState = (afterClose = false): void => {
+    if (closed && !afterClose) return;
     for (const one of hostedWatches) one.status.watch = one.watch.state();
     try {
       writeDaemonState(home, {
@@ -339,6 +365,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const parsed = parseDaemonRequest(line);
       if (!parsed.ok) {
         return formatDaemonResponse({ v: DAEMON_PROTOCOL_VERSION, id: parsed.id, ok: false, error: parsed.error });
+      }
+      if (closed) {
+        // Admission is closed while the presence drain runs: the endpoint still owns its socket
+        // and refuses work until the drain is truthful and the release below unlinks it.
+        return formatDaemonResponse({
+          v: DAEMON_PROTOCOL_VERSION,
+          id: parsed.request.id,
+          ok: false,
+          error: { code: 'daemon.internal', message: 'the daemon is closing' },
+        });
       }
       const started = now().getTime();
       inFlight.set(parsed.request.id, { op: parsed.request.op, since: started });
@@ -412,15 +448,28 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     status.root = canonical;
     status.team = loaded.team.project;
     sweepRoots.push({ root: loaded.root, team: loaded.team });
-    routes.push(
-      routeOf(
-        canonical,
-        loaded.team.project,
-        loaded.team.session,
-        loaded.team.seats.map((seat) => seat.name),
-      ),
+    const route = routeOf(
+      canonical,
+      loaded.team.project,
+      loaded.team.session,
+      loaded.team.seats.map((seat) => seat.name),
     );
+    routes.push(route);
     teamFiles.set(canonical, loaded.path);
+    if (input.presenceHosting === true) {
+      // One ingester per canonical route, created only after the duplicate check above accepted
+      // the route: the daemon's single-instance lock is what makes this process the only writer.
+      // A root with no readable team file or a second spelling of a hosted checkout got no route,
+      // so it gets no ingester.
+      const stateDir = dirname(loaded.path);
+      presenceWork.push({
+        route,
+        ingester: input.presenceIngest?.(route, stateDir)
+          ?? createPresenceIngester({ stateDir, session: loaded.team.session }),
+        activity: input.presenceActivity?.(route, stateDir)
+          ?? createPresenceActivity({ stateDir, session: loaded.team.session }),
+      });
+    }
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
     let send: Awaited<ReturnType<typeof startSendDaemon>>;
     try {
@@ -539,6 +588,62 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   }
 
+  /** One distinct presence failure per route is logged once: a broken spool must not turn the
+   *  daemon log into a 250 ms stream. The set is bounded so a pathological spool cannot grow it. */
+  const logPresenceOnce = (route: HostedRoute, text: string): void => {
+    if (text === '') return;
+    const key = `${route.root}\n${text}`;
+    if (presenceLogged.has(key)) return;
+    if (presenceLogged.size >= 64) return;
+    presenceLogged.add(key);
+    appendDaemonLog(home, `presence ${route.root}: ${text}`, now());
+  };
+
+  /**
+   * One presence pass for one route: the ingester's bounded step, then the activity reconciler
+   * over what it appended. It is asynchronous from end to end, so a slow or broken spool holds
+   * only its own route; the beat that starts it never awaits it.
+   */
+  const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
+    let run: Promise<void>;
+    run = (async () => {
+      try {
+        const step = await one.ingester.step();
+        logPresenceOnce(one.route, step.errors[0]?.why ?? '');
+      } catch (error) {
+        logPresenceOnce(one.route, `the presence step failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        // The transitions are consumed under the state lock only after the step that appended
+        // them resolved, so the projection is at least as new as the lines read.
+        const applied = await one.activity(now());
+        if (applied.failed !== null) logPresenceOnce(one.route, `the activity step failed: ${applied.failed}`);
+        const bad = applied.seats.find((seat) => seat.bad !== null)?.bad;
+        if (typeof bad === 'string') logPresenceOnce(one.route, bad);
+      } catch (error) {
+        logPresenceOnce(one.route, `the activity step failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })().finally(() => {
+      if (presenceRuns.get(one.route.root) === run) presenceRuns.delete(one.route.root);
+    });
+    return run;
+  };
+
+  // One presence timer for every hosted route, beside the 5 s heartbeat and never merged with it.
+  // A beat starts each idle route's pass without awaiting any: independent routes run together,
+  // and a route whose previous pass is still in flight is skipped, never queued.
+  let presenceTimer: ReturnType<typeof setInterval> | null = null;
+  if (input.presenceHosting === true && presenceWork.length > 0) {
+    presenceTimer = setInterval(() => {
+      if (closed) return;
+      for (const one of presenceWork) {
+        if (presenceRuns.has(one.route.root)) continue;
+        presenceRuns.set(one.route.root, runPresence(one));
+      }
+    }, input.presenceEveryMs ?? PRESENCE_EVERY_MS);
+    presenceTimer.unref();
+  }
+
   // A socket file that stays behind after a crash, or a listener that stops answering, is not a
   // hosted endpoint. The heartbeat asks each hosted socket; an endpoint that stopped answering is
   // marked failed with its reason and logged once, and a later heartbeat never resurrects it.
@@ -616,34 +721,81 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   }, heartbeatMs);
   timer.unref();
 
+  let admissionClosed = false;
+  let ownershipReleased = false;
+  let presenceCloses: Promise<unknown>[] | null = null;
+
   const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    clearInterval(timer);
-    // Each watch leaves through its own loop: the stop resolves its wait false and awaits the
-    // pass in flight, so nothing is left half-written. The state record's last write keeps the
-    // stopped phase and its reason.
-    await Promise.all(hostedWatches.map(async (one) => {
-      try {
-        await one.watch.stop('the daemon is closing');
-      } catch {
-        // Closing is best effort; the process is ending.
+    if (ownershipReleased) return;
+    if (!admissionClosed) {
+      admissionClosed = true;
+      closed = true;
+      clearInterval(timer);
+      if (presenceTimer !== null) clearInterval(presenceTimer);
+      // Admission first: effects close, hosted passes abort, and send, bus and the machine
+      // endpoint stop taking work. Presence never outlives admission; its drain comes after.
+      // Each watch leaves through its own loop: the stop resolves its wait false and awaits the
+      // pass in flight, so nothing is left half-written. The state record's last write keeps the
+      // stopped phase and its reason.
+      await Promise.all(hostedWatches.map(async (one) => {
+        try {
+          await one.watch.stop('the daemon is closing');
+        } catch {
+          // Closing is best effort; the process is ending.
+        }
+        one.status.watch = one.watch.state();
+      }));
+      for (const handle of busHandles.splice(0)) {
+        try {
+          await handle.close();
+        } catch {
+          // Closing is best effort; the process is ending.
+        }
       }
-      one.status.watch = one.watch.state();
-    }));
-    for (const handle of busHandles.splice(0)) {
-      try {
-        await handle.close();
-      } catch {
-        // Closing is best effort; the process is ending.
+      for (const handle of sendHandles.splice(0)) {
+        try {
+          await handle.close();
+        } catch {
+          // Closing is best effort; the process is ending.
+        }
       }
+      // The machine endpoint stops taking work here, but its listener stays bound: closing it
+      // unlinks the socket file, and the socket is part of the ownership a non-truthful drain
+      // must retain. It refuses every request while `closed` and is closed on release below.
     }
-    for (const handle of sendHandles.splice(0)) {
-      try {
-        await handle.close();
-      } catch {
-        // Closing is best effort; the process is ending.
+    // Presence drain: the in-flight pass of each route (an ingester step and the activity write
+    // that follows it) finishes, then every ingester's own truthful close. No timeout races the
+    // teardown: a write that cannot finish is the honest reason ownership is not released.
+    await Promise.allSettled([...presenceRuns.values()]);
+    presenceCloses ??= presenceWork.map((one) => one.ingester.close());
+    const drained = await Promise.allSettled(presenceCloses);
+    const unsettled: { route: HostedRoute; why: string }[] = [];
+    drained.forEach((outcome, index) => {
+      const one = presenceWork[index];
+      if (one === undefined) return;
+      if (outcome.status === 'rejected') {
+        unsettled.push({ route: one.route, why: messageOf(outcome.reason) });
+        return;
       }
+      const value = outcome.value as { quiesced?: unknown; why?: unknown } | null;
+      if (value !== null && typeof value === 'object' && value.quiesced === true) return;
+      const why = value !== null && typeof value === 'object' && typeof value.why === 'string'
+        ? value.why
+        : 'the ingester did not quiesce';
+      unsettled.push({ route: one.route, why });
+    });
+    if (unsettled.length > 0) {
+      // Ownership is retained on purpose: the lock, the socket and the state record stand, so no
+      // new daemon can take the routes while an old writer might still append. A later close
+      // retries the same promises; only a truthful quiescence releases. A killed process falls to
+      // the existing dead-pid lock path.
+      for (const one of unsettled) {
+        const status = roots.find((entry) => entry.root === one.route.root);
+        if (status !== undefined) status.presence = { state: 'pending', why: one.why };
+        appendDaemonLog(home, `presence ${one.route.root}: close pending: ${one.why}`, now());
+      }
+      writeState(true);
+      return;
     }
     await host.close();
     try {
@@ -657,6 +809,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // The state record is refreshed by the next start; a stale dead pid reads not-running.
     }
     releaseLock();
+    ownershipReleased = true;
   };
 
   return {
