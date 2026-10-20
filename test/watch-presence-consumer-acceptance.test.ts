@@ -195,7 +195,7 @@ function reportWith(
     live: options.live === undefined ? null : options.live,
     now: new Date(NOW),
     presence: new Map([[SEAT, read]]),
-    presenceChannelHealthy: options.healthy === undefined ? true : options.healthy,
+    presenceChannelHealthy: () => options.healthy === undefined ? true : options.healthy,
   });
 }
 
@@ -412,7 +412,7 @@ describe('the daemon projection at the consumer', () => {
       live: null,
       now: new Date(NOW),
       presence: reads,
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
     });
     expect(report.presence_unknown).toBeUndefined();
     expect(report.idle).toEqual([{
@@ -444,7 +444,7 @@ describe('the daemon projection at the consumer', () => {
       live: null,
       now: new Date(NOW),
       presence: reads,
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
     });
     expect(report.idle).toHaveLength(1);
     expect(readFileSync(statePath(world), 'utf8')).toBe(before.state);
@@ -466,7 +466,7 @@ describe('the dispatcher holds what it cannot prove', () => {
     const result = await dispatchIdleWork(dispatchInput(world, {
       live: liveWith('working', BUSY_SCREEN),
       presence: new Map([[SEAT, { kind: 'native', reading: reading() }]]),
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
       push,
     }));
     expect(result.suppressed).toEqual([SEAT]);
@@ -490,7 +490,7 @@ describe('the dispatcher holds what it cannot prove', () => {
     const result = await dispatchIdleWork(dispatchInput(world, {
       live: liveWith('idle', IDLE_SCREEN),
       presence: new Map([[SEAT, { kind: 'invalid', why: 'the projection is unreadable' }]]),
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
     }));
     expect(result.pushed).toEqual([]);
     expect(result.fallback).toBeUndefined();
@@ -507,7 +507,7 @@ describe('the dispatcher holds what it cannot prove', () => {
     const before = readFileSync(statePath(world), 'utf8');
     const result = await dispatchIdleWork(dispatchInput(world, {
       presence: new Map([[SEAT, { kind: 'invalid', why: 'the projection is unreadable' }]]),
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
     }));
     expect(result.pushed).toEqual([]);
     expect(result.fallback).toBeUndefined();
@@ -547,7 +547,7 @@ describe('the dispatcher holds what it cannot prove', () => {
     const before = readFileSync(statePath(world), 'utf8');
     const result = await dispatchIdleWork(dispatchInput(world, {
       live: liveWith('idle', IDLE_SCREEN),
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
     }));
     expect(result.pushed).toEqual([]);
     expect(result.fallback).toBeUndefined();
@@ -563,7 +563,7 @@ describe('the dispatcher holds what it cannot prove', () => {
       lastActive: at(360),
       gate: fence({ seq: projection.seq, applied_at: projection.observedAt }),
     }));
-    const result = await dispatchIdleWork(dispatchInput(world, { presenceChannelHealthy: true }));
+    const result = await dispatchIdleWork(dispatchInput(world, { presenceChannelHealthy: () => true }));
     expect(result.suppressed).toEqual([SEAT]);
     // No route is wired in this pass: the attempt is still recorded, which proves the reading
     // reached the dispatcher through the prefetch and not through a screen.

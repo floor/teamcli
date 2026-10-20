@@ -197,8 +197,8 @@ describe('the actual producer through the owned health seam', () => {
         sceneRoute(), sceneLoop(), {} as WatchSources, undefined, undefined, provider,
       );
       // This is the exact answer the watch dispatch reads into IdleDispatchInput.
-      expect(sources.presenceChannelHealthy?.()).toBe(true);
-      expect(sources.presenceChannelHealthy?.() === true).toBe(true);
+      expect(sources.presenceChannelHealthy?.(SCENE_SEAT)).toBe(true);
+      expect(sources.presenceChannelHealthy?.(SCENE_SEAT) === true).toBe(true);
     } finally {
       await ingester.close();
       rmSync(world.base, { recursive: true, force: true });
@@ -230,7 +230,7 @@ describe('the actual producer through the owned health seam', () => {
       expect(faulted.errors.length).toBeGreaterThan(0);
       expect(faulted.healthy).toBe(false);
       channel.stepped(presenceStepHealth(faulted), nowAt);
-      expect(sources.presenceChannelHealthy?.()).toBe(false);
+      expect(sources.presenceChannelHealthy?.(SCENE_SEAT)).toBe(false);
 
       // The fault is reported once; the next beat is quiet, and the verdict must still be false.
       // The producer's recovery marker, not the error list of this step, is what carries it.
@@ -239,7 +239,7 @@ describe('the actual producer through the owned health seam', () => {
       expect(quiet.errors).toEqual([]);
       expect(quiet.healthy).toBe(false);
       channel.stepped(presenceStepHealth(quiet), nowAt);
-      expect(sources.presenceChannelHealthy?.()).toBe(false);
+      expect(sources.presenceChannelHealthy?.(SCENE_SEAT)).toBe(false);
     } finally {
       await second.close();
       rmSync(world.base, { recursive: true, force: true });

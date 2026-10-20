@@ -181,7 +181,7 @@ function report(world: World, healthy: boolean) {
     live: null,
     now: new Date(NOW),
     presence: prefetched,
-    presenceChannelHealthy: healthy,
+    presenceChannelHealthy: () => healthy,
   });
 }
 

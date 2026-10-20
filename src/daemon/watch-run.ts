@@ -18,8 +18,9 @@ export type HostedWatchRunInput = {
   base?: WatchSources;
   /** Test seam: the process id the loop's reads record. */
   pid?: number;
-  /** The owning daemon's fixed liveness for the route's presence channel, when it hosts one. */
-  presenceChannelHealthy?: () => boolean;
+  /** The owning daemon's fresh per-seat answer for this route's presence channels, when it
+   *  hosts them: the argument is a declared seat name. */
+  presenceChannelHealthy?: (seat: string) => boolean;
 };
 
 /**
@@ -34,7 +35,7 @@ export function hostedWatchSources(
   base: WatchSources,
   pushWork?: WorkPush,
   pid?: number,
-  presenceChannelHealthy?: () => boolean,
+  presenceChannelHealthy?: (seat: string) => boolean,
 ): WatchSources {
   return {
     ...base,

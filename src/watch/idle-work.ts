@@ -114,7 +114,9 @@ function idleSeatsOf(
         binding: record?.presence_binding ?? null,
         fence: fenceAt(record),
         lastActive: record?.last_active,
-        channelHealthy: input.presenceChannelHealthy === true,
+        // The health answer is the caller's, per seat: a route-wide answer cannot prove this
+        // seat's stream, and a seat the caller cannot prove is held on its own.
+        channelHealthy: input.presenceChannelHealthy?.(seat.name) === true,
       };
       const read = reads.get(seat.name) ?? {
         kind: 'absent' as const,

@@ -170,8 +170,9 @@ export function forgetIdleEpisodes(): void {
  */
 export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDispatchResult> {
   // Coherent native readings are prefetched outside the synchronous snapshot. The channel health
-  // is the caller's own knowledge (daemon ownership, fixed health or a live RPC answer); with
-  // none supplied it is not known, so a present projection is held rather than believed.
+  // is the caller's own per-seat knowledge (daemon ownership, a binding-matched fixed health or a
+  // live RPC answer); with none supplied it is not known, so a present projection is held rather
+  // than believed.
   const presence = input.presence === undefined
     ? await prefetchPresence({
         stateDir: input.dir,

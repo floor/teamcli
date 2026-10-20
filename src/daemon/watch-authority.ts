@@ -80,11 +80,11 @@ export type HostedWatchAuthorityInput = {
   alive?: (pid: number) => boolean;
   base?: WatchSources;
   /**
-   * The owning daemon's fixed liveness for this route's presence channel. Absent (presence
-   * hosting off, or a test without one) means not known, and the dispatcher holds a native
-   * projection rather than believing it.
+   * The owning daemon's fresh per-seat liveness for this route's presence channels, keyed by
+   * declared seat name. Absent (presence hosting off, or a test without one) means not known, so
+   * that seat's native projection is held rather than believed.
    */
-  presenceChannelHealthy?: () => boolean;
+  presenceChannelHealthy?: (seat: string) => boolean;
 };
 
 function textOf(error: unknown): string {

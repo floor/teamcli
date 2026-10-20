@@ -187,7 +187,7 @@ function report(world: World, presence: Awaited<ReturnType<typeof prefetchPresen
     live: null,
     now,
     presence,
-    presenceChannelHealthy: healthy,
+    presenceChannelHealthy: () => healthy,
   });
 }
 

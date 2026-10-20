@@ -2,8 +2,11 @@
 // proof is strong enough to dispatch work. The store is written by a runtime hook, an event
 // adapter or the daemon's own launch record; this module only reads it. A reading is trusted only
 // when the projection is current for this seat's incarnation, the canonical activity fence shows
-// that exact sequence applied to the persisted clock, and the channel is known healthy. Anything
-// else is unproven: the caller holds without pruning claims, writing notices or typing.
+// that exact sequence applied to the persisted clock, and the channel is known healthy for that
+// seat. Anything else is unproven: the caller holds without pruning claims, writing notices or
+// typing. The one non-idle conclusion that survives an unhealthy channel is a canonical `gone`
+// projection, and only once the same exact binding and fence proof holds: a session end can
+// never become an idle wake.
 //
 // `terminal-host` never appears in a record the store serves (the contract refuses it on read);
 // it is a label the fallback reading carries when the native channel is explicitly absent or
@@ -35,7 +38,8 @@ export type PresenceSeat = {
   fence: unknown;
   /** `state.seats[seat].last_active`, the canonical claim stamp. */
   lastActive: string | undefined;
-  /** Injected: the daemon's current ownership, a fixed health bound or a live RPC answer. */
+  /** Injected: the caller's fresh per-seat proof for this seat's channel (daemon ownership, a
+   *  binding-matched fixed health or a live RPC answer), never a route-wide answer. */
   channelHealthy: boolean;
 };
 
@@ -181,7 +185,10 @@ export function presenceVerdict(read: PresenceRead, seat: PresenceSeat, clock: P
   if (presenceFutureBeyond(fence.applied_at, clock.now)) {
     return invalid('the canonical activity fence applied_at is in the future');
   }
-  if (!seat.channelHealthy) {
+  // A canonical session end is a known non-idle conclusion: once this seat's binding and the
+  // exact fence/seq/applied_at proof above hold, an unhealthy channel cannot turn it into an
+  // idle wake, so only `gone` is answered without a healthy channel. Every other state holds.
+  if (!seat.channelHealthy && reading.state !== 'gone') {
     return invalid('the presence channel is not known healthy this pass');
   }
   if (presenceFutureBeyond(reading.observedAt, clock.now)) {

@@ -69,9 +69,11 @@ export type IdleWorkInput = {
    *  reader does not consult the native store and keeps the terminal-host reading as it was;
    *  an explicit null means the channel is not used for this command. */
   presence?: ReadonlyMap<string, PresenceRead> | null;
-  /** Whether the presence channel is known healthy this pass (daemon ownership, fixed health or
-   *  a live RPC answer). Absent means not known, so a native projection is held, never believed. */
-  presenceChannelHealthy?: boolean;
+  /** The caller's fresh answer for one seat's native channel this pass (daemon ownership, a
+   *  binding-matched fixed health or a live RPC answer), keyed by declared seat name. Absent, or
+   *  anything but exactly true for a seat, means that seat's native projection is held, never
+   *  believed. */
+  presenceChannelHealthy?: (seat: string) => boolean;
 };
 
 export type IdleWorkSource = (input: IdleWorkInput) => IdleWorkReport;

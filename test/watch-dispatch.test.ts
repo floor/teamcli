@@ -25,6 +25,7 @@ import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { captureIdleClaim, idleClaimOf, settleIdleClaim } from '../src/watch/claim.ts';
 import type { PresenceReading } from '../src/daemon/presence/contract.ts';
+import { idleWorkReport } from '../src/watch/idle-work.ts';
 import type { PresenceRead } from '../src/watch/presence.ts';
 import {
   dispatchIdleWork, forgetIdleEpisodes,
@@ -991,6 +992,22 @@ function presenceSessionAt(stamp: string, withFence = true): SessionState {
   return session;
 }
 
+const PRESENCE_SEAT_ID_2 = 'seat_bbbbbbbbbbbb';
+
+/** Both declared workers with their own managed identity and a canonical fence at seq 7, so a
+ *  native reading can be proved for each seat separately. */
+function twoSeatPresenceSessionAt(stamp: string): SessionState {
+  const session = presenceSessionAt(stamp);
+  session.seats['worker-2'] = {
+    stage: 'ready',
+    last_active: stamp,
+    id: PRESENCE_SEAT_ID_2,
+    presence_binding: PRESENCE_BINDING,
+    presence_applied: { seat_id: PRESENCE_SEAT_ID_2, binding: PRESENCE_BINDING, seq: 7, applied_at: stamp },
+  } as unknown as SessionState['seats'][string];
+  return session;
+}
+
 describe('native presence before any dispatch', () => {
   const stamp = new Date(NOW - 10 * MIN).toISOString();
   const statePath = (): string => join(root, '.agents', 'team.state.json');
@@ -1009,7 +1026,7 @@ describe('native presence before any dispatch', () => {
     }).kind).toBe('captured');
     const before = readFileSync(statePath(), 'utf8');
     const result = await dispatchIdleWork(input({
-      presence: new Map([['worker-1', read]]), presenceChannelHealthy: true, ...extra,
+      presence: new Map([['worker-1', read]]), presenceChannelHealthy: () => true, ...extra,
     }));
     return { before, after: readFileSync(statePath(), 'utf8'), result };
   }
@@ -1031,7 +1048,7 @@ describe('native presence before any dispatch', () => {
   test('a projection on a channel not known healthy holds even when it reads idle', async () => {
     const pass = await heldPass(
       { kind: 'native', reading: presenceReading() },
-      { presenceChannelHealthy: false },
+      { presenceChannelHealthy: () => false },
     );
     expect(pass.after).toBe(pass.before);
     expect(pass.result.pushed).toEqual([]);
@@ -1057,7 +1074,7 @@ describe('native presence before any dispatch', () => {
     const result = await dispatchIdleWork(input({
       live: null,
       presence: new Map([['worker-1', { kind: 'native' as const, reading: presenceReading({ since: nativeSince }) }]]),
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
       push,
     }));
     // The native clock authorises the wake; the transport still has no live read to type through.
@@ -1085,7 +1102,7 @@ describe('native presence before any dispatch', () => {
         ['worker-1', { kind: 'native', reading: presenceReading() }],
         ['worker-2', { kind: 'invalid', why: 'the projection is unreadable' }],
       ]),
-      presenceChannelHealthy: true,
+      presenceChannelHealthy: () => true,
       push,
     }));
     // worker-1 is provably idle and the queue holds t1, but the pass cannot vouch for worker-2.
@@ -1108,5 +1125,54 @@ describe('native presence before any dispatch', () => {
     expect(result.fallback).toBeUndefined();
     expect(readFileSync(statePath(), 'utf8')).toBe(before);
     expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+  });
+
+  test('one seat’s unproven channel holds the pass while its sibling carries its own answer', async () => {
+    handWritten(twoSeatPresenceSessionAt(stamp));
+    queue([{ id: 't1', title: 'First' }]);
+    const asked: string[] = [];
+    const healthy = (seat: string): boolean => {
+      asked.push(seat);
+      return seat !== 'worker-2';
+    };
+    const presence = new Map<string, PresenceRead>([
+      ['worker-1', { kind: 'native', reading: presenceReading() }],
+      ['worker-2', { kind: 'native', reading: presenceReading() }],
+    ]);
+    // worker-1 is provably idle under its own fresh answer; worker-2's projection is last-known
+    // only, so it stays unqualified and the whole mutating pass holds.
+    const seen = idleWorkReport(input({ presence, presenceChannelHealthy: healthy }));
+    expect(seen.idle.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(seen.presence_unknown).toContain('worker-2: the presence channel is not known healthy this pass');
+    const before = readFileSync(statePath(), 'utf8');
+    const result = await dispatchIdleWork(input({ presence, presenceChannelHealthy: healthy }));
+    expect(result.pushed).toEqual([]);
+    expect(result.fallback).toBeUndefined();
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+    expect(asked).toContain('worker-1');
+    expect(asked).toContain('worker-2');
+  });
+
+  test('a canonically gone seat with an unproven channel is non-idle, not a held pass', async () => {
+    handWritten(twoSeatPresenceSessionAt(stamp));
+    queue([{ id: 't1', title: 'First' }]);
+    const goneSince = new Date(NOW - MIN).toISOString();
+    const push: WorkPush = async () => ({ ok: true, outcome: 'typed (unconfirmed)' });
+    const result = await dispatchIdleWork(input({
+      presence: new Map<string, PresenceRead>([
+        ['worker-1', { kind: 'native', reading: presenceReading() }],
+        ['worker-2', {
+          kind: 'native',
+          reading: presenceReading({ state: 'gone', event: 'session-end', since: goneSince }),
+        }],
+      ]),
+      presenceChannelHealthy: (seat) => seat === 'worker-1',
+      push,
+    }));
+    // The exact binding/fence proof makes the session end a known non-idle conclusion; it does
+    // not hold its sibling's work, and it never becomes a wake.
+    expect(result.suppressed).toEqual(['worker-1']);
+    expect(result.pushed).toEqual([{ seat: 'worker-1', ok: true, outcome: 'typed (unconfirmed)' }]);
   });
 });

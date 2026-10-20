@@ -141,6 +141,24 @@ describe('the native proof', () => {
     expect(verdict({}, { channelHealthy: false })).toMatchObject({ idle: false, reason: 'invalid' });
   });
 
+  test('a canonical gone needs no healthy channel, but its incarnation and exact fence still hold', () => {
+    const gone = { state: 'gone' as const, event: 'session-end' as const, since: iso(MIN) };
+    expect(verdict(gone, { channelHealthy: false, lastActive: iso(60 * MIN) }))
+      .toMatchObject({ idle: false, reason: 'gone' });
+    // Only `gone` passes an unhealthy channel: a working or waiting seat is still held.
+    expect(verdict({ state: 'working', event: 'turn-start' }, { channelHealthy: false }))
+      .toMatchObject({ idle: false, reason: 'invalid' });
+    expect(verdict({ state: 'waiting-for-a-person', event: 'human-wait' }, { channelHealthy: false }))
+      .toMatchObject({ idle: false, reason: 'invalid' });
+    // The session end is not a way around the exact binding/fence proof.
+    expect(verdict(gone, { channelHealthy: false, binding: null }))
+      .toMatchObject({ idle: false, reason: 'invalid' });
+    expect(verdict(gone, { channelHealthy: false, fence: { seat_id: SEAT_ID, binding: BINDING, seq: 6, applied_at: iso(9 * MIN) } }))
+      .toMatchObject({ idle: false, reason: 'invalid' });
+    expect(verdict(gone, { channelHealthy: false, fence: { seat_id: 'seat_ffffffffffff', binding: BINDING, seq: 7, applied_at: iso(9 * MIN) } }))
+      .toMatchObject({ idle: false, reason: 'invalid' });
+  });
+
   test('future timestamps and a since/id disagreement are refused; the id instant must be since', () => {
     expect(verdict({ observedAt: new Date(NOW + 2 * MIN).toISOString() }))
       .toMatchObject({ idle: false, reason: 'invalid' });
@@ -303,7 +321,7 @@ function reportWith(read: PresenceRead, options: { live?: Live | null; healthy?:
     live: options.live === undefined ? null : options.live,
     now: new Date(NOW),
     presence: new Map([['writer', read]]),
-    presenceChannelHealthy: options.healthy ?? true,
+    presenceChannelHealthy: () => options.healthy ?? true,
   });
 }
 
@@ -336,6 +354,70 @@ describe('the report seam', () => {
     const report = reportWith({ kind: 'native', reading: reading() }, { healthy: false });
     expect(report.idle).toEqual([]);
     expect(report.presence_unknown).toContain('channel is not known healthy');
+  });
+
+  test('the per-seat answer alone gates the same old idle: unproven holds, proven qualifies', () => {
+    let proven = false;
+    const asked: string[] = [];
+    const ask = (seat: string): boolean => {
+      asked.push(seat);
+      return proven;
+    };
+    const read: PresenceRead = { kind: 'native', reading: reading() };
+    const take = () => idleWorkReport({
+      root: '/nonexistent-acme-root',
+      team,
+      state: writerState(),
+      live: null,
+      now: new Date(NOW),
+      presence: new Map([['writer', read]]),
+      presenceChannelHealthy: ask,
+    });
+    // A reconnect or initialize alone proves nothing: the caller must keep answering false
+    // until its own bound-thread continuity proof exists.
+    const held = take();
+    expect(held.idle).toEqual([]);
+    expect(held.presence_unknown).toContain('writer: the presence channel is not known healthy this pass');
+    proven = true;
+    const qualified = take();
+    expect(qualified.presence_unknown).toBeUndefined();
+    expect(qualified.idle).toEqual([{
+      seat: 'writer',
+      since: iso(10 * MIN),
+      native_since: iso(10 * MIN),
+      presence_source: 'runtime-hook',
+    }]);
+    expect(asked).toEqual(['writer', 'writer']);
+  });
+
+  test('a genuinely unsupported channel keeps the labelled fallback with no true answer', () => {
+    const report = idleWorkReport({
+      root: '/nonexistent-acme-root',
+      team,
+      state: writerState(),
+      live: idleLive(),
+      now: new Date(NOW),
+      presence: new Map([['writer', { kind: 'unsupported', why: 'this seat has no native channel' }]]),
+      presenceChannelHealthy: () => false,
+    });
+    expect(report.presence_unknown).toBeUndefined();
+    expect(report.idle).toEqual([{
+      seat: 'writer', since: iso(10 * MIN), presence_source: 'terminal-host',
+    }]);
+  });
+
+  test('an invalid native projection never borrows the screen, with or without health', () => {
+    const report = idleWorkReport({
+      root: '/nonexistent-acme-root',
+      team,
+      state: writerState(),
+      live: idleLive(),
+      now: new Date(NOW),
+      presence: new Map([['writer', { kind: 'invalid', why: 'the projection is unreadable' }]]),
+      presenceChannelHealthy: () => false,
+    });
+    expect(report.idle).toEqual([]);
+    expect(report.presence_unknown).toContain('the projection is unreadable');
   });
 
   test('an absent record falls back to the labelled terminal-host reading', () => {
