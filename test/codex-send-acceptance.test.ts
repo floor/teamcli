@@ -18,6 +18,16 @@
 //    accepts reading: the probe aborts before any queue process, the walk falls back to the drop
 //    file, and the same id/record, the native attempt in the fallback marker, and the `failed`
 //    reason on the history line are all the production walk's own.
+// 5. A relative `CODEX_HOME` names one socket, resolved absolutely from the queue's inherited
+//    cwd: the same route-through-`runSend` acceptance, with the queue handed that absolute path.
+// 6. A relative control socket is resolved the same way by `deliverCodexNativeRoute` itself.
+// 7. An explicit remote and a control socket that name different endpoints are refused before
+//    any probe connection or queue process.
+//
+// Scenes 5 run through `runSend`; scene 6 and 7 call `deliverCodexNativeRoute` directly because
+// `runSend` supplies neither an explicit socket nor an explicit remote — the pair the refusal
+// exists for is only reachable at the route function, and this suite does not edit the product to
+// expose it.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -32,12 +42,13 @@ import {
 } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { deliverCodexNativeRoute } from '../src/send/push-adapters/codex-relay.ts';
 import { readHistory } from '../src/send/history.ts';
 import { pushPointer } from '../src/send/push.ts';
 import { recordBody, testIo } from './helpers.ts';
@@ -333,33 +344,97 @@ function queueCalls(file: string): string[][] {
 
 /** Runs one ordinary send with `CODEX_HOME` naming the scratch app-server's own home and the
  *  scratch recorder first on `PATH`; both are restored before the assertions run. */
-async function sendWith(
-  scene: Scene,
-  server: AppServer,
-): Promise<{ code: number; out: string; err: string; calls: string[][] }> {
-  const host = hostFor(scene);
-  const io = testIo(scene.root, { kind: 'owner' });
-  const saved = {
+type SavedEnv = { path?: string; codexHome?: string; queueLog?: string };
+
+/** The scratch recorder first on `PATH`, a scratch `CODEX_HOME`, and its argv log; the caller
+ *  restores the saved values in a `finally`. */
+function installEnv(scene: Scene, codexHome: string): SavedEnv {
+  const saved: SavedEnv = {
     path: process.env.PATH,
     codexHome: process.env.CODEX_HOME,
     queueLog: process.env.CODEX_QUEUE_LOG,
   };
   process.env.PATH = `${scene.binDir}:${saved.path ?? ''}`;
-  process.env.CODEX_HOME = scene.codexHome;
+  process.env.CODEX_HOME = codexHome;
   process.env.CODEX_QUEUE_LOG = scene.queueLog;
+  return saved;
+}
+
+function restoreEnv(saved: SavedEnv): void {
+  if (saved.path === undefined) delete process.env.PATH;
+  else process.env.PATH = saved.path;
+  if (saved.codexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = saved.codexHome;
+  if (saved.queueLog === undefined) delete process.env.CODEX_QUEUE_LOG;
+  else process.env.CODEX_QUEUE_LOG = saved.queueLog;
+}
+
+/** Runs one ordinary send; `codexHome` is the value the queue process inherits, absolute by
+ *  default and deliberately relative in the endpoint scene. */
+async function sendWith(
+  scene: Scene,
+  server: AppServer,
+  codexHome: string = scene.codexHome,
+): Promise<{ code: number; out: string; err: string; calls: string[][] }> {
+  const host = hostFor(scene);
+  const io = testIo(scene.root, { kind: 'owner' });
+  const saved = installEnv(scene, codexHome);
   let code: number;
   try {
     code = await runSend([SEAT, 'hello'], io, host);
   } finally {
-    if (saved.path === undefined) delete process.env.PATH;
-    else process.env.PATH = saved.path;
-    if (saved.codexHome === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = saved.codexHome;
-    if (saved.queueLog === undefined) delete process.env.CODEX_QUEUE_LOG;
-    else process.env.CODEX_QUEUE_LOG = saved.queueLog;
+    restoreEnv(saved);
     await server.close();
   }
   return { code, out: io.out, err: io.err, calls: queueCalls(scene.queueLog) };
+}
+
+/** The native route's own target for this fixture. `runSend` never supplies `remote`; only the
+ *  contradiction scene adds it. */
+function nativeTarget(scene: Scene, remote?: string) {
+  return {
+    route: 'native' as const,
+    runtime: 'codex' as const,
+    copy: { dir: scene.dropDir, name: MESSAGE_ID },
+    root: scene.root,
+    home: scene.home,
+    session: SESSION,
+    seat: SEAT,
+    sender: { seat: 'owner', team: teamIdOf(scene.root) },
+    ...(remote === undefined ? {} : { remote }),
+  };
+}
+
+function nativeAttemptOptions(extra: { socketPath?: string | null } = {}) {
+  return {
+    now: () => NOW,
+    startedAt: NOW.getTime(),
+    routeStartedAt: NOW.getTime(),
+    deliveryTimeout: 10_000,
+    liveRoutesRemain: true,
+    skipStage: true,
+    liveProbe: true,
+    ...extra,
+  };
+}
+
+/** The refusal the route reports for a contradictory pair, as its whole attempt. */
+function refusedPair(scene: Scene, why: string) {
+  return {
+    route: 'native' as const,
+    outcome: 'unsupported' as const,
+    reason: why,
+    receipt: { copy: join(scene.dropDir, MESSAGE_ID), at: NOW.toISOString() },
+    walkAttempt: {
+      route: 'native' as const,
+      outcome: 'unreachable' as const,
+      liveRoutesRemain: true,
+      at: NOW,
+      ms: 0,
+      reason: why,
+      receipt: { kind: 'stored' as const, id: MESSAGE_ID },
+    },
+  };
 }
 
 function lastEntry(scene: Scene): Record<string, unknown> {
@@ -532,5 +607,131 @@ describe('the ordinary send native leg (Codex)', () => {
     const entry = lastEntry(scene);
     expect(entry.id).toBe(MESSAGE_ID);
     expect(entry.failed).toEqual([`native: ${reason}`]);
+  });
+
+  test('a relative CODEX_HOME resolves once: the probe and the queue name the same absolute socket', async () => {
+    const scene = makeScene();
+    const socketPath = join(scene.codexHome, 'app-server-control', 'app-server-control.sock');
+    const server = await startAppServer(socketPath, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+
+    // The queue process inherits this name and its cwd; the socket the probe must read is the
+    // same one, named absolutely.
+    const envCodexHome = relative(process.cwd(), scene.codexHome);
+    expect(envCodexHome.startsWith('/')).toBe(false);
+
+    const { code, out, err, calls } = await sendWith(scene, server, envCodexHome);
+
+    expect(code).toBe(0);
+    expect(err).toBe('');
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`);
+    expect(calls).toEqual([
+      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+    // The probe connected to that same absolute socket.
+    expect(server.socketPath).toBe(socketPath);
+    expect(server.requests).toEqual([
+      { method: 'initialize' },
+      { method: 'thread/read', threadId: THREAD_ID },
+    ]);
+    expect(markerOf(scene).attempts).toEqual([
+      expect.objectContaining({
+        route: 'native',
+        outcome: 'delivered',
+        reason: 'pushed to codex queue; no read receipt yet',
+      }),
+    ]);
+  });
+
+  test('a relative control socket is resolved to the absolute endpoint the probe reads and the queue is given', async () => {
+    const scene = makeScene();
+    const socketPath = join(scene.codexHome, 'app-server-control', 'app-server-control.sock');
+    const server = await startAppServer(socketPath, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    const givenSocket = relative(process.cwd(), socketPath);
+    expect(givenSocket.startsWith('/')).toBe(false);
+
+    const saved = installEnv(scene, scene.codexHome);
+    let attempt;
+    try {
+      attempt = await deliverCodexNativeRoute(
+        nativeTarget(scene),
+        { id: MESSAGE_ID, record: '{}' },
+        nativeAttemptOptions({ socketPath: givenSocket }),
+      );
+    } finally {
+      restoreEnv(saved);
+      await server.close();
+    }
+
+    expect(attempt.outcome).toBe('enqueue');
+    expect(attempt.walkAttempt).toEqual(
+      expect.objectContaining({
+        route: 'native',
+        outcome: 'delivered',
+        reason: 'pushed to codex queue; no read receipt yet',
+      }),
+    );
+    expect(server.requests).toEqual([
+      { method: 'initialize' },
+      { method: 'thread/read', threadId: THREAD_ID },
+    ]);
+    expect(queueCalls(scene.queueLog)).toEqual([
+      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+  });
+
+  test('a contradictory remote and socket are refused before any probe connection or queue process', async () => {
+    const scene = makeScene();
+    const givenSocket = join(scene.codexHome, 'app-server-control', 'app-server-control.sock');
+    const remoteSocket = join(scene.base, 'other-app-server.sock');
+    const server = await startAppServer(givenSocket, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+
+    const saved = installEnv(scene, scene.codexHome);
+    let mismatch;
+    let socketless;
+    try {
+      mismatch = await deliverCodexNativeRoute(
+        nativeTarget(scene, `unix://${remoteSocket}`),
+        { id: MESSAGE_ID, record: '{}' },
+        nativeAttemptOptions({ socketPath: givenSocket }),
+      );
+      socketless = await deliverCodexNativeRoute(
+        nativeTarget(scene, 'ws://127.0.0.1:9'),
+        { id: MESSAGE_ID, record: '{}' },
+        nativeAttemptOptions({ socketPath: givenSocket }),
+      );
+    } finally {
+      restoreEnv(saved);
+      await server.close();
+    }
+
+    expect(mismatch).toEqual(
+      refusedPair(
+        scene,
+        `the configured remote names ${remoteSocket}, but the given control socket is ${givenSocket}; refusing to probe one endpoint and enqueue to another`,
+      ),
+    );
+    expect(socketless).toEqual(
+      refusedPair(
+        scene,
+        'the configured remote ws://127.0.0.1:9 names no local control socket, and a control socket was given; refusing to probe one endpoint and enqueue to another',
+      ),
+    );
+
+    // Refused before either operation: no probe connection, no queue process, no staged record.
+    expect(server.requests).toEqual([]);
+    expect(queueCalls(scene.queueLog)).toEqual([]);
+    expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
   });
 });
