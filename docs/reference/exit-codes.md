@@ -614,8 +614,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.invocation` | `swap` | 2 | the invocation can't be read | `team swap queue` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
+| `team.presence-hook-staged` | `team` | 0 | the presence event was staged | `team presence-hook --event turn-end` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
+| `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
+| `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
@@ -673,6 +676,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `usage.block` | `usage` | 0 | the machine's report printed | `team usage` |
 | `usage.invocation` | `usage` | 2 | the invocation can't be read | `team usage extra` |
 | `usage.store` | `usage` | 2 | the store folder can't be read | `team usage` |
+| `watch.standby` | `watch` | 0 | a hosted watch stood down for a running watch | `team watch` |
 | `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
 | `watch.already` | `watch` | 1 | a watch already runs | `team watch` |

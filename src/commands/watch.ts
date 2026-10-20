@@ -516,6 +516,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     // watch is a separate step with its own proof.
     if (hosted !== undefined) {
       hosted.standby(`a watch already runs for the session "${session}" (${where})`);
+      // exit: watch.standby
       return 0;
     }
     refuse('watch.already', `a watch already runs for the session "${session}" (${where})`);

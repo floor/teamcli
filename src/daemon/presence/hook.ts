@@ -46,7 +46,7 @@ function parse(argv: readonly string[]): Parsed | null {
 
 export default function run(argv: readonly string[]): number {
   const parsed = parse(argv);
-  if (parsed === null) return 1;
+  if (parsed === null) return 1; // exit: team.presence-hook-invalid
   const staged = stagePresenceRecord(parsed.dir, {
     session: parsed.session,
     seat: parsed.seat,
@@ -54,5 +54,7 @@ export default function run(argv: readonly string[]): number {
     source: 'runtime-hook',
     event: parsed.event,
   });
+  // exit: team.presence-hook-staged
+  // exit: team.presence-hook-refused
   return staged.kind === 'staged' ? 0 : 1;
 }

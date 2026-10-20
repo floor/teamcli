@@ -4260,6 +4260,13 @@
     {
       "code": 0,
       "command": "team",
+      "id": "team.presence-hook-staged",
+      "meaning": "the presence event was staged",
+      "trigger": "team presence-hook --event turn-end"
+    },
+    {
+      "code": 0,
+      "command": "team",
       "id": "team.version",
       "meaning": "the version was printed",
       "trigger": "team --version"
@@ -4270,6 +4277,20 @@
       "id": "team.command-threw",
       "meaning": "a command threw",
       "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.presence-hook-invalid",
+      "meaning": "the presence hook's words can't be read",
+      "trigger": "team presence-hook --event turn-end"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.presence-hook-refused",
+      "meaning": "the presence event could not be staged",
+      "trigger": "team presence-hook --event turn-end"
     },
     {
       "code": 2,
@@ -4669,6 +4690,13 @@
       "id": "usage.store",
       "meaning": "the store folder can't be read",
       "trigger": "team usage"
+    },
+    {
+      "code": 0,
+      "command": "watch",
+      "id": "watch.standby",
+      "meaning": "a hosted watch stood down for a running watch",
+      "trigger": "team watch"
     },
     {
       "code": 0,

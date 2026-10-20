@@ -1,7 +1,7 @@
 // One run per row of contract/exit-codes.json. Each trigger is a temporary directory and the
 // injectable stand-ins the other command tests use: no herdr session, no user-level store.
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -22,6 +22,7 @@ import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
+import runPresenceHook from '../src/daemon/presence/hook.ts';
 import type { ServiceManager } from '../src/daemon/service.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
@@ -2407,6 +2408,23 @@ scene('watch.already', async (place) => {
   });
   return show(await watched(place, [], owner, watchSources({ alive: (pid) => pid === 99 })), 'already runs');
 });
+scene('watch.standby', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.watch = { pid: 99, heartbeat: NOW.toISOString() };
+  });
+  const stood: string[] = [];
+  const hosted = {
+    signal: new AbortController().signal,
+    wait: async () => false,
+    cycled: () => {},
+    standby: (why: string) => void stood.push(why),
+  };
+  const ran = await watched(place, [], owner, watchSources({ alive: (pid) => pid === 99, hosted }));
+  expect(stood).toEqual([`a watch already runs for the session "acme" (pid 99)`]);
+  return ran;
+});
 scene('watch.stopped', async (place) => {
   write(place, TEAM);
   return show(await watched(place, [], owner), 'stopped');
@@ -2426,6 +2444,31 @@ scene('watch.started', async (place) => {
     paneRun: () => true,
     watchCommand: () => 'team watch',
   })), 'the watch runs in its own workspace');
+});
+
+// The hidden settings-file hook prints nothing by design, so its scenes assert the status and
+// the spool the run leaves behind, never output. `--dir` is the team file's own folder.
+const HOOK_BINDING = 'prs_0123456789ab';
+function hooked(place: Place, words: string[]): Ran {
+  return { code: runPresenceHook(['--dir', place.root, ...words]), out: '', err: '' };
+}
+scene('team.presence-hook-invalid', async (place) => {
+  const ran = hooked(place, ['--session', 'crew', '--seat', 'writer', '--binding', 'not-a-binding', '--event', 'turn-end']);
+  expect(existsSync(join(place.root, 'presence'))).toBe(false);
+  return ran;
+});
+scene('team.presence-hook-staged', async (place) => {
+  const ran = hooked(place, ['--session', 'crew', '--seat', 'writer', '--binding', HOOK_BINDING, '--event', 'turn-end']);
+  const spool = join(place.root, 'presence', 'crew', 'writer', 'spool');
+  expect(readdirSync(spool).some((name) => name.endsWith('.json'))).toBe(true);
+  return ran;
+});
+scene('team.presence-hook-refused', async (place) => {
+  // The writer refuses the seat name before any folder is made: a record the contract's seat
+  // rule rejects still leaves the hook exit 1, and the settings-file command ignores it.
+  const ran = hooked(place, ['--session', 'crew', '--seat', 'not a seat', '--binding', HOOK_BINDING, '--event', 'turn-end']);
+  expect(existsSync(join(place.root, 'presence'))).toBe(false);
+  return ran;
 });
 
 async function used(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
