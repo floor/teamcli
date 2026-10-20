@@ -18,6 +18,8 @@ export type HostedWatchRunInput = {
   base?: WatchSources;
   /** Test seam: the process id the loop's reads record. */
   pid?: number;
+  /** The owning daemon's fixed liveness for the route's presence channel, when it hosts one. */
+  presenceChannelHealthy?: () => boolean;
 };
 
 /**
@@ -27,7 +29,12 @@ export type HostedWatchRunInput = {
  * store and the mailbox are read, and the gates in `runWatch` decide what hosted may write.
  */
 export function hostedWatchSources(
-  route: HostedRoute, loop: HostedLoop, base: WatchSources, pushWork?: WorkPush, pid?: number,
+  route: HostedRoute,
+  loop: HostedLoop,
+  base: WatchSources,
+  pushWork?: WorkPush,
+  pid?: number,
+  presenceChannelHealthy?: () => boolean,
 ): WatchSources {
   return {
     ...base,
@@ -55,6 +62,7 @@ export function hostedWatchSources(
     sleep: (ms) => loop.wait(ms).then(() => undefined),
     wait: (seconds) => loop.wait(seconds * 1000),
     pushWork,
+    ...(presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy }),
   };
 }
 
@@ -72,5 +80,12 @@ export function hostedWatchRun(input: HostedWatchRunInput): (loop: HostedLoop) =
     stdoutIsTTY: false,
     stderrIsTTY: false,
   };
-  return async (loop) => runWatch([], io, hostedWatchSources(input.route, loop, base, input.pushWork, input.pid));
+  return async (loop) => runWatch([], io, hostedWatchSources(
+    input.route,
+    loop,
+    base,
+    input.pushWork,
+    input.pid,
+    input.presenceChannelHealthy,
+  ));
 }

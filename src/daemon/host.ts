@@ -39,6 +39,7 @@ import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
+import { createPresenceChannelHealth, type PresenceChannelHealth } from './presence/health.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
@@ -298,7 +299,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // record on each state write, and only entries that actually got a host ever have one.
   const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
   /** The presence pair per accepted route, and this process's one in-flight run per route. */
-  const presenceWork: { route: HostedRoute; ingester: PresenceIngester; activity: PresenceActivityStep }[] = [];
+  const presenceWork: {
+    route: HostedRoute;
+    ingester: PresenceIngester;
+    activity: PresenceActivityStep;
+    /** This route's fixed liveness, answered to its hosted watch's dispatcher. */
+    health: PresenceChannelHealth;
+  }[] = [];
   const presenceRuns = new Map<string, Promise<void>>();
   const presenceLogged = new Set<string>();
   let heartbeatAt = since;
@@ -468,6 +475,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           ?? createPresenceIngester({ stateDir, session: loaded.team.session }),
         activity: input.presenceActivity?.(route, stateDir)
           ?? createPresenceActivity({ stateDir, session: loaded.team.session }),
+        health: createPresenceChannelHealth(),
       });
     }
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
@@ -556,11 +564,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (hostedWatches.some((one) => one.watch.route === route)) continue;
       const teamFile = teamFiles.get(route.root);
       if (teamFile === undefined) continue;
+      // The route's channel health comes from this daemon's own fixed liveness, never from the
+      // store's last word: with presence hosting off there is no pass, so the answer is absent
+      // and the dispatcher holds a native projection rather than believing it.
+      const presence = presenceWork.find((one) => one.route.root === route.root);
       const build = input.hostedWatch?.(route, log)
         ?? hostedWatchAuthority({
           route,
           teamFile,
           log,
+          ...(presence === undefined
+            ? {}
+            : { presenceChannelHealthy: () => !closed && presence.health.healthy(now()) }),
           // The shared verifier judges the captured identity against the record under its own
           // lock immediately before every effect; a lifecycle report is never a substitute.
           verifyAuthority: (check) => verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK }),
@@ -609,12 +624,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
     run = (async () => {
+      let stepped = false;
       try {
         const step = await one.ingester.step();
+        stepped = true;
         logPresenceOnce(one.route, step.errors[0]?.why ?? '');
       } catch (error) {
         logPresenceOnce(one.route, `the presence step failed: ${error instanceof Error ? error.message : String(error)}`);
       }
+      // The channel's fixed liveness is this step's own outcome: a step that finished vouches
+      // for the grace window, a step that threw or hung does not.
+      one.health.stepped(stepped, now());
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.

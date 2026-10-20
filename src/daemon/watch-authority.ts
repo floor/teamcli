@@ -79,6 +79,12 @@ export type HostedWatchAuthorityInput = {
   now?: () => Date;
   alive?: (pid: number) => boolean;
   base?: WatchSources;
+  /**
+   * The owning daemon's fixed liveness for this route's presence channel. Absent (presence
+   * hosting off, or a test without one) means not known, and the dispatcher holds a native
+   * projection rather than believing it.
+   */
+  presenceChannelHealthy?: () => boolean;
 };
 
 function textOf(error: unknown): string {
@@ -331,6 +337,9 @@ async function runAuthoritativeHost(
       log: input.log,
       ...(pushWork === undefined ? {} : { pushWork }),
       ...(input.base === undefined ? {} : { base: input.base }),
+      ...(input.presenceChannelHealthy === undefined
+        ? {}
+        : { presenceChannelHealthy: input.presenceChannelHealthy }),
       // The record carries this runtime's pid; the shared loop must read it as its own.
       pid: process.pid,
     });

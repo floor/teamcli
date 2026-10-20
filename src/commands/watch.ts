@@ -206,6 +206,13 @@ export type WatchSources = {
    * receives it only from the daemon's own source set.
    */
   hosted?: HostedLoop;
+  /**
+   * Whether the caller knows this route's presence channel is healthy right now. Only the
+   * machine daemon that owns the route and runs its ingester can answer, from that fixed
+   * liveness; a hand-started watch does not know, and the dispatcher then holds a native
+   * projection instead of believing it. Never settable from a command line.
+   */
+  presenceChannelHealthy?: () => boolean;
 };
 
 /** The streams a direct dispatch writes through: the watch process's own, with an optional copy
@@ -880,6 +887,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             swaps: [...waiting],
             body: (seat) => (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', seat),
             push: sources.pushWork,
+            // The caller's own knowledge, never the store's last word: with no provider the
+            // answer is not known and the dispatcher holds a native projection.
+            presenceChannelHealthy: sources.presenceChannelHealthy?.() === true,
           });
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;
