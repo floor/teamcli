@@ -42,12 +42,14 @@ export async function sendWatchDirect(
     },
   };
   const said: string[] = [];
+  // No guard is handed in: the send composes the principal's own recheck itself, from the watch
+  // it carries, before every direct transport. This entry never relies on a caller remembering
+  // to wire the check — it hands over the principal and lets the seam do it.
   const run = await sendDirect(watchDirectIo(context.root, (text) => said.push(text)), host, {
     seat: request.seat,
     pane: request.pane,
     cli: request.cli,
     body: request.body,
-    guard: () => principal.recheck(),
     watch: principal,
   });
   return workPushResultOf(run.result, said.join(''));

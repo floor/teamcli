@@ -236,9 +236,11 @@ export type DirectSendHook = {
    *  seat the session no longer lists at that pane, or whose file names another CLI, is refused
    *  before any route is attempted. */
   expect?: { pane: string; cli: string };
-  /** The direct-only caller's recheck, run after preparation and immediately before each route
-   *  a direct walk could transport on, socket or a functional headless route. A refusal ends the
-   *  walk without another transport attempt; a throw is read as a refusal, never as consent. */
+  /** A caller's own narrowing recheck, run after preparation and immediately before each route
+   *  a direct walk could transport on, socket or a functional headless route. On the watch's own
+   *  run the principal's actual verifier is composed in front of it whatever this holds — omitted
+   *  or permissive, it can only narrow, never replace. A refusal ends the walk without another
+   *  transport attempt; a throw is read as a refusal, never as consent. */
   guard?: () => { ok: true } | { ok: false; why: string };
   /** Called once, when a route's ending closes the walk, before the command returns. */
   ended(result: DirectSendResult): void;
@@ -862,9 +864,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // leg is a stored copy and the mcp-inbox leg is the seat's own storage — none of them is a
   // wake, so none is attempted. A functional headless route would stay if this build carried
   // one. Every remaining leg keeps its own rules, and the order's own words decide whether the
-  // receiver offers it.
+  // receiver offers it. A watch principal makes the walk direct by itself: the watch's own send
+  // never falls back to a route that types or stores, whatever hook its caller built.
   const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
-  const walk: readonly DeliveryLeg[] = host.direct ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  const directWalk = host.direct !== undefined || host.watch !== undefined;
+  const walk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
 
   // One signed record is written into the recipient's folder — the whole body, its thread, the
   // address it resolved to and the rule that admitted it — and the leg that takes the send
@@ -896,14 +900,25 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return refuse(io, dir, who, `${to.seat}: its pane is now ${here.pane}, not the ${bound.pane} the pass saw; nothing was sent`, host, report);
     }
   }
-  // The watch's own direct send is bound to exact target evidence, not only to the pair the pass
-  // read: the seat's registry record must be running and name this seat, session, pane and CLI,
-  // and the state must record the same pane for it. Anything less is refused before a route is
-  // attempted, so a stale, renamed or unrecorded target stages nothing.
-  if (host.watch !== undefined && bound !== undefined) {
+  // A watch send is the watch principal's own: it is a direct send or it is nothing, and it is
+  // bound to the direct context the caller's pass read. Without that context it is refused here,
+  // before anything is staged — a watch principal is never walked through a route that types or
+  // stores, and never trusts a target the pass did not bind. With it, the exact target evidence
+  // is required unconditionally: the seat's registry record must be running and name this seat,
+  // session, pane and CLI, and the state must record the same pane for it. Anything less is
+  // refused before a route is attempted, so a stale, renamed or unrecorded target stages nothing.
+  if (host.watch !== undefined) {
+    if (host.direct === undefined || bound === undefined) {
+      return refuse(io, dir, who, `${to.seat}: the watch's send carries no direct context to bind it, so nothing was sent`, host, report);
+    }
     const evidence = exactWatchTarget(host, to, bound, dir);
     if (evidence !== null) return refuse(io, dir, who, evidence, host, report);
   }
+  // The per-transport recheck every direct route reads: a watch principal's actual verifier
+  // always runs, and a guard the caller hands in may only narrow what it allows. It is composed
+  // once here, before the walk, so no route can transport without it and no caller has to
+  // remember to pass one.
+  const directGuard = composedGuard(host);
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
   // the send ends the walk; a leg that definitely cannot take it hands the send to the next
@@ -1030,8 +1045,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       await ensureEpisode();
       // A direct-only caller's authority is rechecked after preparation and immediately before
       // the dial: an epoch replaced while the record was staged ends the walk here, and no other
-      // route is attempted in a walk the caller no longer stands behind.
-      const socketGuard = guardRefusal(host.direct?.guard);
+      // route is attempted in a walk the caller no longer stands behind. The composed guard is
+      // the watch principal's own verifier first and any narrowing guard its caller handed in.
+      const socketGuard = guardRefusal(directGuard);
       if (socketGuard !== null) {
         failures.push(`socket: refused: ${socketGuard.why}`);
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
@@ -1195,8 +1211,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // A direct-only caller's authority is rechecked before this leg's own route as well, even
       // while the build carries no resume runtime: a refusal here ends the walk rather than
       // recording an unavailable leg, and when a functional resume lands here it sits behind the
-      // same recheck, never after it. A refusal never reaches the walk's next route.
-      const resumeGuard = guardRefusal(host.direct?.guard);
+      // same recheck, never after it. A refusal never reaches the walk's next route. The
+      // composed guard is the watch principal's own verifier first and any narrowing guard its
+      // caller handed in.
+      const resumeGuard = guardRefusal(directGuard);
       if (resumeGuard !== null) {
         failures.push(`headless-resume: refused: ${resumeGuard.why}`);
         note(walkAttempt('headless-resume', 'refused', false, host.now(), startedAt, { reason: resumeGuard.why }));
@@ -3144,6 +3162,24 @@ function guardRefusal(guard: (() => { ok: true } | { ok: false; why: string }) |
   } catch (error) {
     return { ok: false, why: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * The recheck a direct route actually reads. When the run is the watch's own send, the watch
+ * principal's actual verifier always runs first: it is composed here, from the principal the run
+ * carries, so a caller that omits its own guard — or hands in one that always allows — cannot
+ * replace it. A caller's guard, when present, may only narrow the principal's verdict, and a
+ * refusal from either stands. Every other direct walk keeps exactly the guard it was given.
+ */
+function composedGuard(host: SendHost): (() => { ok: true } | { ok: false; why: string }) | undefined {
+  const principal = host.watch;
+  if (principal === undefined) return host.direct?.guard;
+  const narrowing = host.direct?.guard;
+  return () => {
+    const mine = guardRefusal(() => principal.recheck());
+    if (mine !== null) return mine;
+    return guardRefusal(narrowing) ?? { ok: true };
+  };
 }
 
 /**

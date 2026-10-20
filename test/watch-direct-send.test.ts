@@ -8,10 +8,11 @@ import { dirname, join } from 'node:path';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { MESSAGE_ID } from '../src/mcp/inbox.ts';
-import { sendDirect, type WatchSendPrincipal } from '../src/commands/send.ts';
+import { runSend, sendDirect, type WatchSendPrincipal } from '../src/commands/send.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
+import { verifyWatchAuthority, WATCH_DIRECT_WORK } from '../src/watch/authority.ts';
 import { sendWatchDirect } from '../src/watch/direct-send.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
@@ -293,4 +294,94 @@ describe("the watch's direct-work sender", () => {
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
+
+  test('a watch send with no direct context is refused before anything is staged', async () => {
+    const made = world(null);
+    cleanup = made.cleanup;
+    accepting(made);
+    registered(made);
+    verifiable(made);
+    watching(made);
+    const pane = scripted(['idle'], null);
+    const dials: string[] = [];
+    const host = fake(made, {
+      native: pane,
+      deliver: async (_socketPath, frame) => {
+        dials.push(frame);
+        return { ok: true };
+      },
+    });
+    // A principal whose own verdict is favourable: the refusal must come from the missing direct
+    // context alone, not from the watch ceasing to hold its authority.
+    const principal: WatchSendPrincipal = { root: made.root, session: SESSION, recheck: () => ({ ok: true }) };
+    const io = owner(made.root);
+
+    const code = await runSend(['lead', 'a note'], io, { ...host, watch: principal });
+
+    expect(code).toBe(1);
+    expect(io.err).toContain("the watch's send carries no direct context to bind it");
+    expect(stagedIds(made)).toEqual([]);
+    expect(dials).toHaveLength(0);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
+  // The watch's recheck is composed by the send itself, not handed in by the caller: an external
+  // guard that is missing or always permits must not drop it. The epoch is replaced during
+  // preparation, and the walk must still stop at the socket with nothing dialled or resumed.
+  for (const [label, guard] of [
+    ['omitted', undefined],
+    ['permissive', () => ({ ok: true as const })],
+  ] as const) {
+    test(`an ${label} external guard cannot drop the watch's recheck`, async () => {
+      const made = world(['socket', 'headless-resume']);
+      cleanup = made.cleanup;
+      accepting(made);
+      registered(made);
+      verifiable(made);
+      watching(made);
+      const pane = scripted(['idle'], null);
+      const dials: string[] = [];
+      const host = fake(made, {
+        native: pane,
+        deliver: async (_socketPath, frame) => {
+          dials.push(frame);
+          return { ok: true };
+        },
+        sendId: () => {
+          replaced(made);
+          return '11111111-2222-4333-8444-555555555555';
+        },
+      });
+      const principal: WatchSendPrincipal = {
+        root: made.root,
+        session: SESSION,
+        recheck: () => {
+          const again = verifyWatchAuthority({ root: made.root, session: SESSION, epoch: EPOCH, purpose: WATCH_DIRECT_WORK });
+          return again.ok ? { ok: true } : { ok: false, why: again.why };
+        },
+      };
+
+      const run = await sendDirect(owner(made.root), host, {
+        seat: 'lead',
+        pane: PANE,
+        cli: 'claude-code',
+        body: 'a note',
+        watch: principal,
+        ...(guard === undefined ? {} : { guard }),
+      });
+
+      expect(run.result).toEqual({
+        outcome: 'refused',
+        route: 'socket',
+        id: expect.any(String),
+        record: expect.any(String),
+        reason: "the recorded watch is another watch's epoch",
+      });
+      expect(stagedIds(made)).toHaveLength(1);
+      expect(dials).toHaveLength(0);
+      expect(pane.typed).toEqual([]);
+      expect(pane.enters).toBe(0);
+    });
+  }
 });
