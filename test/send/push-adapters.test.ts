@@ -1063,7 +1063,15 @@ seats:
     expect(readFileSync(join(dropDir, SAMPLE_ID), 'utf8')).toBe(signedRecordText);
     expect(spawnCalls).toEqual([
       {
-        args: ['queue', '--thread', scene.sessionId, '--message', SAMPLE_POINTER],
+        args: [
+          'queue',
+          '--remote',
+          `unix://${join(scene.home, '.codex', 'app-server-control', 'app-server-control.sock')}`,
+          '--thread',
+          scene.sessionId,
+          '--message',
+          SAMPLE_POINTER,
+        ],
         timeoutMs: 3_500,
       },
     ]);
@@ -1686,21 +1694,25 @@ seats:
     // One resolver: the team home's `.codex` by default, `CODEX_HOME` when the queue's own
     // process names one, and an explicit socket ahead of both.
     expect(resolveCodexAttemptEndpoint(scene.home, undefined)).toEqual({
+      ok: true,
       socketPath: sockPath,
       remote: `unix://${sockPath}`,
     });
     const codexHome = join(scene.dir, 'codex-home');
     expect(resolveCodexAttemptEndpoint(scene.home, undefined, undefined, { CODEX_HOME: codexHome })).toEqual({
+      ok: true,
       socketPath: join(codexHome, 'app-server-control', 'app-server-control.sock'),
       remote: `unix://${join(codexHome, 'app-server-control', 'app-server-control.sock')}`,
     });
     const explicit = join(scene.dir, 'explicit.sock');
     expect(resolveCodexAttemptEndpoint(scene.home, undefined, explicit)).toEqual({
+      ok: true,
       socketPath: explicit,
       remote: `unix://${explicit}`,
     });
     // A ws/wss remote is its own endpoint: there is no local socket to read or pass.
     expect(resolveCodexAttemptEndpoint(scene.home, 'ws://127.0.0.1:8791')).toEqual({
+      ok: true,
       socketPath: null,
       remote: 'ws://127.0.0.1:8791',
     });
@@ -1748,5 +1760,89 @@ seats:
     expect(spawnArgs).toEqual([
       ['queue', '--remote', `unix://${sockPath}`, '--thread', scene.sessionId, '--message', SAMPLE_POINTER],
     ]);
+  });
+
+  test('refuses an explicit remote and socket that name different endpoints before either operation', async () => {
+    const { deliverCodexNativeRoute, resolveCodexAttemptEndpoint } =
+      await import('../../src/send/push-adapters/codex-relay.ts');
+    const scene = makeCodexPushScene();
+    const probeSocket = join(scene.dir, 'probe.sock');
+    const otherSocket = join(scene.dir, 'elsewhere.sock');
+
+    // A unix remote naming one socket and a socket override naming another cannot both stand.
+    expect(resolveCodexAttemptEndpoint(scene.home, `unix://${otherSocket}`, probeSocket)).toEqual({
+      ok: false,
+      why: `the configured remote names ${otherSocket}, but the given control socket is ${probeSocket}; refusing to probe one endpoint and enqueue to another`,
+    });
+    // A ws/wss remote names no local socket at all, so a socket to read contradicts it.
+    expect(resolveCodexAttemptEndpoint(scene.home, 'ws://127.0.0.1:8791', probeSocket)).toEqual({
+      ok: false,
+      why: 'the configured remote ws://127.0.0.1:8791 names no local control socket, and a control socket was given; refusing to probe one endpoint and enqueue to another',
+    });
+
+    // The attempt refuses before the probe and before any spawn: neither side ran against a
+    // conflicting pair of options.
+    let probed = false;
+    let spawned = false;
+    const attempt = await deliverCodexNativeRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy: { dir: join(scene.dir, 'drops'), name: SAMPLE_ID },
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        sender: { seat: 'tester-2', team: 'teamcli' },
+        remote: `unix://${otherSocket}`,
+      },
+      { id: SAMPLE_ID, record: 'unused: skipStage', pointer: SAMPLE_POINTER },
+      {
+        deliveryTimeout: { native: 5 },
+        skipStage: true,
+        socketPath: probeSocket,
+        liveProbe: async () => {
+          probed = true;
+          return {
+            ok: true,
+            thread: { id: scene.sessionId, status: { type: 'idle' }, canAcceptDirectInput: true },
+          };
+        },
+        spawn: () => {
+          spawned = true;
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+    );
+    expect(attempt.outcome).toBe('unsupported');
+    if (attempt.outcome !== 'unsupported') throw new Error(`expected unsupported, got ${attempt.outcome}`);
+    expect(attempt.reason).toBe(
+      `the configured remote names ${otherSocket}, but the given control socket is ${probeSocket}; refusing to probe one endpoint and enqueue to another`,
+    );
+    expect(probed).toBe(false);
+    expect(spawned).toBe(false);
+  });
+
+  test('names a relative socket once, absolutely, before the probe and the queue', async () => {
+    const { resolveCodexAttemptEndpoint } = await import('../../src/send/push-adapters/codex-relay.ts');
+    const scene = makeCodexPushScene();
+    const cwd = join(scene.base, 'cwd');
+
+    // A relative CODEX_HOME is resolved from the one known working directory: the probe reads
+    // the absolute socket and the queue is given that same absolute path.
+    const relativeHome = join('relative', 'codex-home');
+    const codexSocket = join(cwd, relativeHome, 'app-server-control', 'app-server-control.sock');
+    expect(
+      resolveCodexAttemptEndpoint(scene.home, undefined, undefined, { CODEX_HOME: relativeHome }, cwd),
+    ).toEqual({ ok: true, socketPath: codexSocket, remote: `unix://${codexSocket}` });
+
+    // A relative explicit socket is the same endpoint on both sides too.
+    const relativeSocket = join('relative', 'explicit.sock');
+    const absoluteSocket = join(cwd, relativeSocket);
+    expect(resolveCodexAttemptEndpoint(scene.home, undefined, relativeSocket, {}, cwd)).toEqual({
+      ok: true,
+      socketPath: absoluteSocket,
+      remote: `unix://${absoluteSocket}`,
+    });
   });
 });

@@ -29,7 +29,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve as resolvePath } from 'node:path';
 import {
   stage as relayStage,
   type CopyTarget,
@@ -474,28 +474,58 @@ export function resolveCodexControlSocketPath(
   return null;
 }
 
+/** One endpoint, resolved once: `socketPath` is the local socket both the readiness probe and
+ *  the queue name (null for a ws/wss remote), `remote` the explicit `--remote` value the queue
+ *  gets. A refusal says why the caller's options cannot name one endpoint. */
+export type CodexAttemptEndpoint =
+  | { ok: true; socketPath: string | null; remote: string | undefined }
+  | { ok: false; why: string };
+
 /** The one endpoint a `native` attempt binds both its readiness probe and its queue to: the
  *  caller's explicit socket, else the control socket under `CODEX_HOME` when the queue's own
  *  process names one, else the team home's `.codex`. A ws/wss remote has no local socket, so the
- *  remote itself stays the endpoint. */
+ *  remote itself stays the endpoint.
+ *
+ *  The queue process resolves its own relative names against the working directory it inherits,
+ *  so a relative socket is named once, absolutely, from `cwd` before either operation runs — the
+ *  probe reads the absolute socket and the queue is given the same absolute `unix://` URI. An
+ *  explicit `remote` and an explicit socket that name different endpoints are refused: probing
+ *  one app-server and enqueuing to another is the split this resolution exists to prevent. */
 export function resolveCodexAttemptEndpoint(
   home: string,
   remote?: string,
   socketPath?: string | null,
   env: NodeJS.ProcessEnv = process.env,
-): { socketPath: string | null; remote: string | undefined } {
+  cwd: string = process.cwd(),
+): CodexAttemptEndpoint {
   const codexHome = env.CODEX_HOME?.trim();
-  const socket =
+  const namedCodexHome = codexHome === undefined || codexHome === '' ? undefined : codexHome;
+  const absolute = (path: string): string =>
+    isAbsolute(path) ? resolvePath(path) : resolvePath(cwd, path);
+
+  if (socketPath !== undefined && socketPath !== null && remote !== undefined) {
+    const remoteSocket = resolveCodexControlSocketPath(home, remote, namedCodexHome);
+    if (remoteSocket === null) {
+      return {
+        ok: false,
+        why: `the configured remote ${remote} names no local control socket, and a control socket was given; refusing to probe one endpoint and enqueue to another`,
+      };
+    }
+    if (absolute(remoteSocket) !== absolute(socketPath)) {
+      return {
+        ok: false,
+        why: `the configured remote names ${remoteSocket}, but the given control socket is ${socketPath}; refusing to probe one endpoint and enqueue to another`,
+      };
+    }
+  }
+
+  const named =
     socketPath !== undefined && socketPath !== null
       ? socketPath
-      : resolveCodexControlSocketPath(
-          home,
-          remote,
-          codexHome === undefined || codexHome === '' ? undefined : codexHome,
-        );
-  if (socket === null) return { socketPath: null, remote };
-  const queueRemote = socket.startsWith('/') ? `unix://${socket}` : `unix:///${socket}`;
-  return { socketPath: socket, remote: queueRemote };
+      : resolveCodexControlSocketPath(home, remote, namedCodexHome);
+  if (named === null) return { ok: true, socketPath: null, remote };
+  const socket = absolute(named);
+  return { ok: true, socketPath: socket, remote: `unix://${socket}` };
 }
 
 function encodeMaskedWsTextFrame(text: string): Buffer {
@@ -1232,8 +1262,23 @@ export async function deliverCodexNativeRoute(
 
   // The endpoint a live probe reads is the one the queue below is given. Left to their own
   // defaults the two can name different daemons: the probe reads the team home's `.codex` while
-  // `codex queue` reads the queue process's inherited `CODEX_HOME`.
-  let boundEndpoint: ReturnType<typeof resolveCodexAttemptEndpoint> | null = null;
+  // `codex queue` reads the queue process's inherited `CODEX_HOME`. A contradictory pair of
+  // options is refused here, before either operation, rather than probing one endpoint and
+  // enqueuing to the other.
+  const endpoint = resolveCodexAttemptEndpoint(target.home, target.remote, options.socketPath);
+  if (!endpoint.ok) {
+    const at = nowFn();
+    return {
+      route: CODEX_NATIVE_ROUTE,
+      outcome: 'unsupported',
+      reason: endpoint.why,
+      receipt: copyReceipt,
+      walkAttempt: buildWalkAttempt('unreachable', liveRoutesRemain, at, startedAt, endpoint.why, {
+        kind: 'stored',
+        id: message.id,
+      }),
+    };
+  }
   if (options.liveProbe !== undefined && options.liveProbe !== false) {
     const elapsedBeforeProbeMs = Math.max(0, nowFn().getTime() - routeStartedAtMs);
     const remainingBeforeProbeMs = budget.timeoutMs - elapsedBeforeProbeMs;
@@ -1257,8 +1302,6 @@ export async function deliverCodexNativeRoute(
       };
     }
 
-    const endpoint = resolveCodexAttemptEndpoint(target.home, target.remote, options.socketPath);
-    boundEndpoint = endpoint;
     const live = await probeCodexLiveReadiness({
       root: target.root,
       home: target.home,
@@ -1322,7 +1365,7 @@ export async function deliverCodexNativeRoute(
     };
   }
 
-  const queueRemote = boundEndpoint === null ? target.remote : boundEndpoint.remote;
+  const queueRemote = endpoint.remote;
   const adapter =
     options.adapter
     ?? codexPushAdapter({
