@@ -73,10 +73,11 @@ seats:
     stopped: true
 `;
 
-// The live restart reading: the file asks for 0.5 GB free swap, the machine reads 0.4 GB.
+// The live restart reading: the file asks for 0.5 GB free swap — which no longer refuses a
+// launch — and the OS's own pressure level is what the gate acts on.
 const MACHINE_YAML = TEAM_YAML.replace('workspace:\n', 'machine:\n  swap_free_min: 0.5GB\nworkspace:\n');
 const ROOMY: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 8e9, swapFree: 4e9, swapUsed: 4e9 };
-const TIGHT: Machine = { ...ROOMY, swapFree: 0.4e9, swapUsed: 7.6e9 };
+const TIGHT: Machine = { ...ROOMY, pressure: 'critical' };
 
 type Fixture = {
   base: string;
@@ -1038,8 +1039,8 @@ describe('team restart machine atomicity', () => {
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
     });
     // The live shape: the preflight reading passes, and by the time the run holds the lock
-    // the machine reads 0.4 GB free swap where the file asks 0.5 GB. The refusal must land
-    // before the stop, so the seat keeps its pane and nothing is typed, closed or created.
+    // the OS reports critical memory pressure. The refusal must land before the stop, so the
+    // seat keeps its pane and nothing is typed, closed or created.
     const readings = [ROOMY, TIGHT];
     let calls = 0;
     const { sources, did } = makeHarness(fixture, {
@@ -1048,7 +1049,7 @@ describe('team restart machine atomicity', () => {
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, sources)).toBe(1);
-    expect(io.err).toBe('team restart: free swap is 0.4 GB, below 0.5 GB\n');
+    expect(io.err).toBe('team restart: memory pressure is critical\n');
     expect(calls).toBe(2);
     expect(did.typed).toEqual([]);
     expect(did.closed).toEqual([]);
@@ -1066,7 +1067,7 @@ describe('team restart machine atomicity', () => {
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
     });
     // The reading is honest up to the stop and bad after it: the old workspace is closed and the
-    // machine now reads 0.4 GB free swap. The launch takes no reading after the stop, so the
+    // OS now reports critical memory pressure. The launch takes no reading after the stop, so the
     // decision made before it stands and the seat comes back up.
     const reads: number[] = [];
     const { sources, did } = makeHarness(fixture, {
