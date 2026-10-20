@@ -4,7 +4,7 @@
 // where the status alone says what happened.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -77,8 +77,18 @@ delivery_order: [mcp-inbox, typed]
 `;
 }
 
-function setupWorld() {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-readback-')));
+/** A short writable parent, or the platform temp root when neither short path exists. The
+ *  daemon spells its trigger as the absolute path of the store drop, so a deep temp root can
+ *  push that line past `TRIGGER_MAX` on a machine where the suite still has to pass. */
+function shortTempBase(): string {
+  for (const candidate of ['/private/tmp', '/tmp']) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return tmpdir();
+}
+
+function setupWorld(baseDir: string = tmpdir()) {
+  base = realpathSync(mkdtempSync(join(baseDir, 'team-send-readback-')));
   const root = join(base, 'acme');
   const dir = join(root, '.agents');
   const sockets = join(base, 'sockets');
@@ -167,14 +177,16 @@ describe('the composer read-back at its boundaries', () => {
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'the pane refused the Enter'], io, host)).toBe(1);
     expect(io.err).toContain('not-submitted: the seat did not take the trigger after 0 Enters; the box holds');
-    expect(io.err).toContain('Read ');
+    // The typed line is the sender-prefixed read form, so the quoted box proves which line was
+    // left unsent: the seat's own drop read, never a path the composer had to name.
+    expect(io.err).toContain('the box holds "From owner@acme: run team drops --read --seat lead --session acme and do that."');
     expect(host.enters.length).toBe(1);
     expect(outcomes(world)).toEqual(['not-submitted']);
 
     // The body waits in the drop file, whole, for the seat to pick up, with the retry record
-    // the watch reads beside it.
+    // the watch reads beside it and the walk's own `<id>.fallback.json` record beside both.
     const drops = join(world.dir, 'send-drops', 'acme', 'lead');
-    const files = readdirSync(drops).filter((name) => !name.endsWith('.pending'));
+    const files = readdirSync(drops).filter((name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json'));
     expect(files.length).toBe(1);
     expect(recordBody(join(drops, files[0]!))).toBe(filed('the pane refused the Enter'));
     expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
@@ -214,7 +226,9 @@ describe('the composer read-back at its boundaries', () => {
   });
 
   test('the same box through the daemon: one Enter, and the same sent word', async () => {
-    const world = setupWorld();
+    // This is the path-form boundary scene: the daemon types `read <absolute drop path>`, so
+    // the world runs under a short owned root to keep the intended successful line <= 200.
+    const world = setupWorld(shortTempBase());
     const host = makeHost(world);
     host.native.pressEnter = (_session, pane) => {
       host.enters.push(pane);
