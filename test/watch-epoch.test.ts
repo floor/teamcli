@@ -101,11 +101,11 @@ describe('the state record and the heartbeat', () => {
     expect(current()).toBeUndefined();
   });
 
-  test('a heartbeat pass keeps the epoch of the same pid and never adopts another pid\'s', () => {
+  test('a pane beat leaves a fenced record untouched, the same pid included', () => {
     const epoch = mintWatchEpoch();
     seed({ pid: process.pid, heartbeat: iso(T0), epoch });
     beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep');
-    expect(current()).toEqual({ pid: process.pid, heartbeat: iso(T0 + 5_000), epoch });
+    expect(current()).toEqual({ pid: process.pid, heartbeat: iso(T0), epoch });
 
     seed({ pid: process.pid + 1, heartbeat: iso(T0), epoch });
     beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep');
@@ -117,5 +117,11 @@ describe('the state record and the heartbeat', () => {
     seed({ heartbeat: iso(T0), epoch });
     beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep');
     expect(current()).toEqual({ heartbeat: iso(T0), epoch });
+  });
+
+  test('an ordinary epochless pane record still beats', () => {
+    seed({ pid: process.pid, heartbeat: iso(T0) });
+    beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep');
+    expect(current()).toEqual({ pid: process.pid, heartbeat: iso(T0 + 5_000) });
   });
 });

@@ -76,8 +76,10 @@ export function placedWatch(
 }
 
 /** The heartbeat. A place found this pass is recorded. `'keep'` leaves a pane this same pid
- *  already recorded, and writes none for a watch that has not seen itself in one. A record this
- *  same pid held keeps its authority epoch: a heartbeat never erases the fence. */
+ *  already recorded, and writes none for a watch that has not seen itself in one. A pane beat
+ *  carries no epoch, so it leaves any record holding a well-formed epoch untouched — the same
+ *  pid included: only `renewWatchAuthority` with the captured epoch and pid writes a fenced
+ *  heartbeat. An ordinary epochless pane record beats as before. */
 export function beatWatch(
   dir: string,
   session: string,
@@ -88,9 +90,7 @@ export function beatWatch(
   updateState(dir, (state) => {
     const record = (state.sessions[session] ??= emptySession());
     const prior = record.watch;
-    // A record another holder fenced with a well-formed epoch is not this pane's to overwrite:
-    // an old pane beat must not erase a successor's authority. This pid's own epoch is kept below.
-    if (prior && isWatchEpoch(prior.epoch) && prior.pid !== pid) return;
+    if (prior && isWatchEpoch(prior.epoch)) return;
     // `'keep'` preserves the pane this same pid recorded — or, on the first pass, the pane the
     // hand-over recorded with no pid yet: herdr not naming the watch's own pane must not erase
     // where the watch is known to run.
@@ -99,11 +99,9 @@ export function beatWatch(
         ? { pane: prior.pane, ...(prior.workspace ? { workspace: prior.workspace } : {}) }
         : undefined)
       : place;
-    const keptEpoch = prior?.pid === pid && isWatchEpoch(prior.epoch) ? prior.epoch : undefined;
     record.watch = {
       pid,
       heartbeat,
-      ...(keptEpoch !== undefined ? { epoch: keptEpoch } : {}),
       ...(kept?.pane ? { pane: kept.pane } : {}),
       ...(kept?.workspace ? { workspace: kept.workspace } : {}),
     };
