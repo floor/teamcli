@@ -8,7 +8,7 @@
 // (send, next, route, receipt, feed, event) is refused here with `daemon.auth-unsupported`
 // until the daemon derives a verified principal from the existing caller/placement/session
 // binding. No caller self-certification, self-minted owner proof or grant is accepted.
-import type { DaemonFeatures, DaemonStuckRequest } from './state.ts';
+import type { DaemonFeatures, DaemonRootPresenceHealth, DaemonStuckRequest } from './state.ts';
 
 export const DAEMON_PROTOCOL_VERSION = 1 as const;
 
@@ -33,6 +33,17 @@ export type DaemonRequest = {
   scope?: DaemonScope;
 };
 
+/**
+ * One canonical route the answering daemon hosts, derived from its in-memory routes for this
+ * request rather than copied from the five-second state record. `root` is the canonical checkout
+ * root the daemon accepted; `presence` is present only when this process runs the route's
+ * presence pass, so an entry without it means no health is known.
+ */
+export type DaemonRootHealthSnapshot = {
+  root: string;
+  presence?: DaemonRootPresenceHealth;
+};
+
 /** The daemon facts a health answer carries; the caller adds the probe timing. */
 export type DaemonHealthSnapshot = {
   pid: number;
@@ -43,6 +54,13 @@ export type DaemonHealthSnapshot = {
   heartbeatAt: string;
   stuck: DaemonStuckRequest[];
   features: DaemonFeatures;
+  /**
+   * The canonical routes and their fresh presence answers. Present while the daemon has routes;
+   * the snapshot's `pid` and `since` name the epoch that produced them, and a reader must match
+   * that epoch before using an answer. Absent fields, or a root with no entry, mean no health is
+   * known and a reader must hold its last projection rather than infer one.
+   */
+  roots?: DaemonRootHealthSnapshot[];
 };
 
 export type DaemonErrorCode =

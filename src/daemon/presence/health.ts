@@ -26,10 +26,14 @@ export function presenceStepHealth(result: { healthy?: unknown; pending?: unknow
 
 export type PresenceChannelHealth = {
   /** Records one finished step's typed channel answer at the instant it finished. The answer is
-   *  the ingester's own (`presenceStepHealth`), never inferred from the step merely resolving. */
-  stepped(ok: boolean, at: Date): void;
+   *  the ingester's own (`presenceStepHealth`), never inferred from the step merely resolving.
+   *  `why` is display detail for a false answer; it never participates in the verdict. */
+  stepped(ok: boolean, at: Date, why?: string | null): void;
   /** Whether a successful step finished inside the grace window and nothing failed since. */
   healthy(at: Date): boolean;
+  /** Why the answer at `at` is not healthy, for display; null when it is healthy. Never a
+   *  substitute for `healthy`: no step, a false step and an aged-out step all answer false. */
+  reason(at: Date): string | null;
 };
 
 export function createPresenceChannelHealth(
@@ -37,15 +41,23 @@ export function createPresenceChannelHealth(
 ): PresenceChannelHealth {
   let lastOkAt: number | null = null;
   let lastStepOk = false;
+  let lastWhy: string | null = null;
+  const healthy = (at: Date): boolean => {
+    if (!lastStepOk || lastOkAt === null) return false;
+    const age = at.getTime() - lastOkAt;
+    return age >= 0 && age <= graceMs;
+  };
   return {
-    stepped(ok, at) {
+    stepped(ok, at, why = null) {
       lastStepOk = ok;
+      lastWhy = ok ? null : why;
       if (ok) lastOkAt = at.getTime();
     },
-    healthy(at) {
-      if (!lastStepOk || lastOkAt === null) return false;
-      const age = at.getTime() - lastOkAt;
-      return age >= 0 && age <= graceMs;
+    healthy,
+    reason(at) {
+      if (healthy(at)) return null;
+      if (!lastStepOk) return lastWhy ?? 'the presence channel did not answer healthy';
+      return 'no presence step finished inside the liveness window';
     },
   };
 }

@@ -29,7 +29,7 @@ import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine } from '../launch/plain.ts';
 import { pidAlive } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
-import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot } from './protocol.ts';
+import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
@@ -195,6 +195,7 @@ function snapshotOf(fields: {
   heartbeatAt: string;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
+  roots?: DaemonRootHealthSnapshot[];
 }): DaemonHealthSnapshot {
   return {
     pid: fields.pid,
@@ -205,6 +206,7 @@ function snapshotOf(fields: {
     heartbeatAt: fields.heartbeatAt,
     stuck: fields.stuck,
     features: fields.features,
+    ...(fields.roots === undefined ? {} : { roots: fields.roots }),
   };
 }
 
@@ -324,8 +326,44 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     return stuck;
   };
 
-  const health = (): DaemonHealthSnapshot =>
-    snapshotOf({
+  /**
+   * The canonical routes for this request, derived from the in-memory route table rather than
+   * copied from the five-second state record. A route carries a presence answer only when this
+   * process owns a presence pass for it; with presence hosting off the field is omitted, which
+   * a reader must treat as unknown, never as healthy.
+   *
+   * The answer is never a stored word: `serving` with `healthy: true` only while this process
+   * owns the route, is not closing, and the route's last finished step answered the producer's
+   * own `healthy: true` with no known backlog inside the fixed grace window. A gap, a failed
+   * step, a known backlog and a closing daemon all answer `pending` with `healthy: false`.
+   */
+  const rootsSnapshot = (at: Date): DaemonRootHealthSnapshot[] => {
+    const checkedAt = at.toISOString();
+    return routes.map((route) => {
+      const presence = presenceWork.find((one) => one.route.root === route.root);
+      if (presence === undefined) return { root: route.root };
+      const healthy = !closed && presence.health.healthy(at);
+      const why = healthy
+        ? null
+        : closed
+          ? 'the daemon is closing'
+          : presence.health.reason(at) ?? 'the presence channel is not current';
+      return {
+        root: route.root,
+        presence: {
+          session: route.session,
+          state: healthy ? 'serving' : 'pending',
+          healthy,
+          checkedAt,
+          why,
+        },
+      };
+    });
+  };
+
+  const health = (): DaemonHealthSnapshot => {
+    const at = now();
+    return snapshotOf({
       pid,
       uid,
       since,
@@ -334,7 +372,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       heartbeatAt,
       features,
       stuck: stuckNow(),
+      ...(routes.length > 0 ? { roots: rootsSnapshot(at) } : {}),
     });
+  };
 
   const writeState = (afterClose = false): void => {
     if (closed && !afterClose) return;
@@ -627,18 +667,23 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     let run: Promise<void>;
     run = (async () => {
       let healthy = false;
+      let why: string | null = null;
       try {
         const step = await one.ingester.step();
         // A resolved step is not a healthy channel: faults are reported in the step's own typed
         // outcome, and an absent or unconvincing answer is not known, which is not healthy.
         healthy = presenceStepHealth(step);
+        // Display detail for the health answer only; the verdict above never reads this text.
+        why = step.errors[0]?.why
+          ?? (step.pending === true ? 'the presence channel still has a backlog' : null);
         logPresenceOnce(one.route, step.errors[0]?.why ?? '');
       } catch (error) {
-        logPresenceOnce(one.route, `the presence step failed: ${error instanceof Error ? error.message : String(error)}`);
+        why = `the presence step failed: ${error instanceof Error ? error.message : String(error)}`;
+        logPresenceOnce(one.route, why);
       }
       // The channel's fixed liveness is that typed outcome: only a step that finished with no
       // persistent fault and no known backlog vouches for the grace window.
-      one.health.stepped(healthy, now());
+      one.health.stepped(healthy, now(), why);
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.

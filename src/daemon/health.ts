@@ -15,6 +15,7 @@ import {
   daemonStateAlive,
   readDaemonState,
   type DaemonFeatures,
+  type DaemonRootPresenceHealth,
   type DaemonRootState,
   type DaemonState,
   type DaemonStuckRequest,
@@ -40,8 +41,13 @@ export type DaemonHealth = {
   heartbeatAt: string | null;
   features: DaemonFeatures | null;
   stuck: DaemonStuckRequest[];
-  /** The checkouts the running daemon recorded hosting, with any failure reason. Empty when
-   *  nothing was hosted or when the reading cannot tell. */
+  /**
+   * The checkouts the running daemon recorded hosting, with any failure reason. When the daemon
+   * answered the probe, a root it names in the same answer gains that answer's fresh presence
+   * record — `state: 'serving', healthy: true` only for a current, owned, healthy channel. A root
+   * with no presence record means no health is known, and a reader must hold its last projection.
+   * Empty when nothing was hosted or when the reading cannot tell.
+   */
   roots: DaemonRootState[];
   probe: DaemonProbe;
   /** Why the reading is unknown, when it is. */
@@ -126,7 +132,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       heartbeatAt: health.heartbeatAt,
       features: health.features,
       stuck: health.stuck,
-      roots: read.state.roots,
+      roots: mergedRoots(read.state, health),
       probe: { state: 'answered', at: stamp(now) },
       why: null,
     };
@@ -144,6 +150,56 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
     at: stamp(now),
     reason: answer.reason,
   });
+}
+
+/**
+ * The state record's roots, with the answering daemon's fresh presence answers merged by canonical
+ * root. The answer is used only when the answer and the record name the same daemon epoch: a
+ * process that restarted between the two reads must not have its answers pasted onto another
+ * incarnation's record. A malformed or self-contradicting answer is dropped, never repaired; a
+ * fresh root the record does not carry is not invented into it. Nothing here resolves a spelling:
+ * the daemon names the canonical root, and that exact string is the key.
+ */
+function mergedRoots(state: DaemonState, answer: DaemonHealthSnapshot): DaemonRootState[] {
+  if (answer.pid !== state.pid || answer.since !== state.since) return state.roots;
+  if (!Array.isArray(answer.roots)) return state.roots;
+  const fresh = new Map<string, DaemonRootPresenceHealth>();
+  for (const item of answer.roots) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.root !== 'string' || entry.root === '') continue;
+    const presence = freshPresenceOf(entry.presence);
+    if (presence !== null) fresh.set(entry.root, presence);
+  }
+  if (fresh.size === 0) return state.roots;
+  return state.roots.map((root) => {
+    const presence = fresh.get(root.root);
+    return presence === undefined ? root : { ...root, presence };
+  });
+}
+
+/**
+ * One fresh presence record, or null when it is not the exact shape the daemon promises. `serving`
+ * and `healthy: true` are one fact: a record that says one without the other is not known, and a
+ * pending record without a non-empty why cannot say what it is waiting for.
+ */
+function freshPresenceOf(raw: unknown): DaemonRootPresenceHealth | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.session !== 'string' || entry.session === '') return null;
+  if (entry.state !== 'serving' && entry.state !== 'pending') return null;
+  if (typeof entry.healthy !== 'boolean') return null;
+  if ((entry.state === 'serving') !== entry.healthy) return null;
+  if (typeof entry.checkedAt !== 'string' || entry.checkedAt === '') return null;
+  if (!(entry.why === null || typeof entry.why === 'string')) return null;
+  if (entry.state === 'pending' && (typeof entry.why !== 'string' || entry.why === '')) return null;
+  return {
+    session: entry.session,
+    state: entry.state,
+    healthy: entry.healthy,
+    checkedAt: entry.checkedAt,
+    why: entry.why as string | null,
+  };
 }
 
 function runningFromState(state: DaemonState, socket: string, probe: DaemonProbe): DaemonHealth {

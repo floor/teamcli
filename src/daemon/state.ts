@@ -13,6 +13,30 @@ export type DaemonFeatures = { broker: 'on' | 'off' | 'absent' };
 /** A request the daemon has been working on longer than its stuck threshold. */
 export type DaemonStuckRequest = { id: string; op: string; since: string; ageMs: number };
 
+/**
+ * One route's fresh presence answer, computed for the health request that carries it and never
+ * persisted. `session` is the session of the team file this daemon actually loaded for the route;
+ * `checkedAt` is the request's snapshot instant, not an age of the native event. `serving` with
+ * `healthy: true` is the only combination a reader may treat as proof: a gap, a fault, a known
+ * backlog, a closing daemon or a route this process does not own answer `pending` with
+ * `healthy: false` and a non-empty why.
+ */
+export type DaemonRootPresenceHealth = {
+  session: string;
+  state: 'serving' | 'pending';
+  healthy: boolean;
+  checkedAt: string;
+  why: string | null;
+};
+
+/**
+ * A route's presence record as a reading carries it: the close record a daemon persisted when its
+ * drain was not truthful (`state: 'pending'`, why non-empty), or the fresh health answer merged
+ * from a same-epoch health response. Only the fresh answer can carry `healthy`; the close record
+ * never does, so it can never be mistaken for proof.
+ */
+export type DaemonRootPresence = { state: 'pending'; why: string } | DaemonRootPresenceHealth;
+
 /** One checkout this process hosts, recorded so a later `team daemon status` can tell a running
  *  daemon from a running daemon that silently hosts nothing for a checkout. */
 export type DaemonRootState = {
@@ -28,11 +52,13 @@ export type DaemonRootState = {
    */
   watch?: HostedWatchState;
   /**
-   * The route's presence lifecycle. Present only when the daemon was started to ingest presence
-   * and could not finish a truthful drain at close: `pending` means the daemon kept its lock,
-   * socket and state record rather than claim a closure it had not reached, and names why.
+   * The route's presence record. On the persisted path it is present only when the daemon was
+   * started to ingest presence and could not finish a truthful drain at close: `pending` means
+   * the daemon kept its lock, socket and state record rather than claim a closure it had not
+   * reached, and names why. On a live health reading the same key carries the request-fresh
+   * answer, whose only proof is `state: 'serving'` with `healthy: true`.
    */
-  presence?: { state: 'pending'; why: string };
+  presence?: DaemonRootPresence;
 };
 
 export type DaemonState = {
