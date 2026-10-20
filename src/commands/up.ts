@@ -53,7 +53,7 @@ import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/c
 import { executePlan } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
-import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
+import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -1518,16 +1518,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     stampLobbyTrust(true);
     stampGrantedTrust();
     // The general seat brief goes first: one signed drop in the folder of every seat this plan
-    // launches or relaunches, and of every declared seat the session records no launch of. A seat
-    // the state records as already launched, which this run leaves as it is, is left exactly so:
-    // no drop and no state entry. A delivery that cannot be written is said and logged, and the
-    // launch goes on; `team check` names the seat with no record. The plan is built here with the
-    // planned settings map — the launch set does not depend on the files — so the claim exists
-    // before the settings files are written below, which name the epoch it was delivered under.
+    // launches or relaunches, and of every declared seat the session records no launch of that
+    // does not already hold a ready claim for this brief. A seat the state records as already
+    // launched, which this run leaves as it is, is left exactly so: no drop and no state entry. A
+    // delivery that cannot be written is said and logged, and the launch goes on; `team check`
+    // names the seat with no record. The plan is built here with the planned settings map — the
+    // launch set does not depend on the files — so the claim exists before the settings files are
+    // written below, which name the epoch it was delivered under.
     const planned = buildPlan();
     const launchedSeats = planned.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    // A declared seat this session never launched is delivered to only until it holds a ready
+    // claim for this build's brief: an unchanged second run leaves that claim and its drop as
+    // they are, while a missing, failed or older claim is delivered again.
+    const claimStands = (name: string): boolean => {
+      const claim = currentBriefClaim(recorded?.briefs?.[name]);
+      return claim !== null && claim.stage === 'ready' && claim.sha256 === GENERAL_BRIEF_SHA256;
+    };
     const briefSeats = team.seats
-      .filter((seat) => launchedSeats.includes(seat.name) || recorded?.seats[seat.name] === undefined)
+      .filter((seat) => launchedSeats.includes(seat.name)
+        || (recorded?.seats[seat.name] === undefined && !claimStands(seat.name)))
       .map((seat) => seat.name);
     const briefs = deliverBriefForAttribution({
       dir,

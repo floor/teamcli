@@ -416,6 +416,38 @@ describe('team up, two runs and the watchdog', () => {
     expect(stateOf().sessions['acme-web']).toEqual(beforeSecond);
   });
 
+  test('a recordless seat whose claim is gone is delivered again', async () => {
+    await approve();
+    const made = world();
+    const first = testIo(root, { kind: 'owner' });
+    expect(await runUp(FILE, first, sources({}, made))).toBe(0);
+    const firstClaims = stateOf().sessions['acme-web']?.briefs ?? {};
+    const was = firstClaims['codex-acme']?.id;
+    expect(typeof was).toBe('string');
+    // The seat was never launched, so its claim is the only record of the delivery: without one,
+    // the next run must write a fresh claim and its drop rather than treat the seat as served.
+    const seeded = JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'));
+    delete seeded.sessions['acme-web'].briefs['codex-acme'];
+    writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify(seeded));
+
+    const named = () => [
+      agent('claude-coordinator-acme', 'w1:p1'),
+      agent('deepseek-acme', 'w2:p1'),
+      agent('deepseek-acme-2', 'w3:p1'),
+    ];
+    made.launch.agents = named;
+    const second = testIo(root, { kind: 'owner' });
+    const code2 = await runUp(FILE, second, sources({
+      sessionState: () => 'running',
+      alive: () => true,
+      agents: named,
+    }, made));
+    expect(code2).toBe(0);
+    const claim = stateOf().sessions['acme-web']?.briefs?.['codex-acme'];
+    expect(claim?.stage).toBe('ready');
+    expect(claim?.id).not.toBe(was);
+  });
+
   test('the watchdog pane is recorded when a flagless watch would miss the file, and survives the next run', async () => {
     // A git root above the project: a watch started in `root` with no `--file` would load the
     // git root's own file, not this one, so the resolved path is recorded for the pane. The
