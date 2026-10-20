@@ -28,6 +28,7 @@
 import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WatchSources } from '../commands/watch.ts';
+import type { BrokerWorkSource } from '../idle_work.ts';
 import { readState } from '../state.ts';
 import { createWatchHost, type WatchHostReport } from '../watch/authority-lifecycle.ts';
 import type { WorkPush } from '../watch/dispatch.ts';
@@ -85,6 +86,12 @@ export type HostedWatchAuthorityInput = {
    * that seat's native projection is held rather than believed.
    */
   presenceChannelHealthy?: (seat: string) => boolean;
+  /**
+   * The owning daemon's broker reader, when it hosts the broker. The watch counts a tracker
+   * team's takeable work from the snapshot it returns; absent (broker hosting off, the default),
+   * the reading stays explicitly unknown and no socket is opened.
+   */
+  brokerWork?: BrokerWorkSource;
 };
 
 function textOf(error: unknown): string {
@@ -340,6 +347,7 @@ async function runAuthoritativeHost(
       ...(input.presenceChannelHealthy === undefined
         ? {}
         : { presenceChannelHealthy: input.presenceChannelHealthy }),
+      ...(input.brokerWork === undefined ? {} : { brokerWork: input.brokerWork }),
       // The record carries this runtime's pid; the shared loop must read it as its own.
       pid: process.pid,
     });

@@ -8,6 +8,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { IdleWorkInput, IdleWorkReport, PresenceSource } from '../idle_work.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { takeable } from '../commands/next.ts';
+import type { TaskRecord } from '../tasks/adapter.ts';
 import { liveLeases } from '../tasks/lease.ts';
 import { fileSourceOf, readFileSource } from '../tasks/queue.ts';
 import { nativeAllowsTyping, presenceSeatOf, presenceVerdict, type PresenceRead, type PresenceVerdict } from './presence.ts';
@@ -60,8 +61,8 @@ export function idleThresholdReading(team: TeamFile, root: string, home: string 
  * stamp has no provable clock and is not counted. `takeable` is the records at
  * least one of those seats could claim under the picker's own rules (`takeable`), minus ids a
  * live lease in this clone already holds. A paused team claims nothing. A team whose file names
- * a tracker has an unknown count here — no broker snapshot is read and the tracker is never read
- * over the network — and the reading says unknown rather than zero.
+ * a tracker counts the caller's prefetched broker snapshot when one is supplied; without one the
+ * count is unknown rather than zero, and nothing here reads the tracker over the network.
  */
 export function idleWorkReport(input: IdleWorkInput): IdleWorkReport {
   const now = input.now.getTime();
@@ -195,25 +196,34 @@ function sinceOf(stamp: string | undefined): string | null {
 }
 
 /** The records at least one idle seat could claim now, under the picker's rules, with live
- *  leases removed. `takeable: null` means a named file source could not be read; the reason is
- *  carried so the reading never looks like an empty queue. */
+ *  leases removed. `takeable: null` means a named source could not be read; the reason is
+ *  carried so the reading never looks like an empty queue. A tracker team counts the caller's
+ *  prefetched broker snapshot; without one the count stays unknown, never zero. */
 function takeableNow(input: IdleWorkInput, seats: readonly IdleWorker[], now: number): { takeable: number | null; refused?: string } {
   if (input.pause != null) return { takeable: 0 };
   const source = fileSourceOf(input.team);
-  // A declared tracker is the team's source, and this reading has no broker snapshot behind it:
-  // the count is unknown, never zero, so no dispatcher reads it as "no work".
+  let records: readonly TaskRecord[];
   if (source === null) {
-    return { takeable: null, refused: 'the team declares a linear task source and no broker snapshot is available here' };
+    const snapshot = input.broker;
+    // A declared tracker is the team's source. Without a snapshot the count is unknown, never
+    // zero, so no dispatcher reads it as "no work".
+    if (snapshot == null) {
+      return { takeable: null, refused: 'the team declares a linear task source and no broker snapshot is available here' };
+    }
+    if (snapshot.kind === 'refused') return { takeable: null, refused: snapshot.why };
+    records = snapshot.records;
+  } else {
+    const read = readFileSource(input.root, source);
+    if (read.kind === 'missing') return { takeable: null, refused: `${source.path} is missing` };
+    if (read.kind === 'outside') return { takeable: null, refused: `${source.path} is outside the team root` };
+    if (read.kind === 'not-a-list') return { takeable: null, refused: `${source.path} is not a task list` };
+    records = read.records;
   }
-  const read = readFileSource(input.root, source);
-  if (read.kind === 'missing') return { takeable: null, refused: `${source.path} is missing` };
-  if (read.kind === 'outside') return { takeable: null, refused: `${source.path} is outside the team root` };
-  if (read.kind === 'not-a-list') return { takeable: null, refused: `${source.path} is not a task list` };
   const held = new Set(liveLeases(input.root, now).map((lease) => lease.id));
-  const pull = input.team.tasks?.source === 'file' ? input.team.tasks.pull ?? 'self' : 'self';
+  const pull = input.team.tasks?.pull ?? 'self';
   const ids = new Set<string>();
   for (const seat of seats) {
-    for (const record of takeable(read.records, seat.name, pull, false)) {
+    for (const record of takeable(records, seat.name, pull, false)) {
       if (!held.has(record.id)) ids.add(record.id);
     }
   }

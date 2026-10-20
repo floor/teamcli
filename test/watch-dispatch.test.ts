@@ -23,6 +23,7 @@ import { emptySession, readState, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import type { BrokerWorkSource } from '../src/idle_work.ts';
 import { captureIdleClaim, idleClaimOf, settleIdleClaim } from '../src/watch/claim.ts';
 import type { PresenceReading } from '../src/daemon/presence/contract.ts';
 import { idleWorkReport } from '../src/watch/idle-work.ts';
@@ -948,6 +949,80 @@ describe('the watch seam', () => {
     // The guard is narrow: with nothing to dispatch and a truthful clock, the mail ring is the
     // one typed path left, and it types.
     expect(typed.some((line) => line.includes('Team: run team drops --read --seat deepseek-acme-2'))).toBe(true);
+  });
+
+  /** The same team file with its source moved to a tracker. Its records exist only in the
+   *  caller's broker reading; the file itself carries the local queue nothing reads here. */
+  function linearFile(): string {
+    const path = join(dir, '.agents', 'team-linear.yaml');
+    writeFileSync(path, `${readFileSync(file, 'utf8')}tasks:
+  source: linear
+  linear:
+    project: 01234567-89ab-cdef-0123-456789abcdef
+    keychainService: team.linear.acme
+`);
+    return path;
+  }
+
+  test('a tracker team counts the pass’s broker reading and dispatches from it', async () => {
+    const asked: string[] = [];
+    const brokerWork: BrokerWorkSource = async (input) => {
+      asked.push(input.root);
+      return { kind: 'records', at: input.now.toISOString(), records: [{ id: 't1', title: 'Tracker first' }] };
+    };
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', linearFile()], io, sources({
+      wait: async () => false,
+      brokerWork,
+      pushWork: async (request) => {
+        pushed.push(request);
+        return { ok: true, outcome: 'typed (unconfirmed)' };
+      },
+    }));
+    // One pass, one reading, and the picker's record reaches both idle seats through the one
+    // direct route. Nothing read the tracker over the network but the caller's own reader.
+    expect(code).toBe(0);
+    expect(asked).toEqual([dir]);
+    expect(pushed.map((one) => one.seat).sort()).toEqual(['deepseek-acme', 'deepseek-acme-2']);
+  });
+
+  test('a file team and a watch told not to nudge never ask the broker', async () => {
+    const asked: string[] = [];
+    const brokerWork: BrokerWorkSource = async () => {
+      asked.push('asked');
+      return null;
+    };
+    expect(await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources({ wait: async () => false, brokerWork }))).toBe(0);
+    expect(asked).toEqual([]);
+    // A watch that types nothing dispatches nothing: it opens no reading it could not act on.
+    expect(await runWatch(['--file', linearFile(), '--no-nudge'], testIo(dir, { kind: 'owner' }), sources({
+      wait: async () => false,
+      brokerWork,
+      pushWork: async (request) => {
+        pushed.push(request);
+        return { ok: true, outcome: 'typed (unconfirmed)' };
+      },
+    }))).toBe(0);
+    expect(asked).toEqual([]);
+    expect(pushed).toEqual([]);
+  });
+
+  test('a refused broker reading dispatches nothing, never an empty page', async () => {
+    const brokerWork: BrokerWorkSource = async () => ({
+      kind: 'refused',
+      at: new Date(clock).toISOString(),
+      why: 'the broker is not running',
+    });
+    const code = await runWatch(['--file', linearFile()], testIo(dir, { kind: 'owner' }), sources({
+      wait: async () => false,
+      brokerWork,
+      pushWork: async (request) => {
+        pushed.push(request);
+        return { ok: true, outcome: 'typed (unconfirmed)' };
+      },
+    }));
+    expect(code).toBe(0);
+    expect(pushed).toEqual([]);
   });
 });
 

@@ -50,6 +50,7 @@ import {
   type PresenceSourceRuntime, type PresenceSourceStatus,
 } from './presence/health.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
+import type { BrokerWorkSource } from '../idle_work.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import {
@@ -88,6 +89,11 @@ export type HostedWatchBuild = {
   tick?: (at: Date) => boolean | void;
 };
 
+/** What the daemon resolved for one route besides the route itself and its log. `brokerWork` is
+ *  present only when this daemon hosts the broker and a reader was built for the route; it is
+ *  the watch's only way to count a tracker team's takeable work. */
+export type HostedWatchExtras = { brokerWork?: BrokerWorkSource };
+
 export type StartMachineDaemonInput = {
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
@@ -115,8 +121,17 @@ export type StartMachineDaemonInput = {
   watchHosting?: boolean;
   /** Builds one route's watch. The default runs the shared watch loop over the real read
    *  sources with mutating sources closed and outbound effects blocked; a test injects its
-   *  own run and clock and, only with a verified admitted sender, `open` effects. */
-  hostedWatch?: (route: HostedRoute, log: (text: string) => void) => HostedWatchBuild;
+   *  own run and clock and, only with a verified admitted sender, `open` effects. The third
+   *  argument carries what the daemon resolved for this route besides the route itself. */
+  hostedWatch?: (route: HostedRoute, log: (text: string) => void, extras: HostedWatchExtras) => HostedWatchBuild;
+  /**
+   * The broker reading the hosted watches may count for a tracker team, built per route. Only a
+   * daemon that hosts the broker resolves one (`features.broker === 'on'`); otherwise the
+   * builder is never called and a tracker team's idle reading stays explicitly unknown. The
+   * reader is the caller's: this daemon never opens the broker's socket or reads a credential
+   * itself. Absent even with the broker hosted, the same explicit unknown stands.
+   */
+  brokerWork?: (route: HostedRoute) => BrokerWorkSource | undefined;
   /**
    * Whether each hosted route also runs the presence ingester, the activity reconciler and the
    * publisher that copies applied transitions to the bus event log on the daemon's own 250 ms
@@ -958,7 +973,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // store's last word: with presence hosting off there is no pass, so the answer is absent
       // and the dispatcher holds a native projection rather than believing it.
       const presence = presenceWork.find((one) => one.route.root === route.root);
-      const build = input.hostedWatch?.(route, log)
+      // The route's broker reading is a daemon capability: only a daemon that hosts the broker
+      // resolves one, and only through the injected builder. Otherwise this daemon opens no
+      // socket and a tracker team's idle reading stays explicitly unknown.
+      const brokerWork = features.broker === 'on' ? input.brokerWork?.(route) : undefined;
+      const extras: HostedWatchExtras = brokerWork === undefined ? {} : { brokerWork };
+      const build = input.hostedWatch?.(route, log, extras)
         ?? hostedWatchAuthority({
           route,
           teamFile,
@@ -972,6 +992,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 presenceChannelHealthy: (seat: string) =>
                   seatQualified(presence, seat, now()),
               }),
+          ...(brokerWork === undefined ? {} : { brokerWork }),
           // The shared verifier judges the captured identity against the record under its own
           // lock immediately before every effect; a lifecycle report is never a substitute.
           verifyAuthority: (check) => verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK }),

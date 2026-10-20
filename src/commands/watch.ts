@@ -36,6 +36,7 @@ import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
 import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
+import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
 import { nativeHeldSeats } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
@@ -215,7 +216,33 @@ export type WatchSources = {
    * holds a native projection instead of believing it. Never settable from a command line.
    */
   presenceChannelHealthy?: (seat: string) => boolean;
+  /**
+   * The broker reading for a tracker team, prefetched once in the pass before the dispatcher
+   * reads it. Absent (a hand-started watch, and every daemon that does not host the broker), the
+   * reading stays explicitly unknown and this watch never opens the broker's socket. Only a
+   * machine daemon that hosts the broker supplies one. Never settable from a command line.
+   */
+  brokerWork?: BrokerWorkSource;
 };
+
+/** The pass's one broker reading for a tracker team. The caller's reader is asked once; a
+ *  reader with no answer leaves the snapshot absent, so the reading keeps its own pinned unknown
+ *  rather than a refusal this watch invented, and a throw becomes a named refusal so a broken
+ *  reader is never read as an empty page. */
+async function prefetchBrokerWork(
+  source: BrokerWorkSource,
+  input: { root: string; team: TeamFile; now: Date },
+): Promise<BrokerWorkSnapshot | undefined> {
+  try {
+    return (await source(input)) ?? undefined;
+  } catch (error) {
+    return {
+      kind: 'refused',
+      at: input.now.toISOString(),
+      why: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 /** The streams a direct dispatch writes through: the watch process's own, with an optional copy
  *  of what it said on stderr, so a refusal that names no route still reaches the dispatcher. */
@@ -723,6 +750,17 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const whole = readState(dir);
         const state = whole.sessions[session] ?? emptySession();
         const now = sources.now().getTime();
+        // Whether this pass may dispatch at all: a foreign session, a watch told to type
+        // nothing, an unreadable pace, or a hosted loop with no direct route. The dispatcher
+        // below takes its reading only when something could act on it, and so does the broker.
+        const dispatchHeld = foreign || args.flags.has('no-nudge') || !paceVerified
+          || (hosted !== undefined && sources.pushWork === undefined);
+        // The tracker team's one broker reading for this pass, beside the presence snapshot: the
+        // caller's reader, never this process's socket. A file team never asks, and neither does
+        // a pass that cannot dispatch, so a held watch opens nothing it could not use.
+        const broker = dispatchHeld || sources.brokerWork === undefined || team.tasks?.source !== 'linear'
+          ? undefined
+          : await prefetchBrokerWork(sources.brokerWork, { root, team, now: sources.now() });
         // One presence snapshot for this pass, shared by the status engine, the pass's idle
         // publication and every automatic typed path: they cannot disagree about a seat. The
         // hold is the explicit allow (`nativeAllowsTyping`): only a qualified native idle or a
@@ -901,8 +939,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // cannot prove idle is typed at by nobody. `--no-nudge` is the watch that types nothing:
         // it dispatches nothing at all rather than spending an episode on a route it was told
         // not to use.
-        const idleDispatch: IdleDispatchResult = foreign || args.flags.has('no-nudge') || !paceVerified
-          || (hosted !== undefined && sources.pushWork === undefined)
+        const idleDispatch: IdleDispatchResult = dispatchHeld
           ? { pushed: [], suppressed: [] }
           : await dispatchIdleWork({
             root, dir, team, state, live, now: sources.now(),
@@ -918,6 +955,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             // The same snapshot and hold the rest of this pass reads, so the dispatcher, the
             // status engine and the typed fallbacks cannot disagree about a seat.
             presence,
+            // The pass's prefetched broker reading, when a caller hosts one: the dispatcher
+            // counts it with the picker's own rules and never reads the tracker itself.
+            ...(broker === undefined ? {} : { broker }),
           });
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;

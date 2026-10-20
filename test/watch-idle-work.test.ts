@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import type { BrokerWorkSnapshot } from '../src/idle_work.ts';
 import { idleWorkNotes } from '../src/idle_work.ts';
 import type { PauseRecord, SessionState } from '../src/state.ts';
 import { emptySession } from '../src/state.ts';
@@ -72,8 +73,18 @@ function queue(records: { id: string; title: string }[]): void {
   writeFileSync(join(root, '.agents', 'queue.yaml'), records.map((record) => `- id: ${record.id}\n  title: "${record.title}"\n`).join(''));
 }
 
-function read(team: TeamFile, state: SessionState, scene: Live | null = live(), now = NOW, extra: { pause?: PauseRecord; swaps?: string[] } = {}) {
+function read(team: TeamFile, state: SessionState, scene: Live | null = live(), now = NOW, extra: { pause?: PauseRecord; swaps?: string[]; broker?: BrokerWorkSnapshot } = {}) {
   return idleWorkReport({ root, team, state, live: scene, now: new Date(now), ...extra });
+}
+
+/** The example with its task source moved to a tracker: the reading cannot read it itself. */
+function linearTeam(extra = ''): TeamFile {
+  return teamOf(`${example}tasks:
+  source: linear
+  linear:
+    project: 01234567-89ab-cdef-0123-456789abcdef
+    keychainService: team.linear.acme
+${extra}`);
 }
 
 describe('the idle clock', () => {
@@ -160,15 +171,53 @@ describe('the idle clock', () => {
   });
 
   test('a declared tracker with no broker snapshot is unknown, not zero work', () => {
-    const team = teamOf(`${example}tasks:
-  source: linear
-  linear:
-    project: 01234567-89ab-cdef-0123-456789abcdef
-    keychainService: team.linear.acme
-`);
-    const report = read(team, stateWith(new Date(NOW - 10 * MIN).toISOString()));
+    const report = read(linearTeam(), stateWith(new Date(NOW - 10 * MIN).toISOString()));
     expect(report.takeable).toBeNull();
     expect(report.refused).toBe('the team declares a linear task source and no broker snapshot is available here');
+  });
+
+  test('a supplied broker snapshot is counted by the picker and honours live leases', () => {
+    const team = linearTeam();
+    const at = new Date(NOW).toISOString();
+    const records = [
+      { id: 't1', title: 'Unassigned' },
+      { id: 't2', title: 'Another seat’s', assignee: 'codex-acme' },
+      { id: 't3', title: 'Blocked', blockedBy: ['t1'] },
+    ];
+    const snapshot: BrokerWorkSnapshot = { kind: 'records', at, records };
+    expect(read(team, stateWith(new Date(NOW - 10 * MIN).toISOString()), live(), NOW, { broker: snapshot }).takeable).toBe(1);
+    // The declared pull is the picker's own rule, exactly as `team next` reads it.
+    const any = read(linearTeam("  pull: any\n"), stateWith(new Date(NOW - 10 * MIN).toISOString()), live(), NOW, { broker: snapshot });
+    expect(any.takeable).toBe(2);
+    // A live local lease removes its record from the count, as it does for a file source.
+    mkdirSync(join(root, '.agents', 'leases'), { recursive: true });
+    writeFileSync(join(root, '.agents', 'leases', 't1.json'), JSON.stringify({
+      format: 1, id: 't1', seat: 'codex-acme', pane: 'w2:p1',
+      acquiredAt: new Date(NOW - MIN).toISOString(), renewedAt: new Date(NOW - MIN).toISOString(),
+      until: new Date(NOW + MIN).toISOString(),
+    }));
+    expect(read(team, stateWith(new Date(NOW - 10 * MIN).toISOString()), live(), NOW, { broker: snapshot }).takeable).toBe(0);
+  });
+
+  test('a refused broker snapshot carries the broker’s own sentence', () => {
+    const snapshot: BrokerWorkSnapshot = { kind: 'refused', at: new Date(NOW).toISOString(), why: 'the broker is not running' };
+    const report = read(linearTeam(), stateWith(new Date(NOW - 10 * MIN).toISOString()), live(), NOW, { broker: snapshot });
+    expect(report.takeable).toBeNull();
+    expect(report.refused).toBe('the broker is not running');
+    expect(idleWorkNotes(report)).toEqual([
+      'the task source cannot be read, so the idle reading is unknown (the broker is not running)',
+    ]);
+  });
+
+  test('a broker snapshot never overrides a file team’s own source', () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const snapshot: BrokerWorkSnapshot = {
+      kind: 'records',
+      at: new Date(NOW).toISOString(),
+      records: [{ id: 'x1', title: 'One' }, { id: 'x2', title: 'Two' }],
+    };
+    const report = read(teamOf(example), stateWith(new Date(NOW - 10 * MIN).toISOString()), live(), NOW, { broker: snapshot });
+    expect(report.takeable).toBe(1);
   });
 
   test('a no-live reading never calls a seat idle', () => {

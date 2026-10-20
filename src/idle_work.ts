@@ -1,11 +1,12 @@
 // The reading `status` and `check` print about enforced idle work, and the green journal's
 // ready-but-uninstalled metadata. The watch owns the snapshot: this module is the shared shape and
 // the one renderer, so the producer and the two commands cannot drift. Reading is all either side
-// does — a snapshot never claims, writes a lease, touches the broker or infers an install from a
+// does — a snapshot never claims, writes a lease, opens the broker or infers an install from a
 // ready event, a time or a version.
 import type { TeamFile } from './file/types.ts';
 import type { PauseRecord, SessionState } from './state.ts';
 import type { Live } from './status/compare.ts';
+import type { TaskRecord } from './tasks/adapter.ts';
 import type { PendingGreenSlice } from './tasks/green-slices.ts';
 import type { PresenceWriterSource } from './daemon/presence/contract.ts';
 import type { PresenceRead } from './watch/presence.ts';
@@ -52,6 +53,24 @@ export type IdleWorkReport = {
   idle: IdleSeat[];
 };
 
+/** One prefetched broker reading for a team whose source is a tracker: the records the broker
+ *  answered with — the tracker's whole page; which seat may take which record stays the picker's
+ *  rule — and when the reading was taken. `refused` carries the broker's own sentence, so a
+ *  refused read is never an empty page. A snapshot is a photograph: it is never re-read, and its
+ *  age is its `at`, not a reason to read the socket again. */
+export type BrokerWorkSnapshot =
+  | { kind: 'records'; at: string; records: readonly TaskRecord[] }
+  | { kind: 'refused'; at: string; why: string };
+
+/** The caller's broker reader for one pass. The watch never opens the broker's socket: a daemon
+ *  that hosts the broker, or a command that owns a seat's placement, supplies the snapshot.
+ *  `null` means this caller could not take one, and the reading keeps its explicit unknown. */
+export type BrokerWorkSource = (input: {
+  root: string;
+  team: TeamFile;
+  now: Date;
+}) => Promise<BrokerWorkSnapshot | null>;
+
 /** What the watch needs to take the snapshot. `home` is absent in a test that does not set one.
  *  The pause and the queued swaps are the project's records, not one session's, so they arrive
  *  beside the session state: a paused team claims nothing, and a seat holding a queued swap takes
@@ -74,6 +93,11 @@ export type IdleWorkInput = {
    *  anything but exactly true for a seat, means that seat's native projection is held, never
    *  believed. */
   presenceChannelHealthy?: (seat: string) => boolean;
+  /** The broker reading this pass prefetched for a tracker team, when the caller hosts one.
+   *  Absent (the default for `status`, `check` and a hand-started watch) keeps the pinned
+   *  no-snapshot refusal: nothing here ever opens the broker's socket or reads the credential.
+   *  Ignored for a team whose source is a file. */
+  broker?: BrokerWorkSnapshot | null;
 };
 
 export type IdleWorkSource = (input: IdleWorkInput) => IdleWorkReport;
