@@ -10,6 +10,7 @@ import { cleanClassification, type Classification } from './launch/progress.ts';
 import { cleanIdleClaims, type IdleClaimEntry } from './watch/claim-record.ts';
 import { isWatchEpoch } from './watch/epoch.ts';
 import { isPresenceBinding } from './daemon/presence/contract.ts';
+import type { CodexEndpointRecord } from './daemon/presence/endpoint-record.ts';
 
 // What a team keeps: the live session's seats, worktrees and watch, and the project's last
 // readings, which outlive every session (§ 4.4). It lives beside the team file and is written by
@@ -112,6 +113,17 @@ export type SeatState = {
    * presence writer, which the ingester treats as no live presence rather than guessing.
    */
   presence_binding?: string;
+  /**
+   * The app-server endpoint the seat's managed launch started and owns, recorded in the same
+   * locked write that re-checks `presence_binding` (`binding` must equal it). `binding` is the
+   * presence incarnation the endpoint serves, so a predecessor server can never serve a
+   * successor: its path carries the binding. Consumers may use `url` only while the two bindings
+   * agree and the URL is an explicit `unix:///…` endpoint; otherwise the endpoint is unknown,
+   * never guessed from `~/.codex`. `pid` names the process the launch started, for its own
+   * cleanup. Written only by the managed launch, never by the daemon: internal state, never a
+   * public identity.
+   */
+  codex_endpoint?: CodexEndpointRecord;
   /**
    * The daemon's activity reconciler's fence: the newest applied presence line of the seat's
    * current runtime binding that the canonical state has reconciled. `seq` must equal the current
