@@ -7,6 +7,7 @@ import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { launchBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
@@ -28,7 +29,17 @@ export type Op =
    *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher }
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+      /**
+       * This launch starts (or reuses) the managed Codex app-server endpoint recorded on the
+       * seat's current presence binding, and attaches the TUI to it with `--remote`. Set only
+       * for a Codex seat with the signed `codex-daemon` policy on, a plain Codex launch line,
+       * and no `--remote`/`--no-daemon` of the file's own to collide with. The endpoint and the
+       * attach are decided at launch time, so the printed line stays the file's own. `dir` is the
+       * state folder the endpoint's record is written in, carried by the plan so the launch's
+       * host methods take no folder of their own.
+       */
+      codexEndpoint?: { dir: string } }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -338,6 +349,12 @@ export interface UpInput {
   teamFile?: string;
   /** The home directory used to resolve signed policies (`entity`, `project`, `team`, `seat`). */
   home?: string;
+  /**
+   * The team's state folder (`.agents`). A managed Codex seat's app-server endpoint is recorded
+   * there, so a launch without it manages no endpoint: presence stays whatever it was, and no
+   * path is guessed in the state's place. Present on every real launch.
+   */
+  stateDir?: string;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -650,6 +667,16 @@ export function upPlan(input: UpInput): Step[] {
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
     }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon });
+    // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
+    // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
+    // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
+    // than probed past. Nothing is recorded when the policy is off or unreadable.
+    const managedCodex = profile.cli === 'codex'
+      && codexDaemon === 'on'
+      && input.stateDir !== undefined
+      && launchBinary(seat.launch) === profile.binary
+      && !/(^|\s)--remote(=|\s|$)/.test(command)
+      && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
@@ -659,7 +686,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: said ? `${said}; would launch; ${watched}` : watched,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }
     const rules = profile.rulesMode;

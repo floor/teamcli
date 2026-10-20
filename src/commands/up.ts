@@ -51,6 +51,8 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
+import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
+import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -143,6 +145,13 @@ export type Launch = {
    *  none. Null when the profile carries no file route; a refusal leaves the seat on its drop
    *  and typed legs. Absent on a world that registers nothing: fake launches and reads. */
   registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
+  /** Starts and stops the managed Codex app-server endpoint a launch owns. Present on the shipped
+   *  launch surface; a fake launch that omits it plans no endpoint, so no scene reaches a real
+   *  process. */
+  codexEndpoint?: {
+    managed(input: { dir: string; session: string; seat: string; cwd?: string }): Promise<ManagedEndpointRead>;
+    stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
@@ -214,6 +223,10 @@ const realLaunch: Launch = {
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  codexEndpoint: {
+    managed: (input) => ensureCodexEndpoint(input),
+    stop: (input) => stopSeatCodexEndpoint(input),
+  },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
@@ -1323,6 +1336,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     cliHooks,
     briefEpochs: currentBriefEpochs(dir, session),
     home: sources.home,
+    // A launch surface with no endpoint seam plans none: the marker is what makes the launch
+    // start one, and a scene's fake launch must never reach a real process.
+    ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
   });
 
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
@@ -1589,6 +1605,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      ...(launch.codexEndpoint === undefined
+        ? {}
+        : {
+            managedCodexEndpoint: (input: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(input),
+            stopManagedCodexEndpoint: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(input),
+          }),
       ...(launch.registerInbox
         ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
         : {}),

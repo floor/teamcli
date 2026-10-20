@@ -35,6 +35,7 @@ import {
 import type { Command, Io } from '../io.ts';
 import type { ExitKeys, ExitTyping, Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
+import { stopSeatCodexEndpoint, type EndpointStopRead } from '../launch/codex-endpoint.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -79,6 +80,11 @@ export type DownSources = {
   standing?(root: string): Standing;
   // Present on the shipped command. A dry run never calls it.
   launch?: DownLaunch;
+  /** Stops the managed Codex endpoint a seat's launch recorded, before the record that names it
+   *  is dropped. Absent on a world with no endpoint seam: nothing is stopped or said. */
+  codexEndpoint?: {
+    stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  };
   /** The delegate gate. Tests hand in a verdict; the shipped command asks the real one. */
   gate?: typeof delegateGate;
   /** The gate's own fakes: the approval standing, the approved copy, state, herdr, placement. */
@@ -165,6 +171,7 @@ export const realSources: DownSources = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   home: homedir(),
   launch: realLaunch,
+  codexEndpoint: { stop: (input) => stopSeatCodexEndpoint(input) },
 };
 
 /** How long `--wait` gives a working seat, in seconds. */
@@ -1224,6 +1231,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       record() {},
       running() {},
       drop(name) {
+        // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
+        // before the record that names it goes. An endpoint whose process cannot be proven is
+        // left alone — its pid is never signalled on trust alone — and the refusal is said.
+        const endpoint = sources.codexEndpoint?.stop({ dir, session, seat: name });
+        if (endpoint !== undefined && !endpoint.stopped && endpoint.why !== undefined) {
+          io.stderr(`team down: ${name}: ${endpoint.why}\n`);
+        }
         let pane: string | undefined;
         let temporaryDropped = false;
         updateState(dir, (file) => {

@@ -53,6 +53,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
@@ -116,6 +117,10 @@ const realUpLaunch: Launch = {
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  codexEndpoint: {
+    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
+  },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -871,6 +876,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
+      ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.
@@ -1338,6 +1344,12 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: () => null,
     paneRun: launch.paneRun,
+    ...(launch.codexEndpoint === undefined
+      ? {}
+      : {
+          managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(endpoint),
+          stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
+        }),
     ...(launch.registerInbox
       ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
       : {}),
