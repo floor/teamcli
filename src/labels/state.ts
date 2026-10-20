@@ -83,8 +83,9 @@ export type SeatStateObservation = {
   /** The daemon's presence projection, when one exists for the seat. It answers before every
    *  screen and trace, live or last known. */
   presence?: PresenceObservation | null;
-  /** A projection exists but this build cannot read it: the runtime speaks, and no screen may
-   *  answer in its place. The reading is `unknown`, sourced `presence`. */
+  /** A projection exists but this build cannot read it as this seat's own — malformed, unfenced
+   *  by the recorded binding, or written by another incarnation: the runtime speaks, and no
+   *  screen may answer in its place. The reading is `unknown`, sourced `presence`. */
   presenceUnreadable?: boolean;
   /** The state file the CLI's own hooks keep for the seat, when the launch installed them. */
   hook?: CliHookReading | null;
@@ -105,7 +106,8 @@ export type SeatStateReading = {
    *  legacy word: `waiting-for-a-person` shows as `blocked`, `gone` as `done`, and a reader
    *  that needs the runtime's own word and source finds them here. */
   presence?: PresenceObservation;
-  /** The projection exists but this build cannot read it: unknown, from `presence`. */
+  /** The projection exists but this build cannot read it as this seat's own: unknown, from
+   *  `presence`. */
   presenceUnreadable?: true;
 };
 

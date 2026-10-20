@@ -6,10 +6,11 @@
 // seat's state records, and the route's presence channel must be healthy by a *fresh* answer
 // from the daemon that owns it — never the persisted `status.json` word, which can outlive the
 // channel it describes. A projection that exists under this incarnation but is not live is
-// still the runtime's last known word, and the display keeps showing it; a projection a
-// predecessor launch wrote is not this seat's reading at all, and only a genuinely absent
-// projection lets the labelled terminal-host screen answer. A malformed projection is reported
-// as bad so the caller can show unknown from presence, never a screen's guess in its place.
+// still the runtime's last known word, and the display keeps showing it. A projection the
+// seat's recorded binding does not fence to *this* incarnation — missing, malformed, or a
+// predecessor's — is invalid: it is an existing projection, never genuine absence, so no screen
+// answers in its place and the caller shows unknown from presence. Only a genuinely absent
+// projection lets the labelled terminal-host screen answer.
 import { readFileSync } from 'node:fs';
 import {
   isPresenceBinding,
@@ -21,15 +22,15 @@ import type { PresenceObservation } from './state.ts';
 
 export type PresenceProjectionRead =
   | { kind: 'absent' }
-  /** A projection exists, but under another runtime incarnation: not this seat's reading, and
-   *  the screen may answer in its place. */
-  | { kind: 'predecessor' }
+  /** A projection exists, but the seat's recorded binding cannot fence it to this runtime
+   *  incarnation: it is invalid as this seat's reading, and no screen answers in its place. */
+  | { kind: 'invalid'; why: string }
   | { kind: 'bad'; why: string }
   | { kind: 'ok'; observation: PresenceObservation };
 
 /** The projection file is the reading, even when it is not live — but only under the binding the
- *  seat's state records. Absent (or a predecessor's file) is the one case that permits a
- *  terminal-host fallback. */
+ *  seat's state records. Absent is the one case that permits a terminal-host fallback; an
+ *  existing projection this incarnation cannot claim is invalid, never absence. */
 export function readPresenceForSeat(
   stateDir: string,
   session: string,
@@ -49,10 +50,14 @@ export function readPresenceForSeat(
   const read = readPresenceReading(text);
   if (read.kind !== 'ok') return { kind: 'bad', why: read.why };
   // The fence: a session and seat are reused across launches, so a projection a predecessor
-  // wrote is not this seat's reading, however fresh it is. A value that is not a binding is
-  // simply no fence to open.
-  if (!isPresenceBinding(binding)) return { kind: 'predecessor' };
-  if (read.reading.binding !== binding) return { kind: 'predecessor' };
+  // wrote, or one the state cannot fence at all, is not this seat's reading, however fresh it
+  // is. It is an existing projection, not absence: no screen may answer in its place.
+  if (!isPresenceBinding(binding)) {
+    return { kind: 'invalid', why: 'the seat records no runtime binding to fence the projection' };
+  }
+  if (read.reading.binding !== binding) {
+    return { kind: 'invalid', why: 'the projection belongs to another runtime incarnation' };
+  }
   return {
     kind: 'ok',
     observation: {
@@ -93,23 +98,27 @@ export type PresenceHealthReading = {
 };
 
 /**
- * How far a route's `checkedAt` may sit from the probe answer that carried it. The daemon stamps
- * the request instant and the display asks with the health op's 500 ms bound; five seconds covers
- * a slow local answer without ever accepting a record from an earlier probe.
+ * How far a route's `checkedAt`, and the probe answer that carried it, may sit from the display's
+ * own instant. It is the daemon's shared bound — `PRESENCE_HEALTH_GRACE_MS` in
+ * src/daemon/presence/health.ts, the same window a finished presence step vouches for its channel
+ * — and this copy becomes an import once the daemon branches meet. An answer outside it is an
+ * earlier probe's snapshot, never proof of live now.
  */
-const PRESENCE_CHECKED_AT_WINDOW_MS = 5_000;
+export const PRESENCE_HEALTH_GRACE_MS = 2_000;
 
 /**
  * Whether the display may mark this session's projections live. The answer is the fresh daemon
  * health snapshot's per-route verdict — only `serving` and `healthy` with the same session count,
- * and only when its `checkedAt` belongs to the probe this reading answered. A pending route, a
- * route the daemon is not hosting, a malformed or stale record all leave the display at last
+ * and only when both its `checkedAt` and the probe answer that carried it belong to the display's
+ * own instant, within the shared grace. A pending route, a route the daemon is not hosting, a
+ * malformed or stale record and a snapshot from an earlier probe all leave the display at last
  * known. Default closed: a health answer without a verdict proves nothing.
  */
 export function presenceChannelHealthy(
   reading: PresenceHealthReading,
   root: string,
   session: string,
+  now: Date,
 ): boolean {
   if (reading.probe.state !== 'answered') return false;
   const verdict = reading.roots.find((entry) => entry.root === root)?.presence;
@@ -119,8 +128,11 @@ export function presenceChannelHealthy(
   if (typeof verdict.checkedAt !== 'string') return false;
   const checkedAt = Date.parse(verdict.checkedAt);
   const answeredAt = Date.parse(reading.probe.at);
-  if (!Number.isFinite(checkedAt) || !Number.isFinite(answeredAt)) return false;
-  return Math.abs(answeredAt - checkedAt) <= PRESENCE_CHECKED_AT_WINDOW_MS;
+  const at = now.getTime();
+  if (!Number.isFinite(checkedAt) || !Number.isFinite(answeredAt) || !Number.isFinite(at)) return false;
+  // Both instants must be this display's own: an old probe's answer is a snapshot, never proof.
+  if (Math.abs(at - answeredAt) > PRESENCE_HEALTH_GRACE_MS) return false;
+  return Math.abs(at - checkedAt) <= PRESENCE_HEALTH_GRACE_MS;
 }
 
 

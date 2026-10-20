@@ -380,7 +380,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // Whether the seats' presence projections may be called live: only a fresh route verdict that
   // says serving and healthy for this session. Default closed — a persisted status word or a
   // health answer without a verdict proves nothing.
-  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session);
+  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.

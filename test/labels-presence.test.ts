@@ -1,8 +1,9 @@
 // The display's read of the daemon's presence projection (src/labels/presence.ts): one small
 // file per seat, fenced by the binding the seat's state records. A projection a predecessor
-// launch wrote is not this seat's reading and lets the screen answer; a projection under the
-// recorded binding is answered even when the channel is not healthy — the runtime's last known
-// word, marked not live. Only a genuinely absent file is `absent`, and a malformed projection is
+// launch wrote, or one no recorded binding can fence, is invalid as this seat's reading: it is
+// never genuine absence, so no screen answers in its place. A projection under the recorded
+// binding is answered even when the channel is not healthy — the runtime's last known word,
+// marked not live. Only a genuinely absent file is `absent`, and a malformed projection is
 // `bad` (unknown from presence, never a screen). The channel-health flag is the caller's, from a
 // fresh daemon answer; this module never reads a persisted status word. Every projection below
 // is synthetic and written under a fresh temporary state folder.
@@ -67,15 +68,19 @@ describe("the display's read of current.json", () => {
     });
   });
 
-  test('a projection a predecessor wrote is not this seat reading, so the screen may answer', () => {
+  test('a projection a predecessor wrote is invalid, never genuine absence', () => {
     writeCurrent(projection());
-    expect(readPresenceForSeat(stateDir, SESSION, SEAT, PREDECESSOR, true)).toEqual({ kind: 'predecessor' });
+    const read = readPresenceForSeat(stateDir, SESSION, SEAT, PREDECESSOR, true);
+    expect(read.kind).toBe('invalid');
+    expect(read.kind === 'invalid' ? read.why : '').toContain('runtime incarnation');
   });
 
-  test('no recorded binding, or a value that is not one, is no fence to open', () => {
+  test('no recorded binding, or a value that is not one, leaves the projection unfenced', () => {
     writeCurrent(projection());
     for (const binding of [undefined, null, '', 'prs_nothex', BINDING.toUpperCase(), 42]) {
-      expect(readPresenceForSeat(stateDir, SESSION, SEAT, binding, true)).toEqual({ kind: 'predecessor' });
+      const read = readPresenceForSeat(stateDir, SESSION, SEAT, binding, true);
+      expect(read.kind).toBe('invalid');
+      expect(read.kind === 'invalid' ? read.why : '').toContain('no runtime binding');
     }
   });
 
@@ -111,6 +116,8 @@ describe("the display's read of current.json", () => {
 describe('the fresh daemon health verdict is the only proof of live', () => {
   const ROOT = '/srv/acme';
   const AT = '2026-10-17T12:00:00.000Z';
+  const NOW = new Date(AT);
+  const at = (deltaMs: number): string => new Date(Date.parse(AT) + deltaMs).toISOString();
   const verdict = (over: Record<string, unknown> = {}) => ({
     root: ROOT,
     presence: {
@@ -124,35 +131,42 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
   });
   const reading = (
     roots: readonly { root: string; presence?: Record<string, unknown> }[],
-    at = AT,
+    probeAt = AT,
     state: 'answered' | 'refused' | 'unanswered' | 'unknown' = 'answered',
-  ) => ({ roots, probe: { state, at } });
+  ) => ({ roots, probe: { state, at: probeAt } });
 
   test('a serving, healthy verdict for this session makes the channel healthy', () => {
-    expect(presenceChannelHealthy(reading([verdict()]), ROOT, SESSION)).toBe(true);
+    expect(presenceChannelHealthy(reading([verdict()]), ROOT, SESSION, NOW)).toBe(true);
   });
 
   test('pending, unhealthy, another session or another root is not healthy', () => {
-    expect(presenceChannelHealthy(reading([verdict({ state: 'pending', healthy: false, why: 'backlog' })]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict({ healthy: false })]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict({ session: 'other' })]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict()]), '/srv/other', SESSION)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict({ state: 'pending', healthy: false, why: 'backlog' })]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict({ healthy: false })]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict({ session: 'other' })]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict()]), '/srv/other', SESSION, NOW)).toBe(false);
   });
 
-  test('the verdict must belong to this probe: no older checkedAt and no probe that did not answer', () => {
-    // A record from an earlier probe, ten minutes before the answer, is not fresh.
-    expect(presenceChannelHealthy(reading([verdict()], '2026-10-17T12:10:00.000Z'), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict()], '2026-10-17T12:10:01.000Z'), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict({ checkedAt: 'not-a-date' })]), ROOT, SESSION)).toBe(false);
+  test('the verdict and its probe must belong to this display instant: the grace boundary is exact', () => {
+    // Both instants inside the shared two-second grace: live at exactly 2s, not at 2s and 1ms.
+    const twoSecondsLater = new Date(Date.parse(AT) + 2_000);
+    const past = new Date(Date.parse(AT) + 2_001);
+    expect(presenceChannelHealthy(reading([verdict()], AT), ROOT, SESSION, twoSecondsLater)).toBe(true);
+    expect(presenceChannelHealthy(reading([verdict()], AT), ROOT, SESSION, past)).toBe(false);
+    // An answer from an earlier probe is a snapshot, never proof of live now — however well
+    // its own checkedAt and probe instant agree with each other.
+    expect(presenceChannelHealthy(reading([verdict({ checkedAt: at(-600_000) })], at(-600_000)), ROOT, SESSION, NOW)).toBe(false);
+    // A fresh probe with a verdict from an earlier request instant is stale too.
+    expect(presenceChannelHealthy(reading([verdict({ checkedAt: at(-3_000) })], AT), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict({ checkedAt: 'not-a-date' })]), ROOT, SESSION, NOW)).toBe(false);
     for (const state of ['refused', 'unanswered', 'unknown'] as const) {
-      expect(presenceChannelHealthy(reading([verdict()], AT, state), ROOT, SESSION)).toBe(false);
+      expect(presenceChannelHealthy(reading([verdict()], AT, state), ROOT, SESSION, NOW)).toBe(false);
     }
   });
 
   test('no verdict for the route, or no roots at all, defaults closed', () => {
-    expect(presenceChannelHealthy(reading([{ root: ROOT }]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([]), ROOT, SESSION)).toBe(false);
+    expect(presenceChannelHealthy(reading([{ root: ROOT }]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([]), ROOT, SESSION, NOW)).toBe(false);
     // The persisted close record carries no `healthy` and can never be proof.
-    expect(presenceChannelHealthy(reading([{ root: ROOT, presence: { state: 'pending', why: 'closed' } }]), ROOT, SESSION)).toBe(false);
+    expect(presenceChannelHealthy(reading([{ root: ROOT, presence: { state: 'pending', why: 'closed' } }]), ROOT, SESSION, NOW)).toBe(false);
   });
 });

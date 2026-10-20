@@ -259,8 +259,10 @@ export function seatRegistryRows(
       ? readCliHook(traceSources.stateDir, traceSources.session, row.name)
       : null;
     // The daemon's presence projection. It answers whenever the file exists — live with this
-    // incarnation's binding on a qualified channel, last known otherwise — and only its absence
-    // leaves the screen to answer. Never read for a pane TeamCLI did not launch.
+    // incarnation's binding on a qualified channel, last known otherwise — and only a genuine
+    // absence leaves the screen to answer: an existing projection the seat's binding does not
+    // fence is unknown from presence, never a screen's reading. Never read for a pane TeamCLI
+    // did not launch.
     const presenceRead = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
       ? readPresenceForSeat(
           traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding, presenceQualified,
@@ -299,7 +301,9 @@ export function seatRegistryRows(
       ...(screenText !== undefined ? { screenText } : {}),
       hook,
       ...(presenceRead?.kind === 'ok' ? { presence: presenceRead.observation } : {}),
-      ...(presenceRead?.kind === 'bad' ? { presenceUnreadable: true } : {}),
+      ...(presenceRead?.kind === 'bad' || presenceRead?.kind === 'invalid'
+        ? { presenceUnreadable: true }
+        : {}),
       trace,
       ...(goneOnPurpose ? { stopped: true } : {}),
       ...(held ? { held: true } : {}),
@@ -510,7 +514,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
     const health = sources.daemonHealth === undefined || sources.home === undefined
       ? null
       : await sources.daemonHealth(sources.home);
-    const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session);
+    const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
     const rows = seatRegistryRows(team, state, live, comparison, now, all, liveHold(whole, now) !== null, {
       project: team.project,
       root,

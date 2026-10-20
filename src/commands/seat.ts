@@ -206,7 +206,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   const health = sources.daemonHealth === undefined || sources.home === undefined
     ? null
     : await sources.daemonHealth(sources.home);
-  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session);
+  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
   const row = seatRegistryRows(team, state, live, comparison, now, true, liveHold(whole, now) !== null, {
     project: team.project,
     root,

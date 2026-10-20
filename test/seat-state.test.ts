@@ -164,8 +164,13 @@ describe("the daemon's presence projection", () => {
     expect(reading).toMatchObject({ state: 'idle', source: 'presence', presence: { live: false } });
   });
 
-  test('a projection this build cannot read is unknown from presence, never a screen', () => {
+  test('an existing projection this build cannot read as this seat\'s is unknown from presence, never a screen', () => {
+    // Malformed, unfenced or another incarnation's: the runtime speaks, so no screen answers.
     expect(seatState({ presenceUnreadable: true, screen: { kind: 'working' }, trace: ago(30) }, NOW))
+      .toEqual({ state: 'unknown', source: 'presence', blind: false, presenceUnreadable: true });
+    expect(seatState({ presenceUnreadable: true, screen: { kind: 'idle' }, trace: ago(30) }, NOW))
+      .toEqual({ state: 'unknown', source: 'presence', blind: false, presenceUnreadable: true });
+    expect(seatState({ presenceUnreadable: true, screen: { kind: 'permission' } }, NOW))
       .toEqual({ state: 'unknown', source: 'presence', blind: false, presenceUnreadable: true });
     // The certainties above it still answer: a hold is not something the projection speaks to.
     expect(seatState({ presenceUnreadable: true, held: true }, NOW))

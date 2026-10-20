@@ -32,7 +32,7 @@ import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
 import type { Comparison, Live } from '../src/status/compare.ts';
-import { testIo } from './helpers.ts';
+import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 const ago = (seconds: number): string => new Date(NOW.getTime() - seconds * 1000).toISOString();
@@ -709,6 +709,7 @@ describe('a registry row reads the state file', () => {
     session?: string;
     binding?: string;
     channelHealthy?: boolean;
+    screen?: 'idle' | 'permission';
   }): SeatRegistryRow {
     const team = {
       project: 'acme',
@@ -726,7 +727,18 @@ describe('a registry row reads the state file', () => {
       launch_line: CLAUDE,
     };
     if (options.binding !== undefined) state.seats.worker.presence_binding = options.binding;
-    const live: Live = { running: true, agents: [], workspaces: [], screens: {} };
+    const agents = options.screen === undefined
+      ? []
+      : [{ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null }];
+    const screens: Record<string, string> = {};
+    if (options.screen === 'idle') screens['w1:p1'] = CLAUDE_IDLE;
+    if (options.screen === 'permission') {
+      screens['w1:p1'] = readFileSync(
+        new URL('./fixtures/claude-code/2.1.289/permission-create-plain.txt', import.meta.url),
+        'utf8',
+      );
+    }
+    const live: Live = { running: true, agents, workspaces: [], screens };
     const comparison: Comparison = {
       rows: [{ name: 'worker', state: 'idle', model: 'Claude Opus', pane: 'w1:p1' }],
       differences: [],
@@ -765,7 +777,7 @@ describe('a registry row reads the state file', () => {
     }));
   }
 
-  test('a presence projection under the recorded binding answers; a predecessor’s does not', () => {
+  test('a presence projection under the recorded binding answers; a predecessor’s is invalid', () => {
     const binding = 'prs_0123456789ab';
     writePresence(binding, 'working');
     expect(row({ stateDir: dir, session: SESSION, binding, channelHealthy: true }))
@@ -779,12 +791,26 @@ describe('a registry row reads the state file', () => {
     // answering the row, marked not live. The screen and herdr never replace it.
     expect(row({ stateDir: dir, session: SESSION, binding }))
       .toMatchObject({ state: 'working', state_source: 'presence', presence: { live: false } });
-    // A projection a relaunch recorded since is another incarnation's: not this seat's reading,
-    // so the screen and herdr answer again exactly as before the projection existed.
+    // A projection a relaunch recorded since is another incarnation's. It is an existing
+    // projection, never genuine absence: the row is unknown from presence, and neither the
+    // screen nor herdr answers in its place.
     expect(row({ stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true }))
-      .toMatchObject({ state: 'unknown', state_source: 'none' });
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+    // The state records no binding at all: there is no fence to open, so the same answer.
     expect(row({ stateDir: dir, session: SESSION }))
-      .toMatchObject({ state: 'unknown', state_source: 'none' });
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+    // An idle prompt or a permission dialog does not answer in an invalid projection's place.
+    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true, screen: 'idle' }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+    expect(row({ stateDir: dir, session: SESSION, screen: 'permission' }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+  });
+
+  test('with no projection at all, the labelled screen answers as before', () => {
+    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_0123456789ab', screen: 'idle' }))
+      .toMatchObject({ state: 'idle', state_source: 'cli' });
+    expect(row({ stateDir: dir, session: SESSION, screen: 'permission' }))
+      .toMatchObject({ state: 'blocked', state_source: 'cli' });
   });
 
   test('a projection this build cannot read is unknown from presence, never a screen guess', () => {
