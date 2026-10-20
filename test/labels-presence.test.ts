@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
-import { presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceQualified } from '../src/labels/presence.ts';
+import { nativePresenceExpected, presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceQualified } from '../src/labels/presence.ts';
 
 const SESSION = 'session-one';
 const SEAT = 'worker';
@@ -172,7 +172,10 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
 
   // The route's per-seat answers are the second half of live: a seat carried by the seat list
   // is live only by its own serving entry, sampled under the binding the seat's state records.
-  // A hook-only route carries no seat list and keeps the route's own verdict.
+  // A hook-only route carries no seat list and keeps the route's own verdict. The list holds
+  // native-source seats, never a census: an unlisted hook seat sharing the route is expected
+  // and keeps the route verdict, while an unlisted seat that explicitly expects a native
+  // channel was never classified and inherits nothing.
   describe("the route's per-seat answers", () => {
     const serving = (seat: string, binding: string | null = BINDING) => ({
       seat, state: 'serving', healthy: true, binding, why: null,
@@ -183,34 +186,44 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
       const seats = presenceSeatsOf(withSeats(undefined), ROOT, SESSION, NOW);
       expect(seats).toEqual({ kind: 'absent' });
       // No health answer at all is the caller's route-health case too.
-      expect(seatPresenceQualified(undefined, SEAT, BINDING)).toBe(true);
-      expect(seatPresenceQualified(seats, SEAT, BINDING)).toBe(true);
+      expect(seatPresenceQualified(undefined, SEAT, BINDING, true)).toBe(true);
+      expect(seatPresenceQualified(seats, SEAT, BINDING, true)).toBe(true);
+      expect(seatPresenceQualified(seats, SEAT, BINDING, false)).toBe(true);
     });
 
     test('a listed seat is live only when serving and sampled under the recorded binding', () => {
       const seats = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
       expect(seats.kind).toBe('listed');
-      expect(seatPresenceQualified(seats, SEAT, BINDING)).toBe(true);
+      expect(seatPresenceQualified(seats, SEAT, BINDING, true)).toBe(true);
       // A sampled binding that differs from the seat's own record is a predecessor's run, or a
       // relaunch the display has not caught up with: last known, never live by route health.
-      expect(seatPresenceQualified(seats, SEAT, PREDECESSOR)).toBe(false);
-      expect(seatPresenceQualified(seats, SEAT, undefined)).toBe(false);
-      // An expected native seat the route does not list is not proven either.
-      expect(seatPresenceQualified(seats, 'other', BINDING)).toBe(false);
+      expect(seatPresenceQualified(seats, SEAT, PREDECESSOR, true)).toBe(false);
+      // Membership never overrides the fence, whichever class the seat is.
+      expect(seatPresenceQualified(seats, SEAT, PREDECESSOR, false)).toBe(false);
+      expect(seatPresenceQualified(seats, SEAT, undefined, true)).toBe(false);
     });
 
-    test('a pending or unhealthy entry, or a pending entry for the seat, is not proof', () => {
+    test('an absent entry means held for an expected native seat, route health for a hook seat', () => {
+      const seats = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
+      // The native source this seat expects was never classified: no proof to inherit.
+      expect(seatPresenceQualified(seats, 'other', BINDING, true)).toBe(false);
+      // A hook seat absent from the native list is the ordinary mixed-route case.
+      expect(seatPresenceQualified(seats, 'other', BINDING, false)).toBe(true);
+    });
+
+    test('a pending entry is not proof for a seat of either class', () => {
       const pending = presenceSeatsOf(withSeats([
         serving(SEAT),
         { seat: 'other', state: 'pending', healthy: false, binding: null, why: 'hook not yet seen' },
       ]), ROOT, SESSION, NOW);
       expect(pending.kind).toBe('listed');
-      expect(seatPresenceQualified(pending, SEAT, BINDING)).toBe(true);
-      expect(seatPresenceQualified(pending, 'other', BINDING)).toBe(false);
+      expect(seatPresenceQualified(pending, SEAT, BINDING, true)).toBe(true);
+      expect(seatPresenceQualified(pending, 'other', BINDING, true)).toBe(false);
+      expect(seatPresenceQualified(pending, 'other', BINDING, false)).toBe(false);
       // `serving` with `healthy: false` is the daemon client's disagreement case: dropped whole.
       const unhealthy = withSeats([{ seat: SEAT, state: 'serving', healthy: false, binding: BINDING, why: null }]);
       expect(presenceSeatsOf(unhealthy, ROOT, SESSION, NOW).kind).toBe('invalid');
-      expect(seatPresenceQualified(presenceSeatsOf(unhealthy, ROOT, SESSION, NOW), SEAT, BINDING)).toBe(false);
+      expect(seatPresenceQualified(presenceSeatsOf(unhealthy, ROOT, SESSION, NOW), SEAT, BINDING, true)).toBe(false);
       expect(presenceChannelHealthy(unhealthy, ROOT, SESSION, NOW)).toBe(false);
     });
 
@@ -233,7 +246,8 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
         const route = withSeats(seats);
         expect(presenceChannelHealthy(route, ROOT, SESSION, NOW)).toBe(false);
         expect(presenceSeatsOf(route, ROOT, SESSION, NOW).kind).toBe('invalid');
-        expect(seatPresenceQualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING)).toBe(false);
+        expect(seatPresenceQualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING, true)).toBe(false);
+        expect(seatPresenceQualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING, false)).toBe(false);
       }
     });
 
@@ -243,11 +257,41 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
       const otherRoot = reading([verdict({ seats: [serving(SEAT)] })]);
       for (const route of [stale, otherSession]) {
         expect(presenceSeatsOf(route, ROOT, SESSION, NOW).kind).toBe('invalid');
-        expect(seatPresenceQualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING)).toBe(false);
+        expect(seatPresenceQualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING, true)).toBe(false);
       }
       expect(presenceSeatsOf(otherRoot, '/srv/other', SESSION, NOW).kind).toBe('invalid');
       // A fresh, serving route with a well-formed list stays healthy.
       expect(presenceChannelHealthy(reading([verdict({ seats: [serving(SEAT)] })]), ROOT, SESSION, NOW)).toBe(true);
+    });
+
+    test('explicit native expectation comes from the seat, not from list absence', () => {
+      expect(nativePresenceExpected('codex')).toBe(true);
+      for (const cli of ['claude', 'cursor', 'gemini', '-', '', null, undefined]) {
+        expect(nativePresenceExpected(cli)).toBe(false);
+      }
+    });
+
+    test('a mixed route: the listed native seat and the unlisted hook seat are both live', () => {
+      // Same route, same fresh serving answer; the seat list names only the Codex seat.
+      writeCurrent(projection(), 'codex-seat');
+      writeCurrent(projection({ binding: PREDECESSOR }), 'hook-seat');
+      const route = withSeats([serving('codex-seat')]);
+      const seats = presenceSeatsOf(route, ROOT, SESSION, NOW);
+      const healthy = presenceChannelHealthy(route, ROOT, SESSION, NOW);
+      const codexQualified = healthy
+        && seatPresenceQualified(seats, 'codex-seat', BINDING, nativePresenceExpected('codex'));
+      const hookQualified = healthy
+        && seatPresenceQualified(seats, 'hook-seat', PREDECESSOR, nativePresenceExpected('claude'));
+      expect(codexQualified).toBe(true);
+      expect(hookQualified).toBe(true);
+      expect(readPresenceForSeat(stateDir, SESSION, 'codex-seat', BINDING, codexQualified))
+        .toMatchObject({ kind: 'ok', observation: { state: 'idle', live: true } });
+      expect(readPresenceForSeat(stateDir, SESSION, 'hook-seat', PREDECESSOR, hookQualified))
+        .toMatchObject({ kind: 'ok', observation: { state: 'idle', live: true } });
+      // A second Codex seat the route expected but never listed stays last known: no fallback.
+      expect(healthy
+        && seatPresenceQualified(seats, 'codex-missing', BINDING, nativePresenceExpected('codex')))
+        .toBe(false);
     });
   });
 });

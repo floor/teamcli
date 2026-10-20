@@ -19,7 +19,7 @@ import {
 } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type PresenceObservation, type SeatStateWord, type StateSource } from '../labels/state.ts';
-import { presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceQualified, type PresenceSeatsRead } from '../labels/presence.ts';
+import { nativePresenceExpected, presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceQualified, type PresenceSeatsRead } from '../labels/presence.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
@@ -273,7 +273,9 @@ export function seatRegistryRows(
     const presenceRead = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
       ? readPresenceForSeat(
           traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding,
-          presenceQualified && seatPresenceQualified(traceSources.presenceSeats, row.name, recorded?.presence_binding),
+          presenceQualified && seatPresenceQualified(
+            traceSources.presenceSeats, row.name, recorded?.presence_binding, nativePresenceExpected(cli),
+          ),
         )
       : null;
     // The seat-state reading: the daemon's presence projection for this launch, the CLI's own

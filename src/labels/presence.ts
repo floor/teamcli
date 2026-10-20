@@ -195,17 +195,36 @@ export function presenceSeatsOf(
  * binding the seat's state records — a missing entry and a mismatched sampled binding are both
  * last known, never live by route health alone. A hook-only route (no seat list) keeps the
  * route's own answer.
+ *
+ * The list is the daemon's native-source answers, not a census of every seat on the route: a
+ * hook seat sharing the route with a native sibling is expected to be absent, and keeps the
+ * route verdict. Absence is only fatal for a seat that explicitly expects a native channel
+ * (`nativeExpected`), where it means the expected source was never classified and there is no
+ * proof to inherit.
  */
 export function seatPresenceQualified(
   seats: PresenceSeatsRead | undefined,
   seat: string,
   binding: unknown,
+  nativeExpected: boolean,
 ): boolean {
   if (seats === undefined || seats.kind === 'absent') return true;
   if (seats.kind === 'invalid') return false;
   const entry = seats.seats.get(seat);
-  if (entry === undefined || !entry.healthy) return false;
+  if (entry === undefined) return !nativeExpected;
+  if (!entry.healthy) return false;
   return isPresenceBinding(binding) && entry.binding === binding;
+}
+
+/**
+ * The CLIs whose presence this product samples from a managed native source. That explicit
+ * classification, from the seat's own declaration, is what makes an absent seat-list entry
+ * mean "expected and unproven" rather than "hook seat": the seat list itself never tells a
+ * hook seat apart from a native source the daemon failed to classify. Codex is the only one
+ * today; a new native runtime adds its name here, beside its source.
+ */
+export function nativePresenceExpected(cli: string | null | undefined): boolean {
+  return cli === 'codex';
 }
 
 /**
