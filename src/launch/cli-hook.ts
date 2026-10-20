@@ -30,7 +30,8 @@ import { SEAT_NAME } from '../file/sections/seats.ts';
 import { wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
 import type { CliHookReading } from '../labels/state.ts';
 import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
-import { readState } from '../state.ts';
+import { STATE_FILE, emptySession, readState, updateState } from '../state.ts';
+import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
 import { currentBriefClaim } from './general-brief.ts';
 import {
   commandGuardAvailable, commandGuardEntry, commandGuardHookCommand, type CommandGuardContext,
@@ -42,7 +43,17 @@ const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 /** What a launch needs to decide on a hook: the seat's name, its CLI, and the line it runs. A
  *  human's pane is never launched into, and it carries no guard even if a caller names it. */
-export type CliHookSeat = { name: string; cli: string; launch: string; human?: boolean };
+export type CliHookSeat = {
+  name: string;
+  cli: string;
+  launch: string;
+  human?: boolean;
+  /** True when this install runs for a fresh launch of the seat. Only a fresh launch mints a
+   *  new presence binding; a running seat keeps the one its process was started with, and a
+   *  seat with no recorded binding gets no presence entry rather than a binding its running
+   *  process never loaded. */
+  fresh?: boolean;
+};
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
  *  no `/`, no leading `.` or `..`), and a `.json` name within the filesystem's limit. */
@@ -129,15 +140,41 @@ function hookCommand(statePath: string, state: 'working' | 'idle'): string {
 }
 
 /**
- * The command the hook runs to read the seat's drops: this install's own CLI, the way
- * `watchCommand` builds the watchdog's line, so `team` need not be on the CLI's PATH. The seat
- * and session are appended by `dropReadCommand`; the read itself is `team drops --read`, the one
+ * This install's own CLI, the way `watchCommand` builds the watchdog's line, so `team` need not
+ * be on the CLI's PATH. The hook commands append their own subcommand and words.
+ */
+function cliRunner(): string {
+  const here = fileURLToPath(import.meta.url);
+  const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  return `${shellQuote(process.execPath)} ${shellQuote(cli)}`;
+}
+
+/**
+ * The command the hook runs to read the seat's drops: this install's own CLI. The seat and
+ * session are appended by `dropReadCommand`; the read itself is `team drops --read`, the one
  * place a record is verified and its signed receipt written.
  */
 export function dropReadRunner(): string {
-  const here = fileURLToPath(import.meta.url);
-  const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
-  return `${shellQuote(process.execPath)} ${shellQuote(cli)} drops --read`;
+  return `${cliRunner()} drops --read`;
+}
+
+/** The fields the presence hook needs: every one is written into its argv at install time. The
+ *  hook reads nothing from the CLI's stdin, so a turn's prompt bytes never pass through it. */
+export type CliHookPresence = {
+  dir: string;
+  session: string;
+  seat: string;
+  binding: string;
+};
+
+/**
+ * One presence hook: stage the turn event with the launch's binding. The hidden subcommand
+ * validates every field again and writes only the seat's spool record. Its output is discarded
+ * and its exit ignored — a presence observation must never break the turn it observes — and a
+ * failed stage leaves the previous state in place rather than a guessed one.
+ */
+function presenceHookCommand(presence: CliHookPresence, event: 'turn-start' | 'turn-end'): string {
+  return `${cliRunner()} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event} >/dev/null 2>&1 || true`;
 }
 
 /**
@@ -206,7 +243,9 @@ function dropReadCommand(seat: string, session: string, epoch?: string): string 
  *  turn-start read of the seat's drop folder when it has one, and — for a claude-code seat — the
  *  PreToolUse command guard. Two commands share `UserPromptSubmit`: the state word first, so a
  *  read that takes a moment still leaves the seat reading `working`, then the folder read whose
- *  stdout the CLI adds to the turn.
+ *  stdout the CLI adds to the turn. `presence`, when the launch has a binding, adds one command
+ *  after each state word: the hidden hook stages the turn's presence event under that binding, so
+ *  the reading comes from the runtime itself rather than from a screen.
  *
  *  `inbound`, when the seat's own launch line declares one, is written into this same file as the
  *  top-level `crossSessionInbound`. The launch command appends this file's flag at the END of the
@@ -218,18 +257,26 @@ export function cliHookSettings(
   drops?: { seat: string; session: string; epoch?: string },
   guard?: string,
   inbound?: CrossSessionInbound | null,
+  presence?: CliHookPresence,
 ): string {
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
   const start: unknown[] = [hook('working')];
+  if (presence !== undefined) {
+    start.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-start') }] });
+  }
   if (drops) {
     start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session, drops.epoch) }] });
+  }
+  const stop: unknown[] = [hook('idle')];
+  if (presence !== undefined) {
+    stop.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-end') }] });
   }
   const hooks: Record<string, unknown> = {};
   if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
   hooks.UserPromptSubmit = start;
-  hooks.Stop = [hook('idle')];
+  hooks.Stop = stop;
   const document: Record<string, unknown> = { hooks };
   if (inbound !== undefined && inbound !== null) document.crossSessionInbound = inbound;
   return `${JSON.stringify(document, null, 2)}\n`;
@@ -313,6 +360,37 @@ function claimEpochAt(dir: string, session: string, seat: string): string | unde
   }
 }
 
+/** The binding a running seat's process was launched with, when the state records one. Read
+ *  only: an install for a running seat never rotates the incarnation its process loaded. */
+function presenceBindingAt(dir: string, session: string, seat: string): string | null {
+  try {
+    const value = readState(dir).sessions[session]?.seats[seat]?.presence_binding;
+    return isPresenceBinding(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Mints and records the successor incarnation before its settings are written, so the hook and
+ *  the state agree on one binding from the first record. Null leaves the launch without presence
+ *  entries: staging under a binding the state does not hold would only fill `stale/`, so a failed
+ *  record fails closed. A missing state file is not this installer's to create. */
+function recordPresenceBinding(dir: string, session: string, seat: string): string | null {
+  if (lstatOrNull(join(dir, STATE_FILE)) === null) return null;
+  const binding = mintPresenceBinding();
+  try {
+    updateState(dir, (state) => {
+      const one = (state.sessions[session] ??= emptySession());
+      const existing = one.seats[seat];
+      if (existing === undefined) one.seats[seat] = { stage: 'launched', presence_binding: binding };
+      else existing.presence_binding = binding;
+    });
+    return binding;
+  } catch {
+    return null;
+  }
+}
+
 /** Installs one settings file per planned seat. Returns the settings path of every seat whose
  *  file landed; a seat that failed is absent, and its launch goes without the flag. A claude-code
  *  seat's file also carries the PreToolUse command guard when the caller hands the context the
@@ -322,7 +400,13 @@ function claimEpochAt(dir: string, session: string, seat: string): string | unde
  *  A seat whose launch scripts declare `crossSessionInbound` gets that word merged into the same
  *  file: the file is appended last on the launch line, so it overrides the scripts' own
  *  `--settings` and would otherwise leave the CLI with the setting unset. `root` resolves a
- *  relative script word; it defaults to the folder holding the state folder. */
+ *  relative script word; it defaults to the folder holding the state folder.
+ *
+ *  A seat marked `fresh` (a launch this run is about to type) mints and records a new presence
+ *  binding before its settings are written, so its hooks carry the successor incarnation. A
+ *  running seat keeps the binding it was launched with; one with no recorded binding gets no
+ *  presence entries. A binding that cannot be recorded falls back to the legacy settings, never
+ *  to a hook staging records no state will accept. */
 export function installCliHooks(
   dir: string,
   session: string,
@@ -340,6 +424,7 @@ export function installCliHooks(
     || !ensureFolder(hooks) || !ensureFolder(states)) return {};
   const guarded = guard !== undefined && commandGuardAvailable();
   const launches = new Map(seats.map((seat) => [seat.name, seat.launch]));
+  const byName = new Map(seats.map((seat) => [seat.name, seat]));
   const landed: Record<string, string> = {};
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
@@ -348,7 +433,12 @@ export function installCliHooks(
     const drops = { seat, session, ...(epoch === undefined ? {} : { epoch }) };
     const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
     const inbound = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
-    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound))) continue;
+    const fresh = byName.get(seat)?.fresh === true;
+    const binding = fresh
+      ? recordPresenceBinding(dir, session, seat)
+      : presenceBindingAt(dir, session, seat);
+    const presence = binding === null ? undefined : { dir, session, seat, binding };
+    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound, presence))) continue;
     landed[seat] = settingsPath;
   }
   return landed;

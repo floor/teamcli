@@ -1287,6 +1287,24 @@ Usage:
 | --- | --- | --- |
 | `file` | no | no |
 
+## `presence-hook`
+
+Hidden: yes
+
+Usage: none
+
+### Who may run it
+
+`any-caller` — the hidden hook stages one presence record under the project folder its own launch wrote into its argv: it reads no team file, no seat and no terminal, and its words are the launch's own
+
+### Flags
+
+None.
+
+### Positionals
+
+None.
+
 ## `proc`
 
 Hidden: no

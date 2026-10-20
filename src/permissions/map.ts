@@ -257,6 +257,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal',
     },
+    'presence-hook': {
+      kind: 'any-caller',
+      why: 'the hidden hook stages one presence record under the project folder its own launch wrote into its argv: it reads no team file, no seat and no terminal, and its words are the launch\'s own',
+    },
     queue: {
       kind: 'any-caller',
       why: 'list reads the local task queue from the checkout and asks no caller; add is the owner\'s or a seat of this team\'s, on the pane the state records for it',

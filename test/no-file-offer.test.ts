@@ -95,7 +95,10 @@ describe('outside a checkout, the sentence offers --file only where the contract
     .filter(
       ({ path, node }) =>
         !MACHINE_ONLY.has(path[0] as string) &&
+        // Hidden dispatchers: neither is a command in the table, and neither prints a no-repository
+        // sentence — one answers a port's protocol, the other stages a hook's record.
         path[0] !== 'conformance-adapter' &&
+        path[0] !== 'presence-hook' &&
         !node.flags.some((flag) => flag.name === '--file'),
     );
 

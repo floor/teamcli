@@ -558,7 +558,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
-    const installed = installCliHooks(dir, session, [planned], home === undefined ? undefined : { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true }], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());

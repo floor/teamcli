@@ -2187,6 +2187,18 @@
       }
     },
     {
+      "flags": [],
+      "hidden": true,
+      "name": "presence-hook",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [],
+      "who": {
+        "gate": "any-caller",
+        "why": "the hidden hook stages one presence record under the project folder its own launch wrote into its argv: it reads no team file, no seat and no terminal, and its words are the launch's own"
+      }
+    },
+    {
       "flags": [
         {
           "hidden": false,

@@ -157,6 +157,12 @@ export async function main(argv: string[], io: Io): Promise<number> {
     const { default: run } = await import('./conformance/adapter.ts');
     return run(rest, io);
   }
+  // Hidden: a seat's settings-file hook stages one presence event. Every word is in argv; the
+  // command reads no stdin and prints nothing. It is not a command in the help text.
+  if (name === 'presence-hook') {
+    const { default: run } = await import('./daemon/presence/hook.ts');
+    return run(rest);
+  }
   const load = commands[name];
   if (!load) {
     // 0.3.5's last setup step was `team approve`. A user typing it out of habit is told the

@@ -857,7 +857,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat], { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true }], { project: team.project, root, home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, input.command, who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
