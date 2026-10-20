@@ -29,7 +29,7 @@ import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readS
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import type { SeatStateWord, StateSource } from '../labels/state.ts';
+import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
 import { presenceChannelHealthy } from '../labels/presence.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
@@ -192,6 +192,11 @@ export interface StatusJson {
      *  `state` above keeps its published meaning — the comparison's phrase about the record. */
     seat_state?: SeatStateWord;
     seat_state_source?: StateSource;
+    /** The native projection behind the reading, canonical word and provenance kept beside the
+     *  legacy words; `live` false is last known, shown as itself. */
+    seat_presence?: PresenceObservation;
+    /** The projection exists but this build cannot read it: unknown, from presence. */
+    seat_presence_unreadable?: true;
     /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
      *  as not working (the table's `(blind)`). */
     blind?: true;
