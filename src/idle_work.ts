@@ -7,12 +7,24 @@ import type { TeamFile } from './file/types.ts';
 import type { PauseRecord, SessionState } from './state.ts';
 import type { Live } from './status/compare.ts';
 import type { PendingGreenSlice } from './tasks/green-slices.ts';
+import type { PresenceWriterSource } from './daemon/presence/contract.ts';
+import type { PresenceRead } from './watch/presence.ts';
 
 export type { PendingGreenSlice };
 
-/** A seat the snapshot counted as quiet: `since` is the last moment it was seen working, or null
- *  when it was already idle when the watch started. */
-export type IdleSeat = { seat: string; since: string | null };
+/** Where a seat's presence reading came from. `terminal-host` is this reader's labelled fallback
+ *  for a seat the native store cannot answer for; a native reading carries its writer source. */
+export type PresenceSource = PresenceWriterSource | 'terminal-host';
+
+/** A seat the snapshot counted as quiet: `since` is the persisted activity stamp (the claim's
+ *  episode clock), or null when it was already idle when the watch started. `native_since` is the
+ *  runtime's own idle instant, carried for eligibility only: it never becomes the claim stamp. */
+export type IdleSeat = {
+  seat: string;
+  since: string | null;
+  native_since?: string;
+  presence_source?: PresenceSource;
+};
 
 /**
  * The idle-with-work snapshot. It is always a reading: the default local task queue exists even
@@ -33,6 +45,10 @@ export type IdleWorkReport = {
   takeable: number | null;
   /** Present with `takeable: null`: why the source could not be read. */
   refused?: string;
+  /** Present when a seat's native presence could not be trusted (malformed record, unknown
+   *  source/event, binding or fence mismatch, unapplied/stale fence, unknown channel). The
+   *  dispatcher then prunes, writes and announces nothing; existing claims stay byte-identical. */
+  presence_unknown?: string;
   idle: IdleSeat[];
 };
 
@@ -49,6 +65,13 @@ export type IdleWorkInput = {
   home?: string;
   pause?: PauseRecord | null;
   swaps?: readonly string[];
+  /** Native presence readings prefetched for this pass, keyed by seat name. Absent means the
+   *  reader does not consult the native store and keeps the terminal-host reading as it was;
+   *  an explicit null means the channel is not used for this command. */
+  presence?: ReadonlyMap<string, PresenceRead> | null;
+  /** Whether the presence channel is known healthy this pass (daemon ownership, fixed health or
+   *  a live RPC answer). Absent means not known, so a native projection is held, never believed. */
+  presenceChannelHealthy?: boolean;
 };
 
 export type IdleWorkSource = (input: IdleWorkInput) => IdleWorkReport;

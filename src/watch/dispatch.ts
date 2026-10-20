@@ -28,6 +28,7 @@ import { liveLeases } from '../tasks/lease.ts';
 import { captureIdleClaim, endIdleClaims, idleClaimOf, settleIdleClaim } from './claim.ts';
 import { isIdleClaim, type IdleClaim } from './claim-record.ts';
 import { idleWorkReport } from './idle-work.ts';
+import { prefetchPresence } from './presence.ts';
 
 /** The direct route's request: the seat, the pane and CLI the pass read for it, and the body
  *  already rendered from `watch.nudge`. It is the same shape a work drop carries today. */
@@ -168,10 +169,23 @@ export function forgetIdleEpisodes(): void {
  * climb uses. No bus event kind is invented; no owner identity is used here.
  */
 export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDispatchResult> {
-  const report = idleWorkReport(input);
+  // Coherent native readings are prefetched outside the synchronous snapshot. The channel health
+  // is the caller's own knowledge (daemon ownership, fixed health or a live RPC answer); with
+  // none supplied it is not known, so a present projection is held rather than believed.
+  const presence = input.presence === undefined
+    ? await prefetchPresence({
+        stateDir: input.dir,
+        session: input.team.session,
+        seatNames: input.team.seats.map((seat) => seat.name),
+      })
+    : input.presence;
+  const report = idleWorkReport({ ...input, presence });
   // A reading that cannot be trusted dispatches nothing, announces nothing and resets nothing:
   // the dispatcher cannot tell a seat that left its episode from a reading it could not take.
   if (report.threshold_unknown !== undefined || report.takeable === null) return { pushed: [] };
+  // A seat whose native presence could not be trusted holds every prune, write and notice. An
+  // invalid or unfenced reading must never look like a seat that ended its idle episode.
+  if (report.presence_unknown !== undefined) return { pushed: [] };
   const scope = scopeOf(input);
   const result: IdleDispatchResult = { pushed: [] };
 

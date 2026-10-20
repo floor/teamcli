@@ -5,11 +5,12 @@
 // and the dispatcher's decision is taken on it elsewhere.
 import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
-import type { IdleWorkInput, IdleWorkReport } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PresenceSource } from '../idle_work.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { takeable } from '../commands/next.ts';
 import { liveLeases } from '../tasks/lease.ts';
 import { fileSourceOf, readFileSource } from '../tasks/queue.ts';
+import { fenceAt, presenceVerdict, type PresenceSeat, type PresenceVerdict } from './presence.ts';
 import { readScreen } from './screen.ts';
 
 /**
@@ -66,45 +67,101 @@ export function idleWorkReport(input: IdleWorkInput): IdleWorkReport {
   const now = input.now.getTime();
   const threshold = idleThresholdReading(input.team, input.root, input.home, input.now);
   const seats = idleSeatsOf(input, threshold.seconds, now);
-  const counted = takeableNow(input, seats, now);
+  const counted = takeableNow(input, seats.seats, now);
   const report: IdleWorkReport = {
     format: 1,
     at: input.now.toISOString(),
     threshold_seconds: threshold.seconds,
     takeable: counted.takeable,
-    idle: seats.map(({ name, since }) => ({ seat: name, since })),
+    idle: seats.seats.map(({ name, since, native_since, presence_source }) => ({
+      seat: name,
+      since,
+      ...(native_since === undefined ? {} : { native_since }),
+      ...(presence_source === undefined ? {} : { presence_source }),
+    })),
   };
   if (threshold.unknown !== undefined) report.threshold_unknown = threshold.unknown;
   if (counted.refused !== undefined) report.refused = counted.refused;
+  if (seats.unknown !== undefined) report.presence_unknown = seats.unknown;
   return report;
 }
 
-type IdleWorker = { name: string; since: string | null };
+type IdleWorker = { name: string; since: string; native_since?: string; presence_source?: PresenceSource };
 
-function idleSeatsOf(input: IdleWorkInput, threshold_seconds: number, now: number): IdleWorker[] {
+function idleSeatsOf(
+  input: IdleWorkInput,
+  threshold_seconds: number,
+  now: number,
+): { seats: IdleWorker[]; unknown?: string } {
   const { team, state, live } = input;
-  if (live === null || !live.running) return [];
+  const reads = input.presence ?? null;
+  // Without a prefetched native read the snapshot is exactly today's: a live herdr read is
+  // required. With one, native seats are read even when herdr has nothing this pass; the screen
+  // path only runs for a seat whose native channel is explicitly absent or unsupported.
+  if (reads === null && (live === null || !live.running)) return { seats: [] };
   const idle: IdleWorker[] = [];
+  let unknown: string | undefined;
   for (const seat of team.seats) {
     if (seat.human === true || seat.parked || seat.stopped) continue;
     if (seat.name === team.orchestrator || seat.name === team.operator) continue;
     if (input.swaps?.includes(seat.name) === true) continue;
+    const record = state.seats[seat.name];
+    const since = sinceOf(record?.last_active);
+    if (reads !== null) {
+      const presence: PresenceSeat = {
+        seat: seat.name,
+        seatId: record?.id ?? null,
+        binding: record?.presence_binding ?? null,
+        fence: fenceAt(record),
+        lastActive: record?.last_active,
+        channelHealthy: input.presenceChannelHealthy === true,
+      };
+      const read = reads.get(seat.name) ?? {
+        kind: 'absent' as const,
+        why: 'the pass read no presence for this seat',
+      };
+      const verdict: PresenceVerdict = presenceVerdict(read, presence, {
+        now: input.now,
+        thresholdSeconds: threshold_seconds,
+      });
+      if (verdict.idle) {
+        if (since === null) {
+          // The verdict proved the persisted stamp parses; a missing value here is still a hold,
+          // never a wake on a clock this snapshot cannot read.
+          unknown ??= `${seat.name}: the native idle reading carries no persisted claim stamp`;
+          continue;
+        }
+        idle.push({
+          name: seat.name,
+          since,
+          native_since: verdict.nativeSince,
+          presence_source: verdict.source,
+        });
+        continue;
+      }
+      if (verdict.reason === 'invalid') {
+        unknown ??= `${seat.name}: ${verdict.why}`;
+        continue;
+      }
+      if (verdict.reason !== 'fallback-absent' && verdict.reason !== 'fallback-unsupported') continue;
+    }
+    // The labelled terminal-host reading, with the gates the watch used before the store existed.
+    if (live === null || !live.running) continue;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (agent === undefined) continue;
-    // Exactly as the watch's own work drops read a seat: one agent, herdr's quiet word, no turn
-    // running, no dialog, and an empty prompt on the screen.
     if (live.agents.filter((candidate) => candidate.name === seat.name).length !== 1) continue;
     const quiet = agent.status === 'idle' || agent.status === 'done';
     if (!quiet) continue;
     const screen = readScreen(seat.cli, live.screens[agent.pane]);
     if (screen.kind !== 'idle') continue;
-    const since = sinceOf(state.seats[seat.name]?.last_active);
-    // A seat with no stamp cannot be shown to have waited the window: the snapshot counts a
-    // clock it can read, and never guesses that a freshly launched seat has been idle.
     if (since === null || now - Date.parse(since) < threshold_seconds * 1000) continue;
-    idle.push({ name: seat.name, since });
+    idle.push({
+      name: seat.name,
+      since,
+      ...(reads === null ? {} : { presence_source: 'terminal-host' as const }),
+    });
   }
-  return idle;
+  return unknown === undefined ? { seats: idle } : { seats: idle, unknown };
 }
 
 /** The persisted idle clock, or null when the state records no stamp the reader can parse: a
