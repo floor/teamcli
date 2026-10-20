@@ -1,12 +1,21 @@
 // The daemon's channel-health answer and the seam that carries it to the watch's dispatcher.
 // The scenes use a fixed clock: health is a liveness fact, never a wall-clock sleep.
 import { describe, expect, test } from 'bun:test';
+import {
+  mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { hostedWatchSources } from '../src/daemon/watch-run.ts';
 import {
   PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth, presenceStepHealth,
 } from '../src/daemon/presence/health.ts';
+import { presenceId } from '../src/daemon/presence/contract.ts';
+import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
+import { presencePaths, stagePresenceRecord } from '../src/daemon/presence/spool.ts';
 import type { HostedRoute } from '../src/daemon/routes.ts';
+import { STATE_FILE } from '../src/state.ts';
 import type { HostedLoop } from '../src/watch/hosted.ts';
 
 const START = new Date('2026-10-20T00:00:00.000Z');
@@ -99,5 +108,124 @@ describe('the owned source seam', () => {
     };
     const sources = hostedWatchSources(route, loop, {} as WatchSources);
     expect(sources.presenceChannelHealthy).toBeUndefined();
+  });
+});
+
+// The seam above, fed by the real ingester rather than a stub: a synthetic spool on disk, the
+// producer's own step, and its typed verdict carried by reference to the hosted source. No live
+// CLI home, pane or socket is touched.
+const SCENE_SESSION = 'crew';
+const SCENE_SEAT = 'worker-1';
+const SCENE_BINDING = 'prs_0123456789ab';
+
+type SceneWorld = { base: string; stateDir: string; log: string };
+
+function sceneWorld(): SceneWorld {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-presence-health-')));
+  const stateDir = join(base, '.agents');
+  mkdirSync(stateDir);
+  writeFileSync(join(stateDir, STATE_FILE), JSON.stringify({
+    format: 1,
+    sessions: {
+      [SCENE_SESSION]: {
+        seats: { [SCENE_SEAT]: { stage: 'ready', presence_binding: SCENE_BINDING } },
+        worktrees: {},
+      },
+    },
+  }));
+  const paths = presencePaths(stateDir, SCENE_SESSION, SCENE_SEAT);
+  if (paths === null) throw new Error('the scene seat cannot name a presence folder');
+  return { base, stateDir, log: paths.log };
+}
+
+function sceneStage(world: SceneWorld, event: 'turn-start' | 'turn-end', secondsAgo: number): void {
+  const ts = new Date(Date.now() - secondsAgo * 1000).toISOString();
+  const id = presenceId(ts, event === 'turn-start' ? 'a1b2c3d4' : 'b2c3d4e5');
+  if (id === null) throw new Error('the scene supplied an invalid event instant');
+  const staged = stagePresenceRecord(world.stateDir, {
+    session: SCENE_SESSION,
+    seat: SCENE_SEAT,
+    binding: SCENE_BINDING,
+    source: 'runtime-hook',
+    event,
+    ts,
+    id,
+  });
+  if (staged.kind !== 'staged') throw new Error(staged.why);
+}
+
+const sceneRoute = (): HostedRoute => ({ root: '/tmp/route', team: 'acme', session: 'crew', seats: [] });
+const sceneLoop = (): HostedLoop => ({
+  signal: new AbortController().signal,
+  wait: async () => true,
+  cycled: () => {},
+  standby: () => {},
+});
+
+describe('the actual producer through the owned health seam', () => {
+  test('a valid caught-up turn becomes healthy, with no stub anywhere in the path', async () => {
+    const world = sceneWorld();
+    const ingester = createPresenceIngester({ stateDir: world.stateDir, session: SCENE_SESSION });
+    try {
+      sceneStage(world, 'turn-start', 5);
+      const step = await ingester.step();
+      expect(step.errors).toEqual([]);
+      expect(step.healthy).toBe(true);
+
+      const nowAt = new Date();
+      const channel = createPresenceChannelHealth();
+      channel.stepped(presenceStepHealth(step), nowAt);
+      const provider = (): boolean => channel.healthy(nowAt);
+      const sources = hostedWatchSources(
+        sceneRoute(), sceneLoop(), {} as WatchSources, undefined, undefined, provider,
+      );
+      // This is the exact answer the watch dispatch reads into IdleDispatchInput.
+      expect(sources.presenceChannelHealthy?.()).toBe(true);
+      expect(sources.presenceChannelHealthy?.() === true).toBe(true);
+    } finally {
+      await ingester.close();
+      rmSync(world.base, { recursive: true, force: true });
+    }
+  });
+
+  test('a real step fault stays false on a later quiet beat', async () => {
+    const world = sceneWorld();
+    const first = createPresenceIngester({ stateDir: world.stateDir, session: SCENE_SESSION });
+    sceneStage(world, 'turn-start', 10);
+    const caughtUp = await first.step();
+    expect(caughtUp.healthy).toBe(true);
+    await first.close();
+
+    // Fatal log bytes, with a valid later record still staged behind them.
+    writeFileSync(world.log, `${readFileSync(world.log, 'utf8')}not a presence line\n`);
+    sceneStage(world, 'turn-end', 1);
+
+    const second = createPresenceIngester({ stateDir: world.stateDir, session: SCENE_SESSION });
+    try {
+      let nowAt = new Date();
+      const channel = createPresenceChannelHealth();
+      const provider = (): boolean => channel.healthy(nowAt);
+      const sources = hostedWatchSources(
+        sceneRoute(), sceneLoop(), {} as WatchSources, undefined, undefined, provider,
+      );
+
+      const faulted = await second.step();
+      expect(faulted.errors.length).toBeGreaterThan(0);
+      expect(faulted.healthy).toBe(false);
+      channel.stepped(presenceStepHealth(faulted), nowAt);
+      expect(sources.presenceChannelHealthy?.()).toBe(false);
+
+      // The fault is reported once; the next beat is quiet, and the verdict must still be false.
+      // The producer's recovery marker, not the error list of this step, is what carries it.
+      nowAt = new Date(nowAt.getTime() + 250);
+      const quiet = await second.step();
+      expect(quiet.errors).toEqual([]);
+      expect(quiet.healthy).toBe(false);
+      channel.stepped(presenceStepHealth(quiet), nowAt);
+      expect(sources.presenceChannelHealthy?.()).toBe(false);
+    } finally {
+      await second.close();
+      rmSync(world.base, { recursive: true, force: true });
+    }
   });
 });
