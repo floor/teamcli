@@ -562,13 +562,10 @@ seats:
     if (code !== 0) throw new Error(`team status exited ${code}: ${io.err}`);
     expect(code).toBe(0);
     const doc = JSON.parse(io.out) as StatusJson;
-    // The published schema declares these two fields on a row; the reading they carry is the
-    // same PresenceObservation `team seats` prints.
-    const found = doc.rows.find((candidate) => candidate.name === 'worker') as unknown as {
-      seat_state?: string;
-      seat_state_source?: string;
-      seat_presence?: PresenceObservation;
-    };
+    // The published schema declares these fields on a row, so the assertions read the public
+    // StatusJson row type directly; the reading they carry is the same PresenceObservation
+    // `team seats` prints.
+    const found = doc.rows.find((candidate) => candidate.name === 'worker');
     expect(found).toMatchObject({
       seat_state: 'blocked',
       seat_state_source: 'presence',
