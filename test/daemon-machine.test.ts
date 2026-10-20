@@ -489,6 +489,66 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(installed.why).not.toContain('launchctl');
     expect(installed.why).not.toContain('launchd');
   });
+
+  test('a failed first install leaves no unit the next login could load', () => {
+    const { home } = scratch();
+    const manager = darwinServiceManager({
+      runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
+      uid: 501,
+    });
+    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    expect(installed.ok).toBe(false);
+    // The definition was written before the registration was refused; it is taken back out so
+    // the service manager cannot load an unregistered unit at the next login.
+    expect(existsSync(manager.unitPath(home))).toBe(false);
+  });
+
+  test('a failed reinstall puts the earlier unit back for the next login', () => {
+    const { home } = scratch();
+    const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const first = good.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const before = readFileSync(first.unitPath, 'utf8');
+    const failing = darwinServiceManager({
+      runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
+      uid: 501,
+    });
+    const again = failing.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli-v2.js', roots: ['/repo'] });
+    expect(again.ok).toBe(false);
+    // The new definition is gone and the one the machine already carried is back, byte for byte.
+    expect(readFileSync(first.unitPath, 'utf8')).toBe(before);
+  });
+
+  test('a stop the service manager refuses is reported as a refusal, and the unit stays', () => {
+    const { home } = scratch();
+    const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const installed = good.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    expect(installed.ok).toBe(true);
+    if (!installed.ok) return;
+    const before = readFileSync(installed.unitPath, 'utf8');
+    const refuses = darwinServiceManager({
+      runner: () => ({ status: 3, stdout: '', stderr: 'Boot-out failed: 3: No such process' }),
+      uid: 501,
+    });
+    const removed = refuses.uninstall(home);
+    expect(removed.ok).toBe(false);
+    if (removed.ok) return;
+    expect(removed.why).toBe('the system service manager did not confirm the daemon stopped');
+    expect(removed.why).not.toContain('launchctl');
+    expect(removed.why).not.toContain('launchd');
+    // The unit is the recovery state: it is untouched so the owner can retry the uninstall.
+    expect(readFileSync(installed.unitPath, 'utf8')).toBe(before);
+  });
+
+  test('an absent unit is not a failed stop: the uninstall reports nothing to remove', () => {
+    const { home } = scratch();
+    const manager = darwinServiceManager({
+      runner: () => ({ status: 3, stdout: '', stderr: '' }),
+      uid: 501,
+    });
+    expect(manager.uninstall(home)).toMatchObject({ ok: true, removed: false });
+  });
 });
 
 type FakeService = ServiceManager & { calls: string[]; programs: ServiceProgram[] };
