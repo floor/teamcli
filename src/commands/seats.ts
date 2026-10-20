@@ -18,8 +18,8 @@ import {
   type TtyStyle,
 } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { observedSeatState, sayThreshold, type SeatStateWord, type StateSource } from '../labels/state.ts';
-import { readPresenceForSeat } from '../labels/presence.ts';
+import { observedSeatState, sayThreshold, type PresenceObservation, type SeatStateWord, type StateSource } from '../labels/state.ts';
+import { presenceChannelHealthy, readPresenceForSeat } from '../labels/presence.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
@@ -55,6 +55,13 @@ export type SeatTraceSources = {
   /** The session the rows are read for: its own folder under the state folder holds the seats'
    *  hook files, so a seat of the same name in another session is never read here. */
   session?: string;
+  /**
+   * Whether this session's presence route is healthy, from a *fresh* daemon health answer for
+   * the route (the display command's one probe). Absent or false makes every projection last
+   * known — still shown, just not live. Never from the persisted `status.json` word: a status
+   * record can outlive the channel it describes.
+   */
+  presenceChannelHealthy?: boolean;
 };
 
 /**
@@ -90,6 +97,11 @@ export const realSeatsSources: SeatsSources = {
   get home() {
     return realStatusSources.home;
   },
+  daemonHealth: async (home) => {
+    const probe = realStatusSources.daemonHealth;
+    if (probe === undefined) throw new Error('the standing sources carry no daemon health probe');
+    return probe(home);
+  },
   wait: waitOrStop,
 };
 
@@ -111,6 +123,11 @@ export type SeatRegistryRow = {
    *  source — beside `status`, which is the comparison's phrase about the record. */
   state: SeatStateWord;
   state_source: StateSource;
+  /** The native projection behind the reading, canonical word and provenance kept beside the
+   *  legacy word; `live` false is last known, shown as itself. */
+  presence?: PresenceObservation;
+  /** The projection exists but this build cannot read it: unknown, from presence. */
+  presence_unreadable?: true;
   blind: boolean;
   /** The seat's registry record carries the dev mark: a registration dev mode admitted wrote it
    *  (`src/registry/agents.ts`), shown beside the id. Absent when the record says nothing. */
@@ -145,6 +162,13 @@ export interface SeatsJson {
      *  beside `status`, which is the comparison's phrase about the record. */
     state: SeatStateWord;
     state_source: StateSource;
+    /** The native projection the reading came from: canonical four-state word, the runtime
+     *  source that wrote it, the contract event and its instant, and whether it is live. False
+     *  is last known; the legacy `state` still maps `waiting-for-a-person` to `blocked` and
+     *  `gone` to `done`. */
+    presence?: PresenceObservation;
+    /** Present, true, only when the projection exists but this build cannot read it. */
+    presence_unreadable?: true;
     /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
      *  as not working (the table's `(blind)`). */
     blind?: true;
@@ -192,6 +216,10 @@ export function seatRegistryRows(
   // The registry read once for the whole table: each row resolves its own chain over it.
   const home = traceSources?.home;
   const teamId = traceSources === undefined ? undefined : teamIdOf(traceSources.root);
+  // The channel's health is the session's, not a seat's: the caller supplies it from the one
+  // fresh daemon health answer this display command makes. An unqualified channel makes every
+  // projection last known; it never removes one.
+  const presenceQualified = traceSources?.presenceChannelHealthy === true;
   for (const row of comparison.rows) {
     if (!all && row.state === 'stopped') continue;
     const declared = byName.get(row.name);
@@ -230,12 +258,13 @@ export function seatRegistryRows(
       && supportsCliHook(cli)
       ? readCliHook(traceSources.stateDir, traceSources.session, row.name)
       : null;
-    // The daemon's presence projection, only when the seat's state records the binding it was
-    // written under: a projection a predecessor launch wrote is not this seat's reading. Read
-    // for every CLI — an adapter that writes presence for a runtime without a hook file is the
-    // point of the log — and never for a pane TeamCLI did not launch.
-    const presence = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
-      ? readPresenceForSeat(traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding)
+    // The daemon's presence projection. It answers whenever the file exists — live with this
+    // incarnation's binding on a qualified channel, last known otherwise — and only its absence
+    // leaves the screen to answer. Never read for a pane TeamCLI did not launch.
+    const presenceRead = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
+      ? readPresenceForSeat(
+          traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding, presenceQualified,
+        )
       : null;
     // The seat-state reading: the daemon's presence projection for this launch, the CLI's own
     // hook when its launch keeps one, the CLI's own
@@ -269,7 +298,8 @@ export function seatRegistryRows(
       ...(agent !== undefined && !untrusted ? { agent: { pane: agent.pane, status: agent.status } } : {}),
       ...(screenText !== undefined ? { screenText } : {}),
       hook,
-      presence,
+      ...(presenceRead?.kind === 'ok' ? { presence: presenceRead.observation } : {}),
+      ...(presenceRead?.kind === 'bad' ? { presenceUnreadable: true } : {}),
       trace,
       ...(goneOnPurpose ? { stopped: true } : {}),
       ...(held ? { held: true } : {}),
@@ -303,6 +333,8 @@ export function seatRegistryRows(
       status: row.state,
       state: reading.state,
       state_source: reading.source,
+      ...(reading.presence !== undefined ? { presence: reading.presence } : {}),
+      ...(reading.presenceUnreadable === true ? { presence_unreadable: true as const } : {}),
       blind: reading.blind,
       ...(record?.provenance.dev_mode === true ? { dev_mode: true } : {}),
       ...(row.stored ? { stored: row.stored } : {}),
@@ -472,12 +504,20 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       return 2;
     }
     const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
+    // One fresh daemon health probe per pass: the same answer decides whether this session's
+    // presence projections are live. No persisted status word is consulted — an absent
+    // verdict leaves every projection last known, never dropped.
+    const health = sources.daemonHealth === undefined || sources.home === undefined
+      ? null
+      : await sources.daemonHealth(sources.home);
+    const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session);
     const rows = seatRegistryRows(team, state, live, comparison, now, all, liveHold(whole, now) !== null, {
       project: team.project,
       root,
       home: sources.home,
       stateDir: dir,
       session,
+      presenceChannelHealthy: presenceHealthy,
     });
 
     if (json) {
@@ -503,6 +543,8 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
           launch_line: row.launch_line,
           ...(row.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
+          ...(row.presence !== undefined ? { presence: row.presence } : {}),
+          ...(row.presence_unreadable === true ? { presence_unreadable: true as const } : {}),
         })),
         ...(whole.pause !== undefined ? { pause: whole.pause } : {}),
       });

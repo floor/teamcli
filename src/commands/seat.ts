@@ -16,6 +16,7 @@ import { isParseError } from '../file/load.ts';
 import type { Problem } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
+import { presenceChannelHealthy } from '../labels/presence.ts';
 import {
   CLI_HOOK_FRESH_SECONDS,
   CLI_HOOK_FUTURE_SKEW_SECONDS,
@@ -200,12 +201,19 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     return 2;
   }
   const comparison = compare(team, session, state, live, now, watchInForceOf(sources.standing(root), team));
+  // One fresh daemon health probe for this display: its route verdict is the only thing that
+  // makes a projection live. Default closed, never a persisted status word.
+  const health = sources.daemonHealth === undefined || sources.home === undefined
+    ? null
+    : await sources.daemonHealth(sources.home);
+  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session);
   const row = seatRegistryRows(team, state, live, comparison, now, true, liveHold(whole, now) !== null, {
     project: team.project,
     root,
     home: sources.home,
     stateDir: dir,
     session,
+    presenceChannelHealthy: presenceHealthy,
   }).find((candidate) => candidate.name === seatName);
   if (row === undefined) {
     // A declared seat always has a comparison row; this is the file and the state disagreeing
@@ -345,6 +353,8 @@ function statusJson(row: SeatRegistryRow): Record<string, unknown> {
     last_active: row.last_active,
     pane: row.pane,
     launch_line: row.launch_line,
+    ...(row.presence !== undefined ? { presence: row.presence } : {}),
+    ...(row.presence_unreadable === true ? { presence_unreadable: true as const } : {}),
   };
 }
 

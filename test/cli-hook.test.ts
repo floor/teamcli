@@ -703,7 +703,13 @@ describe('the reading the hook feeds', () => {
 describe('a registry row reads the state file', () => {
   const SESSION = 'teamcli';
 
-  function row(options: { cli?: string; stateDir?: string; session?: string; binding?: string }): SeatRegistryRow {
+  function row(options: {
+    cli?: string;
+    stateDir?: string;
+    session?: string;
+    binding?: string;
+    channelHealthy?: boolean;
+  }): SeatRegistryRow {
     const team = {
       project: 'acme',
       seats: [{ role: 'implementer', name: 'worker', cli: options.cli ?? 'claude-code', model: 'Claude Opus', version: '5.5', launch: CLAUDE, cwd: '.' }],
@@ -731,6 +737,7 @@ describe('a registry row reads the state file', () => {
       root: base,
       ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
       ...(options.session !== undefined ? { session: options.session } : {}),
+      ...(options.channelHealthy !== undefined ? { presenceChannelHealthy: options.channelHealthy } : {}),
     });
     return rows[0]!;
   }
@@ -761,14 +768,32 @@ describe('a registry row reads the state file', () => {
   test('a presence projection under the recorded binding answers; a predecessor’s does not', () => {
     const binding = 'prs_0123456789ab';
     writePresence(binding, 'working');
+    expect(row({ stateDir: dir, session: SESSION, binding, channelHealthy: true }))
+      .toMatchObject({
+        state: 'working',
+        state_source: 'presence',
+        blind: false,
+        presence: { state: 'working', source: 'runtime-hook', event: 'turn-start', live: true },
+      });
+    // No fresh channel health yet: the same projection is the runtime's last known word, still
+    // answering the row, marked not live. The screen and herdr never replace it.
     expect(row({ stateDir: dir, session: SESSION, binding }))
-      .toMatchObject({ state: 'working', state_source: 'presence', blind: false });
-    // The same projection under a binding a relaunch recorded since: last known, never this
-    // launch's reading — the screen and herdr answer again.
-    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_ba9876543210' }))
+      .toMatchObject({ state: 'working', state_source: 'presence', presence: { live: false } });
+    // A projection a relaunch recorded since is another incarnation's: not this seat's reading,
+    // so the screen and herdr answer again exactly as before the projection existed.
+    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true }))
       .toMatchObject({ state: 'unknown', state_source: 'none' });
     expect(row({ stateDir: dir, session: SESSION }))
       .toMatchObject({ state: 'unknown', state_source: 'none' });
+  });
+
+  test('a projection this build cannot read is unknown from presence, never a screen guess', () => {
+    const paths = presencePaths(dir, SESSION, 'worker');
+    if (paths === null) throw new Error('the scene names no presence folder');
+    mkdirSync(paths.root, { recursive: true });
+    writeFileSync(paths.current, '{not json');
+    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_0123456789ab', channelHealthy: true }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
   });
 
   test('a fresh hook answers when the screen and herdr have nothing', () => {

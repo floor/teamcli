@@ -258,6 +258,21 @@ const GREEN_SLICES_SCHEMA_FRAGMENT = {
   },
 } as const;
 
+/** The native presence projection behind a seat reading (src/labels/state.ts): the canonical
+ *  four-state word and its provenance, kept beside the legacy state word. */
+const PRESENCE_PROVENANCE_SCHEMA: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['state', 'source', 'event', 'since', 'live'],
+  properties: {
+    state: { type: 'string', enum: ['working', 'idle', 'waiting-for-a-person', 'gone'] },
+    source: { type: 'string', enum: ['runtime-hook', 'runtime-event', 'daemon-launch'] },
+    event: { type: 'string', enum: ['turn-start', 'turn-end', 'human-wait', 'session-end'] },
+    since: { type: 'string', minLength: 1 },
+    live: { type: 'boolean' },
+  },
+};
+
 /** Published `--json` output schema for the pilot `team status` command (`schema/status.schema.json`). */
 export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.status',
@@ -296,6 +311,8 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
               launch_line: { type: ['string', 'null'] },
               seat_state: { type: 'string' },
               seat_state_source: { type: 'string' },
+              seat_presence: PRESENCE_PROVENANCE_SCHEMA,
+              seat_presence_unreadable: { type: 'boolean', const: true },
               blind: { type: 'boolean', const: true },
               dev_mode: { type: 'boolean' },
               start_cwd: { type: 'string' },
@@ -414,6 +431,8 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           status: { type: 'string', minLength: 1 },
           state: { type: 'string', minLength: 1 },
           state_source: { type: 'string', minLength: 1 },
+          presence: PRESENCE_PROVENANCE_SCHEMA,
+          presence_unreadable: { type: 'boolean', const: true },
           blind: { type: 'boolean', const: true },
           last_active: { type: ['string', 'null'] },
           pane: { type: ['string', 'null'] },
@@ -2532,6 +2551,8 @@ export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
         last_active: { type: ['string', 'null'] },
         pane: { type: ['string', 'null'] },
         launch_line: { type: ['string', 'null'] },
+        presence: PRESENCE_PROVENANCE_SCHEMA,
+        presence_unreadable: { type: 'boolean', const: true },
       },
     },
     turn: {

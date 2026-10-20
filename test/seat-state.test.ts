@@ -1,10 +1,11 @@
-// TeamCLI's own seat state (src/labels/state.ts). The reading is best source
-// first — the CLI's own screen, herdr's status, TeamCLI's traces within a window, otherwise
-// unknown — with the certainties (held, unreachable, done) answered before any screen is read.
-// `unknown` past the blind threshold counts as not working. The thresholds are settings
-// (src/settings/inherit.ts). Every screen text below is synthetic.
+// TeamCLI's own seat state (src/labels/state.ts). The certainties (held, unreachable, done)
+// answer first; then the daemon's presence projection for this runtime incarnation — live or
+// last known, never expired by elapsed time and never overridden by a screen or trace; then the
+// CLI's own screen, herdr's status, TeamCLI's traces within a window, otherwise unknown. The
+// thresholds are settings (src/settings/inherit.ts) and govern only the legacy sources. Every
+// screen text below is synthetic.
 import { describe, expect, test } from 'bun:test';
-import { observedSeatState, sayThreshold, seatState } from '../src/labels/state.ts';
+import { observedSeatState, sayThreshold, seatState, type PresenceObservation } from '../src/labels/state.ts';
 import { renderSeatsTable, type SeatRegistryRow } from '../src/commands/seats.ts';
 import { DEFAULT_STATE_THRESHOLDS, STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { resolveNumberSetting, stateThresholds } from '../src/settings/resolve.ts';
@@ -94,54 +95,86 @@ describe('the reading, best source first', () => {
 });
 
 describe("the daemon's presence projection", () => {
-  const presence = (state: 'working' | 'idle' | 'waiting-for-a-person' | 'gone', seconds: number) =>
-    ({ state, since: ago(seconds) });
-
-  test('a young working word is working, whatever the idle prompt shows', () => {
-    expect(seatState({ presence: presence('working', 30), screen: { kind: 'idle' } }, NOW))
-      .toEqual({ state: 'working', source: 'presence', blind: false });
+  const presence = (
+    state: 'working' | 'idle' | 'waiting-for-a-person' | 'gone',
+    seconds: number,
+    live = true,
+  ): PresenceObservation => ({
+    state,
+    source: 'runtime-hook',
+    event: state === 'working' ? 'turn-start'
+      : state === 'idle' ? 'turn-end'
+        : state === 'waiting-for-a-person' ? 'human-wait' : 'session-end',
+    since: ago(seconds),
+    live,
   });
 
-  test('past the working window a readable screen answers, and an unreadable one leaves presence', () => {
-    const stale = DEFAULT_STATE_THRESHOLDS.hook_working_seconds + 30;
-    expect(seatState({ presence: presence('working', stale), screen: { kind: 'idle' } }, NOW))
-      .toEqual({ state: 'idle', source: 'cli', blind: false });
-    expect(seatState({ presence: presence('working', stale), screen: { kind: 'unknown' } }, NOW))
-      .toEqual({ state: 'working', source: 'presence', blind: false });
+  test('a working word answers before a contradictory screen and a fresh trace, however old', () => {
+    const long = presence('working', 2 * 24 * 60 * 60);
+    expect(seatState({ presence: presence('working', 30), screen: { kind: 'idle' }, trace: ago(30) }, NOW))
+      .toMatchObject({ state: 'working', source: 'presence', blind: false });
+    // Older than the hook file's whole day: the native record still stands, and neither the
+    // idle prompt nor a trace inside its window replaces it.
+    expect(seatState({ presence: long, screen: { kind: 'idle' }, trace: ago(30) }, NOW))
+      .toMatchObject({ state: 'working', source: 'presence', blind: false });
+    // No terminal at all: the same answer.
+    expect(seatState({ presence: long }, NOW)).toMatchObject({ state: 'working', source: 'presence' });
   });
 
-  test('idle loses to a trace inside the window and answers without one', () => {
+  test('an idle word stands over a working screen and a fresh trace', () => {
+    const long = presence('idle', 2 * 24 * 60 * 60);
     expect(seatState({ presence: presence('idle', 30), trace: ago(30) }, NOW))
-      .toEqual({ state: 'working', source: 'trace', blind: false });
-    expect(seatState({ presence: presence('idle', 30) }, NOW))
-      .toEqual({ state: 'idle', source: 'presence', blind: false });
+      .toMatchObject({ state: 'idle', source: 'presence', blind: false });
+    expect(seatState({ presence: long, screen: { kind: 'working' }, trace: ago(30) }, NOW))
+      .toMatchObject({ state: 'idle', source: 'presence', blind: false });
+    expect(seatState({ presence: long }, NOW)).toMatchObject({ state: 'idle', source: 'presence' });
   });
 
-  test('a runtime waiting on a person is blocked, whatever any clock says', () => {
-    expect(seatState({ presence: presence('waiting-for-a-person', 30), screen: { kind: 'idle' }, trace: ago(30) }, NOW))
-      .toEqual({ state: 'blocked', source: 'presence', blind: false });
-  });
-
-  test('a session end is done, before a trace could read working', () => {
-    expect(seatState({ presence: presence('gone', 30), trace: ago(30) }, NOW))
-      .toEqual({ state: 'done', source: 'presence', blind: false });
-  });
-
-  test('a projection an interrupted turn left behind loses to a blocked screen', () => {
+  test('a blocked screen never overrides a projection', () => {
     expect(seatState({ presence: presence('working', 30), screen: { kind: 'permission' } }, NOW))
-      .toEqual({ state: 'blocked', source: 'cli', blind: false });
+      .toMatchObject({ state: 'working', source: 'presence' });
+    expect(seatState({ presence: presence('idle', 30), screen: { kind: 'permission' } }, NOW))
+      .toMatchObject({ state: 'idle', source: 'presence' });
   });
 
-  test('a projection older than a day, or dated ahead, says nothing', () => {
-    expect(seatState({ presence: presence('idle', 24 * 60 * 60 + 1), screen: { kind: 'working' } }, NOW))
-      .toEqual({ state: 'working', source: 'cli', blind: false });
-    expect(seatState({ presence: { state: 'idle', since: ago(-61) }, screen: { kind: 'working' } }, NOW))
-      .toEqual({ state: 'working', source: 'cli', blind: false });
+  test('a person the runtime waits on is blocked, and the canonical word survives the mapping', () => {
+    const reading = seatState(
+      { presence: presence('waiting-for-a-person', 30), screen: { kind: 'idle' }, trace: ago(30) }, NOW,
+    );
+    expect(reading).toMatchObject({
+      state: 'blocked',
+      source: 'presence',
+      blind: false,
+      presence: {
+        state: 'waiting-for-a-person', source: 'runtime-hook', event: 'human-wait', live: true,
+      },
+    });
+  });
+
+  test('a session end is done, and the canonical word survives the mapping', () => {
+    expect(seatState({ presence: presence('gone', 30), trace: ago(30) }, NOW)).toMatchObject({
+      state: 'done',
+      source: 'presence',
+      presence: { state: 'gone', event: 'session-end' },
+    });
+  });
+
+  test('last known still answers as itself, marked not live', () => {
+    const reading = seatState({ presence: presence('idle', 30, false), screen: { kind: 'working' } }, NOW);
+    expect(reading).toMatchObject({ state: 'idle', source: 'presence', presence: { live: false } });
+  });
+
+  test('a projection this build cannot read is unknown from presence, never a screen', () => {
+    expect(seatState({ presenceUnreadable: true, screen: { kind: 'working' }, trace: ago(30) }, NOW))
+      .toEqual({ state: 'unknown', source: 'presence', blind: false, presenceUnreadable: true });
+    // The certainties above it still answer: a hold is not something the projection speaks to.
+    expect(seatState({ presenceUnreadable: true, held: true }, NOW))
+      .toMatchObject({ state: 'held', source: 'hold' });
   });
 
   test('presence answers before the hook file a second signal from the same launch', () => {
     expect(seatState({ presence: presence('idle', 30), hook: { state: 'working', since: ago(30) } }, NOW))
-      .toEqual({ state: 'idle', source: 'presence', blind: false });
+      .toMatchObject({ state: 'idle', source: 'presence' });
     // Without a projection the hook keeps answering exactly as before.
     expect(seatState({ hook: { state: 'working', since: ago(30) } }, NOW))
       .toEqual({ state: 'working', source: 'cli-hook', blind: false });

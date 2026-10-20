@@ -127,6 +127,56 @@
               "seat_state_source": {
                 "type": "string"
               },
+              "seat_presence": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "state",
+                  "source",
+                  "event",
+                  "since",
+                  "live"
+                ],
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "working",
+                      "idle",
+                      "waiting-for-a-person",
+                      "gone"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "runtime-hook",
+                      "runtime-event",
+                      "daemon-launch"
+                    ]
+                  },
+                  "event": {
+                    "type": "string",
+                    "enum": [
+                      "turn-start",
+                      "turn-end",
+                      "human-wait",
+                      "session-end"
+                    ]
+                  },
+                  "since": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "live": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "seat_presence_unreadable": {
+                "type": "boolean",
+                "const": true
+              },
               "blind": {
                 "type": "boolean",
                 "const": true

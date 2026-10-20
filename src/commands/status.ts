@@ -30,6 +30,7 @@ import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { SeatStateWord, StateSource } from '../labels/state.ts';
+import { presenceChannelHealthy } from '../labels/presence.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import {
@@ -369,11 +370,24 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     dialogsTrustInForce(sources.home ?? homedir(), root, now),
   );
   const all = args.flags.has('all');
+  // One probe of the machine daemon for the whole run: the line below, the document's `daemon`
+  // field and the seats' presence qualification all come from the same snapshot, so they cannot
+  // disagree. No second probe, no server, and no exit change — the reading is a fact, not a
+  // verdict.
+  const health = sources.daemonHealth === undefined
+    ? null
+    : await sources.daemonHealth(sources.home ?? homedir());
+  // Whether the seats' presence projections may be called live: only a fresh route verdict that
+  // says serving and healthy for this session. Default closed — a persisted status word or a
+  // health answer without a verdict proves nothing.
+  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session);
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
   const registryRows = all || json
-    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session })
+    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, {
+        project: team.project, root, home: sources.home, stateDir: dir, session, presenceChannelHealthy: presenceHealthy,
+      })
     : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
@@ -433,12 +447,6 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
   if (green !== null) comparison.notes.push(...greenNotes(green));
-  // One probe of the machine daemon for the whole run: the line below and the document's
-  // `daemon` field come from the same snapshot, so they cannot disagree. No second probe, no
-  // server, and no exit change — the reading is a fact, not a verdict.
-  const health = sources.daemonHealth === undefined
-    ? null
-    : await sources.daemonHealth(sources.home ?? homedir());
   if (health !== null) {
     comparison.notes.push(...daemonNotes(health));
     // The hosted watches that same reading carries: one plain line per watched route, and a
@@ -468,7 +476,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...rulesFileDifferences(standing, team, root, sources.home),
     // A seat whose reading is blind — unknown past the blind threshold — counts as
     // not working, and is a must-fix here exactly as it is in `team check`.
-    ...blindDifferences(team, state, live, comparison, now, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
+    ...blindDifferences(team, state, live, comparison, now, hold !== null, {
+      project: team.project, root, home: sources.home, stateDir: dir, session, presenceChannelHealthy: presenceHealthy,
+    }),
   ]);
 
   const visibleRows = all
@@ -495,6 +505,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           pane: row.pane,
           ...(extra ? { launch_line: extra.launch_line } : {}),
           ...(found ? { seat_state: found.state, seat_state_source: found.state_source } : {}),
+          ...(found?.presence !== undefined ? { seat_presence: found.presence } : {}),
+          ...(found?.presence_unreadable === true ? { seat_presence_unreadable: true as const } : {}),
           ...(found?.blind ? { blind: true as const } : {}),
           ...(extra?.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
