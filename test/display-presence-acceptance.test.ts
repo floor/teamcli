@@ -177,25 +177,25 @@ describe('a live word is proven only by a fresh route verdict for this probe', (
   ) => ({ roots, probe: { state, at } });
 
   test('a serving, healthy verdict for this route and session is proof', () => {
-    expect(presenceChannelHealthy(reading([verdict()]), ROOT, SESSION)).toBe(true);
+    expect(presenceChannelHealthy(reading([verdict()]), ROOT, SESSION, NOW)).toBe(true);
   });
 
   test('the 2s edge is inside the bound', () => {
     // The bound is the health grace the daemon itself uses: a snapshot this fresh is current.
     expect(presenceChannelHealthy(
-      reading([verdict({ checkedAt: new Date(Date.parse(AT) - 2000).toISOString() })]), ROOT, SESSION,
+      reading([verdict({ checkedAt: new Date(Date.parse(AT) - 2000).toISOString() })]), ROOT, SESSION, NOW,
     )).toBe(true);
   });
 
   test('one millisecond past the bound is not current', () => {
     expect(presenceChannelHealthy(
-      reading([verdict({ checkedAt: new Date(Date.parse(AT) - 2001).toISOString() })]), ROOT, SESSION,
+      reading([verdict({ checkedAt: new Date(Date.parse(AT) - 2001).toISOString() })]), ROOT, SESSION, NOW,
     )).toBe(false);
   });
 
   test('a verdict well past the bound is not current', () => {
     expect(presenceChannelHealthy(
-      reading([verdict({ checkedAt: new Date(Date.parse(AT) - 2500).toISOString() })]), ROOT, SESSION,
+      reading([verdict({ checkedAt: new Date(Date.parse(AT) - 2500).toISOString() })]), ROOT, SESSION, NOW,
     )).toBe(false);
   });
 
@@ -204,26 +204,28 @@ describe('a live word is proven only by a fresh route verdict for this probe', (
       reading([verdict({ checkedAt: new Date(Date.parse(AT) - 10 * 60 * 1000).toISOString() })]),
       ROOT,
       SESSION,
+      NOW,
     )).toBe(false);
   });
 
   test('pending, unhealthy, another session, another route or no verdict proves nothing', () => {
-    expect(presenceChannelHealthy(reading([verdict({ state: 'pending', healthy: false, why: 'backlog' })]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict({ healthy: false })]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict({ session: 'other' })]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([verdict()]), '/srv/other', SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([{ root: ROOT }]), ROOT, SESSION)).toBe(false);
-    expect(presenceChannelHealthy(reading([]), ROOT, SESSION)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict({ state: 'pending', healthy: false, why: 'backlog' })]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict({ healthy: false })]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict({ session: 'other' })]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([verdict()]), '/srv/other', SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([{ root: ROOT }]), ROOT, SESSION, NOW)).toBe(false);
+    expect(presenceChannelHealthy(reading([]), ROOT, SESSION, NOW)).toBe(false);
   });
 
   test('a probe that did not answer, and a persisted close record, never qualify', () => {
     for (const state of ['refused', 'unanswered', 'unknown'] as const) {
-      expect(presenceChannelHealthy(reading([verdict()], AT, state), ROOT, SESSION)).toBe(false);
+      expect(presenceChannelHealthy(reading([verdict()], AT, state), ROOT, SESSION, NOW)).toBe(false);
     }
     expect(presenceChannelHealthy(
       reading([{ root: ROOT, presence: { state: 'pending', why: 'the daemon is closing' } }]),
       ROOT,
       SESSION,
+      NOW,
     )).toBe(false);
   });
 });
