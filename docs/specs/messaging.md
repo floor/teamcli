@@ -183,8 +183,10 @@ team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--
 team send --list [--json]
 ```
 
-- `--file <path>` reads the body from a file instead of the one `<message>` argument; the two
-  cannot both be given.
+- `--file <path>` reads the body from a file instead of the one `<message>` argument, and
+  `--file -` reads it from standard input (`--brief -` does the same); the two cannot both be
+  given. A multiline body that looks like terminal output — two or more lines starting with a
+  check mark or a bracketed number — is warned about on stderr and sent unchanged.
 - `--wait` asks and waits for the reply. **Refused for every seat at the tag** (`send.refused`):
   the frame it rides is a socket write this build does not make; a Claude Code seat's refusal names
   the native leg (`team route` and the caller's own cross-session tool) that will carry a waited
