@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { daemonHealth } from '../src/daemon/health.ts';
-import { startMachineDaemon } from '../src/daemon/host.ts';
+import { startMachineDaemon, type HostedWatchExtras } from '../src/daemon/host.ts';
+import type { BrokerWorkSource } from '../src/idle_work.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath, machineConfigDir } from '../src/daemon/paths.ts';
 import { mintPresenceBinding } from '../src/daemon/presence/contract.ts';
 import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
@@ -141,6 +143,45 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     expect(existsSync(daemonSocketPath(home))).toBe(false);
     const after = await daemonHealth(home);
     expect(after.state).toBe('not-running');
+  });
+
+  test('a crash’s leftover lock and socket are reclaimed by the next start', async () => {
+    const { root, home } = scratch();
+    // What a daemon killed without a clean stop leaves behind: its lock file, held by a pid that
+    // is gone, and the socket file it never unlinked. The pid is above this machine's live range,
+    // so `kill(pid, 0)` answers ESRCH; the socket is a real one whose server was closed.
+    mkdirSync(machineConfigDir(home), { recursive: true, mode: 0o700 });
+    const lockPath = daemonLockPath(home);
+    writeFileSync(lockPath, '999999\n');
+    const socketPath = daemonSocketPath(home);
+    const stale = createServer();
+    // Measured here: a bound unix socket renamed while listening keeps its socket file when the
+    // server closes, while the name it was bound at is unlinked. Moving it onto the daemon's path
+    // therefore leaves exactly the socket a killed daemon leaves — a socket entry nobody listens on.
+    const staging = join(machineConfigDir(home), 'stale.sock');
+    await new Promise<void>((done, fail) => {
+      stale.once('error', fail);
+      stale.listen(staging, () => done());
+    });
+    renameSync(staging, socketPath);
+    await new Promise<void>((done, fail) => stale.close((error) => (error ? fail(error) : done())));
+    expect(existsSync(socketPath)).toBe(true);
+    expect(lstatSync(socketPath).isSocket()).toBe(true);
+
+    const started = await startMachineDaemon({ home, roots: [root], startedBy: 'service-manager', version: 'test' });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The dead holder's lock is replaced by this process, and the stale socket was unlinked and
+      // bound again: the next start needs no manual cleanup and starts no second daemon.
+      expect(readFileSync(lockPath, 'utf8')).toBe(`${process.pid}\n`);
+      expect(existsSync(socketPath)).toBe(true);
+      const health = await daemonHealth(home);
+      expect(health.state).toBe('running');
+      expect(health.pid).toBe(process.pid);
+    } finally {
+      await started.daemon.close();
+    }
   });
 
   test('the same checkout named twice is hosted once and recorded once as a duplicate', async () => {
@@ -497,6 +538,13 @@ function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}):
   };
 }
 
+/** The argv the installed unit itself would run, read back out of its ProgramArguments. */
+function unitArguments(unitPath: string): string[] {
+  const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(readFileSync(unitPath, 'utf8'))?.[1];
+  if (block === undefined) throw new Error('the unit has no ProgramArguments');
+  return [...block.matchAll(/<string>([\s\S]*?)<\/string>/g)].map((match) => match[1] ?? '');
+}
+
 describe('team daemon status, install, uninstall and run', () => {
   test('status prints one line and never fails', async () => {
     const { home } = scratch();
@@ -809,6 +857,53 @@ describe('team daemon status, install, uninstall and run', () => {
     }
   }, 20_000);
 
+  test('the hosted watch gets a broker reading only from a daemon that hosts the broker', async () => {
+    const { root, home } = scratch();
+    const asked: string[] = [];
+    const source: BrokerWorkSource = async () => null;
+    const extras: HostedWatchExtras[] = [];
+    const hostedWatch = (_route: HostedRoute, _log: (text: string) => void, extra: HostedWatchExtras) => {
+      extras.push(extra);
+      return { run: async () => 0 };
+    };
+    const brokerWork = (route: HostedRoute): BrokerWorkSource => {
+      asked.push(route.root);
+      return source;
+    };
+    const start = (features?: { broker: 'on' | 'off' | 'absent' }) => startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: 'test',
+      watchHosting: true,
+      hostedWatch,
+      brokerWork,
+      ...(features === undefined ? {} : { features }),
+    });
+
+    // Default and explicitly off: the builder is never asked, and the watch is built without a
+    // reading, so a tracker team keeps its explicit unknown and no socket is opened.
+    for (const features of [undefined, { broker: 'off' as const }]) {
+      const started = await start(features);
+      expect(started.kind).toBe('serving');
+      if (started.kind !== 'serving') return;
+      await started.daemon.close();
+    }
+    expect(asked).toEqual([]);
+    expect(extras).toEqual([{}, {}]);
+
+    // Hosted: the builder is asked once for the route, and the watch receives exactly its reader.
+    const on = await start({ broker: 'on' });
+    expect(on.kind).toBe('serving');
+    if (on.kind !== 'serving') return;
+    try {
+      expect(asked).toEqual([root]);
+      expect(extras[2]?.brokerWork).toBe(source);
+    } finally {
+      await on.daemon.close();
+    }
+  }, 20_000);
+
   test('run starts one daemon, prints its line, and stops cleanly', async () => {
     const { root, home } = scratch();
     const io = testIo(root, owner);
@@ -887,5 +982,44 @@ describe('team daemon status, install, uninstall and run', () => {
       })),
     ).toBe(1);
     expect(locked.err).toContain('another start holds the machine lock (pid 43)');
+  });
+
+  test('the installed unit’s own argv starts the one daemon hosting send and bus', async () => {
+    const { root, home } = scratch();
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const unit = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root] });
+    expect(unit.ok).toBe(true);
+    if (!unit.ok) return;
+    const argv = unitArguments(unit.unitPath);
+    expect(argv.slice(-2)).toEqual(['--root', root]);
+    expect(argv).toContain('--started-by');
+
+    // The login start, end to end: the unit's own argv through the command surface and the real
+    // machine daemon. The run is admitted as the no-terminal owner because the source is the
+    // service manager, and one process binds the machine socket and hosts this root's existing
+    // send and bus in it, with the broker not hosted.
+    let release: (() => void) | undefined;
+    const io = testIo(root, { kind: 'owner-no-tty' });
+    const running = runDaemon(argv.slice(3), io, sourcesOf(home, {
+      stop: (end) => {
+        release = end;
+        return () => {};
+      },
+    }));
+    await waitFor(() => io.out.includes('team daemon: running'));
+    expect(io.out).toContain('roots 1 (send 1, bus 1)');
+    expect(io.out).toContain('broker not hosted');
+    expect(existsSync(daemonSocketPath(home))).toBe(true);
+    expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
+    expect(existsSync(join(root, '.agents', 'bus.sock'))).toBe(true);
+    const health = await daemonHealth(home);
+    expect(health.state).toBe('running');
+    expect(health.startedBy).toBe('service-manager');
+    expect(health.roots).toEqual([{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }]);
+
+    release?.();
+    expect(await running).toBe(0);
+    expect(io.out).toContain('team daemon: stopped');
+    expect(existsSync(daemonSocketPath(home))).toBe(false);
   });
 });
