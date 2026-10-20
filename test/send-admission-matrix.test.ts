@@ -52,6 +52,7 @@ const RULE = {
   assistant: "an assistant seat to its entity's coordinator",
   seat: "a seat to its own team's orchestrator",
   grant: 'an owner-signed grant naming send',
+  declaredSeat: 'a seat to a declared seat of its own team',
 } as const;
 
 const ID = {
@@ -81,6 +82,7 @@ const ID = {
   legacyLead: 'agt_000000050018',
   legacyBuilder: 'agt_000000050019',
   stray: 'agt_00000005001a',
+  visitor: 'agt_00000005001b',
 } as const;
 
 // The floor team's seats, one per role a live file has shown: the lead place, the operator
@@ -115,6 +117,9 @@ const wordBuilder = agent(ID.wordBuilder, 'builder-1', 'word');
 const legacyLead = agent(ID.legacyLead, 'coord', 'legacy');
 const legacyBuilder = agent(ID.legacyBuilder, 'builder-1', 'legacy');
 const stray = agent(ID.stray, 'builder-1', 'nowhere');
+// A registered record whose seat the floor roster does not declare: the sender-side check of
+// the declared-seat rule.
+const visitor = agent(ID.visitor, 'visitor', 'floor');
 
 // Two entities: floor owns floor, teamcli and material; radio is its own. `word` and `legacy`
 // hold the shapes a role word or a legacy lead key gets wrong; neither names an entity, so no
@@ -297,6 +302,64 @@ describe('the final target: every seat reaches its own orchestrator', () => {
     for (const side of declared) {
       expect({ seat: side.seat, ...admitSend(side, floorLead, teams) }).toEqual({ seat: side.seat, ok: true, rule: RULE.seat });
     }
+  });
+});
+
+// The second half of the final target, once builder-3's rule lands: appended after every
+// current branch, so the 42 pairs the existing rules admit keep their verdicts, and every other
+// pair of one team — seat to self included — is answered by the declared-seat rule. Both
+// endpoints must be declared on the team's roster: a bootstrap DeclaredSender qualifies when its
+// seat is there, a seat off the roster does not, and a `team send --client` principal has no
+// face at this seam (it is not a roster seat). The block turns itself on when the rule's name
+// reaches RULE_SUMMARY, which is what a refusal and the drop header read.
+describe('the final target: the declared-seat rule', () => {
+  const landed = RULE_SUMMARY.includes(RULE.declaredSeat);
+  const targetVerdict = (caller: GridRow, target: GridRow): string =>
+    admittedSameTeam[caller.id]?.[target.id] ?? RULE.declaredSeat;
+
+  test.skipIf(!landed)('every same-team pair is admitted, the existing verdicts kept', () => {
+    for (const caller of grid) {
+      for (const target of grid) {
+        const pair = `${caller.id} -> ${target.id}`;
+        expect({ pair, ...admitSend(caller.side, target.side, teams) }).toEqual({ pair, ok: true, rule: targetVerdict(caller, target) });
+      }
+    }
+  });
+
+  test.skipIf(!landed)('seat-to-self is a declared-seat pair', () => {
+    for (const row of grid.filter((entry) => admittedSameTeam[entry.id]?.[entry.id] === undefined)) {
+      expect({ role: row.id, ...admitSend(row.side, row.side, teams) }).toEqual({ role: row.id, ok: true, rule: RULE.declaredSeat });
+    }
+  });
+
+  test.skipIf(!landed)('a bootstrap declared seat qualifies; a seat off the roster does not', () => {
+    const declaredArchitect: DeclaredSender = { seat: 'architect', team: 'floor', role: 'architect', declared: true };
+    const declaredGhost: DeclaredSender = { seat: 'visitor', team: 'floor', role: 'writer', declared: true };
+    expect(admitSend(declaredArchitect, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    expect(admitSend(declaredArchitect, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    // An existing rule answers first.
+    expect(admitSend(declaredArchitect, floorLead, teams)).toEqual({ ok: true, rule: RULE.seat });
+    expect(admitSend(declaredGhost, writer06, teams).ok).toBe(false);
+    expect(admitSend(visitor, writer06, teams).ok).toBe(false);
+    expect(admitSend(writer06, visitor, teams).ok).toBe(false);
+  });
+
+  test.skipIf(!landed)('the two incident refusals close, and grant and reply stay ahead of the rule', () => {
+    expect(admitSend(architect, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    expect(admitSend(operatorWord, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    expect(admitSend(operatorWord, erato, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    expect(admitSend(operatorWord, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.operators });
+    expect(admitSend(writer06, floorLead, teams)).toEqual({ ok: true, rule: RULE.seat });
+    expect(admitSend(writer06, erato, teams, { name: 'the floor writers' })).toEqual({
+      ok: true,
+      rule: 'an owner-signed grant naming send (the floor writers)',
+    });
+    expect(admitSend(writer06, erato, teams, undefined, { projects: {}, reply: 'open-thread' })).toEqual({
+      ok: true,
+      rule: REPLY_RULE,
+    });
+    // The rule never crosses a team.
+    expect(admitSend(architect, cliWriter, teams).ok).toBe(false);
   });
 });
 
