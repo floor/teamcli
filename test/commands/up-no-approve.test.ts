@@ -291,8 +291,10 @@ describe('team up without an approval record', () => {
       const sent = await runSend(['builder-1', 'first brief'], sendIo, sendHost);
       expect(sent, `${sendIo.err}${sendIo.out}`).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
-      // the outcome is the plain word.
-      expect(sendIo.out).toBe('team acme, session "acme"\nbuilder-1: delivered\n');
+      // the outcome names the trigger sent, never a read.
+      expect(sendIo.out).toBe(
+        'team acme, session "acme"\nbuilder-1: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+      );
       expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {
       rmSync(here.base, { recursive: true, force: true });

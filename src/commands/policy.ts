@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { describeCaller, fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
+import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -167,7 +168,7 @@ function orderedEffectivePolicies(policies: Record<string, EffectivePolicy>): Ef
   return out;
 }
 
-function resolveProjectIdForTeam(home: string, root: string, team: TeamFile): string | null {
+export function resolveProjectIdForTeam(home: string, root: string, team: TeamFile): string | null {
   try {
     const fromRegistry = projectOfTeam(home, teamIdOf(root));
     if (fromRegistry?.id) return fromRegistry.id;
@@ -590,19 +591,24 @@ function executePolicySet(
   const caller = walkCaller(rawIo);
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (json) {
-      writeJsonError(
-        rawIo,
-        'policy.refused',
-        plainText(msg),
-        'the owner runs `team policy set` from a terminal outside herdr',
-        1,
-        'owner-only',
-      );
-    } else {
-      io.stderr(`team policy: ${plainText(msg)}\n`);
+    // The owner's dev-mode admission for exactly this gate.
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(
+          rawIo,
+          'policy.refused',
+          plainText(msg),
+          'the owner runs `team policy set` from a terminal outside herdr',
+          1,
+          'owner-only',
+        );
+      } else {
+        io.stderr(`team policy: ${plainText(msg)}\n`);
+      }
+      return 'refused';
     }
-    return 'refused';
+    io.stderr(`${lift.warning}\n`);
   }
 
   const [rawLevel, rawName, rawValue] = rest as [string, string, string];
@@ -813,19 +819,24 @@ function executePolicyUnset(
   const caller = walkCaller(rawIo);
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (json) {
-      writeJsonError(
-        rawIo,
-        'policy.refused',
-        plainText(msg),
-        'the owner runs `team policy unset` from a terminal outside herdr',
-        1,
-        'owner-only',
-      );
-    } else {
-      io.stderr(`team policy: ${plainText(msg)}\n`);
+    // The owner's dev-mode admission for exactly this gate.
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(
+          rawIo,
+          'policy.refused',
+          plainText(msg),
+          'the owner runs `team policy unset` from a terminal outside herdr',
+          1,
+          'owner-only',
+        );
+      } else {
+        io.stderr(`team policy: ${plainText(msg)}\n`);
+      }
+      return 'refused';
     }
-    return 'refused';
+    io.stderr(`${lift.warning}\n`);
   }
 
   const [rawLevel, rawName] = rest as [string, string];

@@ -5,7 +5,7 @@ import { afterEach, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { dropMessage, triggerLine } from '../src/send/native.ts';
+import { dropMessage, readTriggerLine } from '../src/send/native.ts';
 import { recordBody } from './helpers.ts';
 import { dropDir, filed, nativeHost, owner, world, type World } from './send-native-fixtures.ts';
 
@@ -77,9 +77,9 @@ test('the pane is given the drop path only once that file holds the whole body',
     expect(names.filter((name) => name.endsWith('.tmp'))).toEqual([]);
     expect(names.length).toBe(1);
     const path = join(drops, names[0] as string);
-    const line = triggerLine(path);
-    if (line === null) throw new Error(`no trigger for ${path}`);
-    expect(text).toBe(line);
+    // The typed trigger is the seat's own drop read: the line's receipt is the read the send
+    // watches for, so the record's path no longer has to fit inside the typed line.
+    expect(text).toBe(readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' }) as string);
     expect(recordBody(path)).toBe(filed(body));
     expect(statSync(path).mode & 0o777).toBe(0o600);
     seen = true;

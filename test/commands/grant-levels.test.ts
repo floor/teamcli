@@ -340,7 +340,21 @@ describe('team revoke <name> appends the revocation record', () => {
     expect(active).toHaveLength(1);
     // The revocation is a generation of its own in the same sequence, so the revival is newer
     // than both; what the revocation named stays revoked.
-    expect(active[0]!.generation).toBeGreaterThan(1);
+    const secondGen = active[0]!.generation;
+    expect(secondGen).toBeGreaterThan(1);
+
+    const preview = owner(place);
+    expect(await runRevoke([name, '--dry-run'], preview, { home: place.home })).toBe(0);
+    expect(preview.out).toBe(
+      `revoke: would revoke the grant ${name} at generation ${secondGen}, writing the record revoke-${name}-${secondGen}; nothing written\n`,
+    );
+
+    expect(await runRevoke([name], owner(place), { home: place.home })).toBe(0);
+    expect(readGrants(place.home).revocations).toMatchObject([
+      { name: `revoke-${name}-${secondGen}`, grant: name, grantGeneration: secondGen, by: 'owner' },
+      { name: `revoke-${name}`, grant: name, grantGeneration: 1, by: 'owner' },
+    ]);
+    expect(activeGrants(place.home, new Date())).toEqual([]);
   });
 
   test('a revocation dry run explains and writes nothing', async () => {

@@ -50,64 +50,146 @@
     "events": {
       "type": "array",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "ts",
-          "from",
-          "to",
-          "body",
-          "id",
-          "outcome",
-          "status"
-        ],
-        "properties": {
-          "ts": {
-            "type": "string"
-          },
-          "from": {
-            "type": "string"
-          },
-          "to": {
-            "type": "string"
-          },
-          "body": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "outcome": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "thread": {
-            "type": "string"
-          },
-          "in_reply_to": {
-            "type": "string"
-          },
-          "from_team": {
-            "type": "string"
-          },
-          "ms": {
-            "type": "number"
-          },
-          "via": {
-            "type": "string"
-          },
-          "failed": {
-            "type": "array",
-            "items": {
-              "type": "string"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ts",
+              "from",
+              "to",
+              "body",
+              "id",
+              "outcome",
+              "status"
+            ],
+            "properties": {
+              "ts": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "in_reply_to": {
+                "type": "string"
+              },
+              "from_team": {
+                "type": "string"
+              },
+              "ms": {
+                "type": "number"
+              },
+              "via": {
+                "type": "string"
+              },
+              "failed": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "note": {
+                "type": "string"
+              }
             }
           },
-          "note": {
-            "type": "string"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "ts",
+              "session",
+              "seat",
+              "state",
+              "event",
+              "source",
+              "binding",
+              "seq",
+              "presence_seq",
+              "event_id",
+              "observed_at",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "presence.changed"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              },
+              "seat": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "working",
+                  "idle",
+                  "waiting-for-a-person",
+                  "gone"
+                ]
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "turn-start",
+                  "turn-end",
+                  "human-wait",
+                  "session-end"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "runtime-hook",
+                  "runtime-event",
+                  "daemon-launch"
+                ]
+              },
+              "binding": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer"
+              },
+              "presence_seq": {
+                "type": "integer"
+              },
+              "event_id": {
+                "type": "string"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            }
           }
-        }
+        ]
       }
     }
   }

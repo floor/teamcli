@@ -1,11 +1,12 @@
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
+import { profileFor, shellQuote, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { IDLE_POLL_MS, type Step } from './plan.ts';
+import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
   waitingProblem,
@@ -52,6 +53,19 @@ export type Host = {
   confirmLobby?(): LobbyRefusal | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /**
+   * Starts (or reuses) the managed Codex app-server endpoint for this seat and records it on the
+   * seat's current presence binding, just before the launch command runs. `dir` is the state
+   * folder the plan carried for the seat. The caller appends `--remote <url>` to the command only
+   * when this answers `up`. Absent on a host that starts no endpoint: the seat then launches on
+   * its own line and its presence stays unproven.
+   */
+  managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string }): Promise<ManagedEndpointRead>;
+  /**
+   * Stops the endpoint a launch this run started when its pane never ran, so a partial launch
+   * leaves no orphaned server. The record is cleared only after a proven stop.
+   */
+  stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string }): EndpointStopRead;
   /**
    * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
    * launch command. `teamFile` is the team file the launch read: the seat's folder may be a
@@ -871,10 +885,36 @@ export async function executePlan(
           if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
         }
         const here = place(op.seat, op.pane);
+        // The managed Codex endpoint is started here, after the seat was allowed and its inbox
+        // registered: the plan's command stays the deterministic line a dry run prints, and the
+        // attach is added only once an endpoint exists to attach to. A start failure is said
+        // once and the seat launches on the line it had; presence for it is unproven, not guessed.
+        let command = op.command;
+        let startedEndpoint = false;
+        if (op.codexEndpoint !== undefined) {
+          const read = host.managedCodexEndpoint === undefined
+            ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
+            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
+          if (read.kind === 'up') {
+            command = `${command} --remote ${shellQuote(read.url)}`;
+            startedEndpoint = read.started;
+            for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
+          } else {
+            hold(op.seat, `${op.seat}: the managed Codex endpoint was not started: ${read.why}\n`);
+          }
+        }
         // The session id is minted here, not in the plan: the plan's command stays the
         // deterministic line a dry run prints, and each launch gets its own id.
-        const launch = withLaunchSession(op.cli ?? '', op.command);
+        const launch = withLaunchSession(op.cli ?? '', command);
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
+          // A server this call started was never attached: it is this run's to stop, so a pane
+          // that did not run leaves no endpoint behind.
+          if (startedEndpoint && op.codexEndpoint !== undefined) {
+            const stopped = host.stopManagedCodexEndpoint?.({ dir: op.codexEndpoint.dir, session, seat: op.seat });
+            if (stopped !== undefined && !stopped.stopped && stopped.why !== undefined) {
+              hold(op.seat, `${op.seat}: ${stopped.why}\n`);
+            }
+          }
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
           break;

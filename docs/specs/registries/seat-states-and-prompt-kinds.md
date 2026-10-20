@@ -71,6 +71,8 @@ The Since column records presence at a pinned revision, not an audited first-int
 
 Runtime chapter C supplies the state semantics. A hold, unreachable pane and ended process outrank ordinary signals; blocking screen conditions outrank idle clocks. Sources remain ranked, with the recent-trace exception to an idle reading; `blind` is a flag after the unknown threshold, not an eighth state. Proof: `test/seat-state.test.ts`, `test/watch-checks.test.ts`. Repeated spelling in two namespaces is deliberate.
 
+**Current note, after the v0.5.0 tag.** The rows above record the tag and do not change. A later addition reads the daemon's presence projection as the `presence` state-reading source: canonical presence words `working`, `idle`, `waiting-for-a-person`, `gone` (displayed as `working`, `idle`, `blocked`, `done`), runtime sources `runtime-hook`, `runtime-event`, `daemon-launch`, and the event instant kept beside them. A projection under the seat's recorded runtime binding answers before any screen or trace, live or last known; the terminal-host screen is the labelled fallback only where no projection exists, and a malformed one reads `unknown` from `presence`. Proof: `test/seat-state.test.ts`, `test/labels-presence.test.ts`.
+
 Contributions reconciled at this draft: accounts and gates, budgets, events, grants, launch, messaging, quality gates, records and ledger, RFC process files (no entries), registry, roles, round, seat state and watch, tasks and broker. The Kernel’s §12 points to the same records/ledger contribution rows. All list-valued contributions were expanded against their pinned code source; feature settings outside the release catalogue remain planned.
 
 ## Revision log

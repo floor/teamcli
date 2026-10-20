@@ -166,14 +166,15 @@ export type InboxBlock = {
  *  install's runner — the executable and its entry script — which reach the inbox server
  *  whether or not `team` is on the PATH. `file` is the team file the launch read, when it read
  *  one: the server resolves the team from it, whatever folder it starts in. */
-export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string };
+export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string; epoch?: string };
 
 /** A profile word with the launch's own values filled in.
  *
  *  `{file_args}` is for a launch-line route whose word holds the server's arguments inside a
  *  structured string (codex's `mcp_servers.team_inbox.args=[...]`): it is the `--file` pair as
  *  array elements, the path escaped as a JSON string (which is also a TOML basic string), and
- *  nothing at all when the launch named no team file. A whole `{file}` word is for a command's
+ *  nothing at all when the launch named no team file. `{epoch_args}` is the same for the runtime
+ *  epoch the seat's brief was delivered under, and nothing when this launch has no claim. A whole `{file}` word is for a command's
  *  own argv (`mcp add`), where the pair is two words and the shell never sees them.
  *
  *  `{command_json}`, `{entry_json}` and `{seat_json}` are the same values escaped for a
@@ -190,7 +191,8 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
     .replaceAll('{command_json}', inside(place.command))
     .replaceAll('{entry_json}', inside(place.entry))
     .replaceAll('{seat_json}', inside(place.seat))
-    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`);
+    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`)
+    .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
 }
 
 /**
@@ -207,9 +209,15 @@ export function launchCommand(
   cliHook?: string | null,
   place?: InboxPlace,
   displayName?: string,
+  runtimePolicies?: { codexDaemon?: 'on' | 'off' },
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = profile.unattended.filter((option) => !words.has(option));
+  if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !words.has('--no-daemon')) {
+    const altIdx = options.indexOf('--no-alt-screen');
+    if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
+    else options.push('--no-daemon');
+  }
   // The session's own display name, where the CLI takes one and the line names none: a person
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
   // readable name rather than an anonymous session.
@@ -285,6 +293,21 @@ export function withLaunchSession(cli: string, command: string): { command: stri
   if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return { command };
   const sessionId = randomUUID();
   return { command: `${command} --session-id ${sessionId}`, sessionId };
+}
+
+/**
+ * The command a pane runs to resume a recorded conversation, where the CLI keeps sessions: the
+ * id is appended after every other argument, as `withLaunchSession` appends a new one. The
+ * measured line is Claude Code's (`-r, --resume [value] Resume a conversation - provide a
+ * session ID`, `claude --help` 2.1.303, quoted on `supportsSessionResume`). Null when the CLI
+ * cannot resume: the caller hands over instead. Null, too, for a launch line that already names
+ * a session (`--session-id`, `--resume`/`-r`, `--continue`/`-c`): appending ours would leave two
+ * of the flag on the line, and the line's own choice is the one the file records.
+ */
+export function withResume(cli: string, command: string, sessionId: string): string | null {
+  if (!supportsSessionResume(cli)) return null;
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return null;
+  return `${command} --resume ${sessionId}`;
 }
 
 /** True when the CLI accepts an effort override flag on its launch line. */

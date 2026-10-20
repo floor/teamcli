@@ -72,6 +72,11 @@ export const COMMAND_GATES: Readonly<Record<string, Gate>> = buildGates();
 
 function buildGates(): Record<string, Gate> {
   const gates: Record<string, Gate> = {
+    ack: {
+      kind: 'owner-or-own-team',
+      why: 'marking a message read is the record\'s addressee on its own pane, or the owner: the signed receipt is the same gate team messages writes, and it never reaches another seat\'s folder',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
+    },
     init: {
       kind: 'owner-only',
       why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`',
@@ -148,9 +153,45 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'the broker reads the tracker credential from the owner\'s keychain, one per clone, from a terminal outside herdr',
     },
+    brief: {
+      kind: 'team-read',
+      why: 'the rollout plan reads the team\'s seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner\'s alone, and --apply delivers the general seat brief to the team\'s live seats',
+    },
+    'brief:rollout': {
+      kind: 'team-read',
+      why: 'the command\'s only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat\'s claim and its signed drop',
+    },
     bus: {
       kind: 'owner-only',
       why: 'the bus reconciles the project\'s event log, and the owner runs it, one per clone, from a terminal outside herdr',
+    },
+    daemon: {
+      kind: 'owner-only',
+      why: 'the one machine daemon is the owner\'s: install, uninstall and run are owner-only, and the system service manager\'s no-terminal start is the owner\'s own login session',
+    },
+    'daemon:status': {
+      kind: 'any-caller',
+      why: 'the status reading is one health probe over the machine socket and reads no team file and no secret',
+    },
+    'daemon:run': {
+      kind: 'owner-only',
+      why: 'starting the one machine daemon is the owner\'s, or the system service manager starting it in the owner\'s login session; a seat or a pane never starts it',
+    },
+    'daemon:install': {
+      kind: 'owner-only',
+      why: 'registering the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+    },
+    'daemon:uninstall': {
+      kind: 'owner-only',
+      why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+    },
+    client: {
+      kind: 'any-caller',
+      why: 'its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',
+    },
+    'client:keygen': {
+      kind: 'any-caller',
+      why: 'it writes a fresh app key pair into a directory the caller names, and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',
     },
     commits: {
       kind: 'any-caller',
@@ -159,6 +200,22 @@ function buildGates(): Record<string, Gate> {
     'conformance-adapter': {
       kind: 'any-caller',
       why: 'the hidden port answers classify and yaml requests on stdin: it reads no team file and asks for no caller',
+    },
+    config: {
+      kind: 'any-caller',
+      why: 'it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read',
+    },
+    'config:keys': {
+      kind: 'any-caller',
+      why: 'the listing is the command\'s only verb and reads the registry only: no team file, seat or terminal is read',
+    },
+    'development-mode': {
+      kind: 'any-caller',
+      why: 'it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal',
+    },
+    'development-mode:set': {
+      kind: 'owner-only',
+      why: 'the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged',
     },
     doctor: {
       kind: 'any-caller',
@@ -205,6 +262,30 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal',
     },
+    'presence-hook': {
+      kind: 'any-caller',
+      why: 'the hidden hook stages one presence record under the project folder its own launch wrote into its argv: it reads no team file, no seat and no terminal, and its words are the launch\'s own',
+    },
+    queue: {
+      kind: 'any-caller',
+      why: 'list reads the local task queue from the checkout and asks no caller; add is the owner\'s or a seat of this team\'s, on the pane the state records for it',
+    },
+    'queue:add': {
+      kind: 'owner-or-own-team',
+      why: 'adding to the local queue is the owner\'s or a declared seat\'s; the module refuses a seat the state cannot place on its recorded pane',
+    },
+    'queue:install': {
+      kind: 'owner-or-own-team',
+      why: 'an install is the owner\'s, or the one seat the file designates with an approved `installer:` on its recorded pane; the module refuses every other seat',
+    },
+    'queue:list': {
+      kind: 'any-caller',
+      why: 'the listing reads the checkout and the queue only, and asks for no session and no terminal',
+    },
+    'queue:ready': {
+      kind: 'seat-only',
+      why: 'a green slice ready is a declared seat\'s own record of the task its live lease holds, on the pane the state records for it; the owner is not admitted',
+    },
     proc: {
       kind: 'owner-or-own-team',
       why: 'add and done are the owner\'s or a declared seat\'s, from a terminal; list reads what status does, so an approved delegate pane may list too',
@@ -235,6 +316,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'admission',
       why: 'a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused',
     },
+    seat: {
+      kind: 'team-read',
+      why: 'one seat as an object — its settings, its status row and its newest session: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` and `--session` are the owner\'s alone, and the lifecycle verbs gate as the commands they run (their rows below)',
+    },
     seats: {
       kind: 'team-read',
       why: 'the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner\'s alone',
@@ -242,6 +327,14 @@ function buildGates(): Record<string, Gate> {
     sessions: {
       kind: 'any-caller',
       why: 'it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read',
+    },
+    settings: {
+      kind: 'team-read',
+      why: 'one seat\'s settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner\'s alone, and set and unset are the owner\'s outright (their rows below)',
+    },
+    swap: {
+      kind: 'team-read',
+      why: 'the view and `--rule` read is the team\'s: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call',
     },
     tempo: {
       kind: 'owner-only',
@@ -317,6 +410,43 @@ function buildGates(): Record<string, Gate> {
     'revoke:grant': {
       kind: 'owner-only',
       why: 'removing a standing grant is the owner\'s edit, and the revocation channel of 0.5.0 is the owner at a terminal',
+    },
+    'seat:add': {
+      kind: 'owner-only',
+      why: 'the `add` row for a seat: adding a seat is the owner\'s in 0.5.0, where no `agree` or `grant` holders stand',
+    },
+    'seat:remove': {
+      kind: 'owner-or-leads',
+      why: 'the `remove` row for a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner',
+    },
+    'seat:rename': {
+      kind: 'owner-or-leads',
+      why: 'the `rename` row for a seat: the owner or `leads` for its own team',
+    },
+    'seat:restart': {
+      kind: 'owner-or-leads',
+      why: 'the `restart` row for a seat: as `start`, the owner or `leads` for its own team',
+    },
+    'settings:set': {
+      kind: 'owner-only',
+      why: 'recording a seat\'s setting is the owner\'s: a lead\'s write within its role policy waits for the role policy the approved minimum leaves out, and this build refuses rather than admit a write no policy authorized',
+    },
+    'settings:unset': {
+      kind: 'owner-only',
+      why: 'removing a seat\'s setting is the owner\'s by the same gate as set: a lead\'s write within its role policy is not shipped yet, and this build refuses rather than admit one',
+    },
+    'swap:cancel': {
+      kind: 'team-change',
+      why: 'cancelling a queued swap is the team\'s: the owner, the orchestrator\'s seat or the operator\'s seat, on its recorded pane, through `mayChangeTeamVerdict`',
+    },
+    'swap:now': {
+      kind: 'owner-only',
+      why: 'forcing a swap is the owner\'s word, from a terminal outside herdr or its own seat',
+      terminal: { who: 'the owner', where: 'a terminal outside herdr or its own seat' },
+    },
+    'swap:queue': {
+      kind: 'team-change',
+      why: 'queueing a swap is the team\'s: the owner, the orchestrator\'s seat or the operator\'s seat, on its recorded pane, through `mayChangeTeamVerdict`',
     },
     'worktree:list': {
       kind: 'team-change',

@@ -60,6 +60,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
  *  held to. A run that stopped before the message would pass the offer check vacuously, so
  *  the set of nodes that printed it is pinned. */
 const REACHED = [
+  'ack',
   'broker',
   'bus',
   'delegate',
@@ -72,6 +73,10 @@ const REACHED = [
   'messages',
   'next',
   'plan',
+  'queue add',
+  'queue install',
+  'queue list',
+  'queue ready',
   'proc add',
   'proc done',
   'proc list',
@@ -91,7 +96,10 @@ describe('outside a checkout, the sentence offers --file only where the contract
     .filter(
       ({ path, node }) =>
         !MACHINE_ONLY.has(path[0] as string) &&
+        // Hidden dispatchers: neither is a command in the table, and neither prints a no-repository
+        // sentence — one answers a port's protocol, the other stages a hook's record.
         path[0] !== 'conformance-adapter' &&
+        path[0] !== 'presence-hook' &&
         !node.flags.some((flag) => flag.name === '--file'),
     );
 

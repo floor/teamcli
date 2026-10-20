@@ -100,10 +100,10 @@ describe('Grok launch and captured screens', () => {
     // box row drawn with the left border kept (`  │   team.log`), and a continuation row is
     // never read as the text's own — the nudge is refused, and the watch falls back.
     expect(boxHoldsText('grok', 'Team watch: reports are waiting in .agents/team.log', fixture('unsent-wrap'))).toBe(false);
-    // The shorter line the watch rings with fits one row and reads back.
-    const ring = 'Team: run team messages';
-    expect(readScreen('grok', boxed(ring)).kind).toBe('unsent');
-    expect(boxHoldsText('grok', ring, boxed(ring))).toBe(true);
+    // A line that fits one box row reads back whole.
+    const line = 'a short watch line';
+    expect(readScreen('grok', boxed(line)).kind).toBe('unsent');
+    expect(boxHoldsText('grok', line, boxed(line))).toBe(true);
   });
 
   test('the exit screen and the compact frame permit no input', () => {

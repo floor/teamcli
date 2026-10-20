@@ -1,17 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logLine } from '../src/log.ts';
 import {
   LOCK_FILE,
   LOG_FILE,
+  LockBusyError,
   SEAT_ID_PATTERN,
   STATE_FILE,
   emptySession,
   isSeatId,
   mintSeatId,
   readState,
+  storedWatchRecord,
   updateState,
   withLock,
   writeAtomic,
@@ -193,11 +195,96 @@ describe('the state file', () => {
     });
   });
 
+  test('an idle claim enters only as a claim; a malformed one stays as an unreadable hold', () => {
+    // The claim decides whether an idle episode's one attempt was already spent, so a value this
+    // build cannot read must never read as absence. A well-formed entry keeps its fields and
+    // drops the ones this build does not know; a malformed one keeps its seat as a hold.
+    writeFileSync(
+      join(dir, STATE_FILE),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          one: {
+            seats: { good: { stage: 'ready' }, bad: { stage: 'ready' } },
+            worktrees: {},
+            idle_claims: {
+              good: {
+                claim_id: '0123456789abcdef',
+                idle_since: '2026-10-20T02:50:00.000Z',
+                state: 'pending',
+                claimed_at: '2026-10-20T03:00:00.000Z',
+                body: 'not part of a claim',
+              },
+              bad: {
+                claim_id: '0123',
+                idle_since: '2026-10-20T02:50:00.000Z',
+                state: 'pending',
+                claimed_at: '2026-10-20T03:00:00.000Z',
+              },
+            },
+          },
+        },
+      }),
+    );
+    const claims = readState(dir).sessions.one?.idle_claims;
+    expect(claims?.good).toEqual({
+      claim_id: '0123456789abcdef',
+      idle_since: '2026-10-20T02:50:00.000Z',
+      state: 'pending',
+      claimed_at: '2026-10-20T03:00:00.000Z',
+    });
+    expect(claims?.bad).toEqual({ unreadable: true });
+  });
+
+  test('an idle claim map that is not a map holds every seat the session records', () => {
+    writeFileSync(
+      join(dir, STATE_FILE),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          one: {
+            seats: { a: { stage: 'ready' }, b: { stage: 'ready' } },
+            worktrees: {},
+            idle_claims: ['not', 'a', 'map'],
+          },
+        },
+      }),
+    );
+    expect(readState(dir).sessions.one?.idle_claims).toEqual({
+      a: { unreadable: true },
+      b: { unreadable: true },
+    });
+  });
+
   test('an atomic write leaves no temporary file', () => {
     writeAtomic(join(dir, 'x.json'), 'one');
     writeAtomic(join(dir, 'x.json'), 'two');
     expect(readFileSync(join(dir, 'x.json'), 'utf8')).toBe('two');
     expect(readdirSync(dir)).toEqual(['x.json']);
+  });
+});
+
+describe('the raw watch record', () => {
+  test('an absent state file is an absent holder', () => {
+    expect(storedWatchRecord(dir, 'crew')).toBeUndefined();
+  });
+
+  test('a record the read door would clean is still visible here', () => {
+    writeFileSync(join(dir, STATE_FILE), JSON.stringify({
+      format: 1,
+      sessions: { crew: { watch: { pid: 4242, heartbeat: 42 } } },
+    }));
+    expect(storedWatchRecord(dir, 'crew')).toEqual({ pid: 4242, heartbeat: 42 });
+  });
+
+  test('a corrupt state file is not read as an absent holder', () => {
+    writeFileSync(join(dir, STATE_FILE), '{not json');
+    expect(() => storedWatchRecord(dir, 'crew')).toThrow();
+  });
+
+  test('a state path that cannot be read is not an absent holder', () => {
+    mkdirSync(join(dir, STATE_FILE));
+    expect(() => storedWatchRecord(dir, 'crew')).toThrow();
   });
 });
 
@@ -226,6 +313,51 @@ describe('the lock', () => {
     const stale: number[] = [];
     expect(withLock(dir, () => 'ran', { onStale: (pid) => stale.push(pid) })).toBe('ran');
     expect(stale).toEqual([Number(dead)]);
+  });
+
+  test('a lock file just created and still empty is not taken over', () => {
+    // `openSync(path, 'wx')` creates the file before its writer writes the pid; for that moment
+    // it reads as 0, which names no process.
+    writeFileSync(join(dir, LOCK_FILE), '');
+    const path = join(dir, LOCK_FILE);
+    const before = statSync(path);
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    const after = statSync(path);
+    expect(after.ino).toBe(before.ino);
+    expect(readFileSync(path, 'utf8')).toBe('');
+  });
+
+  test('a young lock file holding 0 is not taken over either', () => {
+    writeFileSync(join(dir, LOCK_FILE), '0\n');
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    expect(readFileSync(join(dir, LOCK_FILE), 'utf8')).toBe('0\n');
+  });
+
+  test('an old lock file with no pid is taken over', () => {
+    writeFileSync(join(dir, LOCK_FILE), '');
+    const past = new Date(Date.now() - 5_000);
+    utimesSync(join(dir, LOCK_FILE), past, past);
+    expect(withLock(dir, () => 'ran', { waitMs: 0 })).toBe('ran');
+    expect(existsSync(join(dir, LOCK_FILE))).toBe(false);
+  });
+
+  test('waitMs 0 refuses at the first held lock with LockBusyError', () => {
+    writeFileSync(join(dir, LOCK_FILE), '1\n');
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(/another team command \(pid 1\) holds/);
+    expect(readFileSync(join(dir, LOCK_FILE), 'utf8')).toBe('1\n');
+  });
+
+  test('waitMs 0 does not take over a young lock file whose holder cannot be read', () => {
+    writeFileSync(join(dir, LOCK_FILE), 'not a pid\n');
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    expect(readFileSync(join(dir, LOCK_FILE), 'utf8')).toBe('not a pid\n');
+  });
+
+  test('an update can ask for the one-attempt lock, and writes nothing when it is held', () => {
+    writeFileSync(join(dir, LOCK_FILE), '1\n');
+    expect(() => updateState(dir, (state) => { state.sessions.crew = emptySession(); }, { waitMs: 0 })).toThrow(LockBusyError);
+    expect(existsSync(join(dir, STATE_FILE))).toBe(false);
   });
 });
 

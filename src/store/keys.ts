@@ -235,13 +235,27 @@ export function signPayload(payload: Json, key: KeyObject): string {
   return cryptoSign(null, canonicalPayload(payload), key).toString('hex');
 }
 
+/** The public half of a signing or verifying key: a public KeyObject as it stands, a private
+ *  one through `createPublicKey`. Some runtimes refuse a public KeyObject in `createPublicKey`,
+ *  so the public case never goes through it. Null when the key cannot be read as public. */
+function publicObjectOf(key: KeyObject): KeyObject | null {
+  if (key.type === 'public') return key;
+  try {
+    return createPublicKey(key);
+  } catch {
+    return null;
+  }
+}
+
 /** False for a signature that is not hex, not present, or not the key's. */
 export function verifyPayload(payload: Json, signature: string, key: KeyObject): boolean {
   const bytes = canonicalPayload(payload);
   const raw = Buffer.from(signature, 'hex');
   if (raw.length * 2 !== signature.length) return false;
+  const publicKey = publicObjectOf(key);
+  if (publicKey === null) return false;
   try {
-    return cryptoVerify(null, bytes, createPublicKey(key), raw);
+    return cryptoVerify(null, bytes, publicKey, raw);
   } catch {
     return false;
   }
@@ -272,8 +286,10 @@ export function verifyDomain(domain: string, payload: Json, signature: string, k
   const bytes = domainBytes(domain, payload);
   const raw = Buffer.from(signature, 'hex');
   if (raw.length * 2 !== signature.length) return false;
+  const publicKey = publicObjectOf(key);
+  if (publicKey === null) return false;
   try {
-    return cryptoVerify(null, bytes, createPublicKey(key), raw);
+    return cryptoVerify(null, bytes, publicKey, raw);
   } catch {
     return false;
   }

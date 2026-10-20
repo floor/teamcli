@@ -28,7 +28,8 @@ Reads the team file (or the one `--file` names), this machine's record store (th
 if any), the session's state (`.agents/team.state.json`, including
 the project's stored budget readings), herdr (the session's state, its agents and their workspaces),
 the seat's CLI's own config under the seat's home when the seat is about to start in the lobby,
-and, like `up`: the doctor's findings and the machine's load, free memory, free disk and free swap.
+and, like `up`: the doctor's findings and the machine's load, free memory, free disk, free swap
+and the OS's memory-pressure level.
 
 Writes the team file when the seat has to be put back into it, `.agents/team.state.json` (the seat's
 stage, pane and workspace; a seat stopped at a dialog's `waiting-owner` record, with the process
@@ -37,6 +38,16 @@ seats the team has had, the CLI's own trust record for the lobby when the seat i
 there — the file that CLI already reads for a folder it was told to trust, written under the seat's
 home before the workspace is made, and left untouched when it or a folder above it is a link — and,
 through herdr: the workspace, the launch, and the name.
+
+For a seat this run starts, the general seat brief goes first, as a claim and a drop: the
+session's `briefs` records a fresh incarnation and runtime epoch, the brief's sha256 and the
+record's expected id before its signed record is posted at that id, and the launch line hands the
+seat's reader that epoch. A temporary seat is delivered like a declared one, and every other live
+or human declared seat is delivered to as well, without touching its pane. A name held at the
+expected id by another file, a link or a folder is refused, never replaced or followed —
+[`team brief rollout --apply`](brief.md) recovers that delivery at the claim's next attempt. A
+delivery that cannot be written is said and logged, and the launch goes on;
+[`team check`](check.md) names the seat.
 
 ## Who may run it
 
@@ -218,7 +229,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | `team add: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` — the CLI's own record for the lobby can't be written, so the seat would open that folder untrusted; `grok` and `cursor` seats are told their own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`) | 1 |
 | ``team add: seat beacon-qa would start in live, inside the protected checkout live; a seat that isn't `mode: shared` never starts in one`` | 1 |
 | `team add: the file changed while add was checking; nothing was written` | 1 |
-| `team add: the load is <n> per core, above <n>` / `team add: free memory is <n>%, below <n>%` | 1 |
+| `team add: the load is <n> per core, above <n>` / `team add: free memory is <n>%, below <n>%` / `team add: memory pressure is critical` | 1 |
 | a `MISS` finding from [team doctor](doctor.md), the seat's own launch line among them | 1 |
 | ``team add: another session-mutating run is holding session <session> (pid <pid>); try again when it is done`` — another run holds the session's mutator lock, the one lock `up`, `add`, `down` and `remove` share; the line names no command, because the lock is shared. The lock is taken before this run's first effect and released at its end; `--dry-run` takes no lock and never shows it | 1 |
 | ``team add: another session-mutating run may be holding session <session>, and its lock cannot be read; if no run is using it, delete <state dir>/seat-locks/<session>/.run`` — the lock file does not read as a token, so its holder is unknown and only the owner clears it; the line names the file | 1 |

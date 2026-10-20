@@ -1,15 +1,15 @@
 // The delivery-order walk: the receiving seat's own chain — entity, project, team, seat — decides
-// the order a plain send walks (mcp-inbox, drop, typed when nothing declares one); a level may
+// the order a plain send walks (mcp-inbox, typed, drop when nothing declares one); a level may
 // drop legs, reorder the ones it keeps, or add `native`, the sender's own recorded choice, and
 // may never empty it — an empty word is set aside, and so is one adding any other leg. A leg that
 // definitely cannot take the send hands it on and is recorded as a failure on the history line,
 // and each leg says its own reason. The mcp-inbox leg takes the send only while a listener for this seat, session
 // and root is alive, and then reports `delivered (read)` when the receipt lands inside its grace
 // or `sent (unconfirmed)` when it does not; without a listener it is recorded `no live inbox
-// listener`. The drop leg writes the same 0600 file the typed leg would and types nothing: a
-// scene here proves the pane sees no keystroke at all. The typed leg is the last fallback behind
-// it. A waited send is refused unless the native leg leads the order: the frame the reply
-// listener stands beside is that leg, and only a declared word can put it there.
+// listener`. The typed leg behind it writes the same 0600 file and one trigger line, and the
+// drop leg behind that writes the file and types nothing: a scene here proves the pane sees no
+// keystroke at all. A waited send is refused unless the native leg leads the order: the frame the
+// reply listener stands beside is that leg, and only a declared word can put it there.
 //
 // Both ways a chain reaches the walk are here: handed in on the host, and — the production
 // reading — left out, so the team file's own `delivery_order` and its seats' are what the walk
@@ -26,13 +26,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import type { ProjectSources } from '../src/commands/projects.ts';
+import type { ConfigKey, ConfigValue } from '../src/config/registry.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { loadTeamFile } from '../src/file/load.ts';
-import { lobbyDir } from '../src/lobby/gate.ts';
+import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { ProjectRecord } from '../src/registry/projects.ts';
+import { upsertProject } from '../src/registry/projects.ts';
+import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { planPolicySet, writePolicySet } from '../src/policy/index.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { deliveryChainOf } from '../src/send/delivery.ts';
 import { readHistory } from '../src/send/history.ts';
@@ -40,8 +45,9 @@ import { readPending } from '../src/send/pending.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
 import { storePath } from '../src/store/store.ts';
-import { messageKeyState } from '../src/store/keys.ts';
+import { installKey, messageKeyState } from '../src/store/keys.ts';
 import { isRead, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { readTriggerLine } from '../src/send/native.ts';
 import { recordBody, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -122,17 +128,21 @@ ${extra.watchless ?? ''}  - role: reviewer
 ${extra.own ?? ''}${extra.top ?? ''}`;
 }
 
-function world(extra: { top?: string; lead?: string; watchless?: string; own?: string } = {}): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
+function world(extra: { top?: string; lead?: string; watchless?: string; own?: string; entity?: string } = {}): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-walk-')));
   const root = join(base, 'acme');
   const dir = join(root, '.agents');
   const sockets = join(base, 'sockets');
   const home = join(base, 'home');
+  // An entity moves the team's lobby to `<home>/.config/team/lobbies/<slug>`; the trust list
+  // names the lobby the file resolves to, so the scene creates and trusts that one.
+  const lobby = extra.entity === undefined ? lobbyDir(home) : resolveLobby(home, { entity: extra.entity });
   mkdirSync(dir, { recursive: true });
   mkdirSync(sockets, { recursive: true });
-  mkdirSync(lobbyDir(home), { recursive: true });
+  mkdirSync(lobby, { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(dir, 'team.yaml'), teamYaml(root, lobbyDir(home), extra));
+  const top = `${extra.entity === undefined ? '' : `entity: ${extra.entity}\n`}${extra.top ?? ''}`;
+  writeFileSync(join(dir, 'team.yaml'), teamYaml(root, lobby, { ...extra, top }));
   const loaded = loadTeamFile(root, { home });
   if (!loaded.ok) throw new Error('fixture team.yaml failed to load');
   return { root, dir, sockets, home, team: loaded.team };
@@ -211,14 +221,15 @@ function dropped(root: string, seat: string): string {
 /** A live listener beside the lead's inbox: this process's pid and the fixture's own seat,
  *  session and root — the record a running inbox server leaves. */
 function liveInbox(w: { root: string }, over: { seat?: string; session?: string; root?: string; pid?: number } = {}): string {
-  const dir = dropDir(w.root, 'lead');
+  const seat = over.seat ?? 'lead';
+  const dir = dropDir(w.root, seat);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, '.inbox-listener'), `${JSON.stringify({
     v: 1,
-    seat: over.seat ?? 'lead',
+    seat,
     session: over.session ?? 'acme',
     root: over.root ?? w.root,
-    cli: 'claude-code',
+    cli: seat === 'native' ? 'codex' : 'claude-code',
     pid: over.pid ?? process.pid,
     ts: NOW.toISOString(),
   })}\n`);
@@ -293,7 +304,7 @@ function lastEntry(root: string, home: string): Record<string, unknown> {
 }
 
 describe('the walk records the channel and the legs it skipped', () => {
-  test('a plain send to a Claude Code seat takes the drop file and records the inbox skip', async () => {
+  test('a plain send to a Claude Code seat types the trigger and records the inbox skip', async () => {
     const w = world();
     const host = walker(w);
     const io = owner(w.root);
@@ -301,10 +312,10 @@ describe('the walk records the channel and the legs it skipped', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
-    // The drop leg types nothing: no trigger line, no Enter, no frame, no dial.
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    // The typed leg is the one that wakes an idle seat: one trigger line, no frame, no dial.
+    expect(host.typed).toEqual([{ pane: 'pane-lead', text: readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string }]);
+    expect(host.enters).toEqual(['pane-lead']);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
     expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
@@ -317,12 +328,11 @@ describe('the walk records the channel and the legs it skipped', () => {
       id: expect.any(String),
       thread: expect.any(String),
       outcome: 'sent (unconfirmed)',
+      note: 'trigger taken, no read receipt yet',
       ms: 0,
-      via: 'drop',
+      via: 'typed',
       failed: [MCP_SKIP],
     });
-    // The marker is what the watch keeps beside the drop for the read receipt.
-    expect(readPending(dropDir(w.root, 'lead'))).toMatchObject([{ leg: 'drop', from: 'owner', to: 'lead' }]);
   });
 
   test('a level that leaves the drop leg out walks the typed leg behind it', async () => {
@@ -346,20 +356,39 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
-    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+    expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'from_team', 'id', 'ms', 'note', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
-  test('a codex seat walks the default order: the inbox is skipped, the drop file takes it', async () => {
+  test('a codex seat walks the implied native-first order: native fails and the typed trigger wakes it before inbox', async () => {
     const w = world();
     const host = walker(w);
     const io = owner(w.root);
 
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
 
-    expect(lastEntry(w.root, w.home).failed).toEqual([MCP_SKIP]);
-    expect(lastEntry(w.root, w.home).via).toBe('drop');
-    expect(host.typed).toEqual([]);
+    // The implied default names the seat's runtime queue first while its `codex-daemon` policy
+    // is on; this fixture records no thread for the seat, so the route stands down and the typed
+    // trigger wakes the idle pane before the inbox can accept a silent write.
+    expect(lastEntry(w.root, w.home).failed).toEqual(['native: no trusted runtime session is recorded for this seat (no agent record for this seat)']);
+    expect(lastEntry(w.root, w.home).via).toBe('typed');
+    expect(host.typed.map((one) => one.pane)).toEqual(['pane-native']);
     expect(existsSync(dropped(w.root, 'native'))).toBe(true);
+  });
+
+  test('a live Codex inbox does not swallow an idle send before its typed wake', async () => {
+    const w = world();
+    const dir = liveInbox(w, { seat: 'native' });
+    const host = walker(w, undefined, 0);
+    const io = owner(w.root);
+
+    expect(await runSend(['native', 'hello'], io, host)).toBe(0);
+
+    expect(io.out).toContain('native: sent (unconfirmed) (typed,');
+    expect(host.typed.map((one) => one.pane)).toEqual(['pane-native']);
+    expect(lastEntry(w.root, w.home).via).toBe('typed');
+    expect(lastEntry(w.root, w.home).failed).toEqual([
+      'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+    ]);
   });
 
   test('a word adding a leg other than native is set aside and the walk in force stands', async () => {
@@ -389,9 +418,9 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
     const entry = lastEntry(w.root, w.home);
-    expect(entry.via).toBe('drop');
+    expect(entry.via).toBe('typed');
     expect(entry.failed).toEqual([MCP_SKIP]);
   });
 });
@@ -498,7 +527,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
     expect(doc.channel).toBe('mcp-inbox');
   });
 
-  test('a marker whose process is gone is no listener: the leg is skipped and the drop file takes it', async () => {
+  test('a marker whose process is gone is no listener: the leg is skipped and the typed leg takes it', async () => {
     const w = world();
     liveInbox(w, { pid: 999_999_999 });
     const host = walker(w);
@@ -506,10 +535,10 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
     expect(lastEntry(w.root, w.home).failed).toEqual([MCP_SKIP]);
-    expect(lastEntry(w.root, w.home).via).toBe('drop');
-    expect(host.typed).toEqual([]);
+    expect(lastEntry(w.root, w.home).via).toBe('typed');
+    expect(host.typed.map((one) => one.pane)).toEqual(['pane-lead']);
   });
 
   test('a marker naming another seat is no listener for this inbox', async () => {
@@ -519,7 +548,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
     expect(await runSend(['lead', 'hello'], owner(w.root), walker(w))).toBe(0);
 
     expect(lastEntry(w.root, w.home).failed).toEqual([MCP_SKIP]);
-    expect(lastEntry(w.root, w.home).via).toBe('drop');
+    expect(lastEntry(w.root, w.home).via).toBe('typed');
   });
 
   test('a marker naming another session is no listener for this inbox', async () => {
@@ -529,7 +558,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
     expect(await runSend(['lead', 'hello'], owner(w.root), walker(w))).toBe(0);
 
     expect(lastEntry(w.root, w.home).failed).toEqual([MCP_SKIP]);
-    expect(lastEntry(w.root, w.home).via).toBe('drop');
+    expect(lastEntry(w.root, w.home).via).toBe('typed');
   });
 
   test('a marker naming another root is no listener for this inbox', async () => {
@@ -539,7 +568,7 @@ describe('the mcp-inbox leg takes the send only for a live listener', () => {
     expect(await runSend(['lead', 'hello'], owner(w.root), walker(w))).toBe(0);
 
     expect(lastEntry(w.root, w.home).failed).toEqual([MCP_SKIP]);
-    expect(lastEntry(w.root, w.home).via).toBe('drop');
+    expect(lastEntry(w.root, w.home).via).toBe('typed');
   });
 });
 
@@ -552,11 +581,12 @@ describe('the chain is read from the files when the host hands none in', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
     // The order in force holds the one leg, so the send goes by it and neither skip a default
     // walk records is walked: the history line has no `failed` at all.
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('typed');
+    expect(entry.outcome).toBe('sent (unconfirmed)');
     expect('failed' in entry).toBe(false);
     expect(entry.body).toBe(`${HEADER}hello`);
     expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
@@ -645,6 +675,109 @@ describe('the chain is read from the files when the host hands none in', () => {
     expect(asked).toEqual([teamIdOf(w.root)]);
     expect(chain).toEqual({ project: ['mcp-inbox', 'typed'] });
   });
+
+  test('a signed entity policy is the entity’s word', () => {
+    const w = world({ entity: 'acme-corp' });
+    const written = writePolicySet(w.home, { level: 'entity', target: 'acme-corp', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({ root: w.root, seat: 'lead', home: w.home, projectOfTeam: () => null }))
+      .toEqual({ entity: ['drop'] });
+  });
+
+  test('the entity’s word reaches the walk: the drop leg takes the send and nothing is typed', async () => {
+    const w = world({ entity: 'acme-corp' });
+    const written = writePolicySet(w.home, { level: 'entity', target: 'acme-corp', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(host.typed).toEqual([]);
+    expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
+  });
+
+  test('a signed project policy shadows the registry record’s legacy word', () => {
+    const w = world();
+    const written = writePolicySet(w.home, { level: 'project', target: 'acme', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      projectOfTeam: () => projectRecord(['native', 'typed']),
+    })).toEqual({ project: ['drop'] });
+  });
+
+  test('the project’s signed word reaches the walk, over the record’s legacy word', async () => {
+    const w = world();
+    const written = writePolicySet(w.home, { level: 'project', target: 'acme', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+    const host = walker(w);
+    host.projects = projectSources(projectRecord(['mcp-inbox', 'typed']));
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(host.typed).toEqual([]);
+  });
+
+  test('a signed team policy shadows the file’s word', () => {
+    const w = world({ top: 'delivery_order: [mcp-inbox, typed]\n' });
+    const written = writePolicySet(
+      w.home,
+      { level: 'team', target: w.root, teamRoot: w.root, name: 'delivery-order', value: ['drop'] },
+      { now: NOW },
+    );
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({ root: w.root, seat: 'lead', home: w.home, projectOfTeam: () => null }))
+      .toEqual({ team: ['drop'] });
+  });
+
+  test('an expired signed word leaves its level silent, and the legacy word it shadows does not come back', () => {
+    const w = world({ top: 'delivery_order: [mcp-inbox, typed]\n' });
+    const written = writePolicySet(
+      w.home,
+      {
+        level: 'team',
+        target: w.root,
+        teamRoot: w.root,
+        name: 'delivery-order',
+        value: ['drop'],
+        expiry: '2026-10-18T00:00:00.000Z',
+      },
+      { now: NOW },
+    );
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+
+    expect(deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      projectOfTeam: () => null,
+      now: new Date('2026-10-19T00:00:00.000Z'),
+    })).toEqual({});
+  });
+
+  test('entity, project and team each accept a delivery-order word naming socket', () => {
+    const w = world({ entity: 'acme-corp' });
+    const requests = [
+      { level: 'entity' as const, target: 'acme-corp' },
+      { level: 'project' as const, target: 'acme' },
+      { level: 'team' as const, target: w.root, teamRoot: w.root },
+    ];
+    for (const request of requests) {
+      const plan = planPolicySet(w.home, { ...request, name: 'delivery-order', value: ['socket', 'drop'] });
+      expect([request.level, plan.ok ? 'ok' : plan.why]).toEqual([request.level, 'ok']);
+    }
+  });
 });
 
 describe('native leaves the default order and returns when a word names it', () => {
@@ -655,10 +788,10 @@ describe('native leaves the default order and returns when a word names it', () 
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    // The default order is mcp-inbox, drop, typed: the native leg is not in it at all, so the
+    // The default order is mcp-inbox, typed, drop: the native leg is not in it at all, so the
     // walk records no word about it and no frame is tried.
     const entry = lastEntry(w.root, w.home);
-    expect(entry.via).toBe('drop');
+    expect(entry.via).toBe('typed');
     expect(entry.failed).toEqual([MCP_SKIP]);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
@@ -710,7 +843,7 @@ describe('a seat that declares no word takes the one its shape implies', () => {
       .toEqual({});
   });
 
-  test('a codex seat has an inbox to watch, so it keeps the default order', () => {
+  test('Codex ordering is decided by the send route, not the generic chain', () => {
     const w = world();
     expect(deliveryChainOf({ root: w.root, seat: 'native', home: w.home, projectOfTeam: () => null }))
       .toEqual({});
@@ -962,7 +1095,7 @@ describe('a human seat is never typed into', () => {
 });
 
 describe('the dry run names only the legs this build can walk', () => {
-  test('a Claude Code seat names the inbox channel and the two legs behind it', async () => {
+  test('a Claude Code seat names the inbox channel and the one leg behind it', async () => {
     const w = world();
     const host = walker(w);
     const io = owner(w.root);
@@ -970,7 +1103,7 @@ describe('the dry run names only the legs this build can walk', () => {
     const code = await runSend(['lead', 'hello', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane, then a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
@@ -990,6 +1123,18 @@ describe('the dry run names only the legs this build can walk', () => {
     // run could take.
     const w = world();
     const host = walker(w, { seat: ['native'] });
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
+
+    expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n');
+  });
+
+  test('a word naming only the headless-resume leg is honoured, and the dry run finds no channel this build walks', async () => {
+    // `headless-resume` is a leg a word may add; this build carries no headless runtime, so the
+    // order in force is that leg alone and nothing of it is a channel this run could take.
+    const w = world();
+    const host = walker(w, { seat: ['headless-resume'] });
     const io = owner(w.root);
 
     expect(await runSend(['lead', 'hello', '--dry-run'], io, host)).toBe(0);
@@ -1043,7 +1188,7 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
     const code = await runSend(['native', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane, then a 0600 drop file and one trigger line; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line, then the seat\'s own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
     expect(io.err).toBe('');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropDir(w.root, 'native'))).toBe(false);
@@ -1061,6 +1206,23 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
       "team send: lead: unreachable: no leg of its delivery order took the send (native: unavailable; the native leg is the sending session's own SendMessage)\n",
     );
     expect(host.dials()).toBe(0);
+    // The skipped native leg is still an attempt the walk records, so its signed copy is on disk
+    // as the message's durable record even though no route took the send.
+    expect(inboxDrop(dropDir(w.root, 'lead'))).toMatch(MESSAGE_ID);
+  });
+  test('a word naming only the headless-resume leg ends unreachable, typing nothing into the seat', async () => {
+    const w = world();
+    const host = { ...walker(w, { seat: ['headless-resume'] }), waitMs: 0 };
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
+
+    expect(code).toBe(1);
+    expect(io.err).toBe(
+      'team send: lead: unreachable: no leg of its delivery order took the send (headless-resume: this build carries no headless resume runtime)\n',
+    );
+    expect(host.typed).toEqual([]);
+    expect(host.frames).toEqual([]);
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 });
@@ -1085,5 +1247,89 @@ describe('the walk’s failures ride the daemon’s write', () => {
     const storeDrops = join(storePath('acme', w.root, w.home), 'drops', 'acme', 'lead');
     const storeDrop = join(storeDrops, readdirSync(storeDrops).sort()[0] as string);
     expect(readFileSync(storeDrop, 'utf8')).toBe(`${HEADER}hello`);
+  });
+});
+
+/** The lead as `up` would register it, with the owner key installed: the seat a signed setting
+ *  can live on. No team record is written, so the fixture keeps the pre-registry addressing. */
+function registeredLead(w: { root: string; home: string }): string {
+  installKey(w.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  return registerAgent(w.home, {
+    name: 'Lead',
+    signing: { model: 'Test', version: '1', role: 'coordinator' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(w.root), seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  }).id;
+}
+
+/** One signed seat setting, written through the store's own plan and write. */
+function signSeat(w: { home: string }, agentId: string, settings: { key: ConfigKey; value: ConfigValue }[]): void {
+  const plan = planConfigSet(w.home, { level: 'seat', target: agentId, settings });
+  if (!plan.ok) throw new Error(`the plan was refused: ${plan.why}`);
+  const written = writeConfigSet(w.home, plan, { now: NOW });
+  if (!written.ok) throw new Error(`the write was refused: ${written.why}`);
+}
+
+describe('a signed seat setting is what the next send walks', () => {
+  test('a signed delivery_order stands in the file’s place', async () => {
+    // The file gives the seat `drop`; the signed record gives it `typed`, and the signed word is
+    // the seat's own.
+    const w = world({ lead: '    delivery_order: [drop]\n' });
+    const agentId = registeredLead(w);
+    signSeat(w, agentId, [{ key: 'delivery_order', value: ['typed'] }]);
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('typed');
+    expect('failed' in entry).toBe(false);
+    expect(host.typed[0]?.pane).toBe('pane-lead');
+  });
+
+  test('a signed human walks the drop file alone over the file’s order', async () => {
+    // The team's order would type; the seat's signed record says its pane is a human's, and a
+    // human's walk is the drop file alone, with every leg it spared recorded.
+    const w = world({ top: 'delivery_order: [mcp-inbox, typed]\n' });
+    const agentId = registeredLead(w);
+    signSeat(w, agentId, [{ key: 'human', value: true }]);
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(entry.failed).toEqual([
+      "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
+      "typed: the pane is a human's, and nothing is typed into it",
+    ]);
+    expect(host.typed).toEqual([]);
+  });
+
+  test('a record that does not verify refuses the send before any leg walks', async () => {
+    // A `human: true` the record disowns must not be read as absent: falling back to the file's
+    // order would type into a pane the tampered record claimed was a human's, so nothing walks.
+    const w = world({ lead: '    delivery_order: [drop]\n' });
+    const agentId = registeredLead(w);
+    signSeat(w, agentId, [{ key: 'human', value: true }]);
+    const path = join(agentsDir(w.home), `${agentId}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('value: true', 'value: false'));
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(2);
+    expect(io.err).toContain(path);
+    expect(io.err).toContain('signature verification failed');
+    expect(host.typed).toEqual([]);
+    expect(host.frames).toEqual([]);
   });
 });

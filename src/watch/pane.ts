@@ -1,5 +1,6 @@
 import { paneProcesses, workspaceList, workspacePanes } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
+import { isWatchEpoch } from './epoch.ts';
 
 export type WatchPlace = { pane: string; workspace: string };
 
@@ -75,7 +76,10 @@ export function placedWatch(
 }
 
 /** The heartbeat. A place found this pass is recorded. `'keep'` leaves a pane this same pid
- *  already recorded, and writes none for a watch that has not seen itself in one. */
+ *  already recorded, and writes none for a watch that has not seen itself in one. A pane beat
+ *  carries no epoch, so it leaves any record holding a well-formed epoch untouched — the same
+ *  pid included: only `renewWatchAuthority` with the captured epoch and pid writes a fenced
+ *  heartbeat. An ordinary epochless pane record beats as before. */
 export function beatWatch(
   dir: string,
   session: string,
@@ -86,6 +90,7 @@ export function beatWatch(
   updateState(dir, (state) => {
     const record = (state.sessions[session] ??= emptySession());
     const prior = record.watch;
+    if (prior && isWatchEpoch(prior.epoch)) return;
     // `'keep'` preserves the pane this same pid recorded — or, on the first pass, the pane the
     // hand-over recorded with no pid yet: herdr not naming the watch's own pane must not erase
     // where the watch is known to run.

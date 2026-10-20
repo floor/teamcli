@@ -10,7 +10,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -39,8 +39,9 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
-import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
+import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -97,6 +98,10 @@ const realLaunch: Launch = {
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  codexEndpoint: {
+    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
+  },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -309,10 +314,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const session = judged.session;
   // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
-  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  // exactly `1` keeps its behaviour. The caller line and the approval are folded below, and the
+  // delegate gate's approval fold carries its own line.
   const dev = resolveDevMode('add', io, { home: sources.home, team, root, now: sources.now() });
   if (!dry) logDevModeState(dir, 'add', describeCaller(shown), dev, sources.now());
   let devFolded = false;
+  // The approval sentence dev mode stood in for, when the standing check below folded: the
+  // doctor's own approval finding repeats it, and that finding does not stop the add any more
+  // than the never-approved miss does.
+  let devApprovalRefusal: string | null = null;
   // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
   // speak: the `add` row is the owner's alone in 0.5.0, so every seat is refused here whatever
   // pane it sits on, and the delegate gate below is the one standing grant that opens a seat's
@@ -353,9 +363,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // The second half of a swap: an entry that lists `swap` starts the lead it
       // stopped, as an entry that lists `add` already could.
       ...(!temporary && isLeadSeat(team, args.rest[0] ?? '') ? { swap: true } : {}),
+      // Dev mode folds the delegation's approval precondition, and the verdict carries the
+      // warning naming the live file; the add then goes on as a delegated one.
+      dev,
+      file: path,
     });
     if (verdict.kind === 'refused') return delegateRefused(io, json, verdict);
     delegatePane = verdict.pane;
+    if (verdict.devApproval !== undefined) {
+      devFolded = true;
+      if (json) (dry ? finalRecords : jsonNotes).push(verdict.devApproval);
+      else if (dry) out.stdout(`! ${verdict.devApproval}\n`);
+      else out.stderr(`team add: ${plainText(verdict.devApproval)}\n`);
+      if (!dry) logDevMode(dir, 'add', describeCaller(caller), verdict.devApproval, sources.now());
+    }
   }
   // The who-may-run-it gate: the map's `add` row, the owner's alone, with the standing grant the
   // delegate gate above may have answered read as its opening. Set to exactly `1`, dev mode says
@@ -398,19 +419,31 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   // A missing record is the live file, and so is a verified one: the edit starts from the live
   // text, and a seat is read from the file as it stands. A legacy or refused record is still not
-  // in force.
+  // in force — unless dev mode is on, where the live file this run edits counts as approved, with
+  // the warning saying so and the caller in the audit log, exactly as the caller gate above folds.
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    refuse(io, json, 'add', {
-      // Both kinds that reach here — `legacy` and `refused` — are a record not in force; a file
-      // never approved is still run, so this site's document is `add.ceilings`.
-      id: 'add.ceilings',
-      message: notInForce(standing),
-      repair: null,
-    });
-    // exit: add.never-approved
-    // exit: add.ceilings
-    return 1;
+    const said = notInForce(standing);
+    const folded = devModeFileApproval(dev, said, path);
+    if (folded !== null) {
+      devFolded = true;
+      devApprovalRefusal = said;
+      if (json) (dry ? finalRecords : jsonNotes).push(folded);
+      else if (dry) out.stdout(`! ${folded}\n`);
+      else out.stderr(`team add: ${plainText(folded)}\n`);
+      if (!dry) logDevMode(dir, 'add', describeCaller(caller), folded, sources.now());
+    } else {
+      refuse(io, json, 'add', {
+        // Both kinds that reach here — `legacy` and `refused` — are a record not in force; a file
+        // never approved is still run, so this site's document is `add.ceilings`.
+        id: 'add.ceilings',
+        message: said,
+        repair: null,
+      });
+      // exit: add.never-approved
+      // exit: add.ceilings
+      return 1;
+    }
   }
   const ceilings = ceilingsOf(team);
 
@@ -746,6 +779,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // A missing approval record is the live file, the same way `up` reads it. The doctor's
       // never-approved miss is that record's absence, and it does not stop this add.
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
+      // The approval miss dev mode's fold answered is that same absence: the live file counts
+      // as approved, so the sentence the fold took does not stop the add either.
+      if (devApprovalRefusal !== null && finding.text === devApprovalRefusal) continue;
       // A file a CLI reads at start is said here and refused later, only when this seat is
       // about to start in the lobby. Other misses still stop the run here.
       if (finding.text.includes(' is read at start by ')) {
@@ -777,7 +813,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           watchAlive: true,
           teamFile: path,
           cliHooks: plannedCliHooks(dir, session, [planned]),
+          briefEpochs: currentBriefEpochs(dir, session),
           watchLabel: watchLabel(prepared.team.project),
+          home: sources.home,
         });
         out.stdout(plainText(formatPlan(preview)));
       } else {
@@ -880,7 +918,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       watchAlive: true,
       teamFile: path,
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
+      briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(prepared.team.project),
+      home: sources.home,
     });
     if (json) {
       writeJson(io, 'team.add', {
@@ -974,26 +1014,23 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
-    // The state hook lands before the plan types the launch line. A seat whose settings file did
-    // not land is said once, in the log, and launches with the file's own line.
-    const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat], { project: prepared.team.project, root, home: sources.home });
     const who = describeCaller(caller);
-    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
-      logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
-    }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
-    // The general seat brief goes first, before the plan types a rules line into the new seat's
-    // pane: one signed drop, human seats included. A delivery that cannot be written is said and
-    // logged, and the launch goes on; `team check` names the seat with no record.
-    const briefs = deliverGeneralBrief({
+    // The general seat brief goes first, before the state hook and the plan's rules line: the
+    // claim is written before the hook that resolves it and the signed drop before the launch,
+    // human seats included. A delivery that cannot be written is said and logged, and the launch
+    // goes on; `team check` names the seat with no record.
+    const briefs = deliverBriefForAttribution({
       dir,
       root,
       session,
-      seats: [planSeat.name],
       home: sources.home,
-      at: (sources.now?.() ?? new Date()).toISOString(),
+      now: sources.now?.() ?? new Date(),
+      team: prepared.team,
+      state: readState(dir).sessions[session] ?? emptySession(),
+      attributed: [planSeat.name],
+      broadcast: true,
     });
+    await walkBriefDeliveries(briefs, { dir, home: sources.home });
     for (const delivery of briefs.deliveries) {
       if (delivery.ok) continue;
       const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
@@ -1005,9 +1042,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       out.stderr(`team add: ${plainText(said)}\n`);
       logLine(dir, 'add', who, said, sources.now());
     }
+    // The state hook lands before the plan types the launch line. A seat whose settings file did
+    // not land is said once, in the log, and launches with the file's own line.
+    // The binding the seat holds before this run's install: a minted successor belongs to the
+    // launch only if the plan runs the seat's line, and a refusal before that puts this back.
+    const priorBinding = readState(dir).sessions[session]?.seats[planSeat.name]?.presence_binding;
+    const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true }], { project: prepared.team.project, root, home: sources.home });
+    if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
+      logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
+    }
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
-    const outcome = { swallowed: false, unknown: false };
+    const outcome = { swallowed: false, unknown: false, launched: false };
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', devMode: devModeMark(dev, devFolded), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
@@ -1023,6 +1071,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       },
     });
     const report = await executePlan(plan, session, host);
+    // A binding is minted for a launch this run is about to type. A refusal that leaves the
+    // seat before its line runs never gave the new settings file to a process, so the seat
+    // keeps the incarnation it had: the rotation is undone, and a seat the install itself
+    // created goes with it. The run's own records of the seat stand otherwise.
+    if (!outcome.launched) restorePresenceBinding(dir, session, planSeat.name, priorBinding);
     const afterwards = readState(dir).sessions[session]?.seats[built.name];
     const launched = !report.held && !report.dropped.includes(built.name) && afterwards?.stage === 'ready';
     // A lead stopped for a swap runs again: the swap's record goes, and the log says who closed it.
@@ -1331,7 +1384,7 @@ function hostOf(input: {
   records: Progress;
   /** What the writer swallowed: the one record whose line the command replaces with its own
    *  sentence, and whether the screen named the way out. Read after the run for `--json`. */
-  outcome: { swallowed: boolean; unknown: boolean };
+  outcome: { swallowed: boolean; unknown: boolean; launched: boolean };
   doctor: DoctorSources;
   confirmLobby(): LobbyRefusal | null;
 }): Host {
@@ -1347,6 +1400,12 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: input.confirmLobby,
     paneRun: launch.paneRun,
+    ...(launch.codexEndpoint === undefined
+      ? {}
+      : {
+          managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(endpoint),
+          stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
+        }),
     ...(launch.registerInbox
       ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
       : {}),
@@ -1494,6 +1553,9 @@ function hostOf(input: {
         noteLaunchedPane(input.home, input.teamFile, patch.pane, session);
         // The registry: the seat's agent is registered at its first launch, re-pointed after.
         if (name === seat.name) {
+          // The state this run just wrote is the registry's reading too: the same seat id and
+          // the same agent session, never a second derivation of either.
+          const kept = readState(dir).sessions[session]?.seats[name];
           const made = registerLaunch(
             {
               home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner,
@@ -1501,7 +1563,8 @@ function hostOf(input: {
             },
             seat,
             patch.pane,
-            readState(dir).sessions[session]?.seats[name]?.id,
+            kept?.id,
+            kept?.agent_session,
           );
           if ('note' in made) logLine(dir, 'add', input.caller, made.note, input.now());
           else {
@@ -1516,6 +1579,9 @@ function hostOf(input: {
     // takes one; a registry that cannot be written is a note in the run's log.
     sessionStarted(name, started) {
       if (name !== seat.name) return;
+      // The plan ran this seat's launch line: the settings file it names is in a process now,
+      // so the binding its hooks carry is the seat's incarnation from here on.
+      input.outcome.launched = true;
       const began = beginSession({
         home: input.home,
         root: input.root,

@@ -9,10 +9,11 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { grantsDir } from '../../src/grant.ts';
-import { activeGrants, covers, planGrant, planRevocation, readGrants, writeGrant, writeRevocation, type GrantRequest } from '../../src/permissions/grants.ts';
+import { activeGrants, covers, planGrant, planRevocation, readGrants, standingRevocationName, writeGrant, writeRevocation, type GrantRequest } from '../../src/permissions/grants.ts';
 import { dialogsTrustInForce } from '../../src/permissions/dialogs-trust.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import { registerAgent, updateAgent } from '../../src/registry/agents.ts';
+import { keyOf, recordedGeneration } from '../../src/store/keys.ts';
 
 const TEAM = 'aaaaaaaaaaaa';
 const OTHER_TEAM = 'bbbbbbbbbbbb';
@@ -256,16 +257,162 @@ describe('revocation: its own appended record', () => {
     expect(read.revocations[0]).toMatchObject({ name: 'revoke-flag', grant: 'flag-gate', grantGeneration: record.generation });
   });
 
-  test('a revocation names the record, not the name: a fresh grant under the same stem is a new record', () => {
+  test('a revocation names the record, not the name: a fresh grant under the same stem is a new record, and revoking it keeps both revocations', () => {
     const world = makeWorld();
     const first = granted(world, {}, NOON);
+    const firstFile = join(grantsDir(world.home), 'flag-gate.json');
+    const firstBytes = readFileSync(firstFile);
     const revoked = writeRevocation(world.home, { name: 'revoke-flag', grant: first.name, generation: first.generation }, { now: NOON });
     expect(revoked.ok).toBe(true);
+    if (!revoked.ok) return;
+    const firstRevokeFile = join(grantsDir(world.home), 'revoke-flag.json');
+    const firstRevokeBytes = readFileSync(firstRevokeFile);
+
+    // Retrying the exact same (name, grant, generation) revocation is idempotent: it returns the
+    // existing signed record byte-identical without rewriting the file or advancing the generation.
+    const retry = writeRevocation(
+      world.home,
+      { name: 'revoke-flag', grant: first.name, generation: first.generation },
+      { now: new Date('2026-10-17T12:02:00.000Z') },
+    );
+    expect(retry.ok).toBe(true);
+    if (retry.ok) expect(retry.record).toEqual(revoked.record);
+    expect(readFileSync(firstRevokeFile).equals(firstRevokeBytes)).toBe(true);
+
+    // Attempting to write a duplicate revocation of the same (grant, generation) under a different
+    // stem is refused without burning a generation.
+    const duplicateDifferentStem = writeRevocation(
+      world.home,
+      { name: 'revoke-flag-dup', grant: first.name, generation: first.generation },
+      { now: new Date('2026-10-17T12:03:00.000Z') },
+    );
+    expect(duplicateDifferentStem.ok).toBe(false);
 
     const second = granted(world, {}, new Date('2026-10-17T12:05:00.000Z'));
-    expect(second.generation).toBeGreaterThan(first.generation);
+    expect(second.generation).toBe(revoked.record.generation + 1);
     // The old revocation ends the old record alone: the new one admits.
     expect(activeGrants(world.home, NOON)).toEqual([second]);
+
+    // A direct write reusing the existing revocation stem for a different generation is refused
+    // as a conflicting overwrite without mutating the file or burning a generation.
+    const conflict = writeRevocation(
+      world.home,
+      { name: 'revoke-flag', grant: second.name, generation: second.generation },
+      { now: new Date('2026-10-17T12:10:00.000Z') },
+    );
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) expect(conflict.why).toContain('never writes over');
+    expect(readFileSync(firstRevokeFile).equals(firstRevokeBytes)).toBe(true);
+
+    // Revoking the re-issued grant under its own distinct stem appends a second revocation record
+    // at the next consecutive generation (confirming the refused conflict burned no generation).
+    const secondRevoked = writeRevocation(
+      world.home,
+      { name: `revoke-flag-${second.generation}`, grant: second.name, generation: second.generation },
+      { now: new Date('2026-10-17T12:10:00.000Z') },
+    );
+    expect(secondRevoked.ok).toBe(true);
+    if (!secondRevoked.ok) return;
+    expect(secondRevoked.record.generation).toBe(second.generation + 1);
+    expect(readFileSync(firstRevokeFile).equals(firstRevokeBytes)).toBe(true);
+
+    // Retrying the qualified revocation is also idempotent.
+    const secondRetry = writeRevocation(
+      world.home,
+      { name: `revoke-flag-${second.generation}`, grant: second.name, generation: second.generation },
+      { now: new Date('2026-10-17T12:15:00.000Z') },
+    );
+    expect(secondRetry.ok).toBe(true);
+    if (secondRetry.ok) expect(secondRetry.record).toEqual(secondRevoked.record);
+
+    const allRevocations = readGrants(world.home).revocations;
+    expect(allRevocations).toHaveLength(2);
+    expect(allRevocations.map((entry) => entry.grantGeneration).sort((a, b) => a - b)).toEqual([
+      first.generation,
+      second.generation,
+    ]);
+    expect(activeGrants(world.home, NOON)).toEqual([]);
+
+    // Restoring the old generation's bytes onto the grant file cannot resurrect it.
+    writeFileSync(firstFile, firstBytes);
+    expect(activeGrants(world.home, NOON)).toEqual([]);
+  });
+
+  test('preempted writers that validated before a peer committed cannot overwrite committed revocation history or burn a generation', () => {
+    const world = makeWorld();
+    const grantA = granted(world, { name: 'g-a', grantee: agentOf(world, 'a') }, NOON);
+    const grantB = granted(world, { name: 'g-b', grantee: agentOf(world, 'b') }, NOON);
+    const key = keyOf(world.home);
+
+    // Writer B validates while `shared-revoke` is still free, then Writer A commits `shared-revoke`
+    // before Writer B reaches the commit section (modeled on the second read of `options.key`).
+    let writerBReads = 0;
+    let firstCommittedBytes = Buffer.alloc(0);
+    let generationAfterFirst: ReturnType<typeof recordedGeneration> = null;
+    const secondWrite = writeRevocation(
+      world.home,
+      { name: 'shared-revoke', grant: grantB.name, generation: grantB.generation },
+      {
+        now: NOON,
+        get key() {
+          writerBReads += 1;
+          if (writerBReads === 2) {
+            const firstWrite = writeRevocation(
+              world.home,
+              { name: 'shared-revoke', grant: grantA.name, generation: grantA.generation },
+              { now: NOON, key },
+            );
+            expect(firstWrite.ok).toBe(true);
+            firstCommittedBytes = readFileSync(join(grantsDir(world.home), 'shared-revoke.json'));
+            generationAfterFirst = recordedGeneration(grantsDir(world.home), world.home);
+          }
+          return key;
+        },
+      },
+    );
+    expect(secondWrite.ok).toBe(false);
+    expect(readFileSync(join(grantsDir(world.home), 'shared-revoke.json')).equals(firstCommittedBytes)).toBe(true);
+    expect(recordedGeneration(grantsDir(world.home), world.home)).toEqual(generationAfterFirst);
+    expect(activeGrants(world.home, NOON).map((entry) => entry.name)).toEqual(['g-b']);
+
+    // Likewise, two CLI-style callers that both select the same generation-qualified stem before
+    // either commits preserve the first committed record byte-identical without advancing the counter.
+    const grantA2 = granted(world, { name: 'g-a', grantee: grantA.grantee }, new Date('2026-10-17T12:05:00.000Z'));
+    const snapshot = readGrants(world.home);
+    const selectedA = standingRevocationName(grantA2.name, grantA2.generation, snapshot.grants, snapshot.revocations);
+    const selectedB = standingRevocationName(grantA2.name, grantA2.generation, snapshot.grants, snapshot.revocations);
+    expect(selectedA).toBe(selectedB);
+
+    let qualifiedReads = 0;
+    let firstQualifiedRecord: unknown = null;
+    let firstQualifiedBytes = Buffer.alloc(0);
+    let generationAfterQualified: ReturnType<typeof recordedGeneration> = null;
+    const secondQualified = writeRevocation(
+      world.home,
+      { name: selectedB, grant: grantA2.name, generation: grantA2.generation },
+      {
+        now: new Date('2026-10-17T12:10:00.000Z'),
+        get key() {
+          qualifiedReads += 1;
+          if (qualifiedReads === 2) {
+            const firstQualified = writeRevocation(
+              world.home,
+              { name: selectedA, grant: grantA2.name, generation: grantA2.generation },
+              { now: new Date('2026-10-17T12:06:00.000Z'), key },
+            );
+            expect(firstQualified.ok).toBe(true);
+            if (firstQualified.ok) firstQualifiedRecord = firstQualified.record;
+            firstQualifiedBytes = readFileSync(join(grantsDir(world.home), `${selectedA}.json`));
+            generationAfterQualified = recordedGeneration(grantsDir(world.home), world.home);
+          }
+          return key;
+        },
+      },
+    );
+    expect(secondQualified.ok).toBe(true);
+    if (secondQualified.ok) expect<unknown>(secondQualified.record).toEqual(firstQualifiedRecord);
+    expect(readFileSync(join(grantsDir(world.home), `${selectedA}.json`)).equals(firstQualifiedBytes)).toBe(true);
+    expect(recordedGeneration(grantsDir(world.home), world.home)).toEqual(generationAfterQualified);
   });
 
   test('a revocation named like its grant is refused at plan time; the grant file is untouched', () => {

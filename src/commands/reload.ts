@@ -34,11 +34,20 @@ import {
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
-import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import {
+  devModeCallerGate,
+  devModeExpiryNote,
+  devModeFileApproval,
+  devModeLevelNote,
+  logDevMode,
+  logDevModeState,
+  resolveDevMode,
+} from '../dev_mode.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
+import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
@@ -50,7 +59,7 @@ import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
-import { profileFor, versionVerdict } from '../profiles/profile.ts';
+import { parseVersion, profileFor, versionVerdict } from '../profiles/profile.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
@@ -94,6 +103,15 @@ function testedRange(tested: { from: string; to: string }): string {
   return tested.from === tested.to ? tested.from : `${tested.from} to ${tested.to}`;
 }
 
+/** The one release a dev-mode run reloads past its profile's tested range: Antigravity's `agy`
+ *  1.4.3, seen exactly. A fourth component, another release or another CLI is not it, and the
+ *  profile's tested range is never touched. */
+function isAgy143(cli: string, printed: string): boolean {
+  if (cli !== 'antigravity') return false;
+  const version = parseVersion(printed);
+  return version !== null && version.length === 3 && version[0] === 1 && version[1] === 4 && version[2] === 3;
+}
+
 const realLaunch: Launch = {
   sessionState: () => null,
   startServer: () => false,
@@ -102,6 +120,10 @@ const realLaunch: Launch = {
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  codexEndpoint: {
+    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
+  },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -181,7 +203,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   let grantSeat: string | null = null;
   let said: GrantVerdict | null = null;
   if (!owner) {
-    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home });
+    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home, dev });
     // A grant that cannot be read is the refusal it was, before any other reading: the rest is
     // judged with the team file in hand, where the map's `reload` row admits a lead.
     if (said.kind === 'refused' && said.id === 'grant.file') {
@@ -193,7 +215,15 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       // exit: reload.grant-file
       return 1;
     }
-    if (said.kind === 'passed') grantSeat = said.grant.seat;
+    if (said.kind === 'passed') {
+      grantSeat = said.grant.seat;
+      // The gate's approval was folded in dev mode: say so where the caller reads it, and let
+      // the audit line below carry it once the run has passed every later refusal.
+      if (said.devApproval !== undefined) {
+        out.stderr(`team reload: ${said.devApproval}\n`);
+        devWarning = said.devApproval;
+      }
+    }
   }
 
   const loaded = loadTeamFile(io.cwd, {
@@ -354,20 +384,33 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     else out.stdout(`team reload: ${said}\n`);
     logLine(dir, 'reload', describeCaller(caller), said, now());
   };
-  // The general seat brief goes to the seat on every path this command reaches it, the paths
-  // that leave it running included: the check names `team reload <seat>` as a repair, so a
-  // reload must deliver the brief even when nothing else drifts. Without a home there is no
-  // message key to sign the record with, so nothing is written.
-  const deliverBrief = (): void => {
+  // The general seat brief goes to the seat on every path this command reaches it: the check
+  // names `team reload <seat>` as a repair, so a reload must deliver the brief even when nothing
+  // else drifts. A relaunch path attributes the seat and gets a fresh delivery lifetime. The two
+  // "already running" paths attribute nobody: the boundary still delivers there when this build's
+  // brief is ahead of the seat's claim, and an idempotent delivery leaves a current claim and its
+  // verified drop as they are. Without a home there is no message key to sign the record with, so
+  // nothing is written.
+  const deliverBrief = async (attributed: boolean): Promise<void> => {
     if (home === undefined) return;
-    const briefs = deliverGeneralBrief({ dir, root, session, seats: [seat.name], home, at: now().toISOString() });
+    const briefs = deliverBriefForAttribution({
+      dir,
+      root,
+      session,
+      home,
+      now: now(),
+      team,
+      state: readState(dir).sessions[session] ?? emptySession(),
+      attributed: attributed ? [seat.name] : [],
+    });
+    await walkBriefDeliveries(briefs, { dir, home });
     for (const delivery of briefs.deliveries) {
       if (!delivery.ok) sayBrief(`${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`);
     }
     if (briefs.recording !== undefined) sayBrief(`the general seat brief was written and not recorded (${briefs.recording})`);
   };
   if (detail === null && rulesProblem === null && source === null) {
-    deliverBrief();
+    await deliverBrief(false);
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
       writeJson(io, 'team.reload', {
@@ -412,7 +455,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         else held.effort = compared.effort;
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
-      deliverBrief();
+      await deliverBrief(false);
       if (json) {
         writeJson(io, 'team.reload', {
           format: 1 as const,
@@ -436,19 +479,29 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // screen is read through the CLI's profile: an installed version outside the profile's
     // tested range may draw a prompt no recogniser knows, and the seat would be closed and left
     // without one. The version is read once, before anything is closed. A version that cannot
-    // be read is not evidence against the CLI, and refuses nothing.
+    // be read is not evidence against the CLI, and refuses nothing. One dev-mode run continues
+    // past the refusal: AGY 1.4.3, the next release after the range, warns and reloads anyway
+    // while the tested range itself stays as it was. Every other CLI and version, and every run
+    // with dev mode off, is the refusal it always was.
     const profile = profileFor(seat.cli);
     const printed = profile === null || sources.version === undefined ? null : sources.version(profile.binary);
     if (profile !== null && printed !== null) {
       const verdict = versionVerdict(printed, profile.tested);
       if (verdict === 'older' || verdict === 'newer') {
-        refuse(io, json, 'reload', {
-          id: 'reload.untested',
-          message: `${seat.name}: ${plainLine(profile.binary)} ${plainLine(printed)} is ${verdict} than the tested ${plainLine(testedRange(profile.tested))}; its ready screen may not be recognised, so nothing closed`,
-          repair: null,
-        });
-        // exit: reload.untested
-        return 1;
+        const reading = `${seat.name}: ${plainLine(profile.binary)} ${plainLine(printed)} is ${verdict} than the tested ${plainLine(testedRange(profile.tested))}; its ready screen may not be recognised`;
+        const continues = dev.on && verdict === 'newer' && isAgy143(profile.cli, printed);
+        if (!continues) {
+          refuse(io, json, 'reload', {
+            id: 'reload.untested',
+            message: `${reading}, so nothing closed`,
+            repair: null,
+          });
+          // exit: reload.untested
+          return 1;
+        }
+        const warning = `warning: ${reading}; dev mode continues${devModeLevelNote(dev)}`;
+        out.stderr(`team reload: ${warning}\n`);
+        logDevMode(dir, 'reload', describeCaller(placed), warning, sources.now?.() ?? new Date());
       }
     }
 
@@ -539,10 +592,13 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         reload: { detail: driftDetail },
       },
     };
+    // The general seat brief goes first, before the state hook and the plan's rules line: the
+    // claim is written before the hook that resolves it and the signed drop before the launch.
+    await deliverBrief(true);
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
-    const installed = installCliHooks(dir, session, [planned], home === undefined ? undefined : { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true }], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());
@@ -555,14 +611,15 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       startWatch: false,
       teamFile: loaded.path,
       cliHooks: installed,
+      briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
+      ...(home === undefined ? {} : { home }),
+      ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.
     resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
-    // The general seat brief goes first, before the plan types a rules line into the pane.
-    deliverBrief();
     let closed = false;
     const host: Host = {
       agentList: (current) => launch.agents(current),
@@ -578,6 +635,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       agentPanes: (current) => launch.agentPanes(current),
       createWorkspace: (current, cwd, label) => launch.createWorkspace(current, cwd, label),
       paneRun: (current, pane, command) => launch.paneRun(current, pane, command),
+      ...(launch.codexEndpoint === undefined
+        ? {}
+        : {
+            managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(endpoint),
+            stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
+          }),
       ...(launch.registerInbox
         ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
         : {}),
@@ -682,11 +745,15 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         // The registry: the relaunched seat keeps its agent, re-pointed to the new pane with the
         // model and effort the file now declares.
         if (patch.pane && next === seat.name && sources.home) {
+          // The state this run just wrote is the registry's reading too: the same seat id and
+          // the same agent session, never a second derivation of either.
+          const kept = readState(dir).sessions[session]?.seats[next];
           const made = registerLaunch(
             { home: sources.home, team, root, by: describeCaller(caller), session, owner },
             seat,
             patch.pane,
-            readState(dir).sessions[session]?.seats[next]?.id,
+            kept?.id,
+            kept?.agent_session,
           );
           if ('note' in made) logLine(dir, 'reload', describeCaller(caller), made.note, now());
           else {

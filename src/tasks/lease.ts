@@ -72,6 +72,40 @@ export function releaseLocal(root: string, seat: string, pane: string, now: numb
   });
 }
 
+/** The live lease `seat` holds in this clone, or null. The swap boundary is a seat holding none:
+ *  a lease is work in its hands (Policies rule 11). A directory that cannot be read holds none. */
+export function liveLeaseOf(root: string, seat: string, now: number): Lease | null {
+  let files: string[];
+  try {
+    files = leaseFiles(leasesDir(root));
+  } catch {
+    return null;
+  }
+  for (const path of files) {
+    const lease = readLease(path);
+    if (lease && lease.seat === seat && isLive(lease, now)) return lease;
+  }
+  return null;
+}
+
+/** Every live lease in this clone, read-only and lock-free: a reader that must not claim (a
+ *  status snapshot, the watch's idle reading) never takes the leases lock to look. A directory
+ *  that cannot be read holds none. */
+export function liveLeases(root: string, now: number): Lease[] {
+  let files: string[];
+  try {
+    files = leaseFiles(leasesDir(root));
+  } catch {
+    return [];
+  }
+  const live: Lease[] = [];
+  for (const path of files) {
+    const lease = readLease(path);
+    if (lease && isLive(lease, now)) live.push(lease);
+  }
+  return live;
+}
+
 /** Re-keys any lease held by `fromSeat` to `toSeat` so a renamed seat can still renew and release it. */
 export function renameSeatLeases(root: string, fromSeat: string, toSeat: string): string[] {
   const dir = leasesDir(root);

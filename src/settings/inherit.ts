@@ -179,6 +179,19 @@ export const STATE_THRESHOLDS: { [K in keyof StateThresholds]: NumberSettingSpec
   },
 };
 
+/**
+ * How long a queued model swap may wait for its boundary before it runs at the next pause between
+ * two turns (Policies rule 11). It ships at 30 minutes; a shorter wait moves the
+ * seat sooner, so the tighter side is 'lower'. The project may open it, as it may open the state
+ * windows, and every level inside may close it again.
+ */
+export const SWAP_WAIT_SECONDS: NumberSettingSpec = {
+  name: 'swap_wait_seconds',
+  policy: 'swap-wait-seconds',
+  fallback: 1800,
+  looseningLevels: ['project'],
+};
+
 /** The three liveness defaults, in the order a report names them: the idle-to-lead, idle-to-owner
  *  and blind windows. They ship at 5 minutes, 15 minutes and 5 minutes. */
 export type LivenessThresholds = Pick<StateThresholds, 'idle_lead_seconds' | 'idle_owner_seconds' | 'blind_after_seconds'>;
@@ -258,33 +271,50 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
 }
 
 /**
- * The legs a send may walk, in the words the delivery order is written in: `native`, the frame on
- * the receiving seat's cross-session socket; `mcp-inbox`, the seat's own MCP inbox; `typed`, the
- * 0600 drop file and one composer trigger line; `drop`, the same 0600 drop file and no keystroke
- * at all — for a receiver that watches its own drop folder, or a pane that must not be typed into.
+ * The legs a send may walk, in the words the delivery order is written in: `socket`, the frame on
+ * the receiving seat's cross-session socket (a signed copy is written first); `native`, the
+ * sender's own cross-session SendMessage, recorded by the sender with `--confirm`; `mcp-inbox`,
+ * the seat's own MCP inbox; `typed`, the 0600 drop file and one composer trigger line; `drop`, the
+ * same 0600 drop file and no keystroke at all — for a receiver that watches its own drop folder,
+ * or a pane that must not be typed into; `headless-resume`, the receiving seat's own CLI resumed
+ * headlessly for one turn, with no TUI pane typed into. `socket` and `native` are distinct legs:
+ * the socket leg is this build's own frame on the receiver's socket, the native leg the sender's
+ * own call. `headless-resume` is nobody's default: only a word that names it reaches it, and this
+ * build carries no headless runtime yet, so the walk records the leg as unavailable and moves on.
  */
-export type DeliveryLeg = 'native' | 'mcp-inbox' | 'typed' | 'drop';
+export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'typed', 'drop'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume'];
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: mcp-inbox,
- * then drop, then typed. The mcp-inbox leg takes a send only while the seat's own inbox server is
+ * then typed, then drop. The mcp-inbox leg takes a send only while the seat's own inbox server is
  * listening, and writes the message to that inbox without typing; otherwise it is skipped as
- * `no live inbox listener` and the walk moves on. The drop leg writes the same 0600 file and
- * types nothing at all: a receiver that watches its folder — the inbox server where its CLI has
- * an MCP front, the launch's start-of-turn read where it has a hook — takes the message there,
- * and a seat that watches nothing never walks this leg (`src/send/delivery.ts` leaves it out of
- * that seat's order). The typed leg stays the last fallback. The `native` leg is not in the
+ * `no live inbox listener` and the walk moves on. The typed leg is next because it is the leg
+ * that wakes an idle seat: one trigger line, the seat's own drop read, and its signed receipt is
+ * what makes the send `delivered (read)`. The drop leg is last: it writes the same 0600 file and
+ * types nothing at all, so a receiver that watches its folder — the inbox server where its CLI
+ * has an MCP front, the launch's start-of-turn read where it has a hook — takes the message
+ * there, but nothing wakes a seat that is idle. A seat that watches nothing never walks this leg
+ * (`src/send/delivery.ts` leaves it out of that seat's order). The `native` leg is not in the
  * default: a level that names it is the sender choosing the cross-session SendMessage and
- * recording the delivery itself, so `native` is the one leg a declared word may add
- * (`src/policy/types.ts`). The chain is the receiving seat's own — entity, project, team, seat —
- * because the order says how that seat's messages may travel.
+ * recording the delivery itself, so `native` is a leg a declared word may add
+ * (`src/policy/types.ts`). The `headless-resume` leg is not in the fallback and no implied default
+ * adds it: a level that wants it names it, and a declared word may add it
+ * (`src/policy/types.ts`); until the receiving seat's runtime carries one, the walk records the
+ * leg as unavailable rather than typing into the seat for it. The `socket` leg is not in this
+ * fallback either: `team send` walks it first only when the receiver's launch declares
+ * `crossSessionInbound: accept` (a team-file `inbound: accept` authorizes any launch, an explicit
+ * `hold` or `refuse` opts out, and with no word only a launch this build attested is authorized),
+ * and no level of the chain names an order — the one implied default that adds it
+ * (`src/commands/send.ts`).
+ * A declared word may place `socket` anywhere or leave it out. The chain is the receiving seat's
+ * own — entity, project, team, seat — because the order says how that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',
   policy: 'delivery-order',
-  fallback: ['mcp-inbox', 'drop', 'typed'],
+  fallback: ['mcp-inbox', 'typed', 'drop'],
 };
 
 /**

@@ -12,10 +12,18 @@ written. A message an earlier build left in `.agents/messages/` carries no threa
 not answered.
 
 A reply goes to the sender of the record it answers, never to a third seat, and the pair is
-admitted exactly as a send's own pair is — with the reply rule (`reply-on-open-thread`) asked
-last, so a reply between two seats no other rule pairs is admitted while the thread is open. The
-rule reads the thread, not the invitation: it admits a reply on any open thread, and a thread is
-open until it is closed or the clock or the cap ends it.
+judged by the same rules as a send's, with the reply rule (`reply-on-open-thread`) asked after
+the targeted and grant rules and before the declared-seat rule: a reply on an open thread is
+admitted by the reply rule even between two seats no earlier rule pairs. The rule reads the
+thread, not the invitation: it admits a reply on any open thread, and a thread is open until it
+is closed or the clock or the cap ends it.
+
+A record a client wrote is not answered in this release. A record carrying `from_client` is
+refused with `reply.client-refused` before any grant is read or any client inbox is created, and
+an answer to it writes nothing: client reply publication is not in 0.5.3. `--close` on such a
+record still writes only the own-seat close sidecar. The client's own read and ack path
+in [team messages](messages.md) is retained and is separate from seat reply publication. A seat's
+replies, its receipts, and `--close` are unchanged.
 
 A thread ends in three ways. `team reply <id> --close` writes a signed close sidecar beside the
 record it answers, `<id>.closed.json` — a thread's close is the addressee's own act, and it
@@ -29,7 +37,8 @@ closed thread is refused, naming what ended it, and nothing is written.
 The answered record moves to `replied`: the reply writes a signed receipt (`<id>.replied.json`)
 beside the message it answers, in the answering seat's own folder. The reply is delivered the way
 the drop leg delivers — the record is left in the target's folder, nothing is typed and no frame
-is sent — and the receiving seat's own watch rings `Team: run team messages`; a
+is sent — and the receiving seat's own watch rings
+`Team: run team drops --read --seat <seat> --session <session>`; a
 [team send --wait](send.md) waiting on that thread wakes on the reply record and returns
 `answered`. A reply's text is
 kept in the record, and the project's message history keeps one line for it, with `thread`,
@@ -57,7 +66,10 @@ Reads the team file, the caller's placement, the message key, and the record the
 the records and close sidecars of its thread. Writes one signed record,
 `.agents/send-drops/<session>/<seat>/<id>` (mode 0600), into the answered sender's folder, and a
 signed `replied` receipt beside the answered record (`<id>.replied.json`); a `--close` writes the
-signed close sidecar `<id>.closed.json` beside it instead. The seat's folder and the reply's
+signed close sidecar `<id>.closed.json` beside it instead. A record carrying `from_client` is
+refused as a reply and writes nothing: no client inbox record, no `replied` receipt, no history
+line. `--close` on it still writes the signed close sidecar beside it. The
+seat's folder and the reply's
 record are each written under the seat's lock (`<state dir>/seat-locks/<session>/<seat>`), so two
 commands never write into one folder at once. It writes one line to `.agents/team.log`, and
 appends the reply to the project's message history ([team feed](feed.md)); when the reply record
@@ -71,8 +83,13 @@ The owner, or a seat of the team, from a terminal outside herdr or its own pane.
 terminal is refused. The caller must be the record's addressee — the record's `to` names it, and
 the record sits in its own folder — and the reply reaches the seat the record's `from` names: a
 sender the team file no longer declares is not reached by a reply. The owner answers a seat's
-record through this same path; a record the owner sent has no seat to answer in this build, and a
-reply to it is refused before anything is written.
+record through this same path. A record the owner sent is answered at its entity's
+`owner-reply-to` endpoint — the `seat@team` address an owner-origin message names — and the
+`floor` entity answers `orchestrator@floor` when it declares none. The reply is written into that
+endpoint seat's own folder, and the receipt stays beside the answered record; an entity that
+declares no endpoint, or an endpoint the registry cannot resolve, is refused and nothing is
+written. A record carrying `from_client` cannot be answered in this release for any caller; an
+answer writes nothing, while `--close` remains available.
 
 ## Output and exit codes
 
@@ -84,6 +101,7 @@ then the outcome line. A refused run prints its line on stderr and has none.
 | replied | `<seat>: replied` on stdout — the seat the reply went to | 0 |
 | closed | `<thread>: closed` on stdout | 0 |
 | refused | `team reply: <reason>` on stderr | 1 |
+| a client record not answered | `team reply: <reason>` on stderr — client reply publication is not in this release | 1 |
 | configuration | `team reply: <team-file problem>` on stderr | 2 |
 | usage | `team reply: <problem>` and the usage on stderr | 2 |
 
@@ -91,7 +109,7 @@ Under `--json` a written run prints one `team.reply` document — `{format, stat
 project, session, record, thread, in_reply_to, to, rule, reply, at}` — where `status` is `replied`
 or `closed`, `record` is the reply's own id (`null` for a close), and `rule` is the admitting
 rule; a refused run prints the structured error document instead (`error.id` is `reply.refused`,
-`reply.configuration` or `reply.usage`) and stderr stays empty.
+`reply.client-refused`, `reply.configuration` or `reply.usage`) and stderr stays empty.
 
 Refusals name what stopped them, and nothing is written:
 
@@ -100,7 +118,9 @@ Refusals name what stopped them, and nothing is written:
     team reply: no message key; nothing was written
     team reply: record <id> does not verify against this message key
     team reply: record <id> is addressed to <seat>, not to <caller>
-    team reply: record <id> was sent by the owner, and this build does not deliver a reply to the owner; nothing was written
+    team reply: record <id> was sent by the owner, and the owner's reply endpoint is missing (<why>); nothing was written
+    team reply: record <id> was sent by the owner, and the owner's reply endpoint <target> cannot be resolved: <reason>; nothing was written
+    team reply: client reply publication is not in this release: a client thread is read, not answered; nothing was written
     team reply: the thread <thread> is already closed; nothing was written
     team reply: the thread <thread> ended: no record on it for 72h; nothing was written
     team reply: the thread <thread> ended at its 50-record cap; nothing was written

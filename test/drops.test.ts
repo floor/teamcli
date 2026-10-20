@@ -23,12 +23,13 @@ import { readEvents } from '../src/bus/log.ts';
 import type { Caller } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
+import { generalBriefRecord, GENERAL_BRIEF_SHA256, currentBriefClaim } from '../src/launch/general-brief.ts';
 import { DROPS_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, type ReceiptPayload } from '../src/send/record.ts';
-import { receiptPath } from '../src/mcp/inbox.ts';
+import { signRecord, signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt, writeRecord, type ReceiptPayload, type RecordPayload } from '../src/send/record.ts';
+import { listUnread, readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { messageKeyState } from '../src/store/keys.ts';
-import { updateState } from '../src/state.ts';
+import { readState, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -104,6 +105,40 @@ function drop(name: string, text: string): string {
   const path = join(dropDir, name);
   writeFileSync(path, text);
   return path;
+}
+
+/** The seat's current claim and the signed launch record it names, as `team up` leaves them: the
+ *  record lands at the id the claim expects. */
+function plantCurrentBrief(seat = 'lead'): RecordPayload {
+  mkdirSync(dropDir, { recursive: true });
+  const incarnation = 'inc_000000000012';
+  const record = generalBriefRecord({
+    to: seat,
+    root,
+    session: 'acme',
+    at: '2026-10-19T09:00:00.000Z',
+    incarnation,
+  });
+  const wrote = writeRecord(dropDir, signRecord(record, home));
+  if (!wrote.ok) throw new Error(wrote.reason);
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme,
+      briefs: {
+        [seat]: {
+          id: record.id,
+          at: record.at,
+          incarnation,
+          epoch: 'run_000000000012',
+          sha256: GENERAL_BRIEF_SHA256,
+          attempt: 0,
+          stage: 'ready' as const,
+          superseded: [],
+        },
+      },
+    } as never;
+  });
+  return record;
 }
 
 async function run(
@@ -217,6 +252,49 @@ describe('team drops', () => {
     const listing = listDrops(dropDir, state.key);
     if (listing.kind !== 'ok') throw new Error(listing.reason);
     expect(listing.rows.map((row) => [row.id, row.from])).toEqual([[D_RECORD, null]]);
+  });
+
+  test('a listing omits the deliveries the current claim replaced or does not name', () => {
+    // The seat's current claim: this build's brief, and the id an earlier delivery held.
+    const claimId = '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d';
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions.acme = {
+        ...state.sessions.acme,
+        briefs: {
+          lead: {
+            id: claimId,
+            at: '2026-10-04T09:00:00.000Z',
+            incarnation: 'inc_000000000010',
+            epoch: 'run_000000000010',
+            sha256: GENERAL_BRIEF_SHA256,
+            attempt: 0,
+            stage: 'ready' as const,
+            superseded: [D_OWNER],
+          },
+        },
+      } as never;
+    });
+    // A file at an id the claim replaced: never read, never listed.
+    drop(D_OWNER, 'an earlier delivery, replaced');
+    // A launch record under its own delivery lifetime, which the claim does not name: an earlier
+    // brief the read could only refuse, so the listing does not offer it.
+    const old = generalBriefRecord({
+      to: 'lead',
+      root,
+      session: 'acme',
+      at: '2026-10-04T08:00:00.000Z',
+      incarnation: 'inc_000000000011',
+    });
+    const wrote = writeRecord(dropDir, signRecord(old, home));
+    expect(wrote.ok).toBe(true);
+    const key = messageKeyState(home);
+    if (key.kind !== 'key') throw new Error('the fixture wrote no key');
+    const listing = listDrops(dropDir, key.key, { to: 'lead', root, session: 'acme' });
+    if (listing.kind !== 'ok') throw new Error(listing.reason);
+    expect(listing.rows).toEqual([]);
+    // The inbox listing skips the replaced id by name; the earlier brief is not named by the claim.
+    const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
+    expect(unread.map((message) => message.id)).not.toContain(D_OWNER);
   });
 
   test('--json is the same reading as one team.drops document', async () => {
@@ -453,6 +531,47 @@ describe('team drops --read', () => {
     expect(second).toEqual({ code: 0, out: '', err: '' });
   });
 
+  test('a receipt that does not bind the current claim does not hide the brief’s delivery', async () => {
+    const record = plantCurrentBrief();
+    // A signed read receipt for the message that does not bind the claim: an ordinary read of the
+    // file, not of this delivery. It proves the file was seen, never that this brief was served.
+    const occupying = writeReceipt(dropDir, signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: record.id,
+      to: 'lead',
+      root,
+      session: 'acme',
+      at: '2026-10-19T09:05:00.000Z',
+    }, home), home);
+    expect(occupying.ok).toBe(true);
+    const at = receiptPath(dropDir, record.id);
+    const before = readFileSync(at, 'utf8');
+    // The listing still offers the delivery the claim names, and the read refuses the occupied
+    // name with no body. The receipt and the drop are left exactly as they were.
+    const context = { to: 'lead', root, session: 'acme' };
+    expect(listUnread(dropDir, context, home).map((message) => message.id)).toEqual([record.id]);
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: 'team drops: the read receipt name is held by a file that does not verify for this brief\n',
+    });
+    expect(readFileSync(at, 'utf8')).toBe(before);
+    expect(existsSync(join(dropDir, record.id))).toBe(true);
+  });
+
+  test('a receipt bound to the current claim still marks the brief read', async () => {
+    const record = plantCurrentBrief();
+    const claimOf = () => currentBriefClaim(readState(join(root, '.agents')).sessions.acme?.briefs?.lead);
+    const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, record.id, home, { claim: claimOf });
+    expect(read.ok).toBe(true);
+    const context = { to: 'lead', root, session: 'acme' };
+    expect(listUnread(dropDir, context, home)).toEqual([]);
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({ code: 0, out: '', err: '' });
+  });
+
   test('--read is an invocation of the launch line, never a placed caller', async () => {
     const noSeat = await run(['--read']);
     expect(noSeat).toEqual({ code: 2, out: '', err: 'team drops: --read needs --seat <seat>\n' + USAGE });
@@ -482,37 +601,124 @@ describe('team drops --read', () => {
     expect(seat).toEqual({ code: 1, out: '', err: 'team drops: the team file declares no seat "helper"\n' });
   });
 
-  test('a turn reads ten records at most, oldest first, and leaves the rest waiting', async () => {
+  test('a turn reads the ten newest records first, and leaves the rest waiting', async () => {
     const ids = Array.from(
       { length: 12 },
       (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`,
     );
     for (const [index, id] of ids.entries()) {
-      const at = plantRecord(home, root, 'acme', 'lead', id, `message ${String(index)}`);
-      const when = new Date(Date.parse('2026-10-04T09:00:00.000Z') + index * 1_000);
-      utimesSync(at, when, when);
+      plantRecord(home, root, 'acme', 'lead', id, `message ${String(index)}`, {
+        at: new Date(Date.parse('2026-10-04T09:00:00.000Z') + index * 1_000).toISOString(),
+      });
     }
     const first = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
     expect(first.code).toBe(0);
+    // Newest first: the ten newest are handed over, and the two that wait are the oldest.
     expect(first.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
-      Array.from({ length: 10 }, (_, index) => `message ${String(index)}`),
+      Array.from({ length: 10 }, (_, index) => `message ${String(11 - index)}`),
     );
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
     const second = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
-    expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 10', 'message 11']);
+    expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
+    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
+    // The receipts are what leave nothing behind: a third read has no body at all.
+    const third = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(third).toEqual({ code: 0, out: '', err: '' });
+  });
+
+  test('a plain-text drop an earlier build wrote is skipped and reported, and the signed record behind it is read', async () => {
+    // The old file is the newest, so a newest-first read meets it first: it must not use a batch
+    // slot, stop the walk, or put its text in front of the turn.
+    const legacy = drop(D_RECORD, `${OWNER_HEADER}\n\nan old raw drop\n`);
+    utimesSync(legacy, new Date('2026-10-04T10:00:00.000Z'), new Date('2026-10-04T10:00:00.000Z'));
+    plantRecord(home, root, 'acme', 'lead', D_RECORD_READ, 'a signed body', { at: '2026-10-04T09:00:00.000Z' });
+
+    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+
+    expect(result.code).toBe(0);
+    expect(result.out).toBe('a signed body\n');
+    expect(result.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
+    expect(result.out).not.toContain('an old raw drop');
+    expect(result.err).not.toContain('an old raw drop');
+    // The old file is never receipted — nothing about it was verified — while the record that was
+    // served is, and the next turn hands over no body and reports the old file again.
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+    expectReceipt(D_RECORD_READ);
+    const again = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(again).toEqual({
+      code: 0,
+      out: '',
+      err: 'team drops: 1 drop(s) are not signed records and are not served\n',
+    });
+    // Old mail is not an integrity refusal: it is reported by count, never as record.invalid.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    expect(events.events.filter((event) => event.payload.kind === 'record.invalid')).toEqual([]);
+  });
+
+  test('a legacy drop in the newest slot uses no batch slot: the ten newest signed records are read', async () => {
+    const ids = Array.from(
+      { length: 12 },
+      (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    for (const [index, id] of ids.entries()) {
+      plantRecord(home, root, 'acme', 'lead', id, `message ${String(index)}`, {
+        at: new Date(Date.parse('2026-10-04T09:00:00.000Z') + index * 1_000).toISOString(),
+      });
+    }
+    const legacy = drop('0f0e0d0c-0b0a-4908-8706-050403020100', `${OWNER_HEADER}\n\nan old raw drop\n`);
+    utimesSync(legacy, new Date('2026-10-04T09:00:30.000Z'), new Date('2026-10-04T09:00:30.000Z'));
+
+    const first = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(first.code).toBe(0);
+    expect(first.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
+      Array.from({ length: 10 }, (_, index) => `message ${String(11 - index)}`),
+    );
+    expect(first.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
+    expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
+    // The two oldest signed records are what waited, not the old file: it is skipped every turn.
+    const second = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
+    expect(second.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
   });
 
   test('a file an earlier build wrote is never handed over and gets no receipt', async () => {
     drop(D_RECORD, `${OWNER_HEADER}\n\nan old raw drop\n`);
     const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
-    expect(result.code).toBe(1);
-    expect(result.out).toBe('');
-    expect(result.err).toStartWith(`team drops: message ${JSON.stringify(D_RECORD)} is not a signed record: `);
+    // Old unsigned mail is not an integrity refusal: the folder was read, the file is reported by
+    // count, and no body and no receipt come of it.
+    expect(result).toEqual({
+      code: 0,
+      out: '',
+      err: 'team drops: 1 drop(s) are not signed records and are not served\n',
+    });
     expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
 
-    // The owner hears the refusal as its rule and object — the drop's id, its seat and its
-    // path — and never the file's content.
+    // Its text never reaches the output, and it is not raised as a record refusal: an old drop is
+    // expected mail, not a broken record, and a folder full of them must not flood the log.
+    expect(result.out).not.toContain('an old raw drop');
+    expect(result.err).not.toContain('an old raw drop');
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    expect(events.events.filter((event) => event.payload.kind === 'record.invalid')).toEqual([]);
+  });
+
+  test('a record whose signature does not verify is still refused when it is the folder\'s only mail', async () => {
+    const at = plantRecord(home, root, 'acme', 'lead', D_RECORD, 'tampered after signing');
+    const record = JSON.parse(readFileSync(at, 'utf8')) as { signature: string };
+    record.signature = 'not-this-key';
+    writeFileSync(at, `${JSON.stringify(record)}\n`);
+
+    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+
+    expect(result.code).toBe(1);
+    expect(result.out).toBe('');
+    expect(result.err).toBe(`team drops: message ${JSON.stringify(D_RECORD)} does not verify against this message key\n`);
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+    // The owner hears the refusal as its rule and object — never the record's content.
     const events = readEvents('acme', root, home);
     expect(events.ok).toBe(true);
     if (!events.ok) return;
@@ -520,12 +726,39 @@ describe('team drops --read', () => {
     expect(refused).toHaveLength(1);
     expect(refused[0]!.payload).toMatchObject({
       session: 'acme',
-      rule: 'shape',
+      rule: 'signature',
       seat: 'lead',
       subject: D_RECORD,
       reason: join(dropDir, D_RECORD),
     });
-    expect(JSON.stringify(refused[0]!.payload)).not.toContain('an old raw drop');
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain('tampered after signing');
+  });
+
+  test('a bad signature uses no batch slot either: the signed record behind it is still served and reported', async () => {
+    const at = plantRecord(home, root, 'acme', 'lead', D_RECORD, 'tampered after signing', {
+      at: '2026-10-04T10:00:00.000Z',
+    });
+    const record = JSON.parse(readFileSync(at, 'utf8')) as { signature: string };
+    record.signature = 'not-this-key';
+    writeFileSync(at, `${JSON.stringify(record)}\n`);
+    plantRecord(home, root, 'acme', 'lead', D_RECORD_READ, 'a signed body', { at: '2026-10-04T09:00:00.000Z' });
+
+    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+
+    expect(result.code).toBe(0);
+    expect(result.out).toBe('a signed body\n');
+    expect(result.err).toBe('');
+    // The record that verified is receipted; the one that did not never is.
+    expectReceipt(D_RECORD_READ);
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+    // The refusal is still reported to the owner, as the rule and the object and never the body.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'record.invalid');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({ rule: 'signature', seat: 'lead', subject: D_RECORD });
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain('tampered after signing');
   });
 
   test('a link standing where the seat folder should be refuses the read', async () => {

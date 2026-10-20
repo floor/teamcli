@@ -1,8 +1,9 @@
 // A send its seat took without showing it: the later confirmation, and the word when it never
-// came. A box that clears with no status or transcript evidence is delivered as `taken, not yet
-// confirmed`; the watch's later passes read the transcript and the status for the sign the seat
-// acted, and past the window say "taken but never acted on" once. A taken line is never typed
-// again. A trigger left in the box is the other case: not-submitted, and the watch's retry.
+// came. A box that clears with no status or transcript evidence is sent with the note
+// `trigger taken, no read receipt yet`; the watch's later passes read the transcript and the
+// status for the sign the seat acted, and past the window say "taken but never acted on" once. A
+// taken line is never typed again. A trigger left in the box is the other case: not-submitted,
+// and the watch's retry.
 // Fixtures only: a scripted pane, a temporary home, no live session.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -173,11 +174,12 @@ function dropDirOf(made: World): string {
   return join(made.dir, 'send-drops', 'acme', 'lead');
 }
 
-/** The taken word on the sender's line, and the record it leaves beside the drop. */
+/** The trigger note on the sender's line, and the record it leaves beside the drop. */
 async function sendTaken(made: World, one: Pane): Promise<string> {
   const io = testIo(made.root, { kind: 'owner' });
   expect(await runSend(['lead', 'hello'], io, sendHost(made, one, () => NOW))).toBe(0);
-  expect(io.out).toContain('lead: delivered (taken, not yet confirmed)');
+  expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
+  expect(io.out).toContain('trigger taken, no read receipt yet');
   const taken = readTaken(dropDirOf(made));
   expect(taken).toHaveLength(1);
   return (taken[0] as { id: string }).id;
@@ -203,7 +205,7 @@ describe('a taken delivery, confirmed later', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.note])).toEqual([
-      [id, 'delivered', 'taken, not yet confirmed'],
+      [id, 'sent (unconfirmed)', 'trigger taken, no read receipt yet'],
     ]);
   });
 
@@ -245,8 +247,8 @@ describe('a taken delivery its seat never acted on', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.note])).toEqual([
-      [id, 'delivered', 'taken, not yet confirmed'],
-      [id, 'delivered', 'taken but never acted on'],
+      [id, 'sent (unconfirmed)', 'trigger taken, no read receipt yet'],
+      [id, 'sent (unconfirmed)', 'taken but never acted on'],
     ]);
 
     // The record is gone, and neither the retry nor a later look types the line again.
@@ -331,14 +333,14 @@ describe('a trigger left in the box is the other case', () => {
     await retryHeldDrops(at);
     expect(readPending(dropDirOf(made))).toEqual([]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
-    expect(at.said).toEqual(['lead: a held send from owner was delivered on retry']);
+    expect(at.said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
 
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([
       ['not-submitted', undefined],
-      ['delivered', undefined],
+      ['sent (unconfirmed)', 'trigger taken, no read receipt yet'],
     ]);
   });
 });

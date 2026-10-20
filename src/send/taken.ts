@@ -1,11 +1,11 @@
 // The record a taken delivery leaves beside its drop, and the bounds on confirming it.
 //
 // A send whose box cleared before herdr's status or the transcript showed the seat act is
-// delivered as `taken, not yet confirmed`: the seat took the line, and the sign that it acted on
-// it comes later. The marker `<id>.taken` beside the drop is what a running watch reads on its
-// later passes: it confirms the delivery from the transcript or the status, and says the one
-// thing left to say when no sign ever comes. The marker is never a retry — a taken line is never
-// typed again, whatever the later look finds.
+// `sent (unconfirmed)` with the note `trigger taken, no read receipt yet`: the seat took the line,
+// and the sign that it acted on it comes later. The marker `<id>.taken` beside the drop is what a
+// running watch reads on its later passes: it confirms the take from the transcript or the status,
+// and says the one thing left to say when no sign ever comes. The marker is never a retry — a
+// taken line is never typed again, whatever the later look finds.
 //
 // Like the retry's marker, this one is a convenience, never the message: the drop file is the
 // message, and a marker that cannot be written or read costs a confirmation, not a byte of the

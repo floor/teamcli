@@ -1,11 +1,13 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
+import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { launchBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
@@ -27,7 +29,17 @@ export type Op =
    *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher }
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+      /**
+       * This launch starts (or reuses) the managed Codex app-server endpoint recorded on the
+       * seat's current presence binding, and attaches the TUI to it with `--remote`. Set only
+       * for a Codex seat with the signed `codex-daemon` policy on, a plain Codex launch line,
+       * and no `--remote`/`--no-daemon` of the file's own to collide with. The endpoint and the
+       * attach are decided at launch time, so the printed line stays the file's own. `dir` is the
+       * state folder the endpoint's record is written in, carried by the plan so the launch's
+       * host methods take no folder of their own.
+       */
+      codexEndpoint?: { dir: string } }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -188,6 +200,9 @@ export interface UpSeat {
    * wrote it.
    */
   sessionName?: string;
+  /** The resolved `codex-daemon` policy (`on | off`) for a Codex seat. When omitted, `upPlan`
+   *  resolves it from the signed policy chain (`entity -> project -> team -> seat`). */
+  codexDaemon?: CodexDaemonValue;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
    *  one line typed in its pane. Absent when the path can't be typed safely. */
   rulesFile?: { path: string; line: string };
@@ -321,11 +336,25 @@ export interface UpInput {
    */
   cliHooks?: Readonly<Record<string, string>>;
   /**
+   * The runtime epoch each seat's general brief was delivered under, by seat name, when this run
+   * wrote a claim. A launch-line inbox route names it to the server, so the server serves only
+   * that delivery. Absent on a dry run, and for a seat this run delivered no brief to.
+   */
+  briefEpochs?: Readonly<Record<string, string>>;
+  /**
    * The team file this run read and validated, as its absolute path. A seat's folder may be a
    * lobby with no team file, so the launch's inbox registration and the server it names are told
    * this file. Absent on a plan built by hand, whose launches register from the seat's folder.
    */
   teamFile?: string;
+  /** The home directory used to resolve signed policies (`entity`, `project`, `team`, `seat`). */
+  home?: string;
+  /**
+   * The team's state folder (`.agents`). A managed Codex seat's app-server endpoint is recorded
+   * there, so a launch without it manages no endpoint: presence stays whatever it was, and no
+   * path is guessed in the state's place. Present on every real launch.
+   */
+  stateDir?: string;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -621,12 +650,33 @@ export function upPlan(input: UpInput): Step[] {
     // team file's own session instead (`mcp/register.ts`), read from the file this run read:
     // the server refuses any other. A launch-line route names the same file to its server, so
     // both resolve the team from it rather than from the seat's folder.
+    let codexDaemon: CodexDaemonValue | undefined = seat.codexDaemon;
+    if (codexDaemon === undefined && profile.cli === 'codex' && input.home !== undefined) {
+      codexDaemon = codexDaemonForSeat({
+        home: input.home,
+        root: input.root,
+        ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+        seat: seat.name,
+        session,
+      });
+    }
     const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
-    }, seat.sessionName);
+      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon });
+    // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
+    // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
+    // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
+    // than probed past. Nothing is recorded when the policy is off or unreadable.
+    const managedCodex = profile.cli === 'codex'
+      && codexDaemon === 'on'
+      && input.stateDir !== undefined
+      && launchBinary(seat.launch) === profile.binary
+      && !/(^|\s)--remote(=|\s|$)/.test(command)
+      && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
@@ -636,7 +686,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: said ? `${said}; would launch; ${watched}` : watched,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }
     const rules = profile.rulesMode;

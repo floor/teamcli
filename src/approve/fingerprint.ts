@@ -101,9 +101,9 @@ export function legacyLabelDigests(team: Approvable): { named: Record<string, st
 
 /**
  * A watch section digest as computed before `idle_repeat` defaulted to off — when the key was
- * not set in the file, its value was filled in as 1200 seconds — and before `idle_owner` and
- * `blind_after` joined the section. `omittedIdleFirst` says the approved text wrote no
- * `idle_first`, so the reader then took the ten minutes the section shipped.
+ * not set in the file, its value was filled in as 1200 seconds — and before `idle_owner`,
+ * `blind_after` and `unread_after` joined the section. `omittedIdleFirst` says the approved text
+ * wrote no `idle_first`, so the reader then took the ten minutes the section shipped.
  */
 export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): string | null {
   const watch = team.watch as Record<string, unknown> | null | undefined;
@@ -112,27 +112,44 @@ export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): s
   delete rest.checks;
   delete rest.idleOwner;
   delete rest.blindAfter;
+  delete rest.unreadAfter;
   if (omittedIdleFirst && rest.idleFirst === 300) rest.idleFirst = 600;
   return digest(rest);
 }
 
 /**
- * Every earlier spelling of the `watch` digest a record may carry: the current shape without
- * `idle_owner` and `blind_after`, with or without the `idle_repeat` fill-in, and, when the file
- * wrote no `idle_first`, with the ten-minute default it shipped then. A stored digest equal to
- * one of these was not edited by the arrival — it is adopted as the current one.
+ * Every earlier spelling of the `watch` digest a record may carry: the shape without
+ * `idle_owner`, `blind_after` and `unread_after`; the 0.5.0–0.5.2 shape, which kept
+ * `idle_owner` and `blind_after` and omitted only `unread_after`; each with or without the
+ * `idle_repeat` fill-in, and, when the file wrote no `idle_first`, with the ten-minute default
+ * it shipped then. A stored digest equal to one of these was not edited by the arrival — it is
+ * adopted as the current one.
  */
 export function legacyWatchDigests(team: Approvable, omittedIdleFirst: boolean): string[] {
   const watch = team.watch as Record<string, unknown> | null | undefined;
   if (!watch) return [];
-  const rest: Record<string, unknown> = { ...watch };
-  delete rest.checks;
-  delete rest.idleOwner;
-  delete rest.blindAfter;
-  if (omittedIdleFirst && rest.idleFirst === 300) rest.idleFirst = 600;
-  const out = [digest(rest)];
-  if (rest.idleRepeat === undefined) out.push(digest({ ...rest, idleRepeat: 1200 }));
-  return out;
+  const without = (...keys: string[]): Record<string, unknown> => {
+    const rest = { ...watch };
+    for (const key of keys) delete rest[key];
+    return rest;
+  };
+  const shapes = [
+    without('checks', 'idleOwner', 'blindAfter', 'unreadAfter'),
+    without('checks', 'unreadAfter'),
+  ];
+  const out = new Set<string>();
+  for (const rest of shapes) {
+    // A file that wrote no `idle_first` may predate the 300-second default or come from the
+    // 0.5.0-0.5.2 line that already shipped it: the stored digest names the default of its
+    // own era, so both readings are earlier spellings of the same section.
+    const variants = [rest];
+    if (omittedIdleFirst && rest.idleFirst === 300) variants.push({ ...rest, idleFirst: 600 });
+    for (const shape of variants) {
+      out.add(digest(shape));
+      if (shape.idleRepeat === undefined) out.add(digest({ ...shape, idleRepeat: 1200 }));
+    }
+  }
+  return [...out];
 }
 
 function seatDigest(seat: Record<string, unknown>, free: Set<string>): string {

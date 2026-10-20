@@ -2,10 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
+import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
 import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
+import { cleanIdleClaims, type IdleClaimEntry } from './watch/claim-record.ts';
+import { isWatchEpoch } from './watch/epoch.ts';
+import { isPresenceBinding } from './daemon/presence/contract.ts';
+import type { CodexEndpointRecord } from './daemon/presence/endpoint-record.ts';
 
 // What a team keeps: the live session's seats, worktrees and watch, and the project's last
 // readings, which outlive every session (§ 4.4). It lives beside the team file and is written by
@@ -13,8 +18,7 @@ import { cleanClassification, type Classification } from './launch/progress.ts';
 
 export const SEAT_ID_PATTERN = /^seat_[0-9a-f]{12}$/;
 
-/** The id a general-brief delivery names: the lowercase UUID every drop record is named by. */
-export const BRIEF_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export { BRIEF_ID_PATTERN };
 
 export function isSeatId(value: unknown): value is string {
   return typeof value === 'string' && SEAT_ID_PATTERN.test(value);
@@ -29,10 +33,36 @@ export type RetainedSeat = {
   last_active?: string;
 };
 
-/** One seat's general-brief delivery: the record's id and when the seat received it. */
+/**
+ * One seat's general-brief claim. `id` and `at` were the whole record before claims existed; a
+ * claim written by an older build keeps them and carries none of the fields below, so it is
+ * readable but stale — no reader serves it and the check names the seat until a delivery writes
+ * a current claim. The claim is written before the drop and finalized (`stage: 'ready'`) once
+ * the drop verifies, so a launch that dies between the two leaves a claim the next launch can
+ * repair rather than a silent gap. `superseded` keeps the newest 50 earlier ids, bounded so the
+ * state file cannot grow with a recovery loop.
+ */
 export type BriefRecord = {
   id: string;
   at: string;
+  /** Delivery lifetime: kept across a reword, minted again for a new seat or a recovery. */
+  incarnation?: string;
+  /** The runtime epoch a running reader was started with; a receipt counts only while it matches. */
+  epoch?: string;
+  /** The delivered body's sha256, as the claim records it. */
+  sha256?: string;
+  /** Delivery attempt: 0 on the first, one more for each recovery from a held name. */
+  attempt?: number;
+  /** `claimed` while the drop is being written; `ready` once it was read back and verified. */
+  stage?: 'claimed' | 'ready';
+  /** The seat handle the launch wrote the drop for, when the registry had one. */
+  seat_handle?: string;
+  /** The pane the delivery's launch was recording, when it named one. */
+  pane?: string;
+  /** The pane's root process id at delivery, so a replaced pane can be told from the same one. */
+  pane_root_pid?: number;
+  /** Earlier ids this claim replaced, oldest first, newest 50 kept. */
+  superseded?: readonly string[];
 };
 
 export type SeatState = {
@@ -70,9 +100,54 @@ export type SeatState = {
   /**
    * The agent session herdr reported for this seat when its idle prompt appeared, beside the
    * process ids. A later pane whose pids differ and whose live session equals this one is the
-   * seat (`replacedSeat`). Absent when the launch's reading had none.
+   * seat (`replacedSeat`). The same id is written to the agent registry's `reach.agent_session`
+   * by the register and launch paths. Absent when the launch's reading had none.
    */
   agent_session?: string;
+  /**
+   * The presence runtime incarnation of the seat's current launch (`prs_<12 lowercase hex>`),
+   * minted when that launch installs a presence writer and compared whole by the daemon's
+   * presence ingester. Presence events carry it, so a late event from a predecessor process
+   * cannot move a successor seat; a mismatch is set aside, never repaired. Internal state, not
+   * a credential or a public identity, and never printed. Absent when the launch installs no
+   * presence writer, which the ingester treats as no live presence rather than guessing.
+   */
+  presence_binding?: string;
+  /**
+   * The app-server endpoint the seat's managed launch started and owns, recorded in the same
+   * locked write that re-checks `presence_binding` (`binding` must equal it). `binding` is the
+   * presence incarnation the endpoint serves, so a predecessor server can never serve a
+   * successor: its path carries the binding. Consumers may use `url` only while the two bindings
+   * agree and the URL is an explicit `unix:///…` endpoint; otherwise the endpoint is unknown,
+   * never guessed from `~/.codex`. `pid` names the process the launch started, for its own
+   * cleanup. Written only by the managed launch, never by the daemon: internal state, never a
+   * public identity.
+   */
+  codex_endpoint?: CodexEndpointRecord;
+  /**
+   * The daemon's activity reconciler's fence: the newest applied presence line of the seat's
+   * current runtime binding that the canonical state has reconciled. `seq` must equal the current
+   * projection's sequence for a consumer to treat the reading as known; while either side is
+   * ahead the answer is `unknown`, never idle and never a stale claim. `applied_at` is the
+   * writer's instant, never invented from the event. Absent until the first applied line.
+   */
+  presence_applied?: {
+    seat_id: string;
+    binding: string;
+    seq: number;
+    applied_at: string;
+  };
+  /**
+   * The activity reconciler's own resume point in the seat's transition log, persisted separately
+   * from `presence_applied`: it advances over every line read — audit lines that never became the
+   * projection and predecessor-incarnation lines included — so a skipped line is never re-read
+   * forever. Private to the scanner; no reader treats it as presence evidence.
+   */
+  presence_scan?: {
+    binding: string | null;
+    seq: number;
+    offset: number;
+  };
   /**
    * What this launch declared, written when the idle prompt appears and left in place when a
    * later ready write merges onto the record. A skip of a seat that is already ready does not
@@ -126,6 +201,46 @@ export type WorktreeState = {
 };
 
 export type SwapRecord = { by: string; at: string };
+
+/** The model fields a swap moves a seat between, as the file declares them. */
+export type SwapModel = {
+  cli: string;
+  vendor: string;
+  model: string;
+  version: string;
+  display: string;
+};
+
+/**
+ * One queued model swap (Policies rule 11): the seat takes no new task while the
+ * record stands, waits for the boundary the watch observes, and past `deadline` runs at the next
+ * pause between two turns. `from` and `to` are the file's words at queue time; `to` carries the
+ * launch line and the optional model fields a recipe brought. `waitFor` is the one line `status`
+ * prints under the seat's row. `forced` is the owner's `team swap now`: the log says the deadline
+ * did not decide. A record is the project's, not one session's, like the hold and the pause.
+ */
+export type QueuedSwap = {
+  from: SwapModel;
+  to: SwapModel & {
+    launch: string;
+    modelFrom?: 'launcher';
+    effort?: string;
+    account?: string;
+  };
+  reason: 'model-rule' | 'config' | 'owner';
+  queuedAt: string;
+  deadline: string;
+  waitFor: string;
+  /** The rule value in force when a rule-driven swap was queued. */
+  rule?: string;
+  /**
+   * The handover file the old conversation is asked to write, when the launch will not resume
+   * it: named when the swap is queued, so a run retried after a busy turn offers the same path
+   * and a file already written is used without asking again.
+   */
+  handover?: string;
+  forced?: { by: string; at: string };
+};
 
 /**
  * A hold on the team's work: the reason it was placed, who placed it and when, and the instant
@@ -205,9 +320,11 @@ export type SessionState = {
    * The watch: the pane and workspace it runs in, the process once a pass has recorded one, and
    * the last heartbeat. `pid` is absent from the moment `up` — or an owner's own run — starts the
    * watch until that pane's first pass records its process; `pane` is absent only on a record an
-   * older detached watch left.
+   * older detached watch left. `epoch` is the host's authority fence (`watch_` and 32 lowercase
+   * hex); its absence marks a pane watch record, and a value this build cannot read is dropped at
+   * the read door.
    */
-  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string };
+  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string };
   /**
    * The team file this session was launched from. A lead in the lobby resolves it from a pane
    * the state records, and from no other path. Absent on a session started before it was written.
@@ -228,6 +345,15 @@ export type SessionState = {
    * to it (`add`, `done`), because expiry is a reading, never a timer.
    */
   procs?: Record<string, ProcRecord>;
+  /**
+   * One seat's spend of the watch's single direct-work attempt in one idle episode, keyed by seat
+   * (src/watch/claim-record.ts holds the record's rules). The episode's identity is the seat's
+   * persisted `last_active`, so the record survives a watch or host restart and a second host
+   * reads the same spend. At most one entry per seat; no history. An entry this build cannot read
+   * is kept as `{ unreadable: true }` at the read door — a malformed claim holds the episode, it
+   * is never dropped to absence.
+   */
+  idle_claims?: Record<string, IdleClaimEntry>;
 };
 
 export type State = {
@@ -257,6 +383,11 @@ export type State = {
    * the signed policy file untouched.
    */
   expired_policies?: string[];
+  /**
+   * The queued model swaps, by seat (Policies rule 11): the project's record, read and written
+   * by `team swap` and carried out by the watch. A seat keeps no new task while its entry stands.
+   */
+  swaps?: Record<string, QueuedSwap>;
   sessions: Record<string, SessionState>;
 };
 
@@ -338,10 +469,74 @@ export function stopText(stop: PauseStop): string {
   return `stop ${stop.seat}: ${at.length > 0 ? at.join(', ') : 'no record'}`;
 }
 
+const BRIEF_SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * One brief claim as the state may hold it, or null when the entry does not hold an id and a
+ * time at all. A field that is not the shape this build writes is dropped, not the whole claim:
+ * an entry an older build wrote (`{id, at}` alone) stays readable as a stale claim, never served
+ * and never deleted, so an upgrade cannot silently erase which seats received the old brief.
+ */
+function cleanedBrief(brief: unknown): BriefRecord | null {
+  if (!brief || typeof brief !== 'object') return null;
+  const raw = brief as Record<string, unknown>;
+  if (!isBriefId(raw.id) || typeof raw.at !== 'string' || Number.isNaN(Date.parse(raw.at))) return null;
+  const claim: BriefRecord = { id: raw.id, at: raw.at };
+  if (isBriefIncarnation(raw.incarnation)) claim.incarnation = raw.incarnation;
+  if (isBriefEpoch(raw.epoch)) claim.epoch = raw.epoch;
+  if (typeof raw.sha256 === 'string' && BRIEF_SHA256_PATTERN.test(raw.sha256)) claim.sha256 = raw.sha256;
+  if (typeof raw.attempt === 'number' && Number.isInteger(raw.attempt) && raw.attempt >= 0) claim.attempt = raw.attempt;
+  if (raw.stage === 'claimed' || raw.stage === 'ready') claim.stage = raw.stage;
+  if (isSeatId(raw.seat_handle)) claim.seat_handle = raw.seat_handle;
+  if (typeof raw.pane === 'string' && raw.pane !== '') claim.pane = raw.pane;
+  if (typeof raw.pane_root_pid === 'number' && Number.isInteger(raw.pane_root_pid) && raw.pane_root_pid > 0) {
+    claim.pane_root_pid = raw.pane_root_pid;
+  }
+  if (Array.isArray(raw.superseded)) {
+    const ids: string[] = [];
+    for (const id of raw.superseded) if (isBriefId(id) && !ids.includes(id)) ids.push(id);
+    if (ids.length > 0) claim.superseded = ids.slice(-50);
+  }
+  return claim;
+}
+
+/** Whether a value from the state file is a swap's model word: the five fields the file declares
+ *  and a recipe carries, each with text. */
+function isSwapModel(value: unknown): value is SwapModel {
+  if (value === null || typeof value !== 'object') return false;
+  const model = value as Partial<SwapModel>;
+  return ['cli', 'vendor', 'model', 'version', 'display'].every(
+    (key) => typeof (model as Record<string, unknown>)[key] === 'string' && (model as Record<string, string>)[key] !== '',
+  );
+}
+
+/** Whether a value from the state file is the record `team swap queue` writes. Anything else is
+ *  dropped at the read door, so a hand-edited file can never print or run what it made up. */
+function isQueuedSwap(value: unknown): value is QueuedSwap {
+  if (value === null || typeof value !== 'object') return false;
+  const swap = value as Partial<QueuedSwap>;
+  if (!isSwapModel(swap.from) || !isSwapModel(swap.to)) return false;
+  const to = swap.to as Partial<QueuedSwap['to']>;
+  if (typeof to.launch !== 'string' || to.launch === '') return false;
+  if (to.modelFrom !== undefined && to.modelFrom !== 'launcher') return false;
+  if (to.effort !== undefined && typeof to.effort !== 'string') return false;
+  if (to.account !== undefined && typeof to.account !== 'string') return false;
+  if (swap.reason !== 'model-rule' && swap.reason !== 'config' && swap.reason !== 'owner') return false;
+  if (typeof swap.queuedAt !== 'string' || Number.isNaN(Date.parse(swap.queuedAt))) return false;
+  if (typeof swap.deadline !== 'string' || Number.isNaN(Date.parse(swap.deadline))) return false;
+  if (typeof swap.waitFor !== 'string' || swap.waitFor === '') return false;
+  if (swap.rule !== undefined && typeof swap.rule !== 'string') return false;
+  if (swap.handover !== undefined && (typeof swap.handover !== 'string' || swap.handover === '')) return false;
+  if (swap.forced !== undefined) {
+    if (!swap.forced || typeof swap.forced.by !== 'string' || swap.forced.by === '') return false;
+    if (typeof swap.forced.at !== 'string' || Number.isNaN(Date.parse(swap.forced.at))) return false;
+  }
+  return true;
+}
+
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
-export function readState(dir: string): State {
-  const path = join(dir, STATE_FILE);
+export function readState(dir: string): State {  const path = join(dir, STATE_FILE);
   if (!existsSync(path)) return { format: 1, sessions: {} };
   let parsed: unknown;
   try {
@@ -365,9 +560,31 @@ export function readState(dir: string): State {
   } else if (state.expired_policies !== undefined) {
     delete state.expired_policies;
   }
+  // The queue enters from the file like the hold and the pause, and is cleaned at the same door:
+  // a key that is not a name by the lock's rule is dropped, and so is a record that is not the
+  // one `team swap queue` writes. Only that command writes a key, and it refuses anything but
+  // `validLockName`, so a key that survives this door is a seat name a reader prints.
+  if (state.swaps && typeof state.swaps === 'object') {
+    for (const [seat, swap] of Object.entries(state.swaps)) {
+      if (!validLockName(seat) || !isQueuedSwap(swap)) delete state.swaps[seat];
+    }
+  } else if (state.swaps !== undefined) {
+    delete state.swaps;
+  }
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};
     session.worktrees ??= {};
+    // The watch record enters from the file like every other value: a record whose heartbeat is
+    // not text is not a watch, and an epoch this build does not write is dropped rather than
+    // trusted as a fence. A pane watch record without an epoch stays one.
+    if (session.watch !== undefined) {
+      if (typeof session.watch !== 'object' || session.watch === null || Array.isArray(session.watch)
+        || typeof session.watch.heartbeat !== 'string') {
+        delete session.watch;
+      } else if (session.watch.epoch !== undefined && !isWatchEpoch(session.watch.epoch)) {
+        delete session.watch.epoch;
+      }
+    }
     // A stored classification is validated here, at the one door a value from outside the program
     // enters through: one of the closed list, or `unknown` for anything else. Every later reader —
     // the log line a waiting seat writes, the status row and its `difference:` line, the prompt a
@@ -382,26 +599,47 @@ export function readState(dir: string): State {
       if (seat.effort !== undefined && typeof seat.effort !== 'string') delete seat.effort;
       if (seat.launch_line !== undefined && typeof seat.launch_line !== 'string') delete seat.launch_line;
       if (seat.last_active !== undefined && typeof seat.last_active !== 'string') delete seat.last_active;
+      // The presence fence and cursor enter from the file like every other value. The fence is
+      // consumer evidence, so a malformed one is dropped whole — the consumer's answer is then
+      // `unknown`, never a guess — and a malformed cursor only makes the scanner start over.
+      if (seat.presence_applied !== undefined) {
+        const fence = seat.presence_applied;
+        if (fence === null || typeof fence !== 'object'
+          || !isSeatId(fence.seat_id) || !isPresenceBinding(fence.binding)
+          || !Number.isInteger(fence.seq) || fence.seq < 1
+          || typeof fence.applied_at !== 'string' || Number.isNaN(Date.parse(fence.applied_at))) {
+          delete seat.presence_applied;
+        }
+      }
+      if (seat.presence_scan !== undefined) {
+        const scan = seat.presence_scan;
+        if (scan === null || typeof scan !== 'object'
+          || !(scan.binding === null || isPresenceBinding(scan.binding))
+          || !Number.isInteger(scan.seq) || scan.seq < 0
+          || !Number.isInteger(scan.offset) || scan.offset < 0) {
+          delete seat.presence_scan;
+        }
+      }
+      // A session id is the measured string herdr reported, never an object handed to this build
+      // by a hand-edited file: anything else is not an id and is dropped the way a malformed
+      // model or launch line is.
+      if (seat.agent_session !== undefined && (typeof seat.agent_session !== 'string' || seat.agent_session === '')) {
+        delete seat.agent_session;
+      }
       if (seat.waiting && typeof seat.waiting === 'object') {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);
       }
     }
-    // A brief delivery enters from the file like every other value, and is cleaned here: the id
-    // is the record id the drop leg writes, and the time must parse. A seat name is a key, never
-    // a path, so any non-empty one stands; only a launch writes the map.
+    // A brief claim enters from the file like every other value, and is cleaned here: the id is
+    // the record id the drop leg writes, the time must parse, and every field this build does not
+    // know the shape of is dropped rather than trusted. A seat name is a key, never a path, so any
+    // non-empty one stands; only a launch writes the map. An entry with no id or no parseable time
+    // is not a claim at all and is dropped; an old `{id, at}` entry is kept as a stale claim.
     if (session.briefs && typeof session.briefs === 'object') {
       for (const [seat, brief] of Object.entries(session.briefs)) {
-        if (
-          seat === '' ||
-          !brief ||
-          typeof brief !== 'object' ||
-          typeof brief.id !== 'string' ||
-          !BRIEF_ID_PATTERN.test(brief.id) ||
-          typeof brief.at !== 'string' ||
-          Number.isNaN(Date.parse(brief.at))
-        ) {
-          delete session.briefs[seat];
-        }
+        const claim = seat === '' ? null : cleanedBrief(brief);
+        if (claim === null) delete session.briefs[seat];
+        else session.briefs[seat] = claim;
       }
     } else if (session.briefs !== undefined) {
       delete session.briefs;
@@ -452,6 +690,18 @@ export function readState(dir: string): State {
       }
     } else if (session.procs !== undefined) {
       delete session.procs;
+    }
+    // An idle-episode claim enters from the file like every other value, and is cleaned here at
+    // the same door. A claim this build cannot read is kept as `{ unreadable: true }` and never
+    // dropped to absence: its presence holds the seat's episode, because a claim that may
+    // already have spent the attempt must not be read as no claim at all. A map that is not a
+    // map at all holds every seat the session records; only a trusted episode end (the seat
+    // leaving the actionable reading) or manual recovery releases it. No other writer writes a
+    // seat key, so a surviving key is a seat name that was printed by a reader, never a path.
+    if (session.idle_claims !== undefined) {
+      const cleaned = cleanIdleClaims(session.idle_claims, Object.keys(session.seats));
+      if (Object.keys(cleaned).length === 0) delete session.idle_claims;
+      else session.idle_claims = cleaned;
     }
     // Read old, write new: readings used to be held under a session. They are the project's
     // (§ 4.4), so every session's records are merged to the top level here — no reader loses one,
@@ -523,14 +773,43 @@ export function pruneProcs(session: SessionState, alive: (pid: number) => boolea
   }
 }
 
-// Reads the state, lets `change` edit it, and writes it back, all under the lock.
-export function updateState<T>(dir: string, change: (state: State) => T): T {
+// Reads the state, lets `change` edit it, and writes it back, all under the lock. `waitMs` is the
+// lock's; `0` makes one attempt and throws `LockBusyError` instead of pausing, for a caller on a
+// scheduler tick that must defer the same work to a later tick. `writeWhen` decides from the
+// result whether the file is written at all: a caller that found the record it must not act on
+// can leave the file exactly as it stands, sanitizing read included.
+export function updateState<T>(
+  dir: string,
+  change: (state: State) => T,
+  options: { waitMs?: number; writeWhen?: (result: T) => boolean } = {},
+): T {
   return withLock(dir, () => {
     const state = readState(dir);
     const result = change(state);
-    writeAtomic(join(dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
+    if (!options.writeWhen || options.writeWhen(result)) {
+      writeAtomic(join(dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
+    }
     return result;
-  });
+  }, options);
+}
+
+/** The watch record exactly as the state file holds it, before the read door cleans it. A record
+ *  the parser cannot use must not look absent to a writer that has to judge the holder: this lets
+ *  a locked writer tell a malformed record that stands from no record at all.
+ *
+ *  Only a file that is not there is an absent holder. Any other read or parse failure refuses
+ *  upward: an I/O error is never permission for a writer to acquire. */
+export function storedWatchRecord(dir: string, session: string): unknown {
+  const path = join(dir, STATE_FILE);
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  const raw = JSON.parse(text) as { sessions?: Record<string, { watch?: unknown }> };
+  return raw?.sessions?.[session]?.watch;
 }
 
 export function writeAtomic(path: string, text: string): void {
@@ -575,12 +854,32 @@ function takeOver(path: string, holder: number): boolean {
   return true;
 }
 
+/** A lock another live holder keeps: the work did not run and may be retried once it is released.
+ *  A scheduler that must not block catches this and defers the work to its next pass. */
+export class LockBusyError extends Error {
+  readonly path: string;
+  readonly holder: number | null;
+  constructor(path: string, holder: number | null) {
+    super(
+      holder === null
+        ? `${path} is held and its holder is not readable yet; try again when it is done`
+        : `another team command (pid ${holder}) holds ${path}; try again when it is done`,
+    );
+    this.name = 'LockBusyError';
+    this.path = path;
+    this.holder = holder;
+  }
+}
+
 // One writer at a time. The lock file holds its holder's pid; a lock whose holder is dead is
-// taken over, and `onStale` is told.
+// taken over, and `onStale` is told. `waitMs: 0` tries once and throws `LockBusyError` at the
+// first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
+// a later tick without blocking its event loop.
 export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
   mkdirSync(dir, { recursive: true });
   const path = join(dir, LOCK_FILE);
-  const deadline = Date.now() + (options.waitMs ?? 5000);
+  const waitMs = options.waitMs ?? 5000;
+  const deadline = Date.now() + waitMs;
   for (;;) {
     try {
       const fd = openSync(path, 'wx');
@@ -596,12 +895,17 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
         continue; // released between the two calls
       }
       if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
-        if (Date.now() > deadline) throw new Error(`another team command (pid ${holder}) holds ${path}; try again when it is done`);
+        if (waitMs === 0 || Date.now() > deadline) throw new LockBusyError(path, holder);
         pause(50);
         continue;
       }
-      // A dead holder, or a lock file too young to hold its pid yet.
-      if (!Number.isInteger(holder) && Date.now() - statSync(path).mtimeMs < 1000) {
+      // A dead holder, or a lock file too young to hold its pid yet. A file just created holds
+      // no pid until its writer writes one — it reads as 0, not as a number that names a
+      // process — so anything that is not a positive integer is young, not stale. Past the
+      // one-second window a pid-less lock is stale by this age heuristic alone; that is not
+      // proof its writer is dead, and no takeover pretends otherwise.
+      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {
+        if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
       }

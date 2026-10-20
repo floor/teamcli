@@ -7,11 +7,13 @@ the page.
 
 ## What the run does: the records, the fields, the order
 
-Lists the typed records in the one file the team file names. Anyone in the checkout may run it.
+Lists the typed records in the one file the team file names — or, when it names no source, the
+local queue `.agents/queue.yaml`. Anyone in the checkout may run it.
 It reads. It writes nothing, and it creates no key.
 
-The source is a file the owner committed. A broker source is read by `team next`, never from
-here: this command connects to no broker, holds no tracker credential, and has no seat gate.
+The source is a file the owner committed — or this clone's local queue when the team file names
+no source, where an absent queue is an empty list. A broker source is read by `team next`, never
+from here: this command connects to no broker, holds no tracker credential, and has no seat gate.
 The broker runs as the same OS principal as the seat: that is integrity, not authenticity, and
 this command does not isolate anything.
 `title` and `description` are the owner's text. They are not scrubbed.
@@ -19,13 +21,14 @@ The list is file order. A priority is shown in `--json` and does not reorder.
 A listing is not a claim and not the intake rule. `team plan` prints the takeable queue and claims nothing.
 `repos` and `needs` mark a record `blocked` in the STATE column when the file has them. They are
 not a grant, and they are not checked.
-The watch's ring is unchanged: `Team: run team messages`.
+The watch's ring is unchanged: `Team: run team drops --read --seat <seat> --session <session>`.
 
 ## What it reads and writes
 
 Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
-the team file, and the YAML list at `tasks.path`. The path is relative to that root. A record's
-`id` and `title` are required. The plain listing prints
+the team file, and the YAML list at `tasks.path` — or, when the team file names no source, the
+local queue at `.agents/queue.yaml`. The path is relative to that root. A record's `id` and
+`title` are required. The plain listing prints
 the contract's four columns; every other field the file carries is in the `--json` record.
 `blocked-by`, `repos` and `needs` make the STATE cell `blocked`; none of them is judged or
 resolved here.
@@ -42,7 +45,6 @@ Anyone in the checkout.
 ## Refusals
 
 ```text
-team issues: the team file declares no task source
 team issues: tasks.source must be file
 team issues: team issues lists the file the owner committed; a broker source is read by team next
 team issues: tasks.linear.project is required

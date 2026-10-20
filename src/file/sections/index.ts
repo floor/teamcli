@@ -26,6 +26,7 @@ import { policies } from './policies.ts';
 import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
 import { grant } from './grant.ts';
+import { installer } from './installer.ts';
 import { tasks } from './tasks.ts';
 import { tempo } from './tempo.ts';
 import type { Section } from './section.ts';
@@ -88,6 +89,10 @@ export const SECTIONS: readonly Section[] = [
   tasks,
   // Immediately before `grant`, so the sections already in the digest keep their order.
   tempo,
+  // The seat that may record a green-slice install beside the owner. An owner section, so a file
+  // that writes or changes it is a difference against the last approval; a record written before
+  // it reads the omitted designation from its own copy, so the arrival alone is no difference.
+  installer,
   // Immediately before `delegates`, so `delegates` stays the last owner section.
   grant,
   // Last, after every owner section there was: the owner-section list is filtered from this one,

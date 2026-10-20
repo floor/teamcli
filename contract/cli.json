@@ -4,6 +4,49 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "ack",
+      "positionals": [
+        {
+          "name": "id",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team ack <id> [--json]"
+      ],
+      "who": {
+        "gate": "owner-or-own-team",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a seat of this team"
+        },
+        "why": "marking a message read is the record's addressee on its own pane, or the owner: the signed receipt is the same gate team messages writes, and it never reaches another seat's folder"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -221,6 +264,91 @@
         }
       ],
       "hidden": false,
+      "name": "brief",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--apply",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "rollout",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "team-read",
+            "why": "the command's only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat's claim and its signed drop"
+          }
+        }
+      ],
+      "usage": [
+        "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "the rollout plan reads the team's seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner's alone, and --apply delivers the general seat brief to the team's live seats"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "broker",
       "positionals": [],
       "subcommands": [],
@@ -345,6 +473,73 @@
         }
       ],
       "hidden": false,
+      "name": "client",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--out",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "keygen",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team client keygen --out <dir> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "it writes a fresh app key pair into a directory the caller names, and reads no team file, seat or terminal: the key is the caller's own, and only the owner's signed grant makes it authoritative"
+          }
+        }
+      ],
+      "usage": [
+        "team client keygen --out <dir> [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller's own, and only the owner's signed grant makes it authoritative"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "commits",
       "positionals": [],
       "subcommands": [
@@ -409,6 +604,73 @@
       }
     },
     {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "config",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "keys",
+          "positionals": [
+            {
+              "name": "level",
+              "optional": true,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team config keys [<level>] [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the listing is the command's only verb and reads the registry only: no team file, seat or terminal is read"
+          }
+        }
+      ],
+      "usage": [
+        "team config keys [<level>] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read"
+      }
+    },
+    {
       "flags": [],
       "hidden": true,
       "name": "conformance-adapter",
@@ -418,6 +680,211 @@
       "who": {
         "gate": "any-caller",
         "why": "the hidden port answers classify and yaml requests on stdin: it reads no team file and asks for no caller"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "daemon",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--presence",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--root",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--watch",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "install",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "registering the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--presence",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--root",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--started-by",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--watch",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "run",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "starting the one machine daemon is the owner's, or the system service manager starting it in the owner's login session; a seat or a pane never starts it"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "status",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon status [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the status reading is one health probe over the machine socket and reads no team file and no secret"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "uninstall",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon uninstall [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way"
+          }
+        }
+      ],
+      "usage": [
+        "team daemon status [--json]",
+        "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]",
+        "team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]",
+        "team daemon uninstall [--json]"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "the one machine daemon is the owner's: install, uninstall and run are owner-only, and the system service manager's no-terminal start is the owner's own login session"
       }
     },
     {
@@ -469,6 +936,92 @@
       "who": {
         "gate": "owner-only",
         "why": "a standing grant with a command list, written against this map: the owner's"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "development-mode",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--show",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "local-fast|pr-per-change|off",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged"
+          }
+        }
+      ],
+      "usage": [
+        "team development-mode [--json]",
+        "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal"
       }
     },
     {
@@ -589,6 +1142,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--epoch",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--follow",
           "repeatable": false,
           "takesValue": false
@@ -636,7 +1195,7 @@
       "subcommands": [],
       "usage": [
         "team drops [--follow] [--json]",
-        "team drops --read --seat <seat> [--session <session>]"
+        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]"
       ],
       "who": {
         "gate": "seat-only",
@@ -722,9 +1281,21 @@
         },
         {
           "hidden": false,
+          "name": "--client",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--entity",
+          "repeatable": false,
+          "takesValue": true
         },
         {
           "hidden": false,
@@ -740,6 +1311,12 @@
         },
         {
           "hidden": false,
+          "name": "--inbox",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--json",
           "repeatable": false,
           "takesValue": false
@@ -747,6 +1324,12 @@
         {
           "hidden": false,
           "name": "--name",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--public-key",
           "repeatable": false,
           "takesValue": true
         },
@@ -780,7 +1363,8 @@
       "subcommands": [],
       "usage": [
         "team grant <seat> --scope <act,...> [--dry-run] [--json]",
-        "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]"
+        "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]",
+        "team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--inbox] [--json]"
       ],
       "who": {
         "gate": "owner-only",
@@ -1083,6 +1667,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--epoch",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--file",
               "repeatable": false,
               "takesValue": true
@@ -1117,7 +1707,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
+            "team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]"
           ],
           "who": {
             "gate": "any-caller",
@@ -1161,7 +1751,7 @@
       "usage": [
         "team mcp status [--json]",
         "team mcp doctor [--json]",
-        "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
+        "team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]"
       ],
       "who": {
         "gate": "any-caller",
@@ -1170,6 +1760,18 @@
     },
     {
       "flags": [
+        {
+          "hidden": false,
+          "name": "--ack",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--client",
+          "repeatable": false,
+          "takesValue": true
+        },
         {
           "hidden": false,
           "name": "--help",
@@ -1183,6 +1785,30 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--limit",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--request-id",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--since",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1194,7 +1820,8 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team messages [--json]"
+        "team messages [--json]",
+        "team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]"
       ],
       "who": {
         "gate": "seat-record",
@@ -1627,6 +2254,18 @@
       }
     },
     {
+      "flags": [],
+      "hidden": true,
+      "name": "presence-hook",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [],
+      "who": {
+        "gate": "any-caller",
+        "why": "the hidden hook stages one presence record under the project folder its own launch wrote into its argv: it reads no team file, no seat and no terminal, and its words are the launch's own"
+      }
+    },
+    {
       "flags": [
         {
           "hidden": false,
@@ -1822,6 +2461,229 @@
       "who": {
         "gate": "any-caller",
         "why": "it reads the project registry and changes nothing, from any folder"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "queue",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--assignee",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--id",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--priority",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "add",
+          "positionals": [
+            {
+              "name": "title",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "adding to the local queue is the owner's or a declared seat's; the module refuses a seat the state cannot place on its recorded pane"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--commit",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--version",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "install",
+          "positionals": [
+            {
+              "name": "task",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue install <task> --commit <sha> [--version <version>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "why": "an install is the owner's, or the one seat the file designates with an approved `installer:` on its recorded pane; the module refuses every other seat"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "list",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team queue list [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the listing reads the checkout and the queue only, and asks for no session and no terminal"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--commit",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--version",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "ready",
+          "positionals": [
+            {
+              "name": "task",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queue ready <task> --commit <sha> [--version <version>] [--json]"
+          ],
+          "who": {
+            "gate": "seat-only",
+            "why": "a green slice ready is a declared seat's own record of the task its live lease holds, on the pane the state records for it; the owner is not admitted"
+          }
+        }
+      ],
+      "usage": [
+        "team queue add <title> --id <id> [--assignee <name>] [--priority <value>] [--json]",
+        "team queue list [--json]",
+        "team queue ready <task> --commit <sha> [--version <version>] [--json]",
+        "team queue install <task> --commit <sha> [--version <version>] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "list reads the local task queue from the checkout and asks no caller; add is the owner's or a seat of this team's, on the pane the state records for it"
       }
     },
     {
@@ -2348,6 +3210,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--client",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -2376,7 +3244,12 @@
       "positionals": [
         {
           "name": "name",
-          "optional": false,
+          "optional": true,
+          "repeatable": false
+        },
+        {
+          "name": "client-grant-id",
+          "optional": true,
           "repeatable": false
         }
       ],
@@ -2469,7 +3342,9 @@
       "usage": [
         "team revoke grant [--dry-run] [--json]",
         "team revoke delegate <session/pane> [--dry-run] [--json]",
-        "team revoke <name> [--dry-run] [--json]"
+        "team revoke <name> [--dry-run] [--json]",
+        "team revoke <client-grant-id> [--json]",
+        "team revoke --client <client-grant-id> [--json]"
       ],
       "who": {
         "gate": "owner-only",
@@ -2519,6 +3394,271 @@
       "who": {
         "gate": "admission",
         "why": "a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "seat",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "add",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat add <seat> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the `add` row for a seat: adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "remove",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat remove <seat> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the `remove` row for a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "rename",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "name",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the `rename` row for a seat: the owner or `leads` for its own team"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "restart",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team seat restart <seat> [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "why": "the `restart` row for a seat: as `start`, the owner or `leads` for its own team"
+          }
+        }
+      ],
+      "usage": [
+        "team seat <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat add <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat remove <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat restart <seat> [--session <name>] [--file <path>] [--json]",
+        "team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "one seat as an object — its settings, its status row and its newest session: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` and `--session` are the owner's alone, and the lifecycle verbs gate as the commands they run (their rows below)"
       }
     },
     {
@@ -2582,7 +3722,19 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--brief",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--channel",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--client",
           "repeatable": false,
           "takesValue": true
         },
@@ -2618,6 +3770,12 @@
         },
         {
           "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--list",
           "repeatable": false,
           "takesValue": false
@@ -2631,6 +3789,12 @@
         {
           "hidden": false,
           "name": "--record",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--request-id",
           "repeatable": false,
           "takesValue": true
         },
@@ -2665,12 +3829,20 @@
           "name": "message",
           "optional": true,
           "repeatable": false
+        },
+        {
+          "name": "address",
+          "optional": true,
+          "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
         "team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]",
         "team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]",
+        "team send <seat> --brief <path> [--wait] [--timeout <s>] [--json] [--dry-run]",
+        "team send --client <grant-file> --key <key-file> <address> [--request-id <id>] <message>",
+        "team send --client <grant-file> --key <key-file> <address> [--request-id <id>] --file <path>",
         "team send --confirm <id> [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]",
@@ -2730,6 +3902,178 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "settings",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "key",
+              "optional": true,
+              "repeatable": false
+            },
+            {
+              "name": "value",
+              "optional": true,
+              "repeatable": false
+            },
+            {
+              "name": "key=value",
+              "optional": true,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]",
+            "team settings set <seat> <key=value> [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "recording a seat's setting is the owner's: a lead's write within its role policy waits for the role policy the approved minimum leaves out, and this build refuses rather than admit a write no policy authorized"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "unset",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "key",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing a seat's setting is the owner's by the same gate as set: a lead's write within its role policy is not shipped yet, and this build refuses rather than admit one"
+          }
+        }
+      ],
+      "usage": [
+        "team settings <seat> [--file <path>] [--json]",
+        "team settings set <seat> <key> <value> [--file <path>] [--dry-run] [--json]",
+        "team settings set <seat> <key=value> [--dry-run] [--json]",
+        "team settings unset <seat> <key> [--file <path>] [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "one seat's settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner's alone, and set and unset are the owner's outright (their rows below)"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--all",
           "repeatable": false,
           "takesValue": false
@@ -2781,6 +4125,208 @@
       "who": {
         "gate": "seat-record",
         "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--rule",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "swap",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "cancel",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team swap cancel <seat> [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "cancelling a queued swap is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, through `mayChangeTeamVerdict`"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "now",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team swap now <seat> [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "terminal": {
+              "where": "a terminal outside herdr or its own seat",
+              "who": "the owner"
+            },
+            "why": "forcing a swap is the owner's word, from a terminal outside herdr or its own seat"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--to",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "queue",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team swap queue <seat> [--to <target>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "queueing a swap is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, through `mayChangeTeamVerdict`"
+          }
+        }
+      ],
+      "usage": [
+        "team swap [--file <path>] [--json]",
+        "team swap --rule [--file <path>] [--json]",
+        "team swap queue <seat> [--to <target>] [--file <path>] [--json]",
+        "team swap now <seat> [--file <path>] [--json]",
+        "team swap cancel <seat> [--file <path>] [--json]",
+        "team swap --run [--file <path>] [--json]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "the view and `--rule` read is the team's: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call"
       }
     },
     {

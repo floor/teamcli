@@ -22,11 +22,11 @@ import { readScreen, type Screen } from '../../src/watch/screen.ts';
 import { beginSession, readStoreSessions, sessionsPath } from '../../src/sessions/registry.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
-import { generalBriefId } from '../../src/launch/general-brief.ts';
+import { GENERAL_BRIEF_SHA256, currentBriefClaim, generalBriefBody, generalBriefId } from '../../src/launch/general-brief.ts';
 import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
-const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9, pressure: 'normal' };
 const FILE = ['--file', '.agents/team.yaml'];
 const NOW = new Date('2026-10-03T14:02:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -1477,10 +1477,38 @@ describe('team up, live', () => {
   /** The seats the fixture's file declares: its own four, and the counted second deepseek. */
   const BRIEFED_SEATS = ['claude-coordinator-acme', 'codex-acme', 'deepseek-acme', 'deepseek-acme-2', 'grok-acme'];
 
-  /** The session's `briefs` map as the launch's one delivery leaves it: one entry per seat, the
-   *  id the brief's text derives, and the run's own time. */
+  /** The session's `briefs` map as a session delivered under this build leaves it: a current
+   *  claim per seat, its id derived from the text, and the run's own time. */
   function briefs() {
-    return Object.fromEntries(BRIEFED_SEATS.map((seat) => [seat, { id: generalBriefId(), at: NOW.toISOString() }]));
+    const incarnation = 'inc_0123456789ab';
+    const epoch = 'run_0123456789ab';
+    const id = generalBriefId(incarnation, generalBriefBody());
+    return Object.fromEntries(BRIEFED_SEATS.map((seat) => [seat, {
+      id,
+      at: NOW.toISOString(),
+      incarnation,
+      epoch,
+      sha256: GENERAL_BRIEF_SHA256,
+      attempt: 0,
+      stage: 'ready' as const,
+    }]));
+  }
+
+  /** The scene's state after the run: the incident seat's own record is held still, and every
+   *  seat holds a current claim — a delivery mints a fresh lifetime, so the claims are read as
+   *  claims rather than compared byte for byte. */
+  function expectStateHeld(): void {
+    const after = JSON.parse(readFileSync(join(root, '.agents', 'team.state.json'), 'utf8')) as {
+      sessions: Record<string, { seats: unknown; worktrees: unknown; watch: unknown }>;
+    };
+    const expected = JSON.parse(JSON.stringify(namedState())) as { sessions: Record<string, { seats: unknown; worktrees: unknown; watch: unknown }> };
+    expect(after.sessions['acme-web']?.seats).toEqual(expected.sessions['acme-web']?.seats);
+    expect(after.sessions['acme-web']?.worktrees).toEqual(expected.sessions['acme-web']?.worktrees);
+    expect(after.sessions['acme-web']?.watch).toEqual(expected.sessions['acme-web']?.watch);
+    const claims = readState(join(root, '.agents')).sessions['acme-web']?.briefs ?? {};
+    for (const seat of BRIEFED_SEATS) {
+      expect(currentBriefClaim(claims[seat])).not.toBeNull();
+    }
   }
 
   function namedState() {
@@ -1533,7 +1561,7 @@ describe('team up, live', () => {
     );
     expect(sent).toEqual([]);
     expect(made.closes).toEqual([]);
-    expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
+    expectStateHeld();
   });
 
   test("the incident's other face: a box holding the CLI's own exit text is named, not typed onto", async () => {
@@ -1556,7 +1584,7 @@ describe('team up, live', () => {
     );
     expect(sent).toEqual([]);
     expect(made.closes).toEqual([]);
-    expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
+    expectStateHeld();
   });
 
   test('a named seat whose box is empty and idle is delivered to on the next up', async () => {
@@ -1654,7 +1682,7 @@ describe('team up, live', () => {
     // key — the box is read again after it, to the deadline, and nothing else is ever typed.
     expect(sent).toEqual(['Enter']);
     expect(again.closes).toEqual([]);
-    expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
+    expectStateHeld();
     const enter = calls.indexOf('pressEnter w2:p1');
     expect(enter).toBeGreaterThan(-1);
     expect(calls.slice(0, enter + 1)).toEqual([
@@ -1994,7 +2022,7 @@ describe('team up, live', () => {
     await approve();
     const cases: { machine: Machine; text: string }[] = [
       { machine: { ...fine, memoryFree: 10 }, text: 'free memory is 10%, below 25%' },
-      { machine: { ...fine, swapFree: 1.1e9 }, text: 'free swap is 1.1 GB, below 2.0 GB' },
+      { machine: { ...fine, pressure: 'critical' }, text: 'memory pressure is critical' },
       { machine: { ...fine, diskFree: 5e9 }, text: 'free disk is 5.0 GB, below 10.0 GB' },
     ];
     for (const item of cases) {
@@ -2013,19 +2041,19 @@ describe('team up, live', () => {
     await approve();
     const made = world();
     const io = testIo(root, { kind: 'owner' });
-    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 };
+    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9, pressure: 'critical' };
     expect(await runUp(FILE, io, sources({ machine: () => machine }, made))).toBe(1);
-    expect(io.err).toContain('free swap is 1.2 GB, below 2.0 GB');
+    expect(io.err).toContain('memory pressure is critical');
     const lines = readFileSync(join(root, '.agents', 'team.log'), 'utf8').split('\n')
-      .filter((line) => line.includes('refused: free swap is '));
+      .filter((line) => line.includes('refused: memory pressure is critical'));
     expect(lines).toEqual([
-      '2026-10-03T14:02:00.000Z up [owner] refused: free swap is 1.2 GB, below 2.0 GB — readings: load 1.0/core, memory 69%, disk 200000000000 B free, swap used 7000000000 B of 8200000000 B (free 1200000000 B)',
+      '2026-10-03T14:02:00.000Z up [owner] refused: memory pressure is critical — readings: load 1.0/core, memory 69%, disk 200000000000 B free, pressure critical, swap used 7000000000 B of 8200000000 B (free 1200000000 B)',
     ]);
   });
 
   test('a caller refused before the gate writes nothing, and a dry run writes nothing', async () => {
     await approve();
-    const refusing = { ...fine, swapFree: 1.2e9 };
+    const refusing = { ...fine, pressure: 'critical' as const };
     // A seat may not run `up`; the machine gate below the caller gate still reads and refuses —
     // and this call leaves the files as they were, so the log gains nothing.
     const seat = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1' });
@@ -2036,7 +2064,7 @@ describe('team up, live', () => {
     // A dry run decides nothing — its refused run exits as the real one, and it writes nothing.
     const dry = testIo(root, { kind: 'owner' });
     expect(await runUp(['--dry-run', ...FILE], dry, sources({ machine: () => refusing }, world()))).toBe(1);
-    expect(dry.out).toContain('! up would refuse: free swap is 1.2 GB, below 2.0 GB');
+    expect(dry.out).toContain('! up would refuse: memory pressure is critical');
     log = existsSync(join(root, '.agents', 'team.log')) ? readFileSync(join(root, '.agents', 'team.log'), 'utf8') : '';
     expect(log).not.toContain('readings:');
   });
@@ -2064,7 +2092,7 @@ describe('team up, live', () => {
       // The sentence byte for byte; the stamp is the run's own clock, so only its shape is pinned.
       const [stamp, ...rest] = line.split(' ');
       expect(stamp).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
-      expect(rest.join(' ')).toBe('up [owner] refused: swap grew by 2.0 GB in 10 minutes, above 1.0 GB — readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 3000000000 B of 9000000000 B (free 8000000000 B)');
+      expect(rest.join(' ')).toBe('up [owner] refused: swap grew by 2.0 GB in 10 minutes, above 1.0 GB — readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure normal, swap used 3000000000 B of 9000000000 B (free 8000000000 B)');
     }
   });
 
@@ -2072,14 +2100,14 @@ describe('team up, live', () => {
     await approve();
     const made = world();
     const io = testIo(root, { kind: 'owner' });
-    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 };
+    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9, pressure: 'critical' };
     // The approval wrote its own team.log line; replace the file with a directory, so the
     // readings write can only fail — and the command's own work must be untouched by the log's
     // trouble: the refusal prints, the exit is the refusal's.
     rmSync(join(root, '.agents', 'team.log'), { force: true });
     mkdirSync(join(root, '.agents', 'team.log'), { recursive: true });
     expect(await runUp(FILE, io, sources({ machine: () => machine }, made))).toBe(1);
-    expect(io.err).toContain('free swap is 1.2 GB, below 2.0 GB');
+    expect(io.err).toContain('memory pressure is critical');
     expect(made.starts).toBe(0);
   });
 
@@ -2106,6 +2134,14 @@ describe('team up, live', () => {
     const made = world();
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ machine: () => fine }, made))).toBe(0);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
+  });
+
+  test('free swap under the file does not refuse up on its own', async () => {
+    await approve();
+    const made = world();
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(FILE, io, sources({ machine: () => ({ ...fine, swapFree: 1.2e9 }) }, made))).toBe(0);
     expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer', 'deepseek-acme-2 · implementer', watchLabel('acme-web')]);
   });
 

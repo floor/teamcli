@@ -10,17 +10,27 @@ import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive } from '../dev_mode.ts';
+import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
+import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
+import { daemonHealth } from '../daemon/health.ts';
+import type { DaemonHealth } from '../daemon/health.ts';
+import { daemonNotes, daemonReading } from '../daemon/health_display.ts';
+import { hostedWatchNotes } from '../daemon/watch_display.ts';
+import { pendingGreenSlices } from '../tasks/green-slices.ts';
+import { idleWorkReport } from '../watch/idle-work.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type SessionState } from '../state.ts';
+import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type QueuedSwap, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import type { SeatStateWord, StateSource } from '../labels/state.ts';
+import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
+import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import {
@@ -49,6 +59,7 @@ import { realSources as realProjectSources, type ProjectSources } from './projec
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
+import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 
@@ -73,6 +84,14 @@ export type StatusSources = {
   alive?(pid: number): boolean;
   /** The approved pane's read gate's own reads; the real ones when absent. */
   gate?: DelegateSources;
+  /** The idle-with-work snapshot, from the watch. Read-only; absent when no producer is wired, and
+   *  a test stands in for it. */
+  idleWork?(input: IdleWorkInput): IdleWorkReport;
+  /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
+  pendingGreen?(dir: string): PendingGreenSlice[];
+  /** The machine daemon's one health reading, probed once per run at this boundary. Absent in a
+   *  test that does not stand one in, so its scenes read no socket. */
+  daemonHealth?(home: string): Promise<DaemonHealth>;
 };
 
 /**
@@ -84,6 +103,15 @@ export function standingSource(home: string): StatusSources['standing'] {
 }
 
 export const realSources: StatusSources = {
+  // The watch's own read-only snapshot, the same function its dispatcher uses, so who is idle and
+  // what is takeable cannot differ between the two readers.
+  idleWork: idleWorkReport,
+  // The green journal's own pending reader, the same function the watch uses: a corrupt journal
+  // throws, and the presentation names that read as refused rather than as no ready slice.
+  pendingGreen: pendingGreenSlices,
+  // The daemon's own health probe: it reads the state record and asks the socket once. It never
+  // throws and never waits past its timeout, so an unreadable machine is a reading, not a crash.
+  daemonHealth,
   live(session, team, state) {
     const running = sessionRunning(session);
     if (running === null) return null;
@@ -164,6 +192,11 @@ export interface StatusJson {
      *  `state` above keeps its published meaning — the comparison's phrase about the record. */
     seat_state?: SeatStateWord;
     seat_state_source?: StateSource;
+    /** The native projection behind the reading, canonical word and provenance kept beside the
+     *  legacy words; `live` false is last known, shown as itself. */
+    seat_presence?: PresenceObservation;
+    /** The projection exists but this build cannot read it: unknown, from presence. */
+    seat_presence_unreadable?: true;
     /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
      *  as not working (the table's `(blind)`). */
     blind?: true;
@@ -173,6 +206,12 @@ export interface StatusJson {
     start_cwd?: string;
   }>;
   notes: string[];
+  /** The idle-with-work snapshot, when the watch provides one. */
+  idle_work?: IdleWorkReport;
+  /** Ready-but-not-installed slices, when the green journal was read. */
+  green_slices?: PendingGreenSlice[];
+  /** Why the green journal could not be read; never rendered as an empty list. */
+  green_notice?: string;
   differences: Array<{
     what: string;
     repair: string;
@@ -193,6 +232,11 @@ export interface StatusJson {
     at: string;
     pid?: number;
     note?: string;
+  }>;
+  /** The swaps the project waits on (`team swap`), one entry per seat, in seat order. */
+  swaps?: Array<{
+    seat: string;
+    swap: QueuedSwap;
   }>;
 }
 
@@ -331,11 +375,29 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     dialogsTrustInForce(sources.home ?? homedir(), root, now),
   );
   const all = args.flags.has('all');
+  // One probe of the machine daemon for the whole run: the line below, the document's `daemon`
+  // field and the seats' presence qualification all come from the same snapshot, so they cannot
+  // disagree. No second probe, no server, and no exit change — the reading is a fact, not a
+  // verdict.
+  const health = sources.daemonHealth === undefined
+    ? null
+    : await sources.daemonHealth(sources.home ?? homedir());
+  // Whether the seats' presence projections may be called live: only a fresh route verdict that
+  // says serving and healthy for this session. Default closed — a persisted status word or a
+  // health answer without a verdict proves nothing.
+  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
+  // The same fresh answer's per-seat verdicts: when the route carries them, a seat is live only
+  // by its own serving entry whose sampled binding matches the seat state's recorded one.
+  const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
   const registryRows = all || json
-    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session })
+    ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, {
+        project: team.project, root, home: sources.home, stateDir: dir, session,
+        presenceChannelHealthy: presenceHealthy,
+        ...(presenceSeats === undefined ? {} : { presenceSeats }),
+      })
     : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
   // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
@@ -351,6 +413,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The pause stands above both: it is the one note that says why no seat takes work.
   const pause = whole.pause;
   if (pause) comparison.notes.unshift(pauseText(pause));
+  // The swaps this project waits on, in seat order: the same line `team swap` prints, so the
+  // reading says what each one waits for before the proc records below.
+  const swaps = queuedSwaps(whole);
+  for (const [seat, held] of swaps) comparison.notes.push(`swap ${swapLine(seat, held, now)}`);
   // What the seats recorded with `team proc add`: one note per live process, read the same way
   // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
   // write to clear. The reading is the note and the document, one derivation for both.
@@ -368,7 +434,35 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   }
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides rows fold into quiet notes — a team running so does not take the owner step they
-  // name — and the policy, not the variable, decides once a value governs.
+  // name — and the policy, not the variable, decides once a value governs. A machine record
+  // stands above both, and its own line names the mode, the moment and the owner provenance.
+  const machineMode = sources.home !== undefined ? readDevelopmentMode(sources.home) : null;
+  const machineNote = machineMode === null ? null : developmentModeNote(machineMode);
+  if (machineNote !== null) comparison.notes.push(machineNote);
+  // Idle with work and ready-but-uninstalled slices: one read each, notes only, no exit change.
+  // The snapshot always exists once the watch provides one (the default local queue counts as a
+  // source); the green read keeps a corrupt journal a named refusal rather than an empty list.
+  const idleWork = sources.idleWork?.({
+    root,
+    team,
+    state,
+    live,
+    now,
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    // The project's records, not one session's: a paused team claims nothing and a seat holding
+    // a queued swap is not an idle worker.
+    pause: whole.pause ?? null,
+    swaps: Object.keys(whole.swaps ?? {}),
+  });
+  if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
+  const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
+  if (green !== null) comparison.notes.push(...greenNotes(green));
+  if (health !== null) {
+    comparison.notes.push(...daemonNotes(health));
+    // The hosted watches that same reading carries: one plain line per watched route, and a
+    // blocked outbound gate said as blocked — never as enforcing.
+    comparison.notes.push(...hostedWatchNotes(health, now));
+  }
   const record = approvalAndOverrideRows(
     standing.kind === 'legacy' || standing.kind === 'refused' ? notInForce(standing) : null,
     overrides,
@@ -392,7 +486,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ...rulesFileDifferences(standing, team, root, sources.home),
     // A seat whose reading is blind — unknown past the blind threshold — counts as
     // not working, and is a must-fix here exactly as it is in `team check`.
-    ...blindDifferences(team, state, live, comparison, now, hold !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
+    ...blindDifferences(team, state, live, comparison, now, hold !== null, {
+      project: team.project, root, home: sources.home, stateDir: dir, session,
+      presenceChannelHealthy: presenceHealthy,
+      ...(presenceSeats === undefined ? {} : { presenceSeats }),
+    }),
   ]);
 
   const visibleRows = all
@@ -419,12 +517,18 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           pane: row.pane,
           ...(extra ? { launch_line: extra.launch_line } : {}),
           ...(found ? { seat_state: found.state, seat_state_source: found.state_source } : {}),
+          ...(found?.presence !== undefined ? { seat_presence: found.presence } : {}),
+          ...(found?.presence_unreadable === true ? { seat_presence_unreadable: true as const } : {}),
           ...(found?.blind ? { blind: true as const } : {}),
           ...(extra?.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
         };
       }),
       notes: comparison.notes,
+      ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
+      ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
+      ...(green?.kind === 'refused' ? { green_notice: green.why } : {}),
+      ...(health !== null ? { daemon: daemonReading(health) } : {}),
       differences: comparison.differences.map(toJsonDifference),
       summary: summaryCounts(comparison.differences),
       notice: current.notice ?? null,
@@ -432,6 +536,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       ...(hold ? { hold } : {}),
       ...(pause ? { pause } : {}),
       ...(procs.length ? { procs } : {}),
+      ...(swaps.length ? { swaps: swaps.map(([seat, swap]) => ({ seat, swap })) } : {}),
     });
   } else {
     const style = ttyStyle(io);

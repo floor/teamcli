@@ -19,17 +19,21 @@ import { listUnread, MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, writeRecord } from '../src/send/record.ts';
+import { readTriggerLine } from '../src/send/native.ts';
+import { readHistory } from '../src/send/history.ts';
+import { readRecord, signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, verifyRecord, writeRecord } from '../src/send/record.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import {
   cliHookSettingsPath, cliHookStatePath, dropReadRunner, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
+import { presencePaths } from '../src/daemon/presence/spool.ts';
+import type { PresenceSeatsRead } from '../src/labels/presence.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
 import type { Comparison, Live } from '../src/status/compare.ts';
-import { testIo } from './helpers.ts';
+import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 const ago = (seconds: number): string => new Date(NOW.getTime() - seconds * 1000).toISOString();
@@ -249,8 +253,52 @@ seats:
     expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toContain('"state":"working"');
   });
 
-  test('a plain send types nothing, and the turn-start read delivers it: receipt signed before the body', async () => {
+  test('a plain send types one trigger, and the turn-start read delivers it: receipt signed before the body', async () => {
     const command = dropCommand(install());
+    const io = testIo(project, { kind: 'owner' });
+    const typed: { pane: string; text: string }[] = [];
+    const host: SendHost = {
+      agents: () => [{ name: SEAT, pane: 'w1:p1', cli: 'claude' }],
+      processInfo: () => ({ shell: 1, foreground: [2] }),
+      socketsDir: join(base, 'sockets'),
+      deliver: async () => {
+        throw new Error('the inbox leg must not dial: this inbox has no listener');
+      },
+      native: {
+        typeText: (_session, pane, text) => {
+          typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: () => true,
+        status: () => 'idle',
+        wait: async () => {},
+        paneText: () => '',
+      },
+      now: () => NOW,
+      home,
+    };
+
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
+
+    // The default walk takes the typed leg: the seat's own drop-read trigger is typed once, and
+    // the sender's side has only the unconfirmed ending until the seat's own read writes the
+    // receipt. The typed leg wrote the record the trigger reads.
+    expect(io.out).toContain('sent (unconfirmed)');
+    expect(typed).toEqual([{ pane: 'w1:p1', text: readTriggerLine(SEAT, SESSION, { seat: 'owner', team: 'acme' }) as string }]);
+    const dir = dropsAt();
+    const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
+    if (id === undefined) throw new Error('the send wrote no drop');
+
+    // The end-to-end proof: the installed hook command reads the record, and its body reaches
+    // the turn only after a signed read receipt is on disk.
+    expect(landing(run(command))).toBe(`${HEADER}hello`);
+    expectReadReceipt(dir, id);
+    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
+    // The receipt is what says it was handed over: the next turn prints nothing.
+    expect(run(command)).toBe('');
+  }, 60_000);
+
+  test('a seat the session does not list takes the default walk to the drop leg: signed record, sent (unconfirmed), nothing typed', async () => {
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
     const host: SendHost = {
@@ -276,22 +324,68 @@ seats:
 
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
 
-    // The default walk takes the drop leg: nothing is typed, and the sender's side has only the
-    // unconfirmed ending until the seat's own watcher reads the record.
+    // The typed leg found no live agent, so it typed nothing and handed the send to the drop leg
+    // behind it: the file is the channel, and the sender's side knows only the unconfirmed end.
     expect(io.out).toContain('sent (unconfirmed)');
     expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
     if (id === undefined) throw new Error('the send wrote no drop');
+    // The record is signed and bound to this seat, checkout and session — the seat's own read
+    // would verify it and deliver the body.
+    const held = readRecord(join(dir, id), id);
+    const key = messageKeyState(home);
+    if (!held.ok || held.record === null || key.kind !== 'key') throw new Error('the drop record does not read');
+    expect(verifyRecord(held.record, key.key)).toBe(true);
+    expect(held.record.payload).toMatchObject({ to: SEAT, session: SESSION });
+    expect(realpathSync(held.record.payload.root)).toBe(realpathSync(project));
+    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home).map((one) => one.id)).toEqual([id]);
+    // The drop was not read, and nothing claims it was.
+    expect(existsSync(receiptPath(dir, id))).toBe(false);
+    // The reason the typed leg passed rides the one history line the drop leg wrote.
+    const history = readHistory('acme', project, home);
+    if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
+    const entry = history.entries.filter((one) => one.id === id).at(-1);
+    if (entry === undefined) throw new Error('the send wrote no history line');
+    expect(entry.outcome).toBe('sent (unconfirmed)');
+    expect(entry.via).toBe('drop');
+    const reason = (entry.failed ?? []).find((one) => one.startsWith('typed: '));
+    expect(reason).toBe('typed: no live agent carries that name in the session');
+  });
 
-    // The end-to-end proof: the installed hook command reads the record, and its body reaches
-    // the turn only after a signed read receipt is on disk.
-    expect(landing(run(command))).toBe(`${HEADER}hello`);
-    expectReadReceipt(dir, id);
-    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
-    // The receipt is what says it was handed over: the next turn prints nothing.
-    expect(run(command)).toBe('');
-  }, 60_000);
+  test('a [typed]-only order with no live agent is unreachable, and no drop is written', async () => {
+    const io = testIo(project, { kind: 'owner' });
+    const typed: { pane: string; text: string }[] = [];
+    const host: SendHost = {
+      agents: () => [],
+      processInfo: () => ({ shell: 1, foreground: [2] }),
+      socketsDir: join(base, 'sockets'),
+      delivery: { seat: ['typed'] },
+      deliver: async () => {
+        throw new Error('the typed leg must not dial a socket');
+      },
+      native: {
+        typeText: (_session, pane, text) => {
+          typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: () => true,
+        status: () => 'idle',
+        wait: async () => {},
+        paneText: () => '',
+      },
+      now: () => NOW,
+      home,
+    };
+
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(1);
+
+    // Nothing stands behind the typed leg: no live agent ends the walk unreachable, never typed
+    // blind and never quietly downgraded to a drop file.
+    expect(io.err).toContain('unreachable: no live agent carries that name in the session');
+    expect(typed).toEqual([]);
+    expect(existsSync(dropsAt()) ? readdirSync(dropsAt()).filter((name) => MESSAGE_ID.test(name)) : []).toEqual([]);
+  });
 
   test('a waiting record is handed to the turn once, and its receipt is written beside it at 0600', () => {
     const dir = dropsAt();
@@ -361,13 +455,13 @@ seats:
     expect(landing(run(command))).toBe(`${body}\nsecond line`);
   }, 30_000);
 
-  test('two messages land as two paragraphs, oldest first', () => {
+  test('two messages land as two paragraphs, newest first', () => {
     const one = plant(ID1, 'first');
     plant(ID2, 'second');
     utimesSync(one, new Date(NOW.getTime() - 2_000), new Date(NOW.getTime() - 2_000));
     utimesSync(join(dropsAt(), ID2), new Date(NOW.getTime() - 1_000), new Date(NOW.getTime() - 1_000));
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe('first\n\nsecond');
+    expect(landing(run(command))).toBe('second\n\nfirst');
   }, 30_000);
 
   test('one turn reads ten messages at most, and the rest wait for the next', () => {
@@ -610,7 +704,15 @@ describe('the reading the hook feeds', () => {
 describe('a registry row reads the state file', () => {
   const SESSION = 'teamcli';
 
-  function row(options: { cli?: string; stateDir?: string; session?: string }): SeatRegistryRow {
+  function row(options: {
+    cli?: string;
+    stateDir?: string;
+    session?: string;
+    binding?: string;
+    channelHealthy?: boolean;
+    presenceSeats?: PresenceSeatsRead;
+    screen?: 'idle' | 'permission';
+  }): SeatRegistryRow {
     const team = {
       project: 'acme',
       seats: [{ role: 'implementer', name: 'worker', cli: options.cli ?? 'claude-code', model: 'Claude Opus', version: '5.5', launch: CLAUDE, cwd: '.' }],
@@ -626,7 +728,19 @@ describe('a registry row reads the state file', () => {
       version: '5.5',
       launch_line: CLAUDE,
     };
-    const live: Live = { running: true, agents: [], workspaces: [], screens: {} };
+    if (options.binding !== undefined) state.seats.worker.presence_binding = options.binding;
+    const agents = options.screen === undefined
+      ? []
+      : [{ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null }];
+    const screens: Record<string, string> = {};
+    if (options.screen === 'idle') screens['w1:p1'] = CLAUDE_IDLE;
+    if (options.screen === 'permission') {
+      screens['w1:p1'] = readFileSync(
+        new URL('./fixtures/claude-code/2.1.289/permission-create-plain.txt', import.meta.url),
+        'utf8',
+      );
+    }
+    const live: Live = { running: true, agents, workspaces: [], screens };
     const comparison: Comparison = {
       rows: [{ name: 'worker', state: 'idle', model: 'Claude Opus', pane: 'w1:p1' }],
       differences: [],
@@ -637,6 +751,8 @@ describe('a registry row reads the state file', () => {
       root: base,
       ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
       ...(options.session !== undefined ? { session: options.session } : {}),
+      ...(options.channelHealthy !== undefined ? { presenceChannelHealthy: options.channelHealthy } : {}),
+      ...(options.presenceSeats !== undefined ? { presenceSeats: options.presenceSeats } : {}),
     });
     return rows[0]!;
   }
@@ -645,6 +761,100 @@ describe('a registry row reads the state file', () => {
     mkdirSync(join(dir, 'seat-state', session), { recursive: true, mode: 0o700 });
     writeFileSync(join(dir, 'seat-state', session, 'worker.json'), text);
   }
+
+  function writePresence(binding: string, state: 'working' | 'idle'): string {
+    const paths = presencePaths(dir, SESSION, 'worker');
+    if (paths === null) throw new Error('the scene names no presence folder');
+    mkdirSync(paths.root, { recursive: true });
+    const since = ago(5);
+    const id = `${since}-ab12cd34`;
+    writeFileSync(paths.current, JSON.stringify({
+      v: 1,
+      seq: 1,
+      id,
+      state,
+      source: 'runtime-hook',
+      event: state === 'working' ? 'turn-start' : 'turn-end',
+      binding,
+      since,
+      observedAt: since,
+    }));
+    return id;
+  }
+
+  /** The fresh per-seat answer for one serving runtime seat, naming the applied transition it
+   *  vouches for. */
+  function runtimeSeats(binding: string, appliedEventId: string): PresenceSeatsRead {
+    return {
+      kind: 'listed',
+      seats: new Map([['worker', { healthy: true, source: 'runtime', binding, appliedEventId }]]),
+    };
+  }
+
+  test('a presence projection under the recorded binding answers; a predecessor’s is invalid', () => {
+    const binding = 'prs_0123456789ab';
+    const applied = writePresence(binding, 'working');
+    // The fresh answer lists the seat as serving this binding and vouches for exactly this
+    // projection's transition: only then is the row live.
+    expect(row({ stateDir: dir, session: SESSION, binding, channelHealthy: true, presenceSeats: runtimeSeats(binding, applied) }))
+      .toMatchObject({
+        state: 'working',
+        state_source: 'presence',
+        blind: false,
+        presence: { state: 'working', source: 'runtime-hook', event: 'turn-start', live: true },
+      });
+    // The same qualified seat names another applied transition: the projection is this
+    // incarnation's, but not the transition the answer proved applied. Last known, never live.
+    expect(row({
+      stateDir: dir, session: SESSION, binding, channelHealthy: true,
+      presenceSeats: runtimeSeats(binding, `${ago(4)}-ffffffff`),
+    }))
+      .toMatchObject({
+        state: 'working',
+        state_source: 'presence',
+        presence: { state: 'working', source: 'runtime-hook', event: 'turn-start', live: false },
+      });
+    // No fresh channel health yet: the same projection is the runtime's last known word, still
+    // answering the row, marked not live. The screen and herdr never replace it.
+    expect(row({ stateDir: dir, session: SESSION, binding }))
+      .toMatchObject({ state: 'working', state_source: 'presence', presence: { live: false } });
+    // A projection a relaunch recorded since is another incarnation's. It is an existing
+    // projection, never genuine absence: the row is unknown from presence, and neither the
+    // screen nor herdr answers in its place. A qualified answer for the recorded binding does
+    // not change that: the fence is checked before any applied transition.
+    expect(row({
+      stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true,
+      presenceSeats: runtimeSeats('prs_ba9876543210', applied),
+    }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+    // The state records no binding at all: there is no fence to open, so the same answer.
+    expect(row({ stateDir: dir, session: SESSION }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+    // An idle prompt or a permission dialog does not answer in an invalid projection's place.
+    expect(row({
+      stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true,
+      presenceSeats: runtimeSeats('prs_ba9876543210', applied), screen: 'idle',
+    }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+    expect(row({ stateDir: dir, session: SESSION, screen: 'permission' }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+  });
+
+  test('with no projection at all, the labelled screen answers as before', () => {
+    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_0123456789ab', screen: 'idle' }))
+      .toMatchObject({ state: 'idle', state_source: 'cli' });
+    expect(row({ stateDir: dir, session: SESSION, screen: 'permission' }))
+      .toMatchObject({ state: 'blocked', state_source: 'cli' });
+  });
+
+  test('a projection this build cannot read is unknown from presence, never a screen guess', () => {
+    const paths = presencePaths(dir, SESSION, 'worker');
+    if (paths === null) throw new Error('the scene names no presence folder');
+    mkdirSync(paths.root, { recursive: true });
+    writeFileSync(paths.current, '{not json');
+    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_0123456789ab', channelHealthy: true }))
+      .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
+  });
 
   test('a fresh hook answers when the screen and herdr have nothing', () => {
     writeState(`{"state":"working","since":"${ago(5)}"}\n`);

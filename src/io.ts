@@ -8,6 +8,9 @@ export type Io = {
   cwd: string;
   env: Record<string, string | undefined>;
   stdinIsTTY: boolean;
+  /** Reads standard input to its end: what a lone `-` means where a body file is taken. Set by
+   *  tests; the process's own io leaves it out, and a command reads descriptor 0 instead. */
+  stdin?: () => string;
   /** Whether stdout is a terminal: only then does `up` or `add` draw a seat's provisional line.
    *  Absent counts as false — a caller that never reads it may leave it out. */
   stdoutIsTTY?: boolean;

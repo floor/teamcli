@@ -5,7 +5,7 @@
 // seat, a path — and never the tampered or refused content: the producer hands this module the
 // names only, and nothing here reads a body.
 //
-// Owner delivery is B2's own path (`src/bus/owner.ts`): the watch routes the event to `owner`,
+// Owner delivery has its own path (`src/bus/owner.ts`): the watch routes the event to `owner`,
 // rings the machine notification and writes one signed record in the owner's mailbox. Both
 // kinds are on the owner's immediacy list, so neither waits for a digest.
 //

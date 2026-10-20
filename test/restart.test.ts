@@ -13,9 +13,10 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { readAgents } from '../src/registry/agents.ts';
+import { findAgent, readAgents, recordAgentSession, registerAgent } from '../src/registry/agents.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalStanding } from '../src/store/store.ts';
@@ -72,6 +73,12 @@ seats:
     stopped: true
 `;
 
+// The live restart reading: the file asks for 0.5 GB free swap — which no longer refuses a
+// launch — and the OS's own pressure level is what the gate acts on.
+const MACHINE_YAML = TEAM_YAML.replace('workspace:\n', 'machine:\n  swap_free_min: 0.5GB\nworkspace:\n');
+const ROOMY: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 8e9, swapFree: 4e9, swapUsed: 4e9 };
+const TIGHT: Machine = { ...ROOMY, pressure: 'critical' };
+
 type Fixture = {
   base: string;
   root: string;
@@ -126,6 +133,7 @@ function makeHarness(
     pasteDrops?: boolean;
     closeFails?: boolean;
     doctorVersion?: string | null;
+    machine?: (root: string) => Machine;
   } = {},
 ): {
   sources: RestartSources;
@@ -267,6 +275,7 @@ function makeHarness(
     launch: downLaunch,
     upLaunch,
     doctor,
+    ...(opts.machine ? { machine: opts.machine } : {}),
   };
 
   return { sources, did };
@@ -881,5 +890,202 @@ describe('team restart <seat>', () => {
     assertJsonErrorShape(io.out, { id: 'restart.usage', messageContains: 'a seat name is required' });
     expect(io.out).not.toContain('Usage:');
     expect(USAGE).toContain('Exits 0 when the seat is restarted');
+  });
+});
+
+// ---- the seat's own recorded conversation ---------------------------------------------------
+//
+// The resume id comes from the two team-owned records agreeing — the agent registry's
+// `reach.agent_session` and the seat state's own — bound to this team, seat, agent, CLI and
+// herdr session. A record that does not agree is never resumed: the restart says why and
+// launches fresh, exactly as it did before the records were read.
+describe('team restart resumes the seat\'s own recorded session', () => {
+  function seeded(opts: { registry?: string; state?: string; cli?: string } = {}) {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+        ...(opts.state === undefined ? {} : { agent_session: opts.state }),
+      };
+    });
+    let agentId: string | undefined;
+    if (opts.registry !== undefined) {
+      agentId = registerAgent(fixture.home, {
+        name: 'worker',
+        signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+        lab: 'anthropic',
+        cli: opts.cli ?? 'claude-code',
+        launcher: null,
+        launch: 'claude --model claude-opus-5-5',
+        reach: {
+          team: teamIdOf(fixture.root),
+          seat: 'worker',
+          session: 'acme',
+          pane: 'pane-old',
+          address: null,
+          agent_session: opts.registry,
+        },
+        seat_handle: 'seat_0123456789ab',
+        mcp: [],
+        skills: [],
+        lifecycle: 'running',
+        by: 'team up',
+      }).id;
+    }
+    return { fixture, run: makeHarness(fixture), agentId };
+  }
+
+  test('both records agreeing on one id resume it on the new declaration', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    expect(io.err).toBe('');
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: resuming session ses_keep on the new declaration');
+    // The relaunch's herdr reading carried no id here: the registry keeps the one it held rather
+    // than clearing it, so the next restart can still bind the conversation.
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_keep');
+  });
+
+  test('a state naming another session is never resumed, and the run says why', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_other' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('team restart: worker: not resuming its recorded session (the seat state and the agent record name different sessions)');
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: not resuming its recorded session (the seat state and the agent record name different sessions)');
+  });
+
+  test('a record written by another CLI is not resumed', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', cli: 'codex' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('worker: not resuming its recorded session (the record ran codex, the seat now declares claude-code)');
+  });
+
+  test('a live pane running another conversation is never resumed', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    // The pane on the recorded endpoint says it is running a different conversation: resuming the
+    // recorded one would put two live copies of the seat's history beside each other.
+    const listed = run.sources.agents;
+    run.sources.agents = (session) => (listed(session) ?? []).map((agent) => (
+      agent.name === 'worker' && agent.pane === 'pane-old' ? { ...agent, session: 'ses_live' } : agent
+    ));
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
+  });
+
+  test('a record that changes between the caller\'s read and the run lock is not resumed', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    // A concurrent writer lands a new conversation after the caller's own read: the state and the
+    // registry now agree on another id. The run lock serializes the restart, and the binding is
+    // read again under it, so what launches is the fresh conversation the records now name — never
+    // the id the caller saw a moment before. The writer lands on the run's second listing, after
+    // the caller's read and before the run lock's own.
+    const listed = run.sources.agents;
+    let calls = 0;
+    let moved = false;
+    run.sources.agents = (session) => {
+      calls += 1;
+      if (calls === 2) {
+        moved = true;
+        updateState(fixture.dir, (state) => {
+          const seat = state.sessions.acme?.seats.worker;
+          if (seat) seat.agent_session = 'ses_new';
+        });
+        recordAgentSession(fixture.home, agentId!, 'ses_new');
+      }
+      return listed(session);
+    };
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(moved).toBe(true);
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('worker: not resuming its recorded session (the seat record changed before the launch)');
+  });
+
+  test('a dry run prints the resume the launch would use, and writes no log line', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--dry-run'], io, run.sources)).toBe(0);
+    expect(io.out).toContain('--resume ses_keep');
+    expect(io.out).toContain('dry run: nothing was run');
+    const logged = existsSync(join(fixture.dir, 'team.log')) ? readFileSync(join(fixture.dir, 'team.log'), 'utf8') : '';
+    expect(logged).not.toContain('resuming session');
+    expect(run.did.created).toBe(0);
+  });
+});
+
+describe('team restart machine atomicity', () => {
+  test('a machine refusal under the run lock leaves the running seat and its pane untouched', async () => {
+    const fixture = makeFixture(MACHINE_YAML);
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    // The live shape: the preflight reading passes, and by the time the run holds the lock
+    // the OS reports critical memory pressure. The refusal must land before the stop, so the
+    // seat keeps its pane and nothing is typed, closed or created.
+    const readings = [ROOMY, TIGHT];
+    let calls = 0;
+    const { sources, did } = makeHarness(fixture, {
+      machine: () => readings[Math.min(calls++, readings.length - 1)]!,
+    });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: memory pressure is critical\n');
+    expect(calls).toBe(2);
+    expect(did.typed).toEqual([]);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    expect(did.runs).toEqual([]);
+    const after = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-old');
+  });
+
+  test('a reading that goes bad after the stop is never taken, so the stopped seat is not stranded', async () => {
+    const fixture = makeFixture(MACHINE_YAML);
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    // The reading is honest up to the stop and bad after it: the old workspace is closed and the
+    // OS now reports critical memory pressure. The launch takes no reading after the stop, so the
+    // decision made before it stands and the seat comes back up.
+    const reads: number[] = [];
+    const { sources, did } = makeHarness(fixture, {
+      machine: () => {
+        reads.push(did.closed.length);
+        return did.closed.length === 0 ? ROOMY : TIGHT;
+      },
+    });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    // Both readings were taken while the old workspace was still open; none after the close.
+    expect(reads).toEqual([0, 0]);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(did.runs.join('\n')).toContain('claude --model claude-opus-5-5');
+    const after = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-new');
   });
 });

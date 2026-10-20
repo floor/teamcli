@@ -1,20 +1,19 @@
 // The general seat brief: TeamCLI's built-in default, embedded in the package the way the
 // registered captures are, because a build ships dist/ only and must never read a documentation
-// checkout at runtime. The accepted text lives in the floor's documentation; this repository keeps
-// the embedded copy and its sha256, and no source path — the source is given to this script on the
-// command line, never written down.
+// checkout at runtime. The canonical source lives in this repository at docs/briefs/general.md;
+// the build ships the embedded copy and its sha256, and CI compares the two byte for byte.
 //
-//   bun run brief --write <source>       writes src/launch/general-brief-text.ts from a source copy
-//   bun run brief:check                  fails unless the embedded text hashes to its pinned value
+//   bun run brief --write                writes src/launch/general-brief-text.ts from docs/briefs/general.md
+//   bun run brief --write <source>       writes it from another copy of the same text
+//   bun run brief:check                  checks the pin and compares with docs/briefs/general.md
 //   bun run brief:check -- --source <source>
 //   TEAM_BRIEF_SOURCE=<source> bun run brief:check
-//                                        compares the embedded text with the source, byte for
-//                                        byte, and names the first line that differs
+//                                        compares the embedded text with that source instead,
+//                                        byte for byte, and names the first line that differs
 //
 // The source is markdown: an optional frontmatter block, then the brief's own text from its first
 // heading to the end of the file. The comparison is exact — no trimming, no rewrapping — so the
-// package carries the accepted text and nothing else. CI runs the pin; a machine that has the
-// source runs the comparison.
+// package carries the accepted text and nothing else.
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const textFile = join(root, 'src', 'launch', 'general-brief-text.ts');
+/** The canonical source this repository keeps; an importing machine may pass another copy. */
+const repoSource = join(root, 'docs', 'briefs', 'general.md');
 
 /** The brief's own text: what follows the source's frontmatter, from its first heading. */
 export function briefOf(source: string): string {
@@ -56,8 +57,8 @@ export function textModuleOf(text: string): string {
   ].join('\n');
 }
 
-/** Where the source is, from `--source <path>` or `TEAM_BRIEF_SOURCE`; undefined when neither
- *  gives one. An option with no path is the invocation's error, exit 2. */
+/** Where the source is: `--source <path>`, `TEAM_BRIEF_SOURCE`, or the repository's own
+ *  `docs/briefs/general.md`. An option with no path is the invocation's error, exit 2. */
 function sourceOf(args: string[]): string | undefined {
   const at = args.indexOf('--source');
   let source: string | undefined;
@@ -69,17 +70,18 @@ function sourceOf(args: string[]): string | undefined {
       return undefined;
     }
   }
-  return source ?? (process.env.TEAM_BRIEF_SOURCE || undefined);
+  return source ?? (process.env.TEAM_BRIEF_SOURCE || repoSource);
 }
 
 if (import.meta.main) {
   const [mode, value] = process.argv.slice(2);
   if (mode === '--write') {
-    if (value === undefined || value.startsWith('-')) {
-      console.error('Usage: bun scripts/brief.ts --write <source>');
+    if (value !== undefined && value.startsWith('-')) {
+      console.error('Usage: bun scripts/brief.ts --write [<source>]');
       process.exitCode = 2;
     } else {
-      const text = briefOf(readFileSync(value, 'utf8'));
+      const source = value ?? repoSource;
+      const text = briefOf(readFileSync(source, 'utf8'));
       writeFileSync(textFile, textModuleOf(text));
       const hash = createHash('sha256').update(text).digest('hex');
       console.log(`wrote src/launch/general-brief-text.ts from the source (sha256 ${hash})`);
@@ -118,7 +120,7 @@ if (import.meta.main) {
         );
     }
   } else {
-    console.error('Usage: bun scripts/brief.ts --write <source>\n       bun scripts/brief.ts --check [--source <source>]');
+    console.error('Usage: bun scripts/brief.ts --write [<source>]\n       bun scripts/brief.ts --check [--source <source>]');
     process.exitCode = 2;
   }
 }

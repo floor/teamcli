@@ -31,6 +31,8 @@ import { writeTeamFile } from '../file/write.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentRename } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
+import { deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
+import { plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
@@ -396,7 +398,7 @@ export const rename: Command = (argv, io) => runRename(argv, io, realSources);
 export default rename;
 
 export async function runRename(argv: string[], io: Io, sources: RenameSources = realSources): Promise<number> {
-  const outcome = executeRename(argv, io, sources);
+  const outcome = await executeRename(argv, io, sources);
   if (outcome === 'invocation') {
     return 2; // exit: rename.invocation
   }
@@ -409,7 +411,7 @@ export async function runRename(argv: string[], io: Io, sources: RenameSources =
   return 0; // exit: rename.done
 }
 
-function executeRename(argv: string[], io: Io, sources: RenameSources): RenameOutcome {
+async function executeRename(argv: string[], io: Io, sources: RenameSources): Promise<RenameOutcome> {
   const args = readArgs(argv, ['session', 'file'], ['renumber', 'dry-run', 'json']);
   const renumber = args.flags.has('renumber');
   const dryRun = args.flags.has('dry-run');
@@ -663,6 +665,34 @@ function executeRename(argv: string[], io: Io, sources: RenameSources): RenameOu
     const historyCount = renameSeatHistory(validated.team.project, root, home, from, to);
     if (historyCount > 0) {
       moved.push(`messages.jsonl (${String(historyCount)} ${historyCount === 1 ? 'entry' : 'entries'})`);
+    }
+
+    // The general seat brief, through the one boundary every attribution path calls: the seat
+    // under its new name is attributed, so it gets a fresh delivery lifetime and a fresh record.
+    // The old lifetime is never re-used — its record's payload names the old seat, so it cannot
+    // serve the new name even though the folder move above carried it along. The claim lands
+    // after the state's own rename, in the session that records the seat.
+    const briefs = deliverBriefForAttribution({
+      dir,
+      root,
+      session: seatSession,
+      home,
+      now,
+      team: validated.team,
+      state: readState(dir).sessions[seatSession] ?? emptySession(),
+      attributed: [to],
+    });
+    await walkBriefDeliveries(briefs, { dir, home });
+    for (const delivery of briefs.deliveries) {
+      if (delivery.ok) continue;
+      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+      io.stderr(`team rename: ${plainText(said)}\n`);
+      logLine(dir, 'rename', callerLabel(caller), said, now);
+    }
+    if (briefs.recording !== undefined) {
+      const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+      io.stderr(`team rename: ${plainText(said)}\n`);
+      logLine(dir, 'rename', callerLabel(caller), said, now);
     }
 
     const summary = `renamed seat ${from} -> ${to} (moved: ${moved.join(', ')})`;

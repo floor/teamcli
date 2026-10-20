@@ -1,7 +1,7 @@
 // Closed event kinds table, default recipient positions, privileged kinds, the owner's
 // immediacy list (the kinds pushed at once rather than batched), and owner-sovereign threshold
 // constants (RFC 002 Amendment 01 §4.3, §4.4, §10),
-// wired to the B2 routing settings in `src/policy/events.ts` and `src/bus/routing.ts`.
+// wired to the routing settings in `src/policy/events.ts` and `src/bus/routing.ts`.
 //
 // An event says what happened, when, and to which record; it carries no body and instructs nobody.
 // Privileged kinds (`team.grant-*`, `team.policy-*`, `seat.at-prompt`, plus any kind the owner
@@ -69,6 +69,11 @@ export const EVENT_KINDS = [
   'seat.unblocked',
   'seat.unreachable',
   'seat.done',
+  // Presence: one applied, current-binding transition from a seat's runtime, published by the
+  // daemon's presence publisher. Not a message: it carries no sender, recipient or body, and it
+  // is addressed to nobody by default. The words are the presence contract's own, never the
+  // terminal's seat-state words.
+  'presence.changed',
   // Work & tasks
   'work.claimed',
   'work.done',
@@ -84,6 +89,10 @@ export const EVENT_KINDS = [
   'team.grant-expired',
   'team.policy-changed',
   'team.policy-refused',
+  // A signed settings record changed: one event per key, carrying the key, the
+  // level, and the value before and after. A change the bus's reconcile pass finds without one is
+  // appended by that pass, marked reconciled.
+  'config.changed',
   // The lead's own words to the owner (`team raise`): a release is ready, or a decision is
   // needed. Owner-routed by default and delivered at once; no seat is in the audience.
   'release.ready',

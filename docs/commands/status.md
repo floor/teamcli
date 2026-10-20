@@ -54,6 +54,12 @@ A process a seat recorded with `team proc add` shows too: one `note:` line per l
 notes. A record whose process has ended is not printed, and a team that recorded none shows no
 such line. `--json` carries the same reading as a `procs` array, absent when there is none.
 
+A swap the project waits on ([team swap](swap.md)) is one `note:` line of its own, in seat order:
+`swap <seat>: <from> -> <to> (<reason>), queued <instant>, waits for <what>, runs by <instant>` —
+the same line `team swap` prints for the record, so the reading says what each seat waits on
+before the swap runs. `--json` carries the records as a `swaps` array of `{ "seat": …, "swap": … }`,
+absent when nothing waits.
+
 The watch the state records is one `note:` of its own, before the proc notes: `watch: pane <pane>,
 pid <n>, last heartbeat <age>` — where it runs, whose process it is once a pass has recorded one
 (`pid not recorded yet` in the moment between `up` and that first pass, `pane not recorded` for a
@@ -61,6 +67,24 @@ watch that has not seen itself in a pane), and how old its last heartbeat is. Wh
 running and that heartbeat is older than two in-force intervals, the reading also carries the
 difference `the watch's last pass was <n> minutes ago`, repaired with `team watch --session
 <session>`, which starts the watch in its workspace again.
+
+A watch the machine daemon hosts is a different watch from that one, and the reading says it after
+the daemon's own line: `watch: in daemon, last cycle <age>` for a watch whose last pass completed,
+with the age the record gives it and never a borrowed one, and `watch: in daemon, not yet cycled`
+while no pass has completed. The phases say themselves: `watch: starting in the daemon, not yet
+cycled`, `watch: stopping in the daemon`, `watch: stopped in the daemon (<reason>)` and `watch:
+failed in the daemon (<reason>)`, with `no reason recorded` where the record gives none. A watch
+standing down for a live pane watch reads `watch: standing by; a live pane watch owns this session
+(<reason>)`: it leaves that session to the pane watch and touches nothing there. A watch whose
+outbound effects are closed adds `watch: outbound effects blocked (no verified admitted sender is
+injected); it is not enforcing anything` — it can cycle while those effects are closed, and the
+reading never prints it as enforcing. The phase line says how old the last pass is, not whether it
+failed; the check names a failed pass. A stopped or failed watch is terminal in the record: nothing
+here restarts it, and the daemon does not bring it back by itself, so it runs again only when it is
+started again. A route the daemon records no watch for prints no such line: a watch exists only
+where one was started on purpose. With more than one watched route, each line ends with its route,
+`… (<root>)`, so a failed route still reads beside a good one. These lines are notes: never a
+difference, never in a total, never an exit.
 
 ## Synopsis
 

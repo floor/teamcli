@@ -11,31 +11,33 @@
 // receiving session's `crossSessionInbound` policy decides when the frame surfaces: the
 // probe saw a standalone sender's message held as unidentified (`The sender did not
 // attest its permission mode`) unless the seat was started with `accept`. The
-// `ENOTSOCK` label in `reasonOf`, and the two socket tests in `test/send.test.ts`, are
-// this build's own measured runs against a real listener.
-import { createConnection } from 'node:net';
+// `ENOTSOCK` label in the relay package's dial, and the two socket tests in
+// `test/send.test.ts`, are this build's own measured runs against a real listener.
+//
+// The client itself lives in `packages/relay` (index.js) with the rest of the transport. This
+// module keeps the names TeamCLI imports and the build's own policy flag beside them.
+import { FRAME_LIMIT as RELAY_FRAME_LIMIT, SEND_TIMEOUT_MS as RELAY_SEND_TIMEOUT_MS, dial as relayDial } from '../../packages/relay/index.js';
 
 /** An accepted frame, or the reason the socket did not take it. */
 export type SendOutcome = { ok: true } | { ok: false; reason: string };
 
 /** The listener's measured buffer limit, in characters. A frame longer than this is refused
  *  before any connection is made — never truncated. */
-export const FRAME_LIMIT = 1_048_576;
+export const FRAME_LIMIT = RELAY_FRAME_LIMIT;
 
 /** How long the socket has to take the frame: connecting and writing it. */
-export const SEND_TIMEOUT_MS = 5_000;
+export const SEND_TIMEOUT_MS = RELAY_SEND_TIMEOUT_MS;
 
 /**
- * Whether a `team send` from this CLI process may open another session's cross-session
- * socket. Off: the channel is unattested — the receiving session's `crossSessionInbound`
- * policy holds a frame from a standalone sender as unidentified ("The sender did not
- * attest its permission mode"), and a held frame blocks the seat's box until a person
- * lets it through — so no send path dials while this is false: `team send` (with or
- * without `--wait`) walks the receiving seat's delivery order and waits on the thread,
- * and the daemon and the watch's nudge open no socket either. The socket code stays in
- * the tree, one constant away.
+ * Whether this build may open another session's cross-session socket at all. On: the channel
+ * is carried, and a send dials it only for a receiving Claude session that itself declares
+ * `crossSessionInbound: "accept"` (`src/send/inbound.ts`). Hold, refuse and unset are skipped
+ * before a connection is made, so no frame lands at a box that would hold it. A sender that
+ * cannot use the socket — the receiver is another CLI, or declares nothing — walks the rest of
+ * its order. The socket takes a frame without acknowledging it, so a write is transport, never
+ * a read; only a signed receipt makes a message read.
  */
-export const SOCKET_SEND = false;
+export const SOCKET_SEND: boolean = true;
 
 /**
  * Writes one frame to the socket at `socketPath` and reports whether it was taken.
@@ -48,36 +50,5 @@ export const SOCKET_SEND = false;
  * frame was taken, or the deadline.
  */
 export function sendFrame(socketPath: string, frame: string, timeoutMs = SEND_TIMEOUT_MS): Promise<SendOutcome> {
-  return new Promise((resolve) => {
-    const socket = createConnection({ path: socketPath });
-    let settled = false;
-    const done = (outcome: SendOutcome): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      resolve(outcome);
-    };
-    const timer = setTimeout(
-      () => done({ ok: false, reason: `the socket did not take the frame within ${String(timeoutMs / 1000)}s` }),
-      timeoutMs,
-    );
-    socket.on('error', (error) => done({ ok: false, reason: reasonOf(error) }));
-    socket.on('connect', () => {
-      socket.write(frame, (error) => {
-        if (error) done({ ok: false, reason: reasonOf(error) });
-        else done({ ok: true });
-      });
-    });
-  });
-}
-
-function reasonOf(error: unknown): string {
-  const code = (error as NodeJS.ErrnoException).code;
-  if (code === 'ENOENT') return 'nothing is listening there (the socket is gone)';
-  if (code === 'ECONNREFUSED') return 'nothing is listening there (the connection was refused)';
-  // Measured on this platform: a plain file left at the socket's path answers ENOTSOCK.
-  if (code === 'ENOTSOCK') return 'nothing is listening there (the path is not a socket)';
-  if (code === 'EPIPE' || code === 'ECONNRESET') return 'the session closed the connection before it took the frame';
-  return `the socket could not be written (${code ?? 'unknown error'})`;
+  return relayDial(socketPath, frame, timeoutMs);
 }

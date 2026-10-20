@@ -22,7 +22,7 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import { generationsFolder, keyFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { readState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 const IDLE = CLAUDE_IDLE;
@@ -324,6 +324,82 @@ test('team down refuses an unplaced caller, and the same call stops the team whe
   expect(didStop.n).toBe(1);
   expect(durableBytes(stopped.home)).toBe(stoppedBefore);
   expect(durableBytes(stopped.home)).not.toContain('grant.json');
+});
+
+test('a grant that rests on no verified approval refuses, and the same stop runs on TEAMCLI_DEV_MODE=1', async () => {
+  const lead = { kind: 'seat' as const, name: 'lead', pane: 'w1:p1', session: 'acme' };
+  const granted = (root: string): string => `${file(root)}grant:
+  session: acme
+  seat: lead
+  scope: [down]
+`;
+  const record = (root: string): void => {
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions.acme = {
+        ...emptySession(),
+        seats: { lead: { stage: 'ready', pane: 'w1:p1', workspace: 'w1' } },
+      };
+    });
+  };
+  const refused = repo(granted);
+  record(refused.root);
+  const refusedBefore = durableBytes(refused.home);
+  const refusedStopped = { n: 0 };
+  const refusedIo = testIo(refused.root, lead);
+  const refusedCode = await runDown([], refusedIo, downSources(refused.home, refusedStopped));
+  expect(refusedCode).toBe(1);
+  expect(refusedIo.err).toContain(
+    'team down: a grant needs a verified approval: the file was never approved on this machine\n',
+  );
+  expect(refusedStopped.n).toBe(0);
+  expect(durableBytes(refused.home)).toBe(refusedBefore);
+
+  const stopped = repo(granted);
+  record(stopped.root);
+  const stoppedBefore = durableBytes(stopped.home);
+  const didStop = { n: 0 };
+  const stoppedIo = testIo(stopped.root, lead);
+  stoppedIo.env = { TEAMCLI_DEV_MODE: '1' };
+  const stoppedCode = await runDown([], stoppedIo, downSources(stopped.home, didStop));
+  const live = join(stopped.root, '.agents', 'team.yaml');
+  expect(stoppedCode).toBe(0);
+  expect(stoppedIo.err).toContain(
+    `team down: warning: a grant needs a verified approval: the file was never approved on this machine; the live team file ${live} counts as approved; dev mode continues\n`,
+  );
+  expect(didStop.n).toBe(1);
+  expect(durableBytes(stopped.home)).toBe(stoppedBefore);
+  expect(durableBytes(stopped.home)).not.toContain('grant.json');
+});
+
+test('team down hands the delegate gate its dev standing and prints the folded line the gate returns', async () => {
+  const place = repo((root) => `${file(root)}delegates:
+  - pane: main/w1:p1
+    commands: [down]
+`);
+  approve(place.home, place.root);
+  const live = join(place.root, '.agents', 'team.yaml');
+  const line = `warning: delegation needs a verified approval: the file was never approved on this machine; the live team file ${live} counts as approved; dev mode continues`;
+  const asked: Parameters<NonNullable<DownSources['gate']>>[0][] = [];
+  const didStop = { n: 0 };
+  const io = testIo(place.root, UNPLACED);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const code = await runDown([], io, {
+    ...downSources(place.home, didStop),
+    gate(input) {
+      asked.push(input);
+      return { kind: 'passed', pane: 'main/w1:p1', devApproval: line };
+    },
+  });
+  expect(code).toBe(0);
+  expect(asked.length).toBe(1);
+  const askedInput = asked[0];
+  expect(askedInput?.dev?.on).toBe(true);
+  expect(askedInput?.file).toBe(live);
+  expect(io.err).toContain(`team down: ${line}\n`);
+  expect(readFileSync(join(place.root, '.agents', 'team.log'), 'utf8')).toContain(
+    `down [unplaced (it runs under herdr)] ${line}`,
+  );
+  expect(didStop.n).toBe(1);
 });
 
 function downSources(home: string, stopped: { n: number }): DownSources {

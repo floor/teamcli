@@ -10,6 +10,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { grantGate } from '../src/grant.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { currentBriefClaim } from '../src/launch/general-brief.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { approvalStanding, storePath } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
@@ -264,7 +265,25 @@ describe('reload preserves work without an approved copy', () => {
       expect(made.created).toEqual([]);
       expect(made.commands).toEqual([]);
       expect(readFileSync(file, 'utf8')).toBe(before);
-      expect(readState(dir)).toEqual(state);
+      // Nothing closed and nothing launched: the seats, the work trees and the watch stand. The
+      // brief is a file fact: a relaunch path delivers it before the close that then refuses, so
+      // the seat's claim is the fresh lifetime the delivery minted, the first id recorded as
+      // superseded. An early refusal — the "already protected" planning pass — delivers nothing.
+      const after = readState(dir);
+      expect(after.sessions.acme?.seats).toEqual(state.sessions.acme?.seats);
+      expect(after.sessions.acme?.worktrees).toEqual(state.sessions.acme?.worktrees);
+      expect(after.sessions.acme?.watch).toEqual(state.sessions.acme?.watch);
+      const held = currentBriefClaim(after.sessions.acme?.briefs?.worker);
+      const was = currentBriefClaim(state.sessions.acme?.briefs?.worker);
+      expect(held).not.toBeNull();
+      expect(was).not.toBeNull();
+      if (late) {
+        expect(held!.id).not.toBe(was!.id);
+        expect(held!.incarnation).not.toBe(was!.incarnation);
+        expect(held!.superseded).toContain(was!.id);
+      } else {
+        expect(held).toEqual(was);
+      }
       if (late) {
         // The close path's refusal is said and logged, the way `up` says a seat it leaves out.
         const record = kind === 'working' || status === 'working'

@@ -385,8 +385,10 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
     expect(existsSync(join(storeDir, 'rules', 'builder-01.md'))).toBe(true);
     expect(existsSync(join(fx.root, '.agents', 'queue', 'builder-01.md'))).toBe(true);
 
-    // Signed mailbox message verifies under builder-01
-    expect(listUnacked(fx.root, 'acme', fx.home)).toEqual([
+    // Signed mailbox message verifies under builder-01. The session's unacked drops also hold
+    // each live seat's general seat brief — the rename's own delivery, and the broadcast of a
+    // team whose claims were behind this build — so the mailbox record is the one asserted here.
+    expect(listUnacked(fx.root, 'acme', fx.home).filter((drop) => drop.id === 'm-001')).toEqual([
       { id: 'm-001', to: 'builder-01', at: NOW.toISOString() },
     ]);
     const msgIo = testIo(fx.root, owner);

@@ -4,7 +4,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { triggerLine } from '../src/send/native.ts';
+import { readTriggerLine } from '../src/send/native.ts';
 import { recordBody } from './helpers.ts';
 import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 
@@ -34,8 +34,8 @@ test('control characters in the body are not typed into the pane', async () => {
   const names = readdirSync(drops);
   expect(names.length).toBe(1);
   const path = join(drops, names[0] as string);
-  const line = triggerLine(path);
-  if (line === null) throw new Error(`no trigger for ${path}`);
+  const line = readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' });
+  if (line === null) throw new Error('the trigger line did not fit');
   expect(trigger).toBe(line);
   expect(recordBody(path)).toBe(filed(BODY));
   expect(host.frames).toEqual([]);

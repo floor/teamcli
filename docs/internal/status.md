@@ -228,7 +228,9 @@ when the budgets table would be printed, one object per row (`account`, `window`
 `resetsIn`, `seat`, `age`, `source`, `fallback`, `state`, `inside`, `reserve`). `inside` is true
 when a subscription's left figure is at or inside its reserve, `fallback` when the figure did not
 come from the first source the account names, and `reserve` the reserve that row was read against —
-the same figure the table's line names, null when the account has none. `summary` counts the
+the same figure the table's line names, null when the account has none. `swaps` is present only
+when the project waits on a queued model swap ([team swap](../commands/swap.md)): one `{ seat, swap }`
+entry per queue record, in seat order, the record exactly as the state holds it. `summary` counts the
 differences (`differences`, `owner_differences`), the plain closing line's own
 figures. The exit code is the same as without `--json`; the file's own warnings are `team
 doctor`'s to print, never this document's. A caller who
@@ -480,7 +482,7 @@ exit 0
 The machine's own swap is read for one case only: the check in force — the 2GB default, or the
 file's own `swap_free_min` — asks for more free swap than this reading says the machine has in
 total. The same fact `doctor` warns about is one note, with both figures and the repair, in the
-reading's own words — `would refuse now`, never a promise about a later run; `--json` carries it
+reading's own words — `cannot meet it`, never a promise about a later run; `--json` carries it
 in `notes` in the same place:
 
 ```console machine="small-swap"
@@ -493,14 +495,14 @@ budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
+note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep
 no differences
 exit 0
 ```
 
 A check that merely fails right now — the machine has the swap in total, and not enough of it
-free at this moment — prints no note here: `up`'s refusal names it when the owner runs it, and
-the watch reports what it reads. The note above describes the reading it came from: on macOS the
-total moves with pressure, so it promises nothing about a later `up`. The total is read on macOS
-from `sysctl -n vm.swapusage`, and on Linux from `/proc/meminfo`'s `SwapTotal`; a machine with no
-swap at all is not this case, and nothing is said when the total can't be read.
+free at this moment — prints no note here: the watch reports what it reads. The note above
+describes the reading it came from: on macOS the total moves with pressure, so it promises
+nothing about a later reading. The total is read on macOS from `sysctl -n vm.swapusage`, and on
+Linux from `/proc/meminfo`'s `SwapTotal`; a machine with no swap at all is not this case, and
+nothing is said when the total can't be read.

@@ -19,7 +19,9 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync,
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTeamFile } from '../file/load.ts';
+import { currentBriefClaim } from '../launch/general-brief.ts';
 import { fillInboxPlace, profileFor, type InboxPlace } from '../profiles/profile.ts';
+import { readState } from '../state.ts';
 
 /** A registration's outcome: made, or refused with the reason the seat's line carries. */
 export type InboxRegistration = { ok: true } | { ok: false; reason: string };
@@ -31,9 +33,27 @@ const SERVER_NAME = 'team-inbox';
 
 /** The arguments the inbox server is started with, after the entry script. `file` is the team
  *  file the launch read; the server resolves the team from it, whatever folder the client
- *  starts it in. */
-export function inboxServeArgs(seat: string, session: string, file?: string): string[] {
-  return ['mcp', 'serve', '--seat', seat, '--session', session, ...(file === undefined ? [] : ['--file', file])];
+ *  starts it in. `epoch` is the runtime the seat's brief was delivered under, when the launch
+ *  has a claim: a server started with it serves only that delivery. */
+export function inboxServeArgs(seat: string, session: string, file?: string, epoch?: string): string[] {
+  return [
+    'mcp', 'serve',
+    '--seat', seat,
+    '--session', session,
+    ...(file === undefined ? [] : ['--file', file]),
+    ...(epoch === undefined ? [] : ['--epoch', epoch]),
+  ];
+}
+
+/** The runtime epoch the seat's current claim names, when the launch's state holds one. A state
+ *  file that cannot be read, or a claim an older build wrote, has none: the server then serves
+ *  the claim it reads. */
+function claimEpochOf(dir: string, session: string, seat: string): string | undefined {
+  try {
+    return currentBriefClaim(readState(dir).sessions[session]?.briefs?.[seat])?.epoch;
+  } catch {
+    return undefined;
+  }
 }
 
 /** This install's runner: the executable and the entry script it runs. Resolved from this
@@ -69,6 +89,9 @@ export function registerInbox(input: {
    *  the team from it, so a seat whose folder is a lobby registers like any other. Absent: the
    *  folder's own team file, read as the server reads it. */
   file?: string;
+  /** The runtime epoch the launch delivered the seat's brief under, when the caller has it.
+   *  Absent: read from the claim the launch's state holds for this seat. */
+  epoch?: string;
   /** Runs a command in the seat's folder; tests pass their own. Absent: the real one. */
   run?: (command: string, args: readonly string[], cwd: string) => InboxRun;
 }): InboxRegistration | null {
@@ -89,12 +112,16 @@ export function registerInbox(input: {
   if (!loaded.ok) {
     return { ok: false, reason: input.file === undefined ? 'no team file could be read from its folder' : 'the team file its launch read could not be read' };
   }
+  const epoch = input.epoch ?? claimEpochOf(dirname(loaded.path), loaded.team.session, input.seat);
   const place: InboxPlace = {
     seat: input.seat,
     session: loaded.team.session,
     // The launch's file, named to the server: it starts in the seat's folder (a lobby has no
     // team file), and reads the team from this path instead.
     ...(input.file === undefined ? {} : { file: loaded.path }),
+    // The runtime the seat's brief was delivered under: a server registered with it serves only
+    // that delivery. Absent when the state holds no claim this run wrote.
+    ...(epoch === undefined ? {} : { epoch }),
     ...selfRunner(),
   };
   const target = block.file ?? block.target;
@@ -103,11 +130,16 @@ export function registerInbox(input: {
   if (refused !== null) return { ok: false, reason: refused };
   if (block.file !== null) return writeConfigFile(folder, block.file, place);
   // `{file}` is a whole word: it is the launch's `--file <path>` pair, and nothing at all when
-  // the launch named no file.
+  // the launch named no file. `{epoch}` is the same for the runtime epoch, when this launch has
+  // a claim: the server is then bound to the delivery it was registered under.
   const args: string[] = [];
   for (const word of block.add!) {
     if (word === '{file}') {
       if (place.file !== undefined) args.push('--file', place.file);
+      continue;
+    }
+    if (word === '{epoch}') {
+      if (place.epoch !== undefined) args.push('--epoch', place.epoch);
       continue;
     }
     args.push(fillInboxPlace(word, place));
@@ -195,7 +227,7 @@ function writeConfigFile(folder: string, file: string, place: InboxPlace): Inbox
       ...(servers as Record<string, unknown>),
       [SERVER_NAME]: {
         command: place.command,
-        args: [place.entry, ...inboxServeArgs(place.seat, place.session, place.file)],
+        args: [place.entry, ...inboxServeArgs(place.seat, place.session, place.file, place.epoch)],
       },
     },
   };

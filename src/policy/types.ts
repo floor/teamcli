@@ -6,6 +6,7 @@
 // policies come from a closed, release-owned vocabulary; advised policies may be from the
 // catalogue or a project's own text.
 
+import { DURATION, parseMeasure } from '../file/sections/units.ts';
 import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
@@ -14,9 +15,13 @@ import {
   SEAT_NUMBERING_DEFAULT_VALUE,
   SEATS_CROSS_TEAMS,
   STATE_THRESHOLDS,
+  SWAP_WAIT_SECONDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
+import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
+import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
+import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
 /** The four inheritance levels of Kernel amendment 02 §2.2, outermost first. */
 export type PolicyLevel = 'entity' | 'project' | 'team' | 'seat';
@@ -90,6 +95,10 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-lead-seconds',
   'liveness-idle-owner-seconds',
   'delivery-order',
+  'delivery-timeout',
+  'delivery-escalation',
+  'brief-transport',
+  'sender-line',
   'event-thread-ttl-seconds',
   'event-thread-cap',
   'event-retention-days',
@@ -97,6 +106,13 @@ export const ENFORCED_POLICY_NAMES = [
   'event-unreachable-threshold-seconds',
   'event-idle-threshold-seconds',
   'event-reconcile-interval-seconds',
+  'model-rule',
+  'swap-wait-seconds',
+  'owner-reply-to',
+  'codex-daemon',
+  'idle-threshold',
+  'daemon.broker',
+  'watch-rhythm',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -135,6 +151,12 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   idle_owner_seconds: 'liveness-idle-owner-seconds',
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
+  delivery_timeout: 'delivery-timeout',
+  delivery_escalation: 'delivery-escalation',
+  brief_transport: 'brief-transport',
+  sender_line: 'sender-line',
+  daemon_broker: 'daemon.broker',
+  'daemon-broker': 'daemon.broker',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -162,6 +184,12 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   event_reconcile_interval_seconds: 'event-reconcile-interval-seconds',
   reconcile_interval_seconds: 'event-reconcile-interval-seconds',
   reconcile: 'event-reconcile-interval-seconds',
+  model_rule: 'model-rule',
+  swap_wait_seconds: 'swap-wait-seconds',
+  owner_reply_to: 'owner-reply-to',
+  codex_daemon: 'codex-daemon',
+  idle_threshold: 'idle-threshold',
+  watch_rhythm: 'watch-rhythm',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -192,6 +220,13 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   /** Optional custom refusal reason when `parseValue(raw)` returns null. */
   valueProblem?: (raw: unknown) => string | null;
   /**
+   * Optional: merges a lower declaration into the value in force above it before the chain moves
+   * on. A sparse value names only some fields, and the fields it leaves out inherit the value in
+   * force (the release default for the first declaration) instead of being reset. When absent,
+   * the normalized declaration is the value in force.
+   */
+  inherit?: (higher: V, lower: V) => V;
+  /**
    * Returns true when `lower` (with `lowerExpiry`) is within (tighter than or equal to)
    * `higher` (with `higherExpiry`).
    */
@@ -216,6 +251,137 @@ function parsePositiveSeconds(raw: unknown): number | null {
     return Number.isInteger(n) && n > 0 ? n : null;
   }
   return null;
+}
+
+/**
+ * A duration written the way the team file writes one — a number with its unit, `30s`, `5m` or
+ * `2h` (the `DURATION` table in `src/file/sections/units.ts`) — or a bare whole number of
+ * seconds, the spelling a policy threshold already takes. The value is whole seconds.
+ */
+function parseDurationSeconds(raw: unknown): number | null {
+  if (typeof raw === 'number') return Number.isInteger(raw) && raw > 0 ? raw : null;
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  if (/^[1-9][0-9]*$/.test(text)) return Number.parseInt(text, 10);
+  const seconds = parseMeasure(text, DURATION);
+  return seconds !== null && Number.isInteger(seconds) && seconds > 0 ? seconds : null;
+}
+
+function durationValueProblem(name: string, raw: unknown): string | null {
+  if (parseDurationSeconds(raw) !== null) return null;
+  return `policy "${name}" needs a duration above 0, such as 30s, 5m or 2h, or a whole number of seconds`;
+}
+
+/** The five watch rhythms, from the tightest pace to the quietest. */
+export const WATCH_RHYTHMS = ['urgent', 'normal', 'relaxed', 'night', 'dormant'] as const;
+export type WatchRhythmPreset = (typeof WATCH_RHYTHMS)[number];
+
+/** The final sweep a preset runs when its value names no explicit sweep. */
+export const WATCH_RHYTHM_SWEEP: Readonly<Record<WatchRhythmPreset, number>> = {
+  urgent: 60,
+  normal: 120,
+  relaxed: 240,
+  night: 3600,
+  dormant: 86_400,
+};
+
+/** How a preset scales the six watch waits. The sweep is never scaled by this. */
+export const WATCH_RHYTHM_FACTOR: Readonly<Record<WatchRhythmPreset, number>> = {
+  urgent: 0.5,
+  normal: 1,
+  relaxed: 2,
+  night: 12,
+  dormant: 24,
+};
+
+export const WATCH_SWEEP_MIN = 10;
+export const WATCH_SWEEP_MAX = 86_400;
+
+/** A watch rhythm resolved to its final sweep and its wait factor, ready for the watch. */
+export type WatchRhythm = { preset: WatchRhythmPreset; sweepSeconds: number };
+
+function watchPresetOf(raw: unknown): WatchRhythmPreset | null {
+  return typeof raw === 'string' && (WATCH_RHYTHMS as readonly string[]).includes(raw.trim())
+    ? (raw.trim() as WatchRhythmPreset)
+    : null;
+}
+
+function watchSweepOf(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= WATCH_SWEEP_MIN && raw <= WATCH_SWEEP_MAX
+    ? raw
+    : null;
+}
+
+/**
+ * The parts a raw watch-rhythm value names: a bare preset string, the canonical `preset@seconds`
+ * string, or a mapping `{ preset, sweepSeconds? }`. Null when the value is not one of those.
+ */
+function watchRhythmParts(raw: unknown): { preset: WatchRhythmPreset; sweepSeconds: number | null } | null {
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    const at = text.indexOf('@');
+    if (at < 0) {
+      const preset = watchPresetOf(text);
+      return preset === null ? null : { preset, sweepSeconds: null };
+    }
+    const preset = watchPresetOf(text.slice(0, at));
+    const sweep = watchSweepOf(Number(text.slice(at + 1)));
+    return preset === null || sweep === null ? null : { preset, sweepSeconds: sweep };
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'preset' && key !== 'sweepSeconds')) return null;
+  const preset = watchPresetOf(record.preset);
+  if (preset === null) return null;
+  if (record.sweepSeconds === undefined) return { preset, sweepSeconds: null };
+  const sweep = watchSweepOf(record.sweepSeconds);
+  return sweep === null ? null : { preset, sweepSeconds: sweep };
+}
+
+/**
+ * The canonical watch-rhythm value: a bare preset, or `preset@seconds` when the value names an
+ * explicit final sweep. The signed declaration stores this one scalar; the watch reads it back
+ * as a {@link WatchRhythm}. A mapping value is accepted at load and canonicalized here.
+ */
+export function parseWatchRhythmValue(raw: unknown): string | null {
+  const parts = watchRhythmParts(raw);
+  if (parts === null) return null;
+  return parts.sweepSeconds === null ? parts.preset : `${parts.preset}@${String(parts.sweepSeconds)}`;
+}
+
+/** A canonical watch-rhythm value as its final sweep and preset; null for a value this build cannot read. */
+export function watchRhythmValueOf(raw: unknown): WatchRhythm | null {
+  const canonical = parseWatchRhythmValue(raw);
+  if (canonical === null) return null;
+  const parts = watchRhythmParts(canonical);
+  if (parts === null) return null;
+  return {
+    preset: parts.preset,
+    sweepSeconds: parts.sweepSeconds ?? WATCH_RHYTHM_SWEEP[parts.preset],
+  };
+}
+
+function watchRhythmProblem(raw: unknown): string | null {
+  if (parseWatchRhythmValue(raw) !== null) return null;
+  if (typeof raw === 'string') {
+    const at = raw.indexOf('@');
+    const preset = watchPresetOf(raw.slice(0, at < 0 ? raw.length : at));
+    if (preset === null) {
+      return `policy "watch-rhythm" has no rhythm "${raw.trim()}": expected ${WATCH_RHYTHMS.join(', ')}`;
+    }
+    return `policy "watch-rhythm" needs a whole sweep between ${String(WATCH_SWEEP_MIN)} and ${String(WATCH_SWEEP_MAX)} seconds after "${preset}@"`;
+  }
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== 'preset' && key !== 'sweepSeconds')) {
+      return 'policy "watch-rhythm" takes only preset and sweepSeconds';
+    }
+    if (watchPresetOf(record.preset) === null) {
+      return `policy "watch-rhythm" needs a preset: ${WATCH_RHYTHMS.join(', ')}`;
+    }
+    return `policy "watch-rhythm" needs a whole sweepSeconds between ${String(WATCH_SWEEP_MIN)} and ${String(WATCH_SWEEP_MAX)}`;
+  }
+  return `policy "watch-rhythm" needs a preset (${WATCH_RHYTHMS.join(', ')}) or { preset, sweepSeconds? }`;
 }
 
 /** A positive whole count (a record cap, a number of days), without the seconds suffix. */
@@ -276,6 +442,116 @@ function deliveryOrderProblem(raw: unknown): string | null {
   }
   return null;
 }
+
+/** One `delivery-timeout` word's entries, in the order it names them; an empty part is invalid. */
+function deliveryTimeoutItems(raw: unknown): unknown[] | null {
+  if (typeof raw === 'string') return raw.split(',');
+  if (Array.isArray(raw)) return raw;
+  return null;
+}
+
+/** The budgets a word names; null when the word is not a route map this surface admits. */
+function parseDeliveryTimeoutEntries(raw: unknown): Map<DeliveryTimeoutRoute, number> | null {
+  const items = deliveryTimeoutItems(raw);
+  if (!items || items.length === 0) return null;
+  const entries = new Map<DeliveryTimeoutRoute, number>();
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const text = item.trim();
+    const match = /^([a-z][a-z0-9-]*)=([1-9][0-9]*)$/.exec(text);
+    if (!match) return null;
+    const route = match[1] as DeliveryTimeoutRoute;
+    if (!(DELIVERY_TIMEOUT_ROUTES as readonly string[]).includes(route)) return null;
+    const seconds = Number.parseInt(match[2]!, 10);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86_400) return null;
+    if (entries.has(route)) return null;
+    entries.set(route, seconds);
+  }
+  return entries;
+}
+
+/** The budgets a `delivery-timeout` value fills out with the release defaults. In force, a route
+ *  a lower word leaves out inherits the budget set above it (`inheritDeliveryTimeout`); this
+ *  fills only the routes no level in the chain named at all. */
+export function deliveryTimeoutOf(value: unknown): Record<DeliveryTimeoutRoute, number> | null {
+  const entries = parseDeliveryTimeoutEntries(value);
+  if (entries === null) return null;
+  const budgets: Record<DeliveryTimeoutRoute, number> = { ...DELIVERY_TIMEOUT_DEFAULTS };
+  for (const [route, seconds] of entries) budgets[route] = seconds;
+  return budgets;
+}
+
+/** The complete map, in route order (`socket=15,mcp-inbox=15,typed=15,native=15`). */
+function formatDeliveryTimeout(budgets: Readonly<Record<DeliveryTimeoutRoute, number>>): string {
+  return DELIVERY_TIMEOUT_ROUTES.map((route) => `${route}=${String(budgets[route])}`).join(',');
+}
+
+/** A word kept to the routes it names, in route order, so the resolver can inherit the rest. */
+function formatNamedDeliveryTimeout(entries: ReadonlyMap<DeliveryTimeoutRoute, number>): string {
+  return DELIVERY_TIMEOUT_ROUTES.filter((route) => entries.has(route))
+    .map((route) => `${route}=${String(entries.get(route))}`)
+    .join(',');
+}
+
+function parseDeliveryTimeout(raw: unknown): string | null {
+  const entries = parseDeliveryTimeoutEntries(raw);
+  return entries === null ? null : formatNamedDeliveryTimeout(entries);
+}
+
+/**
+ * A lower word inherits every route it leaves out from the value in force above it, so a team
+ * word `typed=4` under an entity `socket=5` keeps socket at 5 rather than resetting it to the
+ * release default. The value in force after the merge is always a complete map.
+ */
+function inheritDeliveryTimeout(higher: string, lower: string): string {
+  const budgets: Record<DeliveryTimeoutRoute, number> = { ...DELIVERY_TIMEOUT_DEFAULTS };
+  for (const source of [higher, lower]) {
+    const entries = parseDeliveryTimeoutEntries(source);
+    if (entries === null) continue;
+    for (const [route, seconds] of entries) budgets[route] = seconds;
+  }
+  return formatDeliveryTimeout(budgets);
+}
+
+function deliveryTimeoutProblem(raw: unknown): string | null {
+  const items = deliveryTimeoutItems(raw) ?? [];
+  const routes = items
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.split('=')[0]?.trim() ?? '');
+  if (routes.includes('socket-accepted')) return 'socket-accepted is not available in this release';
+  for (const route of routes) {
+    if (route === 'drop' || route === 'durable-copy') {
+      return `route "${route}" has no live receipt wait and no attempt budget`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The main delay before a durable escalation reaches the entity orchestrator's mailbox after
+ * every live route has failed: five minutes (the timing decision of 2026-10-20). The
+ * all-live-routes-failed event is immediate at 0 and is not a value this policy can move. The
+ * legacy `event-unreachable-threshold-seconds` remains enforced as a compatibility cap only when
+ * a level declares it; its own release default of 600 does not lengthen this 300.
+ */
+export const DELIVERY_ESCALATION_SECONDS = 300;
+
+/**
+ * The routes `delivery-timeout` may budget: every leg with a live transport attempt. `native`
+ * (the CLI's own enqueue or spawn) counts: it has no read acknowledgement, but the attempt can
+ * still hang, so the budget bounds it. `drop` has no live wait at all, and a word naming it — or
+ * a route this release does not carry — is refused.
+ */
+export const DELIVERY_TIMEOUT_ROUTES = ['socket', 'mcp-inbox', 'typed', 'native'] as const;
+export type DeliveryTimeoutRoute = (typeof DELIVERY_TIMEOUT_ROUTES)[number];
+
+/** The reviewed attempt budget per route: fifteen seconds each (the timing decision). */
+export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, number>> = {
+  socket: 15,
+  'mcp-inbox': 15,
+  typed: 15,
+  native: 15,
+};
 
 /**
  * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
@@ -372,13 +648,93 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
-    // Dropping or reordering channels present in `higher` is within. `native` is the one leg a
-    // word may add: it is never in the default order, and a level that names it is the sender
-    // choosing to deliver through its own SendMessage and record the delivery. Every other leg
-    // absent from `higher` is still an addition, and the whole word is set aside.
+    // Dropping or reordering channels present in `higher` is within. `native`, `socket` and
+    // `headless-resume` are the legs a word may add: none is in the fallback order, and a level
+    // that names one is the sender choosing that channel — its own SendMessage, this build's
+    // frame on the receiver's socket, or a headless runtime's own turn, which no default order
+    // ever inserts. Every other leg absent from `higher` is still an addition, and the whole
+    // word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+  },
+  // The attempt budget per route: one map, `route=<seconds>` entries separated by commas. It is
+  // the TOTAL budget for one attempt at that route — probe, connect, write and any receipt the
+  // transport requires — and a low-level capability may only shorten the remaining budget. The
+  // post-submit read-receipt window is not part of it (`team send --wait` owns that, and a
+  // receipt wait is never shorter than the attempt it follows). `native` is budgeted too: it has
+  // no read acknowledgement, but the CLI's enqueue or spawn can hang and the attempt is bounded.
+  // A route a word leaves out inherits the budget in force above it, so a level never has to
+  // restate the routes it keeps. `deliveryTimeoutInForce` in `src/policy/delivery.ts` reads the
+  // resolved value; a level may only shorten each route against the value in force.
+  'delivery-timeout': {
+    name: 'delivery-timeout',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: formatDeliveryTimeout(DELIVERY_TIMEOUT_DEFAULTS),
+    gateLifting: false,
+    parseValue: parseDeliveryTimeout,
+    valueProblem: deliveryTimeoutProblem,
+    inherit: inheritDeliveryTimeout,
+    // Every route in the merged value is at or below the value in force for that route.
+    isWithin: (lower: string, higher: string) => {
+      const lowerBudgets = deliveryTimeoutOf(lower);
+      const higherBudgets = deliveryTimeoutOf(higher);
+      if (lowerBudgets === null || higherBudgets === null) return false;
+      return DELIVERY_TIMEOUT_ROUTES.every((route) => lowerBudgets[route] <= higherBudgets[route]);
+    },
+  },
+  // The one main delay in the fallback path: how long after every live route has failed the
+  // durable escalation reaches the entity orchestrator's mailbox. A shorter delay is the tighter
+  // one, and the release default is the ceiling, so a longer word is refused before it is signed.
+  // The all-live-routes-failed event itself is immediate at 0 and is not in this value. The legacy
+  // `event-unreachable-threshold-seconds` stays enforced beside it as a compatibility cap when a
+  // level declares it; its release default never lengthens this value.
+  // `deliveryEscalationDelay` in `src/policy/delivery.ts` reads both and returns the smaller.
+  'delivery-escalation': {
+    name: 'delivery-escalation',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DELIVERY_ESCALATION_SECONDS,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseShortenableSeconds(raw, DELIVERY_ESCALATION_SECONDS),
+    valueProblem: (raw: unknown) => shortenOnlyProblem('delivery-escalation', raw, DELIVERY_ESCALATION_SECONDS),
+    // Shorter or equal delay is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // How a general seat brief travels: `file` is the signed record in the seat's own drop
+  // folder, as every launch writes it; `message` keeps that same signed record and claim and
+  // delivers it through the seat's own delivery walk, so a brief earns the same receipts and
+  // history a send does; `memory` is a strict opt-in experiment that hands the whole brief to a
+  // live receiver through its own runtime, with no body written to disk on either side and no
+  // fallback when the receiver is not live. The values are not one ladder: `message` is within
+  // `file` (it keeps the same durable record and adds the receipted walk), while `memory` is
+  // comparable only to itself — it drops the durable record, so no level may infer it from, or
+  // be inferred into, `file` or `message`.
+  'brief-transport': {
+    name: 'brief-transport',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'file',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'file' || raw === 'message' || raw === 'memory' ? raw : null),
+    isWithin: (lower: 'file' | 'message' | 'memory', higher: 'file' | 'message' | 'memory') =>
+      lower === higher || (lower === 'message' && higher === 'file'),
+  },
+  // The line a typed wake opens with: `on` is the shipped `From <seat>@<team>:`,
+  // and a level may set its own one-line format in its place, as long as both names are in it.
+  // A wake always names the sender its signed record carries; a format decides the words around
+  // those two names, never whether they are there. So the floor has no off: `off` is refused by
+  // the parser, and every format is as strict as every other, which lets a lower level choose.
+  'sender-line': {
+    name: 'sender-line',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseSenderLineValue,
+    valueProblem: senderLineValueProblem,
+    isWithin: () => true,
   },
   // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field
   // at a time; `src/policy/thresholds.ts` reads the resolved chain back into the set the bus and
@@ -458,6 +814,125 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parsePositiveSeconds,
     // A shorter or equal interval is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The entity's rule for which models may run on which seats (Policies rule 10):
+  // one line of `<seat|role|*>=<lab>` entries, carried out in every team of the entity. Only the
+  // entity sets it, so no lower level is ever judged against it; the empty default is no rule.
+  'model-rule': {
+    name: 'model-rule',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: (raw: unknown) => {
+      const entries = parseModelRule(raw);
+      return entries === null ? null : formatModelRule(entries);
+    },
+    valueProblem: modelRuleProblem,
+    isWithin: () => true,
+  },
+  // How long a queued swap may wait for its boundary before it runs at the next pause between two
+  // turns (Policies rule 11), 30 minutes when nothing declares it. A shorter wait moves the seat
+  // sooner, so the shorter value is the tighter one.
+  'swap-wait-seconds': {
+    name: 'swap-wait-seconds',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    looseningLevels: SWAP_WAIT_SECONDS.looseningLevels as readonly PolicyLevel[],
+    defaultValue: SWAP_WAIT_SECONDS.fallback,
+    gateLifting: false,
+    parseValue: parsePositiveSeconds,
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The entity-level address an owner-origin message names for the seat that answers it: one
+  // qualified `seat@team` target. The empty default is no target; entity `floor` alone answers
+  // its shipped `orchestrator@floor`, applied by the reader (`src/policy/owner-reply.ts`) rather
+  // than inherited by every entity as a level default. A signed entity declaration replaces it,
+  // and any other entity without one has no target.
+  'owner-reply-to': {
+    name: 'owner-reply-to',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: parseOwnerReplyToValue,
+    valueProblem: ownerReplyToValueProblem,
+    isWithin: () => true,
+  },
+  // The Codex daemon on a seat's runtime: on unless a level says otherwise. `off` is a valid
+  // opt-out at every level, so a project, team or seat may switch off a daemon the levels above
+  // left on; `on` is only within an inherited `on`, so a level that turned the daemon off is not
+  // turned back on lower down. The runtime reader that consumes this value is owned elsewhere;
+  // this entry is only the name, its alias and the value rule.
+  'codex-daemon': {
+    name: 'codex-daemon',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseOnOff,
+    // 'off' is the opt-out and is always within; 'on' is only within an inherited 'on'.
+    isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => lower === 'off' || higher === 'on',
+  },
+  // How long a seat may sit idle before its lead hears about it: a duration with its unit (`5m`,
+  // `30s`) or whole seconds, five minutes when nothing declares it, always read as numeric
+  // seconds. Only the entity, project or team sets it — never the seat — and a shorter window is
+  // the tighter one. `team watch` reads the effective value; this entry is only the name, its
+  // alias and the value rule.
+  'idle-threshold': {
+    name: 'idle-threshold',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 300,
+    gateLifting: false,
+    parseValue: parseDurationSeconds,
+    valueProblem: (raw: unknown) => durationValueProblem('idle-threshold', raw),
+    // A shorter or equal window is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The machine daemon's broker feature: on keeps the broker handler serving `team next` over the
+  // one machine socket, off stops it before any tracker credential is read. It is a feature gate,
+  // not a start authority, so no level says who starts the daemon. Off is explicit and absolute:
+  // it is within an inherited on, and on is never within an inherited off, so a lower level may
+  // switch the feature off but cannot switch it back on. The daemon reader that consumes this
+  // value is owned elsewhere; this entry is only the name, its aliases and the value rule.
+  'daemon.broker': {
+    name: 'daemon.broker',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    // The broker reads the owner's credential store, so absence is off: no team gets broker
+    // access because it failed to say anything. Turning it on is an explicit owner declaration.
+    defaultValue: 'off',
+    gateLifting: false,
+    parseValue: parseOnOff,
+    // 'off' is tighter than 'on': off is within on, on is not within off.
+    isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
+  },
+  // The watch's own pace: how often a pass sweeps and how long its six waits run. One value
+  // names a preset (`urgent`, `normal`, `relaxed`, `night`, `dormant`), optionally with an
+  // explicit final sweep (`night@1800`, or the mapping `{ preset: night, sweepSeconds: 1800 }`).
+  // The preset sets the six-wait factor and, when no sweep is named, its nominal sweep; an
+  // explicit sweep is final and is never multiplied. A shorter sweep and a smaller wait factor
+  // are both tighter, and a lower level must be no looser on either axis. Only explicit ancestor
+  // declarations bound it: the release default is not a parent, so a team with no ancestor word
+  // may choose any preset. This entry is the name, its aliases and the value rule; the watch
+  // reads the effective value itself.
+  'watch-rhythm': {
+    name: 'watch-rhythm',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'normal',
+    gateLifting: false,
+    parseValue: parseWatchRhythmValue,
+    valueProblem: watchRhythmProblem,
+    isWithin: (lower: string, higher: string) => {
+      const low = watchRhythmValueOf(lower);
+      const high = watchRhythmValueOf(higher);
+      return low !== null
+        && high !== null
+        && low.sweepSeconds <= high.sweepSeconds
+        && WATCH_RHYTHM_FACTOR[low.preset] <= WATCH_RHYTHM_FACTOR[high.preset];
+    },
   },
   'development-mode': {
     name: 'development-mode',

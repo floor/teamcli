@@ -70,7 +70,7 @@ describe('tempo', () => {
     if (!refused.ok) expect(refused.errors.map((error) => error.message)).toContain('tempo must be one of: relaxed, normal, urgent');
   });
 
-  test('relaxed doubles the five waits, urgent halves them, and a repeat that is off stays off', () => {
+  test('relaxed doubles the six waits, urgent halves them, and a repeat that is off stays off', () => {
     const watch = parsed(TEAM).watch;
     expect(applyTempo(watch, 'normal')).toBe(watch);
     const relaxed = applyTempo(watch, 'relaxed');
@@ -79,11 +79,13 @@ describe('tempo', () => {
     expect(relaxed.teamIdle).toBe(1200);
     expect(relaxed.nudgeWait).toBe(1200);
     expect(relaxed.unsentAfter).toBe(120);
+    expect(relaxed.unreadAfter).toBe(1200);
     expect(relaxed.interval).toBe(watch.interval);
     const urgent = applyTempo(watch, 'urgent');
     expect(urgent.idleFirst).toBe(300);
     expect(urgent.idleRepeat).toBe(600);
     expect(urgent.unsentAfter).toBe(30);
+    expect(urgent.unreadAfter).toBe(300);
     expect(urgent.interval).toBe(watch.interval);
     const off = defaultWatch();
     expect(applyTempo(off, 'relaxed').idleRepeat).toBeUndefined();

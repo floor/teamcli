@@ -40,7 +40,7 @@
 // list here is the grantable side of the map's last row; the map owns the command side.
 
 import type { KeyObject } from 'node:crypto';
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { grantsDir, readGrantRecords } from '../grant.ts';
@@ -102,6 +102,15 @@ export type GrantRecord = {
   vocabulary: number;
 };
 
+/** The signed team-envelope boundary a revocation of a team grant ends, preserved inside the
+ *  revocation record itself so overwriting or removing the old grant file cannot erase what the
+ *  revocation terminated. */
+export type RevokedEnvelope = {
+  grantee: string;
+  capabilities: string[];
+  scope: string[];
+};
+
 /** One verified revocation record: ending the grant `grant` at `grantGeneration`, and nothing else. */
 export type RevocationRecord = {
   /** The revocation file's own stem. */
@@ -113,6 +122,10 @@ export type RevocationRecord = {
   by: 'owner';
   at: string;
   generation: number;
+  /** Present when the revoked grant is a team envelope: the team id, capabilities and scope
+   *  signed into the revocation so later overwrites or removal of the envelope file cannot change
+   *  which seat-grant capabilities the revocation ended. */
+  envelope?: RevokedEnvelope;
 };
 
 /** A grant to write. The owner writes grants alone in 0.5.0; the record says so. */
@@ -149,7 +162,8 @@ export type RevocationWrite = { ok: true; record: RevocationRecord } | { ok: fal
  *  exactly what a write refuses. */
 export type GrantPlan = { ok: true; record: GrantRecord } | { ok: false; why: string };
 
-/** A validated revocation, not yet signed or written: generation 0, like a grant plan. */
+/** A validated revocation, not yet signed or written: generation 0 for a new revocation, or the
+ *  existing signed record when the exact `(name, grant, generation)` revocation is already on disk. */
 export type RevocationPlan = { ok: true; record: RevocationRecord } | { ok: false; why: string };
 
 export type GrantOptions = {
@@ -170,12 +184,16 @@ export function writeGrant(home: string, request: GrantRequest, options: GrantOp
 
   const folder = grantsDir(home);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
-  plan.record.generation = bumpGeneration(folder, home, now);
   const key = options.key ?? keyOf(home);
-  const disk = onDiskGrant(plan.record);
-  const signature = signDomain(GRANT_DOMAIN, grantPayload(plan.record.name, disk), key);
-  writeRecord(recordPath(home, plan.record.name), { grant: disk, signature });
-  return { ok: true, record: plan.record };
+  return withFolderLock(folder, () => {
+    const committedPlan = planGrant(home, request, { now, key });
+    if (!committedPlan.ok) return committedPlan;
+    committedPlan.record.generation = bumpGeneration(folder, home, now);
+    const disk = onDiskGrant(committedPlan.record);
+    const signature = signDomain(GRANT_DOMAIN, grantPayload(committedPlan.record.name, disk), key);
+    writeRecord(recordPath(home, committedPlan.record.name), { grant: disk, signature });
+    return { ok: true, record: committedPlan.record };
+  });
 }
 
 /**
@@ -210,28 +228,41 @@ export function planGrant(home: string, request: GrantRequest, options: GrantOpt
  * Writes one owner-signed revocation record, for the grant {@link planRevocation} accepts: the
  * grant's stem and generation together, so a typo is refused rather than left as a record that
  * revokes nothing, and a record name that is a grant's file is refused by the plan, never written
- * over it. A revoked grant is not an edit: this appends, and the reader matches the pair.
+ * over it. Repeating the exact same `(name, grant, generation)` revocation is idempotent: it
+ * returns the signed record already on disk without writing or advancing the sequence.
  */
 export function writeRevocation(home: string, request: RevocationRequest, options: GrantOptions = {}): RevocationWrite {
   const now = options.now ?? new Date();
   const plan = planRevocation(home, request, { ...options, now });
   if (!plan.ok) return plan;
+  if (plan.record.generation > 0) {
+    return { ok: true, record: plan.record };
+  }
 
   const folder = grantsDir(home);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
-  plan.record.generation = bumpGeneration(folder, home, now);
   const key = options.key ?? keyOf(home);
-  const disk = onDiskRevocation(plan.record);
-  const signature = signDomain(GRANT_DOMAIN, revocationPayload(plan.record.name, disk), key);
-  writeRecord(recordPath(home, plan.record.name), { revocation: disk, signature });
-  return { ok: true, record: plan.record };
+  return withFolderLock(folder, () => {
+    const committedPlan = planRevocation(home, request, { now, key });
+    if (!committedPlan.ok) return committedPlan;
+    if (committedPlan.record.generation > 0) {
+      return { ok: true, record: committedPlan.record };
+    }
+    committedPlan.record.generation = bumpGeneration(folder, home, now);
+    const disk = onDiskRevocation(committedPlan.record);
+    const signature = signDomain(GRANT_DOMAIN, revocationPayload(committedPlan.record.name, disk), key);
+    writeRecordExclusive(recordPath(home, committedPlan.record.name), { revocation: disk, signature });
+    return { ok: true, record: committedPlan.record };
+  });
 }
 
 /**
  * Validates one revocation against the folder and builds the record a write would sign —
  * generation 0, nothing written: both stems one safe file name, a positive integer generation,
  * a record name that is neither its grant's own nor another grant's file, and a grant of that
- * exact stem and generation in the folder.
+ * exact stem and generation in the folder. Repeating an exact `(name, grant, generation)` pair
+ * already on disk returns the existing record unchanged; reusing an occupied revocation stem for
+ * a different `(grant, generation)` pair is refused.
  */
 export function planRevocation(home: string, request: RevocationRequest, options: GrantOptions = {}): RevocationPlan {
   const now = options.now ?? new Date();
@@ -248,30 +279,90 @@ export function planRevocation(home: string, request: RevocationRequest, options
       why: `"${request.name}" is its grant's own name: a revocation is a separate record and never writes over the grant's file`,
     };
   }
-  const grants = readGrants(home).grants;
+  const { grants, revocations } = readGrants(home);
   if (grants.some((grant) => grant.name === request.name)) {
     return {
       ok: false,
       why: `"${request.name}" is another grant's name in ${grantsDir(home)}: a revocation is a separate record and never writes over a grant's file`,
     };
   }
-  const known = grants.some(
+  const existingRevocation = revocations.find((revocation) => revocation.name === request.name);
+  if (existingRevocation !== undefined) {
+    if (existingRevocation.grant === request.grant && existingRevocation.grantGeneration === request.generation) {
+      return { ok: true, record: existingRevocation };
+    }
+    return {
+      ok: false,
+      why: `"${request.name}" is another revocation's name in ${grantsDir(home)} (revoking ${existingRevocation.grant}@${existingRevocation.grantGeneration}): a revocation is a separate record and never writes over a revocation's file`,
+    };
+  }
+  if (existsSync(recordPath(home, request.name))) {
+    return {
+      ok: false,
+      why: `"${request.name}" is already occupied in ${grantsDir(home)}: a revocation never writes over an existing file`,
+    };
+  }
+  const alreadyRevoked = revocations.find(
+    (revocation) => revocation.grant === request.grant && revocation.grantGeneration === request.generation,
+  );
+  if (alreadyRevoked !== undefined) {
+    return {
+      ok: false,
+      why: `grant ${request.grant} at generation ${request.generation} is already revoked by ${alreadyRevoked.name} in ${grantsDir(home)}`,
+    };
+  }
+  const target = grants.find(
     (grant) => grant.name === request.grant && grant.generation === request.generation,
   );
-  if (!known) {
+  if (target === undefined) {
     return { ok: false, why: `there is no grant ${request.grant} at generation ${request.generation} in ${grantsDir(home)}` };
   }
-  return {
-    ok: true,
-    record: {
-      name: request.name,
-      grant: request.grant,
-      grantGeneration: request.generation,
-      by: 'owner',
-      at: now.toISOString(),
-      generation: 0,
-    },
+  const record: RevocationRecord = {
+    name: request.name,
+    grant: request.grant,
+    grantGeneration: request.generation,
+    by: 'owner',
+    at: now.toISOString(),
+    generation: 0,
+    ...(target.kind === 'team'
+      ? {
+          envelope: {
+            grantee: target.grantee,
+            capabilities: [...target.capabilities],
+            scope: [...target.scope],
+          },
+        }
+      : {}),
   };
+  if (target.kind === 'seat') {
+    Object.defineProperty(record, SEAT_REVOCATION_SYMBOL, { value: true, enumerable: false });
+  }
+  return { ok: true, record };
+}
+
+/**
+ * Picks the file stem a CLI standing revocation should write for `grantName` at `grantGeneration`:
+ * `revoke-<grantName>` when that stem is free in the folder (or already holds the exact same
+ * `(grantName, grantGeneration)` revocation), or `revoke-<grantName>-<grantGeneration>` (with an
+ * index suffix if needed) when an earlier revocation already holds `revoke-<grantName>`.
+ */
+export function standingRevocationName(
+  grantName: string,
+  grantGeneration: number,
+  grants: readonly GrantRecord[],
+  revocations: readonly RevocationRecord[],
+): string {
+  const baseName = `revoke-${grantName}`;
+  const existingSamePair = revocations.find(
+    (revocation) =>
+      revocation.name === baseName &&
+      revocation.grant === grantName &&
+      revocation.grantGeneration === grantGeneration,
+  );
+  if (existingSamePair !== undefined) return baseName;
+  const priorRevocation = revocations.find((revocation) => revocation.name === baseName);
+  if (priorRevocation === undefined) return baseName;
+  return distinctRevocationName(baseName, grantGeneration, grants, revocations);
 }
 
 /**
@@ -297,19 +388,217 @@ export function readGrants(home: string = homedir()): { grants: GrantRecord[]; r
   return { grants, revocations };
 }
 
+type TeamEnvelopeRevocation = {
+  grantee: string;
+  capabilities: readonly string[];
+  scope: readonly string[];
+  grantGeneration: number;
+  revocationGeneration: number;
+};
+
+const SEAT_REVOCATION_SYMBOL = Symbol.for('team.permissions.seatRevocation');
+const TEAM_REVOCATIONS_SYMBOL = Symbol.for('team.permissions.seatGrantTeamRevocations');
+const seatGrantTeamRevocations = new WeakMap<GrantRecord, readonly TeamEnvelopeRevocation[]>();
+
+function getSeatGrantTeamRevocations(grant: GrantRecord): readonly TeamEnvelopeRevocation[] | undefined {
+  const fromSymbol = (grant as Record<symbol, unknown>)[TEAM_REVOCATIONS_SYMBOL] as
+    | readonly TeamEnvelopeRevocation[]
+    | undefined;
+  return fromSymbol ?? seatGrantTeamRevocations.get(grant);
+}
+
+/**
+ * Whether a seat grant's authority for `(teamId, capability, targetPath)` was durably ended by a
+ * later team-envelope revocation of `teamId` covering `capability` and `targetPath`.
+ */
+export function isSeatGrantTerminated(
+  grant: GrantRecord,
+  teamId: string,
+  capability: string,
+  targetPath: string,
+): boolean {
+  const revocations = getSeatGrantTeamRevocations(grant);
+  if (revocations === undefined || revocations.length === 0) return false;
+  return revocations.some(
+    (entry) =>
+      grant.generation < entry.revocationGeneration &&
+      (entry.grantee === '*' || entry.grantee === teamId) &&
+      entry.capabilities.includes(capability) &&
+      entry.scope.some((envPath) => inside(envPath, targetPath)),
+  );
+}
+
+/**
+ * Whether a seat grant retains at least one non-terminated scope path for `(teamId, capability)`.
+ */
+export function seatGrantHasActiveScopeForTeam(
+  grant: GrantRecord,
+  teamId: string,
+  capability: string,
+): boolean {
+  return grant.scope.some((seatPath) => !isSeatGrantTerminated(grant, teamId, capability, seatPath));
+}
+
+/**
+ * Whether a seat grant covers `targetPath` for `(teamId, capability)` through a non-terminated
+ * scope path without `targetPath` itself having been terminated for `(teamId, capability)`.
+ */
+export function seatGrantCoversPathForTeam(
+  grant: GrantRecord,
+  teamId: string,
+  capability: string,
+  targetPath: string,
+): boolean {
+  if (isSeatGrantTerminated(grant, teamId, capability, targetPath)) return false;
+  return grant.scope.some(
+    (seatPath) => !isSeatGrantTerminated(grant, teamId, capability, seatPath) && inside(seatPath, targetPath),
+  );
+}
+
+/**
+ * The non-terminated scope paths of `grant` for `(teamId, capability)`.
+ */
+export function activeSeatScopeForTeam(
+  grant: GrantRecord,
+  teamId: string,
+  capability: string,
+): string[] {
+  return grant.scope.filter((seatPath) => !isSeatGrantTerminated(grant, teamId, capability, seatPath));
+}
+
+export type ActiveGrantOptions = {
+  /** Optional team id when resolving for a specific team, so envelope revocations of other teams do not end this team's seat grants. */
+  teamId?: string;
+  /** Internal: retain seat grants ended solely by a team-envelope revocation when reporting outside-envelope with no active envelope. */
+  includeEnvelopeEndedSeatGrants?: boolean;
+};
+
 /**
  * The grants in force at `now`: read fresh on every call — the read every gate makes — with the
  * revoked and the expired left out. Revocation takes effect here, at the next gate check, and
  * never depends on a ledger.
  */
-export function activeGrants(home: string = homedir(), now: Date = new Date()): GrantRecord[] {
+export function activeGrants(home: string = homedir(), now: Date = new Date(), options: ActiveGrantOptions = {}): GrantRecord[] {
   const { grants, revocations } = readGrants(home);
   const revoked = new Set(revocations.map((entry) => `${entry.grant}@${entry.grantGeneration}`));
+  const maxRevokedGeneration = new Map<string, number>();
+  for (const entry of revocations) {
+    const previous = maxRevokedGeneration.get(entry.grant) ?? 0;
+    if (entry.grantGeneration > previous) {
+      maxRevokedGeneration.set(entry.grant, entry.grantGeneration);
+    }
+  }
   const nowMs = now.getTime();
-  return grants.filter((grant) => {
+  const directlyActive = grants.filter((grant) => {
     if (revoked.has(`${grant.name}@${grant.generation}`)) return false;
+    if (grant.generation <= (maxRevokedGeneration.get(grant.name) ?? 0)) return false;
     return grant.expires === null || Date.parse(grant.expires) > nowMs;
   });
+  if (options.includeEnvelopeEndedSeatGrants) {
+    return directlyActive;
+  }
+
+  const teamRevocations: TeamEnvelopeRevocation[] = [];
+  for (const revocation of revocations) {
+    if (revocation.envelope !== undefined) {
+      if (options.teamId !== undefined && revocation.envelope.grantee !== options.teamId) continue;
+      teamRevocations.push({
+        grantee: revocation.envelope.grantee,
+        capabilities: revocation.envelope.capabilities,
+        scope: revocation.envelope.scope,
+        grantGeneration: revocation.grantGeneration,
+        revocationGeneration: revocation.generation,
+      });
+      continue;
+    }
+    if ((revocation as Record<symbol, unknown>)[SEAT_REVOCATION_SYMBOL] === true) {
+      continue;
+    }
+    const exactGrant = grants.find(
+      (grant) =>
+        grant.name === revocation.grant &&
+        grant.generation === revocation.grantGeneration,
+    );
+    if (exactGrant !== undefined) {
+      if (exactGrant.kind !== 'team') continue;
+      if (options.teamId !== undefined && exactGrant.grantee !== options.teamId) continue;
+      teamRevocations.push({
+        grantee: exactGrant.grantee,
+        capabilities: exactGrant.capabilities,
+        scope: exactGrant.scope,
+        grantGeneration: revocation.grantGeneration,
+        revocationGeneration: revocation.generation,
+      });
+      continue;
+    }
+    // Legacy revocation without an embedded `envelope` field whose exact target record at
+    // `(revocation.grant, revocation.grantGeneration)` is missing from disk: never infer historical
+    // target identity, kind, or scope from a newer same-stem record. Fail closed for all
+    // pre-existing seat grants older than `revocation.generation`.
+    teamRevocations.push({
+      grantee: '*',
+      capabilities: [...GRANT_WORDS],
+      scope: ['/'],
+      grantGeneration: revocation.grantGeneration,
+      revocationGeneration: revocation.generation,
+    });
+  }
+  if (teamRevocations.length === 0) {
+    return directlyActive;
+  }
+
+  const activeTeamEnvelopes = directlyActive.filter((grant) => grant.kind === 'team');
+  const isPairActiveInHome = (grant: GrantRecord, capability: string, seatPath: string): boolean => {
+    const revokingTeams = new Set<string>();
+    for (const tr of teamRevocations) {
+      if (
+        grant.generation < tr.revocationGeneration &&
+        tr.capabilities.includes(capability) &&
+        tr.scope.some((envPath) => inside(envPath, seatPath))
+      ) {
+        if (tr.grantee === '*') return false;
+        revokingTeams.add(tr.grantee);
+      }
+    }
+    if (revokingTeams.size === 0) return true;
+    if (options.teamId !== undefined) return false;
+    return activeTeamEnvelopes.some(
+      (env) =>
+        !revokingTeams.has(env.grantee) &&
+        env.capabilities.includes(capability) &&
+        env.scope.some((envPath) => inside(envPath, seatPath)),
+    );
+  };
+
+  const result: GrantRecord[] = [];
+  for (const grant of directlyActive) {
+    if (grant.kind !== 'seat') {
+      result.push(grant);
+      continue;
+    }
+    const remainingCapabilities = grant.capabilities.filter((capability) =>
+      grant.scope.some((seatPath) => isPairActiveInHome(grant, capability, seatPath)),
+    );
+    if (remainingCapabilities.length === 0) continue;
+    const remainingScope = grant.scope.filter((seatPath) =>
+      remainingCapabilities.some((capability) => isPairActiveInHome(grant, capability, seatPath)),
+    );
+    if (remainingScope.length === 0) continue;
+    const narrowed =
+      remainingCapabilities.length === grant.capabilities.length && remainingScope.length === grant.scope.length
+        ? grant
+        : { ...grant, capabilities: remainingCapabilities, scope: remainingScope };
+    const applicableRevocations = teamRevocations.filter((tr) => grant.generation < tr.revocationGeneration);
+    if (applicableRevocations.length > 0) {
+      const annotated = narrowed === grant ? { ...grant } : narrowed;
+      (annotated as Record<symbol, unknown>)[TEAM_REVOCATIONS_SYMBOL] = applicableRevocations;
+      seatGrantTeamRevocations.set(annotated, applicableRevocations);
+      result.push(annotated);
+    } else {
+      result.push(narrowed);
+    }
+  }
+  return result;
 }
 
 /**
@@ -338,6 +627,86 @@ function writeRecord(path: string, value: Json): void {
       unlinkSync(temporary);
     } catch {}
     throw error;
+  }
+}
+
+/** Writes one append-only record exclusively: links the staged temporary file to `path` so an
+ *  existing destination file can never be overwritten, then unlinks the temporary name. */
+function writeRecordExclusive(path: string, value: Json): void {
+  const temporary = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    linkSync(temporary, path);
+  } finally {
+    try {
+      unlinkSync(temporary);
+    } catch {}
+  }
+}
+
+let lockSequence = 0;
+
+/** Serializes grant and revocation commits within a single grants folder across concurrent writers. */
+function withFolderLock<T>(folder: string, fn: () => T): T {
+  const lockPath = join(folder, '.write.lock');
+  const deadline = Date.now() + 5000;
+  const stagedLock = `${lockPath}.${process.pid}.${++lockSequence}.tmp`;
+  writeFileSync(stagedLock, `${process.pid}\n`, { mode: 0o600 });
+  let myIno = -1;
+  let acquired = false;
+  try {
+    myIno = statSync(stagedLock).ino;
+    while (!acquired) {
+      try {
+        linkSync(stagedLock, lockPath);
+        acquired = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        try {
+          const lockStat = statSync(lockPath);
+          const rawPid = Number.parseInt(readFileSync(lockPath, 'utf-8').trim(), 10);
+          if (Number.isInteger(rawPid) && rawPid > 0) {
+            try {
+              process.kill(rawPid, 0);
+            } catch (killError) {
+              if ((killError as NodeJS.ErrnoException).code === 'ESRCH') {
+                const reclaimGuard = `${lockPath}.reclaim-${lockStat.ino}`;
+                try {
+                  linkSync(lockPath, reclaimGuard);
+                  try {
+                    if (statSync(lockPath).ino === lockStat.ino) {
+                      unlinkSync(lockPath);
+                    }
+                  } finally {
+                    try {
+                      unlinkSync(reclaimGuard);
+                    } catch {}
+                  }
+                  continue;
+                } catch {}
+              }
+            }
+          }
+        } catch {}
+        if (Date.now() > deadline) {
+          throw new Error(`timed out waiting for grant store lock ${lockPath}`);
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+      }
+    }
+  } finally {
+    try {
+      unlinkSync(stagedLock);
+    } catch {}
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      if (statSync(lockPath).ino === myIno) {
+        unlinkSync(lockPath);
+      }
+    } catch {}
   }
 }
 
@@ -375,6 +744,17 @@ function onDiskRevocation(record: RevocationRecord): Record<string, Json> {
     by: record.by,
     at: record.at,
     generation: record.generation,
+    ...(record.envelope !== undefined
+      ? {
+          envelope: {
+            grantee: record.envelope.grantee,
+            capabilities: [...record.envelope.capabilities],
+            scope: [...record.envelope.scope],
+          },
+        }
+      : (record as Record<symbol, unknown>)[SEAT_REVOCATION_SYMBOL] === true
+        ? { envelope: null }
+        : {}),
   };
 }
 
@@ -398,6 +778,26 @@ function hasDotTraversal(path: string): boolean {
 
 function inside(parent: string, child: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
+}
+
+function distinctRevocationName(
+  baseName: string,
+  grantGeneration: number,
+  grants: readonly GrantRecord[],
+  revocations: readonly RevocationRecord[],
+): string {
+  const taken = new Set<string>([
+    ...grants.map((grant) => grant.name),
+    ...revocations.map((revocation) => revocation.name),
+  ]);
+  const suffix = `-${grantGeneration}`;
+  const primary = `${baseName.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`;
+  if (RECORD_NAME_PATTERN.test(primary) && !taken.has(primary)) return primary;
+  for (let index = 2; ; index += 1) {
+    const indexedSuffix = `-${grantGeneration}-${index}`;
+    const candidate = `${baseName.slice(0, Math.max(1, 64 - indexedSuffix.length))}${indexedSuffix}`;
+    if (RECORD_NAME_PATTERN.test(candidate) && !taken.has(candidate)) return candidate;
+  }
 }
 
 function grantProblem(home: string, request: GrantRequest, now: Date): string | null {
@@ -441,6 +841,9 @@ function grantProblem(home: string, request: GrantRequest, now: Date): string | 
     if (!roots.some((root) => inside(root, expanded))) {
       return `the scope path ${expanded} is outside the declared roots (${roots.join(', ')}): a grant's scope sits within them`;
     }
+  }
+  if (readGrants(home).revocations.some((revocation) => revocation.name === request.name)) {
+    return `"${request.name}" is a revocation's name in ${grantsDir(home)}: a grant is a separate record and never writes over a revocation's file`;
   }
   return null;
 }
@@ -493,21 +896,50 @@ function revocationFrom(stem: string, record: Record<string, unknown>, key: KeyO
   const raw = record.revocation;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const fields = raw as Record<string, unknown>;
-  const known = ['grant', 'grant_generation', 'by', 'at', 'generation'];
+  const known = ['grant', 'grant_generation', 'by', 'at', 'generation', 'envelope'];
   if (Object.keys(fields).some((key) => !known.includes(key))) return null;
   if (typeof fields.grant !== 'string' || !RECORD_NAME_PATTERN.test(fields.grant)) return null;
   if (!Number.isInteger(fields.grant_generation) || (fields.grant_generation as number) < 1) return null;
   if (fields.by !== 'owner') return null;
   if (typeof fields.at !== 'string' || !Number.isFinite(Date.parse(fields.at))) return null;
   if (!Number.isInteger(fields.generation) || (fields.generation as number) < 1) return null;
+  let envelope: RevokedEnvelope | undefined;
+  const isSeatRevocation = fields.envelope === null;
+  if (fields.envelope !== undefined && fields.envelope !== null) {
+    const parsed = revokedEnvelopeFrom(fields.envelope);
+    if (parsed === null) return null;
+    envelope = parsed;
+  }
   if (typeof record.signature !== 'string') return null;
   if (!verifyDomain(GRANT_DOMAIN, revocationPayload(stem, raw as Json), record.signature, key)) return null;
-  return {
+  const verified: RevocationRecord = {
     name: stem,
     grant: fields.grant,
     grantGeneration: fields.grant_generation as number,
     by: 'owner',
     at: fields.at,
     generation: fields.generation as number,
+    ...(envelope !== undefined ? { envelope } : {}),
+  };
+  if (isSeatRevocation) {
+    Object.defineProperty(verified, SEAT_REVOCATION_SYMBOL, { value: true, enumerable: false });
+  }
+  return verified;
+}
+
+function revokedEnvelopeFrom(raw: unknown): RevokedEnvelope | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const fields = raw as Record<string, unknown>;
+  const known = ['grantee', 'capabilities', 'scope'];
+  if (Object.keys(fields).some((key) => !known.includes(key))) return null;
+  if (typeof fields.grantee !== 'string' || !TEAM_ID_PATTERN.test(fields.grantee)) return null;
+  if (!Array.isArray(fields.capabilities) || fields.capabilities.length === 0) return null;
+  if (!fields.capabilities.every((value) => typeof value === 'string' && (GRANT_WORDS as readonly string[]).includes(value))) return null;
+  if (fields.capabilities.some((value) => (TEAM_GRANT_FORBIDDEN as readonly string[]).includes(value as string))) return null;
+  if (!Array.isArray(fields.scope) || !fields.scope.every((value) => typeof value === 'string' && value !== '')) return null;
+  return {
+    grantee: fields.grantee,
+    capabilities: [...(fields.capabilities as string[])],
+    scope: [...(fields.scope as string[])],
   };
 }

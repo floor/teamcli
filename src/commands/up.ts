@@ -51,7 +51,9 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
+import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
+import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -143,6 +145,13 @@ export type Launch = {
    *  none. Null when the profile carries no file route; a refusal leaves the seat on its drop
    *  and typed legs. Absent on a world that registers nothing: fake launches and reads. */
   registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
+  /** Starts and stops the managed Codex app-server endpoint a launch owns. Present on the shipped
+   *  launch surface; a fake launch that omits it plans no endpoint, so no scene reaches a real
+   *  process. */
+  codexEndpoint?: {
+    managed(input: { dir: string; session: string; seat: string; cwd?: string }): Promise<ManagedEndpointRead>;
+    stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
@@ -214,6 +223,10 @@ const realLaunch: Launch = {
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  codexEndpoint: {
+    managed: (input) => ensureCodexEndpoint(input),
+    stop: (input) => stopSeatCodexEndpoint(input),
+  },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
@@ -767,6 +780,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     delegated: string | null;
     grantedSeat: string | null;
     grantRefusal: string | null;
+    /** The warning line a dev-mode approval fold owed, and the file whose folder logs it. */
+    approval: string | null;
+    approvalDir: string;
   } => {
     const verdict = delegatesFile
       ? (sources.delegateGate ?? delegateGate)({
@@ -777,6 +793,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           flags: [...args.flags, ...Object.keys(args.values)],
           io,
           home: sources.home,
+          // Dev mode folds the delegation's approval precondition, and the verdict carries
+          // the warning naming the live file. `aimedDev` is that same default file's chain.
+          dev: aimedDev,
+          file: delegatesFile.path,
         })
       : null;
     // The approved `<session>/<pane id>` when this run is a delegated one: the default file's
@@ -789,12 +809,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
     let grantedSeat: string | null = null;
     let grantRefusal: string | null = null;
+    let approval: string | null = verdict?.kind === 'passed' ? verdict.devApproval ?? null : null;
+    let approvalDir = aimedDir;
     if (delegated === null && delegateMissed && grantFile) {
-      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
-      if (said.kind === 'passed') grantedSeat = said.grant.seat;
-      else grantRefusal = said.text;
+      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home, dev: aimedDev });
+      if (said.kind === 'passed') {
+        grantedSeat = said.grant.seat;
+        if (said.devApproval !== undefined) {
+          approval = said.devApproval;
+          approvalDir = dirname(grantFile.path);
+        }
+      } else grantRefusal = said.text;
     }
-    return { verdict, delegated, grantedSeat, grantRefusal };
+    return { verdict, delegated, grantedSeat, grantRefusal, approval, approvalDir };
   };
   if (!mayLaunchSeats(walked) && aimed) {
     const gates = judgeGates();
@@ -919,7 +946,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const dir = dirname(loaded.path);
   // The run's own dev mode, from the file it mounts: a policy value anywhere in the caller's
   // chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable
-  // set to exactly `1` keeps its behaviour. Only the caller gate is ever folded (below).
+  // set to exactly `1` keeps its behaviour. The caller gate is folded here; the grant and
+  // delegate gates folded theirs earlier, from the default file's chain (`aimedDev`).
   const dev = resolveDevMode('up', io, { home: sources.home, team, root, now: sources.now?.() ?? new Date() });
   // The configuration lines the run owes once: the variable ignored under a governing policy,
   // and a policy source that could not be read or ordered. Written before any refusal returns,
@@ -1300,7 +1328,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // The seats' own state hooks: a settings file per seat, named at the end of its launch line.
   // A dry run plans the map it would write; the real run writes the files below, before the
   // plan is built, and a seat whose file did not land launches exactly as the file declares.
-  const hookSeats = () => seats.map(({ name, cli, launch, human }) => ({ name, cli, launch, ...(human ? { human: true as const } : {}) }));
+  const hookSeats = (fresh: readonly string[] = []) => seats.map(({ name, cli, launch, human }) => ({
+    name, cli, launch,
+    ...(human ? { human: true as const } : {}),
+    ...(fresh.includes(name) ? { fresh: true as const } : {}),
+  }));
   let cliHooks = plannedCliHooks(dir, session, hookSeats());
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
@@ -1317,6 +1349,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ...(watchFile ? { watchFile } : {}),
     teamFile: loaded.path,
     cliHooks,
+    briefEpochs: currentBriefEpochs(dir, session),
+    home: sources.home,
+    // A launch surface with no endpoint seam plans none: the marker is what makes the launch
+    // start one, and a scene's fake launch must never reach a real process.
+    ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
   });
 
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
@@ -1353,14 +1390,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const warning = foldedLine;
   // The one override sentence every lifecycle command prints, its tail included.
   const folded = warning ? devModeCallerGate(dev, warning) ?? warning : '';
-  // The audit line the fold owes: written where the gate is used, on a real run, whether a
+  // A grant or delegate gate that folded its own approval comes with the line the gate
+  // returned: the refusal's words, the live file that counted, the fold. It printed where the
+  // gate is used, so it is one more warning line beside the caller's, never wrapped again.
+  const gateApproval = gates?.approval ?? null;
+  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval])];
+  // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
-  if (!dry && folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
+  if (!dry) {
+    if (folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
+    if (gateApproval !== null) {
+      logDevMode(gates?.approvalDir ?? dir, 'up', callerLabel(caller), gateApproval, sources.now?.() ?? new Date());
+    }
+  }
 
   if (dry) {
     stampLobbyTrust(false);
     if (!json) {
-      if (folded) out.stdout(`! ${plainText(folded)}\n`);
+      for (const line of warnings) out.stdout(`! ${plainText(line)}\n`);
       // The same cause can reach the list twice — the gate and `doctor` both read the
       // approval — so a refusal is said once. A refusal leaves through the real run's
       // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -1379,10 +1426,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // A dev-mode warning rides in the same sentence, so it is not lost in the envelope.
     if (json) {
       const first = refusals[0]!;
-      const message = folded ? `${plainText(folded)}; ${plainText(first.message)}` : plainText(first.message);
+      const lead = warnings.map(plainText).join('; ');
+      const message = lead === '' ? plainText(first.message) : `${lead}; ${plainText(first.message)}`;
       refuse(io, true, 'up', { id: first.id, message, repair: first.repair ?? null });
     } else if (!dry) {
-      if (folded) out.stderr(`team up: ${plainText(folded)}\n`);
+      for (const line of warnings) out.stderr(`team up: ${plainText(line)}\n`);
       for (const refusal of uniqueRefusals(refusals)) out.stderr(`team up: ${plainText(refusal.message)}\n`);
     }
     // exit: up.never-approved
@@ -1395,13 +1443,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.placement
     return 1;
   }
-  if (!dry && folded) stderrLine(`team up: ${plainText(folded)}\n`);
+  if (!dry) for (const line of warnings) stderrLine(`team up: ${plainText(line)}\n`);
   if (dry) {
     if (json) {
       // The plan is the document's: the warning first when there is one, then one step per
       // plan line, each with the prefix the terminal draws (`+`, `!`, `skip`).
       const plan: PlanStep[] = [
-        ...(folded ? [{ step: 'warning', detail: folded, prefix: '!' as const }] : []),
+        ...warnings.map((line) => ({ step: 'warning' as const, detail: line, prefix: '!' as const })),
         ...planStepsOf(buildPlan()),
       ];
       writeJson(io, 'team.up', {
@@ -1495,33 +1543,38 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
     stampGrantedTrust();
-    // The settings files land before the plan types a line, so every launch carries its flag. A
-    // seat whose file did not land is said once, in the log, and its launch is the plain line.
-    const installed = installCliHooks(dir, session, hookSeats(), { project: team.project, root, home: sources.home });
-    for (const name of Object.keys(cliHooks)) {
-      if (installed[name] === undefined) {
-        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
-      }
-    }
-    cliHooks = installed;
-    const plan = buildPlan();
     // The general seat brief goes first: one signed drop in the folder of every seat this plan
-    // launches or relaunches, and of every declared seat the session records no launch of. A seat
-    // the state records as already launched, which this run leaves as it is, is left exactly so:
-    // no drop and no state entry. A delivery that cannot be written is said and logged, and the
-    // launch goes on; `team check` names the seat with no record.
-    const launchedSeats = plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    // launches or relaunches, and of every declared seat the session records no launch of that
+    // does not already hold a ready claim for this brief. A seat the state records as already
+    // launched, which this run leaves as it is, is left exactly so: no drop and no state entry. A
+    // delivery that cannot be written is said and logged, and the launch goes on; `team check`
+    // names the seat with no record. The plan is built here with the planned settings map — the
+    // launch set does not depend on the files — so the claim exists before the settings files are
+    // written below, which name the epoch it was delivered under.
+    const planned = buildPlan();
+    const launchedSeats = planned.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    // A declared seat this session never launched is delivered to only until it holds a ready
+    // claim for this build's brief: an unchanged second run leaves that claim and its drop as
+    // they are, while a missing, failed or older claim is delivered again.
+    const claimStands = (name: string): boolean => {
+      const claim = currentBriefClaim(recorded?.briefs?.[name]);
+      return claim !== null && claim.stage === 'ready' && claim.sha256 === GENERAL_BRIEF_SHA256;
+    };
     const briefSeats = team.seats
-      .filter((seat) => launchedSeats.includes(seat.name) || recorded?.seats[seat.name] === undefined)
+      .filter((seat) => launchedSeats.includes(seat.name)
+        || (recorded?.seats[seat.name] === undefined && !claimStands(seat.name)))
       .map((seat) => seat.name);
-    const briefs = deliverGeneralBrief({
+    const briefs = deliverBriefForAttribution({
       dir,
       root,
       session,
-      seats: briefSeats,
       home: sources.home,
-      at: (sources.now?.() ?? new Date()).toISOString(),
+      now: sources.now?.() ?? new Date(),
+      team,
+      state: recorded ?? emptySession(),
+      attributed: briefSeats,
     });
+    await walkBriefDeliveries(briefs, { dir, home: sources.home });
     for (const delivery of briefs.deliveries) {
       if (delivery.ok) continue;
       const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
@@ -1533,6 +1586,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       stderrLine(`team up: ${said}\n`);
       logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
     }
+    // The settings files land before the plan types a line, so every launch carries its flag. A
+    // seat whose file did not land is said once, in the log, and its launch is the plain line.
+    const installed = installCliHooks(dir, session, hookSeats(launchedSeats), { project: team.project, root, home: sources.home });
+    for (const name of Object.keys(cliHooks)) {
+      if (installed[name] === undefined) {
+        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
+      }
+    }
+    cliHooks = installed;
+    const plan = buildPlan();
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
     resetCliHookState(dir, session, launchedSeats);
@@ -1577,6 +1640,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      ...(launch.codexEndpoint === undefined
+        ? {}
+        : {
+            managedCodexEndpoint: (input: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(input),
+            stopManagedCodexEndpoint: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(input),
+          }),
       ...(launch.registerInbox
         ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
         : {}),
@@ -1911,11 +1980,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         // the gate's pane as actor, the one command `up` — never the pane as signer.
         ...(delegated === null ? {} : { delegated: { actor: delegated, command: 'up' as const } }),
       },
-      team.seats.map((seat) => ({
-        seat,
-        pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,
-        ...(afterwards[seat.name]?.id ? { handle: afterwards[seat.name]?.id } : {}),
-      })),
+      team.seats.map((seat) => {
+        const held = afterwards[seat.name];
+        return {
+          seat,
+          pane: held?.stage === 'ready' ? (held.pane ?? null) : null,
+          ...(held?.id ? { handle: held.id } : {}),
+          // The same measured id the launch wrote into the seat's record: the registry keeps it
+          // beside the pane, and a seat with no reading leaves the record's own id in place.
+          ...(held?.agent_session ? { agent_session: held.agent_session } : {}),
+        };
+      }),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
     // The address: a claude-code seat this run left ready records the socket its session answers
     // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves

@@ -71,6 +71,28 @@ export type EventPayload = {
   reason?: string;
   prompt?: string;
   rule?: string;
+  /** On `config.changed`: the key and the level the signed record was written at. */
+  config_key?: string;
+  config_level?: string;
+  /** The value before and after, in words (an order as its legs). An unset carries the old value
+   *  only; a change the reconcile pass appends carries the new one only, because the record holds
+   *  no history. */
+  config_old?: string;
+  config_new?: string;
+  /** On `presence.changed`: one applied, current-runtime-binding transition from a seat's
+   *  presence log. The four presence words and the event that establishes them are carried
+   *  exactly; `presence_seq` is the per-seat presence log's own sequence and `presence_event_id`
+   *  is that log's record id, so the bus record's identity is reproducible on a replay. */
+  presence_state?: string;
+  presence_event?: string;
+  presence_source?: string;
+  presence_binding?: string;
+  presence_event_id?: string;
+  presence_observed_at?: string;
+  presence_seq?: number;
+  /** On a `config.changed` the reconcile pass appended for a signed record it found without one:
+   *  `true`, so a reader can tell an event raised at write time from one raised after a crash. */
+  reconciled?: string;
   /** On `team.event-log-dropped`: the oldest sequence retention has dropped (carried forward
    *  across declarations) and the newest sequence the declaring pass dropped. */
   dropped_oldest_seq?: number;
@@ -115,6 +137,9 @@ export type CursorReadResult =
       newestSeq: number | null;
       checked: number;
       full: boolean;
+      /** Lines read alongside the verified events whose signature did not verify. They are
+       *  skipped, never returned, and this count is the reader's honest disclosure of them. */
+      unverified: number;
     }
   | {
       ok: true;
@@ -449,9 +474,20 @@ const OPTIONAL_STRING_FIELDS = [
   'reason',
   'prompt',
   'rule',
+  'config_key',
+  'config_level',
+  'config_old',
+  'config_new',
+  'reconciled',
+  'presence_state',
+  'presence_event',
+  'presence_source',
+  'presence_binding',
+  'presence_event_id',
+  'presence_observed_at',
 ] as const;
 
-const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq'] as const;
+const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq'] as const;
 
 const ALLOWED_PAYLOAD_KEYS = new Set<string>([
   'v',
@@ -733,6 +769,7 @@ export function readEventsFromCursor(
     newestSeq,
     checked: read.checked,
     full: read.full,
+    unverified: read.unverified,
   };
 }
 

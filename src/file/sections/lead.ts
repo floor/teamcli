@@ -4,7 +4,7 @@ import type { LeadMark } from './section.ts';
 import type { DraftSeat } from './seats.ts';
 
 export function readLead(
-  entry: YamlEntry | undefined, field: 'coordinator' | 'operator', seats: DraftSeat[], broken: Set<string>, check: Check,
+  entry: YamlEntry | undefined, field: string, seats: DraftSeat[], broken: Set<string>, check: Check,
 ): string {
   const name = check.required(entry, field, 1);
   if (!name || !entry) return '';

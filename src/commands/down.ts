@@ -1,9 +1,9 @@
 import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { processNameMatches } from '../clis.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeLevelNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeLevelNote, devModeOwnerLiftAtCwd, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
@@ -35,6 +35,7 @@ import {
 import type { Command, Io } from '../io.ts';
 import type { ExitKeys, ExitTyping, Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
+import { stopSeatCodexEndpoint, type EndpointStopRead } from '../launch/codex-endpoint.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -79,6 +80,11 @@ export type DownSources = {
   standing?(root: string): Standing;
   // Present on the shipped command. A dry run never calls it.
   launch?: DownLaunch;
+  /** Stops the managed Codex endpoint a seat's launch recorded, before the record that names it
+   *  is dropped. Absent on a world with no endpoint seam: nothing is stopped or said. */
+  codexEndpoint?: {
+    stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  };
   /** The delegate gate. Tests hand in a verdict; the shipped command asks the real one. */
   gate?: typeof delegateGate;
   /** The gate's own fakes: the approval standing, the approved copy, state, herdr, placement. */
@@ -165,6 +171,7 @@ export const realSources: DownSources = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   home: homedir(),
   launch: realLaunch,
+  codexEndpoint: { stop: (input) => stopSeatCodexEndpoint(input) },
 };
 
 /** How long `--wait` gives a working seat, in seconds. */
@@ -509,6 +516,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   let placed = false;
   let liveRead = false;
   let live: LiveFile | undefined;
+  // The warning line a dev-mode approval fold owed, once the gate passed: the gate's own
+  // sentence naming the live file. It is printed and logged beside the placement fold below.
+  let delegateApproval: string | null = null;
   const liveFile = (): LiveFile | undefined => {
     if (!liveRead) {
       liveRead = true;
@@ -521,6 +531,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     asked = true;
     const file = liveFile();
     if (file === undefined || file.team.delegates === null) return undefined;
+    // The delegated run stops the file the gate judges, so dev mode is resolved from that same
+    // live file: the fold and the run's own admission then read one chain. The run's own
+    // resolution below reads the same file (a non-owner with delegates acts on it), so the two
+    // verdicts agree.
+    const devHere = resolveDevMode('down', io, {
+      ...(sources.home !== undefined ? { home: sources.home } : {}),
+      team: file.team,
+      root: file.root,
+      now: sources.now(),
+    });
     verdict = gate({
       command: 'down',
       team: file.team,
@@ -529,9 +549,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       flags,
       io: { env: io.env, stdinIsTTY: io.stdinIsTTY, caller: io.caller, callerSources: io.callerSources },
       ...(sources.delegate ? { sources: sources.delegate } : {}),
+      // Dev mode folds the delegation's approval precondition, and the verdict carries the
+      // warning naming the live file; the stop then goes on as a delegated one.
+      dev: devHere,
+      file: file.path,
     });
-    if (verdict.kind === 'passed') granted = verdict.pane;
-    else if (verdict.id === 'down.delegate-command' || verdict.id === 'down.delegate-flag') placed = true;
+    if (verdict.kind === 'passed') {
+      granted = verdict.pane;
+      if (verdict.devApproval !== undefined) delegateApproval = verdict.devApproval;
+    } else if (verdict.id === 'down.delegate-command' || verdict.id === 'down.delegate-flag') placed = true;
     return verdict;
   };
   // The caller is the pane the gate placed: the run is the delegate's, whatever the verdict.
@@ -591,7 +617,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const liveNow = owner ? undefined : liveFile();
   const liveCurrent: Current | undefined =
     liveNow !== undefined && liveNow.team.delegates !== null
-      ? { ok: true, team: liveNow.team, root: liveNow.root, dir: liveNow.dir, warnings: [] }
+      ? { ok: true, team: liveNow.team, root: liveNow.root, dir: liveNow.dir, path: liveNow.path, warnings: [] }
       : undefined;
   // One clock reading serves the run's own file and the policy chain read beside it; the
   // remembering below keeps its own, later reading.
@@ -613,7 +639,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const { team, dir, root } = current;
   // Dev mode, from the file this run stops: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable set to
-  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  // exactly `1` keeps its behaviour. The caller line and the approval are folded below, and the
+  // delegate and grant gates' approval folds carry their own lines.
   const devNow = loadedAt ?? sources.now();
   const dev = resolveDevMode('down', io, {
     ...(sources.home !== undefined ? { home: sources.home } : {}),
@@ -681,10 +708,14 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // seats stay in `keep`. A file that omits `grant` does not ask, and today's `down` stands.
   let grantSeat: string | undefined;
   let grantRefusal: DownRefusal | undefined;
+  // The approval line a dev-mode grant fold owed: printed and logged with the placement fold.
+  let grantApproval: string | null = null;
   if (!branching() && rule.kind === 'ok' && caller.kind === 'seat' && caller.name === team.orchestrator && team.grant) {
-    const said = (sources.grantGate ?? grantGate)({ act: 'down', io, home: sources.home });
-    if (said.kind === 'passed') grantSeat = said.grant.seat;
-    else {
+    const said = (sources.grantGate ?? grantGate)({ act: 'down', io, home: sources.home, dev });
+    if (said.kind === 'passed') {
+      grantSeat = said.grant.seat;
+      if (said.devApproval !== undefined) grantApproval = said.devApproval;
+    } else {
       grantRefusal = {
         id: said.id === 'grant.scope' ? 'down.grant-scope' : 'down.grant-approval',
         message: said.text,
@@ -813,11 +844,25 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // seat, orchestrator and operator included, exactly as the owner's own `down` does. A gate that
   // has answered is the run's only refusal: today's abandon line stays out of the way of its own.
   const abandon = args.flags.has('abandon') && granted === undefined;
+  let abandonLifted = false;
   if (abandon && !callerOwns(caller) && verdict === undefined) {
-    refusals.push({
-      id: 'down.abandon',
-      message: 'only the owner abandons a team, from a terminal outside herdr',
+    // The owner's dev-mode admission for exactly this gate: a placed lead or
+    // orchestrator continues with the warning; every other caller keeps the refusal.
+    const lift = devModeOwnerLiftAtCwd(io, {
+      command: 'down',
+      refusal: 'only the owner abandons a team, from a terminal outside herdr',
+      ...(sources.home !== undefined ? { home: sources.home } : {}),
+      now: sources.now(),
     });
+    if (lift === null || !lift.lifted) {
+      refusals.push({
+        id: 'down.abandon',
+        message: 'only the owner abandons a team, from a terminal outside herdr',
+      });
+    } else {
+      abandonLifted = true;
+      io.stderr(`${lift.warning}\n`);
+    }
   }
   const branchRun = branching();
 
@@ -825,8 +870,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // Every other refusal stays a refusal. Unset, the list is unchanged. Nothing here writes
   // an approval, a key, or a grant.
   const placement = `only the owner or \`leads\` stops the team; this call is ${describeCaller(caller)}`;
-  let warning = '';
+  const warnings: string[] = [];
   if (dev.on) {
+    let warning = '';
     const kept: DownRefusal[] = [];
     for (const line of refusals) {
       if (line.message === placement) warning = line.message;
@@ -839,10 +885,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       warning = dev.by === 'env'
         ? devModeCallerGate(dev, warning) ?? warning
         : `warning: ${warning}${devModeLevelNote(dev)}`;
+      warnings.push(warning);
     }
-    // The audit line the fold owes: written where the gate is used, on a real run, whether a
+    // The approval a grant or delegate gate folded names the live file that counted; the
+    // delegated line came from the gate when it was asked, the grant's from just above.
+    if (delegateApproval !== null) warnings.push(delegateApproval);
+    if (grantApproval !== null) warnings.push(grantApproval);
+    // The audit line each fold owes: written where the gate is used, on a real run, whether a
     // later refusal stops the stop or the stop goes on. A dry run decides nothing and logs none.
-    if (warning && !dry) logDevMode(dir, 'down', describeCaller(caller), warning, devNow);
+    if (!dry) for (const line of warnings) logDevMode(dir, 'down', describeCaller(caller), line, devNow);
   }
   // The configuration lines the run owes once: the variable ignored under a governing policy,
   // and a policy source that would not load. A dry run writes none.
@@ -854,19 +905,28 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (refusals.length === 0) {
     const standing = sources.standing?.(root) ?? approvalStanding(root, home);
     if (standing.kind !== 'verified' && standing.kind !== 'none') {
-      if (warning) {
-        if (json) collect(warning);
-        else io.stderr(`team down: ${warning}\n`);
+      // The same approval a grant or delegate gate folded above: while dev mode is on, the live
+      // file this run stops counts as approved, the warning names it, and the caller goes to
+      // the audit log. Off, today's refusal.
+      const said = notInForce(standing);
+      const folded = devModeFileApproval(dev, said, current.path ?? join(dir, 'team.yaml'));
+      if (folded === null) {
+        for (const line of warnings) {
+          if (json) collect(line);
+          else io.stderr(`team down: ${line}\n`);
+        }
+        refuse(io, json, 'down', {
+          id: standing.kind === 'legacy' ? 'down.legacy' : 'down.refused',
+          message: notInForce(standing),
+          repair: null,
+        });
+        // exit: down.never-approved
+        // exit: down.legacy
+        // exit: down.refused
+        return 1;
       }
-      refuse(io, json, 'down', {
-        id: standing.kind === 'legacy' ? 'down.legacy' : 'down.refused',
-        message: notInForce(standing),
-        repair: null,
-      });
-      // exit: down.never-approved
-      // exit: down.legacy
-      // exit: down.refused
-      return 1;
+      warnings.push(folded);
+      if (!dry) logDevMode(dir, 'down', describeCaller(caller), folded, devNow);
     }
     // The live file names who stops. A stored copy is not a second roster.
     acting = team;
@@ -1019,10 +1079,10 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
-    abandon: abandon && callerOwns(caller),
+    abandon: abandon && (callerOwns(caller) || abandonLifted),
     // A free seat is still asked. When that ask cannot be typed or confirmed, the owner's
     // `--abandon` closes it in this same run; every other run names that close and leaves it.
-    closeUnasked: abandon && callerOwns(caller),
+    closeUnasked: abandon && (callerOwns(caller) || abandonLifted),
     unasked: 'team down --abandon closes it',
   });
 
@@ -1030,7 +1090,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if (dry && !json) {
     // A refusal leaves through the real run's return below, so the status and the exit id
     // are that refusal's. The words stay the dry run's, and nothing is written.
-    if (warning) io.stdout(`! ${warning}\n`);
+    for (const line of warnings) io.stdout(`! ${line}\n`);
     for (const refusal of refusals) io.stdout(`! down would refuse: ${refusal.message}\n`);
     io.stdout(formatPlan(plan));
   }
@@ -1039,7 +1099,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (json) {
       refuse(io, json, 'down', { id: first.id, message: first.message, repair: first.repair ?? null });
     } else if (!dry) {
-      if (warning) io.stderr(`team down: ${warning}\n`);
+      for (const line of warnings) io.stderr(`team down: ${line}\n`);
       for (const refusal of refusals) io.stderr(`team down: ${refusal.message}\n`);
     }
     // exit: down.caller
@@ -1056,14 +1116,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // exit: down.grant-scope
     return 1;
   }
-  if (!dry && warning) {
-    if (json) collect(warning);
-    else io.stderr(`team down: ${warning}\n`);
+  if (!dry) {
+    for (const line of warnings) {
+      if (json) collect(line);
+      else io.stderr(`team down: ${line}\n`);
+    }
   }
   if (dry) {
     if (json) {
       const steps: PlanStep[] = [
-        ...(warning ? [{ step: 'warning', detail: warning, prefix: '!' as const }] : []),
+        ...warnings.map((line) => ({ step: 'warning' as const, detail: line, prefix: '!' as const })),
         ...planStepsOf(plan),
       ];
       writeJson(io, 'team.down', {
@@ -1210,6 +1272,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       record() {},
       running() {},
       drop(name) {
+        // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
+        // before the record that names it goes. An endpoint whose process cannot be proven is
+        // left alone — its pid is never signalled on trust alone — and the refusal is said.
+        const endpoint = sources.codexEndpoint?.stop({ dir, session, seat: name });
+        if (endpoint !== undefined && !endpoint.stopped && endpoint.why !== undefined) {
+          io.stderr(`team down: ${name}: ${endpoint.why}\n`);
+        }
         let pane: string | undefined;
         let temporaryDropped = false;
         updateState(dir, (file) => {
@@ -1278,7 +1347,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
 }
 
 /** A team file read directly, with the project root and the `.agents` directory beside it. */
-type LiveFile = { team: TeamFile; root: string; dir: string };
+type LiveFile = { team: TeamFile; root: string; dir: string; path: string };
 
 /**
  * The live team file, read directly: the copy the delegate gate judges and the copy a delegated
@@ -1288,7 +1357,7 @@ type LiveFile = { team: TeamFile; root: string; dir: string };
 function liveTeam(io: Io, home?: string): LiveFile | undefined {
   const loaded = loadTeamFile(io.cwd, home ? { home } : {});
   if (!loaded.ok) return undefined;
-  return { team: loaded.team, root: loaded.root, dir: dirname(loaded.path) };
+  return { team: loaded.team, root: loaded.root, dir: dirname(loaded.path), path: loaded.path };
 }
 
 function callerOwns(caller: Caller): boolean {

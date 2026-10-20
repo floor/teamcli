@@ -14,7 +14,7 @@
 // src/registry/teams.ts, src/send/resolve.ts, src/send/admit.ts and src/send/deliver.ts land.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -29,7 +29,7 @@ import { findAgent, readAgents, registerAgent, type Agent } from '../src/registr
 import { findTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
 import { bindPane, deliverTrigger } from '../src/send/deliver.ts';
-import type { NativePane } from '../src/send/native.ts';
+import { readTriggerLine, type NativePane } from '../src/send/native.ts';
 import { resolveTarget } from '../src/send/resolve.ts';
 import { readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
@@ -206,16 +206,13 @@ function sendHost(world: SendWorld, seats: Record<string, { name?: string; sessi
   };
 }
 
-/** The drop the trigger names: the typed line's whitespace-free token that is a path. */
-function dropPathIn(typed: string): string {
-  const word = typed.split(/\s+/).find((part) => part.startsWith('/'));
-  if (!word) throw new Error(`no absolute path in the typed trigger: ${typed}`);
-  return word;
-}
-
-/** The drop file's own text, and the parts the receiver must be able to read in it. */
-function dropOf(typed: string): { path: string; text: string } {
-  const path = dropPathIn(typed);
+/** The one drop in a seat's folder — the message the send wrote. The typed trigger is the
+ *  seat's own receipt-writing read and names no path, so the folder is read, not the line. */
+function soleDrop(root: string, session: string, seat: string): { path: string; text: string } {
+  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const name = readdirSync(dir).find((one) => !one.includes('.'));
+  if (name === undefined) throw new Error(`no drop was written in ${dir}`);
+  const path = join(dir, name);
   return { path, text: readFileSync(path, 'utf8') };
 }
 
@@ -328,7 +325,12 @@ describe('an agy seat sends to the main coordinator', () => {
     const typed = host.typedInto('pane-coordinator')[0] as Typed;
     expect(typed.session).toBe('s');
     expect(typed.pane).toBe('pane-coordinator');
-    const drop = dropOf(typed.text);
+    // The trigger is the seat's own receipt-writing read, built from the receiver's seat and
+    // session — the line that wakes it is the one that writes the signed read receipt.
+    const line = readTriggerLine('main-coordinator', 's', { seat: 'agy-seat', team: 'floor' });
+    if (line === null) throw new Error('the trigger line did not fit');
+    expect(typed.text).toBe(line);
+    const drop = soleDrop(root, 's', 'main-coordinator');
     expect(AGENT_ID.test(agy.id)).toBe(true);
     // The registry id rides the signed payload's `from_id`; the headline a person reads names
     // the seat, and opens the body.
@@ -390,7 +392,10 @@ describe('an orchestrator reaches another team by name', () => {
     const typed = betaPane.typed[0] as Typed;
     expect(typed.session).toBe('beta');
     expect(typed.pane).toBe('pane-beta-lead');
-    const drop = dropOf(typed.text);
+    const line = readTriggerLine('lead', 'beta', { seat: 'lead', team: 'alpha' });
+    if (line === null) throw new Error('the trigger line did not fit');
+    expect(typed.text).toBe(line);
+    const drop = soleDrop(betaRoot, 'beta', 'lead');
     expect(drop.text).toContain(alpha.id);
     expect(drop.text).toContain(BODY);
     // Another team: the headline gives the sender's address, because a bare seat name would read

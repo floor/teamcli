@@ -6,6 +6,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 
 | Id | Command | Code | Meaning | Example |
 | --- | --- | --- | --- | --- |
+| `ack.read` | `ack` | 0 | the message was marked read, or another reader had already marked it read or answered it | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.refused` | `ack` | 1 | the message can't be marked read, or the call is not the record's addressee | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.configuration` | `ack` | 2 | the team file can't be read | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.usage` | `ack` | 2 | the invocation can't be read | `team ack` |
 | `add.dry-run` | `add` | 0 | a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) | `team add worker --dry-run` |
 | `add.ready` | `add` | 0 | the seat is ready | `team add worker` |
 | `add.agents` | `add` | 1 | the agents can't be read | `team add worker` |
@@ -91,6 +95,16 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
+| `brief.current` | `brief` | 0 | --apply left every live or human seat current; the read is not demanded here | `team brief rollout --apply` |
+| `brief.plan` | `brief` | 0 | the dry run found every live or human seat current, and wrote nothing | `team brief rollout` |
+| `brief.file-owner` | `brief` | 1 | --file is the owner's | `team brief rollout --file .agents/team.yaml` |
+| `brief.incomplete` | `brief` | 1 | --apply left a seat stale or failed | `team brief rollout --apply` |
+| `brief.session-owner` | `brief` | 1 | --session is the owner's | `team brief rollout --session other` |
+| `brief.stale` | `brief` | 1 | the dry run found a live or human seat that needs delivery | `team brief rollout` |
+| `brief.file` | `brief` | 2 | the team file can't be read | `team brief rollout` |
+| `brief.file-invalid` | `brief` | 2 | the team file can't be parsed | `team brief rollout` |
+| `brief.invocation` | `brief` | 2 | the invocation can't be read | `team brief` |
+| `brief.not-yours` | `brief` | 2 | the caller may not read this team | `team brief rollout` |
 | `broker.stopped` | `broker` | 0 | the broker served until it was stopped | `team broker` |
 | `broker.bind` | `broker` | 1 | the socket could not be bound | `team broker` |
 | `broker.busy` | `broker` | 1 | a broker is already answering on this clone's socket | `team broker` |
@@ -121,6 +135,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-a-repo` | `check` | 2 | not inside a git repository and no team file here | `team check` |
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
+| `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.keygen.refused` | `client` | 1 | the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked | `team client keygen --out .` |
+| `client.keygen.write` | `client` | 1 | the key directory already holds a key, or the pair could not be written 0600 | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.keygen.invocation` | `client` | 2 | the command arguments are invalid | `team client keygen` |
+| `client.unknown` | `client` | 2 | the subcommand is not one this command knows | `team client grant` |
+| `client.usage` | `client` | 2 | no subcommand was named | `team client` |
 | `commits.passed` | `commits` | 0 | every commit passed | `team commits check HEAD` |
 | `commits.refused` | `commits` | 1 | a commit was refused | `team commits check HEAD` |
 | `commits.threw` | `commits` | 1 | a forbidden pattern is not a regular expression | `team commits check HEAD` |
@@ -136,11 +156,32 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.range` | `commits` | 2 | the range can't be resolved | `team commits check missing..also` |
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
+| `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
+| `config.invocation` | `config` | 2 | the invocation is not one of the command's forms | `team config` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
+| `daemon.already-running` | `daemon` | 0 | a machine daemon is already answering; nothing second was started | `team daemon run` |
+| `daemon.dry-run` | `daemon` | 0 | the install plan was printed and nothing was written | `team daemon install --dry-run` |
+| `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the system service manager starts the daemon | `team daemon install` |
+| `daemon.status` | `daemon` | 0 | the one-line health reading was printed: running, not running or unknown | `team daemon status` |
+| `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
+| `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
+| `daemon.entry-missing` | `daemon` | 1 | the CLI entry cannot be found, so the service unit cannot be written | `team daemon install` |
+| `daemon.install-failed` | `daemon` | 1 | the system service manager refused to write or start the unit | `team daemon install` |
+| `daemon.not-owner` | `daemon` | 1 | the caller may not install or remove the machine daemon | `team daemon install` |
+| `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
+| `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system service manager starts it | `team daemon run` |
+| `daemon.service-unavailable` | `daemon` | 1 | no system service manager adapter is available on this platform yet | `team daemon install` |
+| `daemon.uninstall-failed` | `daemon` | 1 | the system service manager refused to stop or remove the unit | `team daemon uninstall` |
+| `daemon.no-root` | `daemon` | 2 | no checkout was named and the current folder has no readable team file | `team daemon install` |
+| `daemon.run-root` | `daemon` | 2 | a checkout named on run cannot be read, so nothing was started | `team daemon run` |
+| `daemon.usage` | `daemon` | 2 | the invocation cannot be read | `team daemon watch` |
 | `delegate.done` | `delegate` | 0 | the authority record was updated, already matched, or passed a write-free preview | `team delegate <session/pane> --commands up,down` |
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
 | `delegate.invalid` | `delegate` | 2 | the team file or proposed authority record is invalid or cannot be read | `team delegate <session/pane> --commands up,down` |
 | `delegate.invocation` | `delegate` | 2 | the command arguments are invalid | `team delegate <session/pane> --commands up,down` |
+| `development-mode.done` | `development-mode` | 0 | the machine development mode was read, shown, planned, or switched | `team development-mode set local-fast --show` |
+| `development-mode.refused` | `development-mode` | 1 | a non-owner called set without the owner-authorization token for this exact switch, or the machine record cannot be read or verified | `team development-mode set off` |
+| `development-mode.invocation` | `development-mode` | 2 | the command arguments are invalid | `team development-mode set maybe` |
 | `doctor.clear` | `doctor` | 0 | nothing is missing | `team doctor` |
 | `doctor.missing` | `doctor` | 1 | something is missing | `team doctor` |
 | `doctor.file` | `doctor` | 2 | the team file can't be read | `team doctor --file missing.yaml` |
@@ -184,6 +225,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
 | `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
 | `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
+| `feed.presence-unreadable` | `feed` | 1 | the presence event log cannot be read | `team feed` |
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
@@ -216,7 +258,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.not-a-repo` | `init` | 2 | not inside a git repository | `team init` |
 | `issues.none` | `issues` | 0 | nothing is waiting | `team issues` |
 | `issues.shown` | `issues` | 0 | the task list was shown | `team issues` |
-| `issues.file` | `issues` | 1 | the team file can't be read, it declares no task source, or its source is a broker's | `team issues` |
+| `issues.file` | `issues` | 1 | the team file can't be read, its source is a broker's, or its task path can't be used | `team issues` |
 | `issues.missing` | `issues` | 1 | the task file is not there | `team issues` |
 | `issues.shape` | `issues` | 1 | a record is not a task, or the task file is not a list | `team issues` |
 | `issues.invocation` | `issues` | 2 | the invocation can't be read | `team issues extra` |
@@ -238,8 +280,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `mcp.not-set-up` | `mcp` | 1 | no bridge configuration exists in the lobby folder | `team mcp status` |
 | `mcp.invocation` | `mcp` | 2 | the invocation can't be read | `team mcp` |
 | `mcp.serve-refused` | `mcp` | 2 | the inbox server can't start: the invocation, the team placement or its inbox folder can't be read | `team mcp serve` |
+| `messages.client-none` | `messages` | 0 | no client reply is waiting | `team messages --client client-grant.json --key client.key` |
+| `messages.client-shown` | `messages` | 0 | a client reading completed, and an acknowledged reply's receipt was written when it was asked for | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
+| `messages.client-key` | `messages` | 1 | the client key is missing or unreadable, or the ack receipt could not be signed with it | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `messages.client-refused` | `messages` | 1 | the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify | `team messages --client client-grant.json --key client.key` |
 | `messages.file` | `messages` | 1 | the team file can't be read | `team messages` |
 | `messages.id` | `messages` | 1 | the filename is not the record's id | `team messages` |
 | `messages.key` | `messages` | 1 | the message key is missing or unreadable | `team messages` |
@@ -248,6 +294,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.session` | `messages` | 1 | the record is bound to another session | `team messages` |
 | `messages.shape` | `messages` | 1 | the record is not a message | `team messages` |
 | `messages.signature` | `messages` | 1 | the signature is not the message key's | `team messages` |
+| `messages.client-usage` | `messages` | 2 | the client invocation can't be read | `team messages --client client-grant.json` |
 | `messages.invocation` | `messages` | 2 | the invocation can't be read | `team messages extra` |
 | `messages.not-a-repo` | `messages` | 2 | not inside a git repository | `team messages` |
 | `next.none` | `next` | 0 | nothing to take or to release | `team next` |
@@ -256,12 +303,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.wait` | `next` | 0 | the wait was stopped, or a clock that did not advance ended it | `team next --wait` |
 | `next.broker` | `next` | 1 | no broker is running, or its answer was not one this build knows | `team next` |
 | `next.caller` | `next` | 1 | the caller is not a seat of this team on its recorded pane | `team next` |
-| `next.file` | `next` | 1 | the team file can't be read, or it declares no task source | `team next` |
+| `next.file` | `next` | 1 | the team file can't be read, or its task source or task path can't be used | `team next` |
 | `next.missing` | `next` | 1 | the task file is not there | `team next` |
 | `next.paused` | `next` | 1 | the team is paused, so nothing was claimed | `team next` |
 | `next.policy` | `next` | 1 | a task policy the validator refuses | `team next` |
 | `next.read` | `next` | 1 | the broker failed the read | `team next` |
 | `next.shape` | `next` | 1 | nothing was taken, and a record is not a task or the task file is not a list | `team next` |
+| `next.swap` | `next` | 1 | the seat waits on a queued model swap, so nothing was claimed | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
 | `pause.placed` | `pause` | 0 | the team was paused | `team pause` |
@@ -276,7 +324,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `plan.shown` | `plan` | 0 | the takeable queue was printed | `team plan` |
 | `plan.broker` | `plan` | 1 | no broker is running, or its answer was not one this build knows | `team plan` |
 | `plan.caller` | `plan` | 1 | the caller is not a seat of this team on its recorded pane | `team plan` |
-| `plan.file` | `plan` | 1 | the team file can't be read, or it declares no task source | `team plan` |
+| `plan.file` | `plan` | 1 | the team file can't be read, or its task source or task path can't be used | `team plan` |
 | `plan.missing` | `plan` | 1 | the task file is not there | `team plan` |
 | `plan.read` | `plan` | 1 | the broker failed the read | `team plan` |
 | `plan.shape` | `plan` | 1 | nothing was printed, and a record is not a task or the task file is not a list | `team plan` |
@@ -310,6 +358,22 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `projects.listed` | `projects` | 0 | the projects are listed | `team projects` |
 | `projects.unreadable` | `projects` | 1 | the project registry cannot be read | `team projects` |
 | `projects.invocation` | `projects` | 2 | the invocation can't be read | `team projects extra` |
+| `queue.added` | `queue` | 0 | the record was added to the queue | `team queue add "the task title" --id m1` |
+| `queue.install` | `queue` | 0 | the install acknowledgment was recorded, or the same one was already held | `team queue install m1 --commit abcdef1` |
+| `queue.none` | `queue` | 0 | the queue is empty | `team queue list` |
+| `queue.present` | `queue` | 0 | the same record was already queued; nothing was written | `team queue add "the task title" --id m1` |
+| `queue.ready` | `queue` | 0 | the green slice was recorded ready, or the same one was already held | `team queue ready m1 --commit abcdef1` |
+| `queue.shown` | `queue` | 0 | the queue was listed | `team queue list` |
+| `queue.caller` | `queue` | 1 | the caller is not the owner or a seat of this team on its recorded pane, or is not a seat for `ready` | `team queue add "the task title" --id m1` |
+| `queue.duplicate` | `queue` | 1 | the id is already queued with a different record | `team queue add "another title" --id m1` |
+| `queue.file` | `queue` | 1 | the team file can't be read | `team queue list` |
+| `queue.installer` | `queue` | 1 | the caller is not the owner or the designated installer on its recorded pane, or the designation is not approved | `team queue install m1 --commit abcdef1` |
+| `queue.lease` | `queue` | 1 | the caller holds no live lease of the task it names | `team queue ready m1 --commit abcdef1` |
+| `queue.read` | `queue` | 1 | the task file is missing, not a list, could not be written or read back, or holds no such task | `team queue list` |
+| `queue.record` | `queue` | 1 | the green-slice journal can't be read or written, or holds its maximum pending slices | `team queue ready m1 --commit abcdef1` |
+| `queue.source` | `queue` | 1 | the team file declares a linear task source; there is no local queue, and the tracker is never written | `team queue list` |
+| `queue.invocation` | `queue` | 2 | the invocation can't be read, or a value is not a task id, a declared seat, a one-line title or priority, a commit, or a version | `team queue add` |
+| `queue.not-a-repo` | `queue` | 2 | not inside a git repository | `team queue list` |
 | `raise.dry-run` | `raise` | 0 | the route the raise would take; nothing was written | `team raise release.ready "the release is ready for the owner" --dry-run` |
 | `raise.merged` | `raise` | 0 | the line was merged into the owner's open record, and the record counts it | `team raise release.ready "the release is ready for the owner"` |
 | `raise.raised` | `raise` | 0 | the line reached the owner's mailbox as a signed record, and the owner was notified | `team raise release.ready "the release is ready for the owner"` |
@@ -392,6 +456,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.delegate-flag` | `remove` | 1 | the delegate may not use this flag | `team remove worker --keep` |
 | `remove.delegate-placement` | `remove` | 1 | the approved delegate must be an external non-seat pane | `team remove worker` |
 | `remove.detached` | `remove` | 1 | a run with no terminal | `team remove worker` |
+| `remove.endpoint` | `remove` | 1 | the seat's managed Codex endpoint cannot be stopped or kept | `team remove worker, on a seat whose pane is left running or whose endpoint cannot be proven` |
 | `remove.file-owner` | `remove` | 1 | --file is the owner's | `team remove worker --file .agents/team.yaml` |
 | `remove.herdr` | `remove` | 1 | herdr doesn't answer | `team remove worker` |
 | `remove.keep-temporary` | `remove` | 1 | a temporary seat is not kept in the file | `team remove worker --keep` |
@@ -417,6 +482,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `rename.invalid` | `rename` | 2 | the team file or new seat name is invalid | `team rename worker Bad_Name` |
 | `rename.invocation` | `rename` | 2 | the invocation can't be read | `team rename` |
 | `reply.replied` | `reply` | 0 | the reply record was written on its thread, or its thread was closed | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.client-refused` | `reply` | 1 | a record a client wrote can't be answered: client reply publication is not in this release, or the record is bound to another session or checkout | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.refused` | `reply` | 1 | the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.configuration` | `reply` | 2 | the team file can't be read | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.usage` | `reply` | 2 | the invocation can't be read | `team reply` |
@@ -457,6 +523,18 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `route.unrecorded` | `route` | 1 | the pair is admitted and the route record could not be written | `team route builder-2` |
 | `route.configuration` | `route` | 2 | the team file cannot be read | `team route builder-2` |
 | `route.usage` | `route` | 2 | the invocation cannot be read | `team route` |
+| `seat.shown` | `seat` | 0 | the seat is printed | `team seat lead` |
+| `seat.file-owner` | `seat` | 1 | --file is the owner's | `team seat lead --file .agents/team.yaml` |
+| `seat.no-seat` | `seat` | 1 | the team file declares no seat of that name | `team seat ghost` |
+| `seat.session-owner` | `seat` | 1 | --session is the owner's | `team seat lead --session team` |
+| `seat.sessions` | `seat` | 1 | the session registry can't be read | `team seat lead` |
+| `seat.file` | `seat` | 2 | the team file can't be found or read | `team seat lead --file missing.yaml` |
+| `seat.file-invalid` | `seat` | 2 | the team file does not parse or does not validate | `team seat lead --file team.yaml` |
+| `seat.herdr` | `seat` | 2 | herdr doesn't answer | `team seat lead` |
+| `seat.invocation` | `seat` | 2 | the invocation is not one of the command's forms | `team seat` |
+| `seat.not-a-repo` | `seat` | 2 | the directory is not inside a git repository | `team seat lead` |
+| `seat.not-yours` | `seat` | 2 | the team is not the caller's to read | `team seat lead` |
+| `seat.source` | `seat` | 2 | a signed settings record can't be read or does not verify | `team seat lead` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
@@ -467,14 +545,18 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `seats.not-a-repo` | `seats` | 2 | not inside a git repository | `team seats` |
 | `seats.not-yours` | `seats` | 2 | the caller may not read this team | `team seats` |
 | `send.answered` | `send` | 0 | a reply record on the thread arrived within the window | `team send worker hello --wait` |
+| `send.client-sent` | `send` | 0 | a client grant's signed drop was written to the entity orchestrator's drop folder | `team send --client grant.json --key client.key orchestrator@floor hello` |
 | `send.confirmed` | `send` | 0 | a native handoff was recorded to the history and its pending record cleared | `team send --confirm 11111111-1111-4111-8111-111111111111` |
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.native` | `send` | 0 | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | `team send worker hello` |
+| `send.queued` | `send` | 0 | the receiver was busy, so the signed copy is stored and nothing was typed; the message is delivered when the seat's lock clears, and the id on the line is the one the delivery keeps | `team send lead hello` |
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
+| `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
@@ -482,12 +564,32 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |
 | `send.timeout` | `send` | 1 | the record was sent, and the wait window closed with no reply on the thread (the thread stays open) | `team send worker hello --wait --timeout 10` |
 | `send.unreachable` | `send` | 1 | the seat was not reached | `team send worker hello` |
+| `send.client-usage` | `send` | 2 | the client grant invocation can't be read | `team send --client grant.json orchestrator@floor hello` |
 | `send.configuration` | `send` | 2 | the team file cannot be read, or the caller's folder is no team and a bare name has none to resolve in | `team send lead --file missing.yaml` |
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `sessions.none` | `sessions` | 0 | no session record matched | `team sessions` |
 | `sessions.shown` | `sessions` | 0 | the session records were listed | `team sessions` |
 | `sessions.read` | `sessions` | 1 | a session registry can't be read | `team sessions` |
 | `sessions.invocation` | `sessions` | 2 | the invocation can't be read | `team sessions --by nothing` |
+| `settings.dry-run` | `settings` | 0 | the change a write would make is printed and nothing is written | `team settings set lead nickname=Atlas --dry-run` |
+| `settings.set` | `settings` | 0 | the setting is signed into the seat's record and logged | `team settings set lead nickname=Atlas` |
+| `settings.shown` | `settings` | 0 | the seat's settings are printed | `team settings lead` |
+| `settings.unset` | `settings` | 0 | the setting is removed from the seat's record and logged | `team settings unset lead nickname` |
+| `settings.file-owner` | `settings` | 1 | --file is the owner's | `team settings lead --file .agents/team.yaml` |
+| `settings.no-agent` | `settings` | 1 | the seat has no registered agent record and one could not be created to hold its settings | `team settings set lead nickname=Atlas` |
+| `settings.no-seat` | `settings` | 1 | the team file declares no seat of that name | `team settings ghost` |
+| `settings.not-owner` | `settings` | 1 | only the owner sets a seat's settings | `team settings set lead nickname=Atlas` |
+| `settings.not-set` | `settings` | 1 | an unset names a setting that is not set on the seat | `team settings unset lead model` |
+| `settings.policy` | `settings` | 1 | a policy in force over the seat does not admit the value | `team settings set lead delivery_order=typed` |
+| `settings.file` | `settings` | 2 | the team file can't be found or read | `team settings lead --file missing.yaml` |
+| `settings.file-invalid` | `settings` | 2 | the team file does not parse or does not validate | `team settings lead --file team.yaml` |
+| `settings.invocation` | `settings` | 2 | the invocation is not one of the command's forms | `team settings` |
+| `settings.key` | `settings` | 2 | a setting key is unknown or is not one a seat holds | `team settings set lead nope=1` |
+| `settings.not-a-repo` | `settings` | 2 | the directory is not inside a git repository | `team settings lead` |
+| `settings.not-yours` | `settings` | 2 | the team is not the caller's to read | `team settings lead` |
+| `settings.source` | `settings` | 2 | a signed settings record can't be read or does not verify | `team settings lead` |
+| `settings.value` | `settings` | 2 | a value is outside what the seat's profile or the key's shape accepts | `team settings set lead model=nope` |
+| `settings.write` | `settings` | 2 | the seat's record can't be replaced | `team settings set lead nickname=Atlas` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |
@@ -500,10 +602,31 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `status.invocation` | `status` | 2 | the invocation can't be read | `team status extra` |
 | `status.not-a-repo` | `status` | 2 | not inside a git repository | `team status` |
 | `status.not-yours` | `status` | 2 | the caller may not read this team | `team status` |
+| `swap.cancelled` | `swap` | 0 | the queued swap was taken out of the queue | `team swap cancel builder-1` |
+| `swap.forced` | `swap` | 0 | the owner forced the queued swap to run at once | `team swap now builder-1` |
+| `swap.listed` | `swap` | 0 | the queue or the entity's rule listing was shown | `team swap` |
+| `swap.queued` | `swap` | 0 | a model swap was queued for the seat's boundary | `team swap queue builder-1` |
+| `swap.ran` | `swap` | 0 | the queued swaps due now were carried out, or none was due | `team swap --run` |
+| `swap.caller` | `swap` | 1 | not the owner, the orchestrator or the operator, or not a seat of the team for the view | `team swap queue builder-1` |
+| `swap.detached` | `swap` | 1 | a run with no terminal | `team swap now builder-1` |
+| `swap.herdr` | `swap` | 1 | herdr cannot be read, so no swap can be run | `team swap --run` |
+| `swap.io` | `swap` | 1 | the state can't be read or written | `team swap queue builder-1` |
+| `swap.not-queued` | `swap` | 1 | no swap waits for the seat | `team swap cancel builder-1` |
+| `swap.rule` | `swap` | 1 | the entity's model rule can't be read or none is declared | `team swap queue builder-1` |
+| `swap.run-failed` | `swap` | 1 | a due swap did not run: a preflight refusal, a read-back mismatch, or the seat is signed off or no longer declared | `team swap --run` |
+| `swap.seat` | `swap` | 1 | no such seat in the team | `team swap queue nobody` |
+| `swap.target` | `swap` | 1 | no seat of the entity the team may copy from runs the requested model, or no recipe is available | `team swap queue builder-1 --to claude-code:nothing` |
+| `swap.unchanged` | `swap` | 1 | the seat already declares a model the rule allows | `team swap queue builder-1` |
+| `swap.file` | `swap` | 2 | the team file or a --file path can't be read | `team swap --rule` |
+| `swap.invocation` | `swap` | 2 | the invocation can't be read | `team swap queue` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
+| `team.presence-hook-ignored` | `team` | 0 | a notification other than the measured permission prompt was ignored and nothing was staged | `team presence-hook --event human-wait --notification permission_prompt` |
+| `team.presence-hook-staged` | `team` | 0 | the presence event was staged | `team presence-hook --event turn-end` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
+| `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
+| `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
@@ -561,6 +684,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `usage.block` | `usage` | 0 | the machine's report printed | `team usage` |
 | `usage.invocation` | `usage` | 2 | the invocation can't be read | `team usage extra` |
 | `usage.store` | `usage` | 2 | the store folder can't be read | `team usage` |
+| `watch.standby` | `watch` | 0 | a hosted watch stood down for a running watch | `team watch` |
 | `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
 | `watch.already` | `watch` | 1 | a watch already runs | `team watch` |

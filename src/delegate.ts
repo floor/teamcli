@@ -3,6 +3,7 @@ import { compare, describe, fingerprints } from './approve/fingerprint.ts';
 import { callerOf, describeCaller, readAncestors, type Caller, type CallerSources } from './caller.ts';
 import type { ActingCommand, Delegate, DelegateCommand } from './delegate-types.ts';
 import { ACTING_COMMANDS } from './delegate-types.ts';
+import { devModeFileApproval, type DevModeRun } from './dev_mode.ts';
 import type { TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
 import { agentList, paneRootPid, sessionRunning, type HerdrAgent } from './herdr.ts';
@@ -13,11 +14,12 @@ import { approvalStanding, type Standing } from './store/store.ts';
 
 /**
  * A delegated run, decided and not yet done. `passed` names the approved pane the caller
- * stood in. `refused` is what the command prints after `team <command>: `, with no newline;
- * the id is the exit id.
+ * stood in, and, when dev mode folded the approval precondition, the warning line the run
+ * prints and logs. `refused` is what the command prints after `team <command>: `, with no
+ * newline; the id is the exit id.
  */
 export type DelegateVerdict =
-  | { kind: 'passed'; pane: string }
+  | { kind: 'passed'; pane: string; devApproval?: string }
   | { kind: 'refused'; id: string; text: string };
 
 /**
@@ -139,20 +141,42 @@ export function delegateGate(input: {
   /** Approval store home. Absent: the owner's home, the same default the store uses. */
   home?: string;
   sources?: DelegateSources;
+  /**
+   * Dev mode's run for this command. On — and for every command but `approve`, which writes
+   * the verified record — the approval precondition is the live team file's, and the passed
+   * verdict carries the warning line naming it. `file` is that file's path.
+   */
+  dev?: DevModeRun;
+  file?: string;
 }): DelegateVerdict {
   const { command, team, root, dir, flags, home } = input;
   const sources = input.sources ?? {};
   const refuse = (suffix: string, text: string): DelegateVerdict => ({ kind: 'refused', id: `${command}.${suffix}`, text });
 
   const standing = sources.standing ? sources.standing(root) : approvalStanding(root, home);
+  let devApproval: string | undefined;
   if (standing.kind !== 'verified') {
-    return refuse('delegate-approval', `delegation needs a verified approval: ${notInForce(standing)}`);
+    const said = `delegation needs a verified approval: ${notInForce(standing)}`;
+    // `approve` is the one act that writes the verified record: it never runs on a file only
+    // dev mode stands behind, so its precondition is not folded even when a dev run is handed
+    // in. Every other act folds exactly that precondition, and nothing after it: the evidence,
+    // the placement, the entry, its command list and the owner's flags still refuse.
+    const folded = command !== 'approve' && input.dev !== undefined && input.file !== undefined
+      ? devModeFileApproval(input.dev, said, input.file)
+      : null;
+    if (folded === null) return refuse('delegate-approval', said);
+    devApproval = folded;
   }
 
   // `approve` still refuses an owner section outside the ordinary list — read from the record's
   // own fingerprints, never from a stored copy. Every act reads the live file. A fingerprint
   // difference is not a refusal, and a stored copy that cannot be read does not block the act.
   if (command === 'approve') {
+    // Unreachable: the fold above never admits `approve`, so a non-verified standing has
+    // already returned. The guard is what lets the record be read here.
+    if (standing.kind !== 'verified') {
+      return refuse('delegate-approval', `delegation needs a verified approval: ${notInForce(standing)}`);
+    }
     const kept = compare(approvedFingerprints(standing.record), fingerprints(team)).filter(
       (difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name),
     );
@@ -181,7 +205,7 @@ export function delegateGate(input: {
   const prohibited = input.swap ? PROHIBITED[command].filter((name) => name !== 'keep') : PROHIBITED[command];
   const flag = prohibited.find((name) => flags.includes(name));
   if (flag !== undefined) return refuse('delegate-flag', `--${flag} is the owner's; the approved delegate cannot use it`);
-  return { kind: 'passed', pane: found.entry.pane };
+  return { kind: 'passed', pane: found.entry.pane, ...(devApproval === undefined ? {} : { devApproval }) };
 }
 
 /**

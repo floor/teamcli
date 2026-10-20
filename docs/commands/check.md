@@ -36,14 +36,56 @@ reads
 [`team seats`](seats.md) and counts as not working: `<seat>: unknown for over <threshold> — blind,
 and it counts as not working`, repaired with the owner's look at the pane.
 
-The general seat brief every launch delivers first is checked on the same pass. A seat the session
-launched — a human's pane too, once the session has launched anything — with no delivery record in
-the state is the difference `<seat>: the general seat brief has not been delivered`, repaired with
-`team reload <seat> or team up`, or with `team up` alone for a human's pane. A recorded delivery is
-not taken on trust: the check opens the record at the brief's id and verifies it against this
-checkout's message key and the brief's text. A record that is missing, unsigned, signed by another
-key or holding another body is `<seat>: the general seat brief's delivery record does not verify`,
-with the same repair.
+The entity's model rule ([team swap](swap.md)) is read on the same pass: every seat of the team
+this check runs in whose declared vendor the rule forbids is one difference, naming the rule, the
+seat's vendor and the swap proposed — or why none is — and repaired with `team swap queue <seat>`,
+which the team's lead runs. Breaches in the entity's other teams are not this team's differences:
+the check answers for the team it runs in. A rule that cannot be read is a note, never an empty
+rule that would read every seat as in rule.
+
+The general seat brief every launch delivers first is checked on the same pass. A delivery is a
+claim and a drop: the claim in the state names the delivery's incarnation, runtime epoch, the
+brief's sha256 and the id the record must have. A seat the session launched — a human's pane too,
+once the session has launched anything — with no claim, or with one an older build wrote before
+claims existed, is the difference `<seat>: the general seat brief has not been delivered`, repaired
+with `team reload <seat> or team up`, or with `team up` alone for a human's pane. A recorded
+delivery is not taken on trust: the check opens the record at the claim's id and verifies it
+against this checkout's message key, the claim's incarnation and this build's brief. A record that
+is missing, unsigned, signed by another key, bound to another lifetime or epoch, or holding
+another body is `<seat>: the general seat brief's delivery record does not verify`, with the same
+repair. When this build's brief is ahead of any seat's claim, the run prints the one rollout hint
+`run team brief rollout --apply to deliver the general seat brief to every live seat`, after the
+per-seat lines and before the summary. The `--json` document carries the same line as `hint`.
+
+A CLI seat is then asked for its read. `<seat>: the general seat brief has been delivered and not
+read` is repaired by the seat's own next turn; a seat whose record says it has no turn-start
+reader (`watcher` absent or `none`) is told how to read by hand, with
+`team drops --read --seat <seat>`, and how to install the launch's hooks, with
+`team reload <seat>`. The read receipt must bind the current claim — its id, incarnation, text hash
+and the epoch it was written under — so a receipt an earlier agent, an earlier text or an earlier
+runtime left is `<seat>: the general seat brief's read receipt is stale (an earlier agent or an
+earlier text)`, and a receipt file that does not verify for the claim is
+`<seat>: the general seat brief's read receipt does not verify`, whose repair is
+`team brief rollout --apply` recovering the delivery at a new id (the file that does not verify is
+left in place). A delivery whose launch did not reach ready keeps its launch difference and its
+read is not demanded: the seat reads `<seat>: the general seat brief has been delivered; launch not
+ready`, and a read that arrived before readiness is
+`<seat>: a read happened before readiness; the runtime is not confirmed`. A human seat is
+delivery-only and is never asked to read. `team check` writes none of this: it has no writer mode
+and no `--rollout`, and the only act it names is the seat's own read or a delivering command's.
+
+Unread work is named on the same pass. Each seat's drop folder is read the way the watch's
+unread wake reads it: a message with no signed read receipt past `watch.unread_after` — ten
+minutes when the file omits it — is one difference for the seat,
+`<seat>: a message from <from> has been unread for <n> min (id <id>)`, with
+`; <m> more unread` when other messages are due and the oldest named. The sender is the verified
+record's own `from`; a record that does not verify is named `an unverified message` and keeps
+its age, its id and its count, never the word beside it — that marker is unsigned and lends no
+sender, owner or seat. The repair is the seat's next turn, or `team drops --read --seat <seat>`
+when the seat's record says no turn-start reader is installed; the watch's unread wake types
+that same read into an idle seat. The general seat brief keeps its own read difference and is
+not counted twice. A person's drop is read by a person and is never asked for a receipt. The
+check writes nothing here either.
 
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
@@ -66,6 +108,23 @@ printed its plain permission or trust row for the seat (`status`'s wording), the
 with this one line, so a held seat is named once. A temporary seat — one `team add --temporary`
 recorded and the file never names — is read the same way, from its record, with its like-seat's
 CLI.
+
+A watch the machine daemon hosts is read on the same pass, as notes only. The check names the ones
+a reader would act on: a watch whose last pass failed reads `watch: the last cycle failed`, with
+the age the record gives that pass when it holds one (`watch: the last cycle failed <age>`); a
+watch standing down for a live pane watch reads `watch: standing by; a live pane watch owns this
+session (<reason>)`, and it touches nothing in that session; a required watch that stopped or
+failed reads `watch: stopped in the daemon (<reason>)` or `watch: failed in the daemon (<reason>)`;
+and a watch whose outbound effects are closed adds `watch: outbound effects blocked (no verified
+admitted sender is injected); it is not enforcing anything`, whatever its phase — it can cycle
+while those effects are closed, and the check never prints it as enforcing. The rest of the watch
+is quiet: a watch that is simply cycling, one still starting or stopping, one that has not
+completed its first pass, and a stopped or failed watch the record does not call required add no
+phase line, and a route the daemon records no watch for prints nothing at all — a watch exists
+only where one was started on purpose. A stopped or failed watch is terminal in the record: nothing
+here restarts it, and the daemon does not bring it back by itself, so it runs again only when it is
+started again. With more than one watched route, each line ends with its route, `… (<root>)`. These
+notes never enter the total and never change the exit.
 
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
@@ -121,6 +180,9 @@ meet the refusal every command gives them and exit 1.
 
 ## Output and exit codes
 
+Every run prints the declared limitation of a client app key, on stdout in text mode and as
+the `key_isolation` field in JSON: `key isolation: not enforced (pane guard pending)`.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `no differences` | 0 |
@@ -132,19 +194,20 @@ meet the refusal every command gives them and exit 1.
 ## Example
 
 ```fixture
-briefs: delivered
+briefs: delivered-and-read
 ```
 
 ```yaml file=.agents/team.yaml
 format: 1
 project: beacon
+entity: lab
 operator: claude-keeper
 
 identity:
   humans: [jane@acme.example]
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobbies/lab
   - ~/Code/beacon
 
 workspace:
@@ -169,6 +232,15 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+
+  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude --model deepseek-flash
 ```
 
 The team runs as the file and the state say, so there is nothing to act on (the note is the
@@ -177,9 +249,31 @@ housekeeping of a role word written the 0.3.5/0.4 way):
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
+key isolation: not enforced (pane guard pending)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0
+```
+
+The entity's rule refuses this lab, and the check names each seat of the team it runs in with the
+swap the queue would take — the same breach list `team swap --rule` prints for the entity:
+
+```console
+$ team policy set entity model-rule '*=!anthropic' ; echo "exit $?"
+policy: set model-rule=*=!anthropic at entity (lab)
+exit 0
+$ team check ; echo "exit $?"
+team beacon, session "beacon"
+key isolation: not enforced (pane guard pending)
+note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
+difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
+  repair: team swap queue claude-keeper
+  who: the team's lead
+difference: claude-beacon: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
+  repair: team swap queue claude-beacon
+  who: the team's lead
+2 differences
+exit 1
 ```
 
 Rationale, behaviour, refusals and known limits: [docs/internal/check.md](../internal/check.md).

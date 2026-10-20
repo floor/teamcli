@@ -5,9 +5,14 @@
 // not list. A command's usage lines are its exported USAGE string (the same
 // string `--help` prints). Its flags are the names passed to readArgs, or
 // check's VALUE_OPTIONS and FLAG_OPTIONS — the valued options and the switches
-// that take no value. A flag no usage text mentions is hidden: `--help` is
-// in the program usage, so a command keeps it visible, while `-h` and `-V`
-// are not written anywhere and stay hidden. Positionals are the <name> tokens
+// that take no value. A command that parses more than one branch calls readArgs
+// more than once: each call is then one form, and the command's own usage lines
+// declare exactly those forms — every option in a call and its value/switch
+// type must match one line, and every such line must match one call, so a form
+// and its parser cannot drift apart. A single call keeps the older rule: a
+// flag no usage text mentions is hidden — `--help` is in the program usage, so
+// a command keeps it visible, while `-h` and `-V` are not written anywhere and
+// stay hidden. Positionals are the <name> tokens
 // of the usage lines; one that a line omits or wraps in brackets is optional.
 // A bare word after the command is a subcommand, and the command must compare
 // its first positional to that word. One required word after a positional is a
@@ -125,24 +130,26 @@ function stringConst(source: ts.SourceFile, name: string, exported: boolean): st
   return null;
 }
 
-function optionLists(source: ts.SourceFile, rel: string): { valued: string[]; flags: string[] } | null {
-  let read: { valued: string[]; flags: string[] } | null = null;
-  let reads = 0;
+type OptionSet = { valued: string[]; flags: string[] };
+
+/** Every option set the command itself parses: one per readArgs call, in source order. A command
+ *  that parses different branches may call readArgs more than once; each call is then a form of
+ *  its own, and commandNode matches the forms to the usage lines it declares. */
+function optionLists(source: ts.SourceFile, rel: string): OptionSet[] {
+  const read: OptionSet[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'readArgs') {
       const valuedNode = node.arguments[1];
       const flagsNode = node.arguments[2];
       if (!valuedNode || !flagsNode) throw new Error(`${rel}: readArgs needs its option lists`);
-      reads += 1;
-      read = {
+      read.push({
         valued: literalStrings(valuedNode, `${rel}: readArgs values`),
         flags: literalStrings(flagsNode, `${rel}: readArgs flags`),
-      };
+      });
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  if (reads > 1) throw new Error(`${rel}: more than one readArgs call`);
 
   // A command that reads its own options without readArgs lists the valued ones in VALUE_OPTIONS
   // and, when it has any, its switches — taken with no value — in FLAG_OPTIONS beside it: check
@@ -157,8 +164,8 @@ function optionLists(source: ts.SourceFile, rel: string): { valued: string[]; fl
     ts.forEachChild(node, visitValues);
   };
   visitValues(source);
-  if (read && (values || switches)) throw new Error(`${rel}: both readArgs and VALUE_OPTIONS/FLAG_OPTIONS`);
-  if (values) return { valued: values, flags: switches ?? [] };
+  if (read.length > 0 && (values || switches)) throw new Error(`${rel}: both readArgs and VALUE_OPTIONS/FLAG_OPTIONS`);
+  if (values) return [{ valued: values, flags: switches ?? [] }];
   if (switches) throw new Error(`${rel}: FLAG_OPTIONS without VALUE_OPTIONS`);
   return read;
 }
@@ -403,19 +410,67 @@ function sortFlags(flags: Flag[]): Flag[] {
   return [...flags].sort((a, b) => cmp(a.name, b.name));
 }
 
-function definedFlags(lists: { valued: string[]; flags: string[] }, rel: string): Map<string, boolean> {
+function definedFlags(sets: OptionSet[], rel: string): Map<string, boolean> {
   const defined = new Map<string, boolean>();
-  for (const name of lists.valued) {
-    const token = `--${name}`;
-    if (defined.has(token)) throw new Error(`${rel}: ${token} is listed twice`);
-    defined.set(token, true);
-  }
-  for (const name of lists.flags) {
-    const token = `--${name}`;
-    if (defined.has(token)) throw new Error(`${rel}: ${token} is both a value and a boolean`);
-    defined.set(token, false);
+  for (const lists of sets) {
+    const own = new Map<string, boolean>();
+    for (const name of lists.valued) {
+      const token = `--${name}`;
+      if (own.has(token)) throw new Error(`${rel}: ${token} is listed twice`);
+      own.set(token, true);
+    }
+    for (const name of lists.flags) {
+      const token = `--${name}`;
+      if (own.has(token)) throw new Error(`${rel}: ${token} is both a value and a boolean`);
+      own.set(token, false);
+    }
+    // The union is only the actual parser sets: a name one branch reads as a value and another
+    // reads as a switch is a contradiction, not two spellings of one option.
+    for (const [token, takesValue] of own) {
+      const prior = defined.get(token);
+      if (prior !== undefined && prior !== takesValue) throw new Error(`${rel}: ${token} is both a value and a boolean`);
+      defined.set(token, takesValue);
+    }
   }
   return defined;
+}
+
+/** One form's exact shape: every option name with its value/switch type, in one canonical order.
+ *  Bracket optionality is not part of it — a bracketed flag is accepted exactly as the parser
+ *  reads it, so the form is the set of options and their types, not how the line marks them. */
+function formSignature(flags: readonly { name: string; takesValue: boolean }[]): string {
+  return flags
+    .map((flag) => `${flag.name}=${flag.takesValue ? 'value' : 'switch'}`)
+    .sort(cmp)
+    .join(' ');
+}
+
+/** A command that parses more than one branch: its calls and its own usage lines must declare the
+ *  same forms, both ways. A parser shape no line declares, a line no call parses, or two calls or
+ *  two lines with the same shape (which call a run takes would be unstated) is an error — the
+ *  multiple-call error is never swallowed without the forms themselves matching. */
+function checkOptionForms(sets: OptionSet[], ownLines: ParsedLine[], rel: string): void {
+  if (sets.length < 2) return;
+  const fromUsage = new Map<string, string>();
+  for (const line of ownLines) {
+    const signature = formSignature(line.flags);
+    const prior = fromUsage.get(signature);
+    if (prior !== undefined) throw new Error(`${rel}: usage lines "${prior}" and "${line.line}" declare the same form`);
+    fromUsage.set(signature, line.line);
+  }
+  const fromParser = new Set<string>();
+  for (const set of sets) {
+    const signature = formSignature([
+      ...set.valued.map((name) => ({ name: `--${name}`, takesValue: true })),
+      ...set.flags.map((name) => ({ name: `--${name}`, takesValue: false })),
+    ]);
+    if (fromParser.has(signature)) throw new Error(`${rel}: two readArgs calls declare the same form: ${signature || 'no options'}`);
+    fromParser.add(signature);
+    if (!fromUsage.has(signature)) throw new Error(`${rel}: a readArgs call (${signature || 'no options'}) has no usage line declaring that form`);
+  }
+  for (const [signature, line] of fromUsage) {
+    if (!fromParser.has(signature)) throw new Error(`${rel}: usage line "${line}" declares a form no readArgs call parses (${signature || 'no options'})`);
+  }
 }
 
 function flagsOn(lines: ParsedLine[], extra: Flag[], rel: string): Flag[] {
@@ -455,8 +510,8 @@ function commandNode(
   const usage = stringConst(source, 'USAGE', true);
   if (!hidden && usage === null) throw new Error(`${rel}: missing exported USAGE`);
   const lists = optionLists(source, rel);
-  if (!hidden && !lists) throw new Error(`${rel}: no readArgs or VALUE_OPTIONS`);
-  const defined = lists ? definedFlags(lists, rel) : new Map<string, boolean>();
+  if (!hidden && lists.length === 0) throw new Error(`${rel}: no readArgs or VALUE_OPTIONS`);
+  const defined = definedFlags(lists, rel);
   const lines = usage === null ? [] : usageLines(usage).map((line) => parseCommandLine(line, name, rel));
   const fromUsage = new Set(lines.flatMap((line) => (line.subcommand === null ? [] : [line.subcommand])));
   const fromSource = sourceSubcommands(source);
@@ -486,6 +541,7 @@ function commandNode(
   const texts = usage === null ? [] : [usage, programUsage];
   const extra = [...hiddenFlags, ...helpFlags(help, texts)];
   const ownLines = lines.filter((line) => line.subcommand === null);
+  checkOptionForms(lists, ownLines, rel);
   const subcommands = [...fromSource].sort(cmp).map((sub): Node => {
     const subLines = lines.filter((line) => line.subcommand === sub);
     return withWho(

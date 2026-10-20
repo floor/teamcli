@@ -12,7 +12,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ofTeam, projectsFile, upsertProject } from '../src/registry/projects.ts';
+import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam, type RosterEntry, type TeamRecord } from '../src/registry/teams.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
+import { installKey } from '../src/store/keys.ts';
 import {
   defaultNaming,
   namingAcross,
@@ -238,6 +241,45 @@ tasks:
     expect(read.mode).toBe('nickname');
     expect(read.viewerTeam).toBe(teamIdOf(root));
     expect(senderDisplayName({ seat: 'lead', id: 'agt_4d5e6f708192' }, read)).toBe('Ada');
+  });
+
+  test('a signed nickname stands over the roster’s projection, and a tampered one leaves it', () => {
+    fresh();
+    fileRoot();
+    const teamId = teamIdOf(root);
+    const agentId = registerAgent(home, {
+      name: 'Lead',
+      signing: { model: 'Test', version: '1', role: 'coordinator' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamId, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    }).id;
+    upsertTeam(home, teamId, {
+      project: 'acme',
+      session: 'acme',
+      root,
+      roster: [{ agent: agentId, seat: 'lead', role: 'coordinator', nickname: 'Ada' }],
+      at: AT,
+    });
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'nickname', value: 'Wren' }] });
+    if (!plan.ok) throw new Error(`the plan was refused: ${plan.why}`);
+    const written = writeConfigSet(home, plan, { now: new Date(AT) });
+    if (!written.ok) throw new Error(`the write was refused: ${written.why}`);
+
+    // The signed word is the seat's own: the roster's projection of the file's name does not win.
+    expect(senderDisplayName({ seat: 'lead', id: agentId }, namingFor({ home, root }))).toBe('Wren');
+    // A record the reader cannot verify says nothing, and the roster stands — a display never
+    // fails on a broken record.
+    const doc = join(agentsDir(home), `${agentId}.yaml`);
+    writeFileSync(doc, readFileSync(doc, 'utf8').replace('Wren', 'Crow'));
+    expect(senderDisplayName({ seat: 'lead', id: agentId }, namingFor({ home, root }))).toBe('Ada');
   });
 
   test('a reading across teams names a registered sender by its address and an unknown one by its seat', () => {

@@ -75,16 +75,17 @@ describe('the scaling stays inside its bounds', () => {
     teamIdle: 600,
     nudgeWait: 600,
     unsentAfter: 60,
+    unreadAfter: 600,
     quotaMarks: [],
     checks: [],
     ...over,
   });
 
   test('the smallest whole-second table never scales below one second', () => {
-    const smallest = watch({ idleFirst: 1, idleRepeat: 1, teamIdle: 1, nudgeWait: 1, unsentAfter: 1 });
+    const smallest = watch({ idleFirst: 1, idleRepeat: 1, teamIdle: 1, nudgeWait: 1, unsentAfter: 1, unreadAfter: 1 });
     for (const word of ['relaxed', 'urgent'] as const) {
       const scaled = applyTempo(smallest, word);
-      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter'] as const) {
+      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter'] as const) {
         expect(scaled[key]).toBe(word === 'relaxed' ? 2 : 1);
       }
     }
@@ -93,21 +94,22 @@ describe('the scaling stays inside its bounds', () => {
   test('a fractional wait floors at one rather than rounding to zero', () => {
     expect(applyTempo(watch({ unsentAfter: 0.5 }), 'urgent').unsentAfter).toBe(1);
     expect(applyTempo(watch({ nudgeWait: 0.5 }), 'relaxed').nudgeWait).toBe(1);
+    expect(applyTempo(watch({ unreadAfter: 0.5 }), 'urgent').unreadAfter).toBe(1);
   });
 
   test('every scaled value stays a whole number at or above one, both directions', () => {
-    const odd = watch({ idleFirst: 5, idleRepeat: 15, teamIdle: 25, nudgeWait: 45, unsentAfter: 90 });
+    const odd = watch({ idleFirst: 5, idleRepeat: 15, teamIdle: 25, nudgeWait: 45, unsentAfter: 90, unreadAfter: 55 });
     for (const word of ['relaxed', 'urgent'] as const) {
       const scaled = applyTempo(odd, word);
-      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter'] as const) {
+      for (const key of ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter'] as const) {
         expect(Number.isInteger(scaled[key])).toBe(true);
         expect(scaled[key] as number).toBeGreaterThanOrEqual(1);
       }
     }
-    // Halving rounds to the nearest second, halves up: 5->3, 15->8, 25->13, 45->23, 90->45.
+    // Halving rounds to the nearest second, halves up: 5->3, 15->8, 25->13, 45->23, 90->45, 55->28.
     const urgent = applyTempo(odd, 'urgent');
-    expect([urgent.idleFirst, urgent.idleRepeat, urgent.teamIdle, urgent.nudgeWait, urgent.unsentAfter])
-      .toEqual([3, 8, 13, 23, 45]);
+    expect([urgent.idleFirst, urgent.idleRepeat, urgent.teamIdle, urgent.nudgeWait, urgent.unsentAfter, urgent.unreadAfter])
+      .toEqual([3, 8, 13, 23, 45, 28]);
   });
 
   test('the pass rate and the checks are not scaled or rebuilt', () => {

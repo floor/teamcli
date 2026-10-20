@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
-import type { NativePane } from '../../src/send/native.ts';
+import { readTriggerLine, type NativePane } from '../../src/send/native.ts';
 import { sendFrame, type SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
 
@@ -150,6 +150,20 @@ async function listen(sockets: string, pid: number): Promise<{ path: string; rec
 
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
+/** Files the delivery walk leaves beside a message record: the watch's retry record
+ *  (`.pending`) and the fallback episode marker (`.fallback.json`). Neither is a message. */
+const derivative = (name: string): boolean => name.endsWith('.pending') || name.endsWith('.fallback.json');
+
+/** The one signed record in a drop folder, with the episode marker asserted by its id. */
+function dropRecord(drops: string): string {
+  const names = readdirSync(drops);
+  const records = names.filter((name) => !derivative(name));
+  expect(records.length).toBe(1);
+  const id = records[0] as string;
+  expect(names).toContain(`${id}.fallback.json`);
+  return join(drops, id);
+}
+
 describe('team send: the typed trigger is the default for a Claude Code seat', () => {
   test('a plain send is typed while a live socket stands, and the frame is not written', async () => {
     const { root, dir, sockets } = world();
@@ -162,14 +176,16 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     // The socket is not this path's channel: it is never tried, and the live listener at the
     // pane's pid hears nothing.
     expect(host.socketsTried).toEqual([]);
     expect(received).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    const path = join(drops, readdirSync(drops)[0] as string);
-    expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
+    const path = dropRecord(drops);
+    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
     expect(host.pane.enters).toBe(1);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
@@ -186,7 +202,9 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed.length).toBe(1);
     expect(host.pane.enters).toBe(1);
@@ -202,14 +220,16 @@ describe('team send: a typed send with no socket at all', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed.length).toBe(1);
     expect(host.pane.enters).toBe(1);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    const path = join(drops, readdirSync(drops)[0] as string);
-    expect(host.pane.typed[0]).toContain(path);
+    const path = dropRecord(drops);
+    expect(host.pane.typed[0]).toBe(readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string);
     expect(host.pane.typed[0]).not.toContain('hello');
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });

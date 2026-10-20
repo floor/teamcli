@@ -64,13 +64,13 @@ nothing. Fields (`src/send/history.ts`):
 | `to` | string | yes | — | 0.4.x | the recipient seat |
 | `body` | string | yes | — | 0.4.x | the message body, whole |
 | `id` | string | yes | — | 0.4.x | the drop's id |
-| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `held`, `not-submitted`, `unreachable`, `answered`, `timeout` |
+| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `sent (unconfirmed)`, `held`, `not-submitted`, `unreachable`, `answered`, `timeout` |
 | `spec` | string | no | absent | 0.5.0 | the address the caller wrote, when not the resolved seat's own name |
 | `resolved` | string | no | absent | 0.5.0 | the agent id the spec resolved to, written with `spec` |
 | `ms` | number | no | absent | 0.5.0 | send to outcome in whole milliseconds, when measured |
 | `via` | string | no | absent | 0.5.0 | the path the message travelled: `typed` or `socket` |
 | `failed` | string[] | no | absent | 0.5.0 | the legs that did not take the send, each `<leg>: <reason>`, in the order tried |
-| `note` | string | no | absent | 0.5.0 | a qualifier the outcome cannot carry: `taken, not yet confirmed`, `taken but never acted on` |
+| `note` | string | no | absent | 0.5.0 | a qualifier the outcome cannot carry: `trigger taken, no read receipt yet`, `taken but never acted on`, and `the unsent text was pasted back` beside either |
 
 ### The message record
 
@@ -90,15 +90,33 @@ Fields (`src/commands/messages.ts`):
 | `at` | string | yes | — | ≤0.4 | when the record was written |
 | `body` | string | yes | — | ≤0.4 | the message body |
 | `from` | string | yes | — | ≤0.4 | the sender named on the record |
+| `from_id` | string \| null | no | `null` | 0.5.0 | the sender's registry agent id (`agt_`), or null for the owner and the launch |
+| `to_id` | string \| null | no | `null` | 0.5.0 | the recipient's registry agent id (`agt_`), never the state's `seat_` handle; null when the registry holds no record for the seat |
+| `rule` | string | yes | — | ≤0.4 | the admission rule the send judged |
+| `thread` | string | yes | — | ≤0.4 | the thread's first message id; a first message is its own thread |
+| `brief_sha256` | string | no | absent | 0.5.1 | a general-seat-brief delivery's canonical brief hash |
+| `incarnation` | string | no | absent | 0.5.1 | the delivery lifetime the brief record belongs to |
 
 Nothing at the tag writes this record.
+
+A general seat brief's delivery is this envelope with its own sender and id. Its `from` is
+`the launch`, its `from_id` null, and its `rule` names the launch's admission; `thread` is its own
+id, and `brief_sha256` and `incarnation` bind it to the delivered text and to the delivery
+lifetime. Its `to_id` is the recipient's `agt_` id when the registry has one — never the state's
+`seat_` handle — and null otherwise. Its id is not minted at random: it is the delivery lifetime
+and the delivered body read as a lowercase UUID (`sha256(incarnation "\n" attempt "\n" body)`,
+with the attempt omitted at zero), so one lifetime delivered again keeps the id and a reworded
+brief is a new message under the same lifetime. The record is written by the launch paths and by
+`team brief rollout --apply`, beside the claim in the session's state that names its expected id,
+the brief's sha256, the incarnation, the runtime epoch, the attempt and the stage.
 
 ### The receipt
 
 Lives beside the record at `.agents/messages/<seat>/<id>.read.json`, written by `team messages`
-only once the body has been displayed; signed under the receipt domain with the same message key,
-never the approval key. A record that does not verify shows nothing and writes nothing. Fields
-(`src/commands/messages.ts`):
+only once the body has been displayed — never for a general seat brief, whose read only
+`inbox_read` or `team drops --read` writes under the claim (see below); signed under the receipt
+domain with the same message key, never the approval key. A record that does not verify shows
+nothing and writes nothing. Fields (`src/commands/messages.ts`):
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
@@ -108,6 +126,17 @@ never the approval key. A record that does not verify shows nothing and writes n
 | `root` | string | yes | — | ≤0.4 | the checkout binding |
 | `session` | string | yes | — | ≤0.4 | the session binding |
 | `at` | string | yes | — | ≤0.4 | when the receipt was written |
+| `brief_sha256` | string | no | absent | 0.5.1 | a general-seat-brief read's binding: the claim's brief hash |
+| `incarnation` | string | no | absent | 0.5.1 | the claim's delivery lifetime |
+| `brief_epoch` | string | no | absent | 0.5.1 | the runtime epoch the reading process was started under |
+| `brief_seat_handle` | string | no | absent | 0.5.1 | the seat's `seat_` handle as the read copied it from the state |
+| `brief_pane_root_pid` | number | no | absent | 0.5.1 | the pane's root process as the read copied it from the state |
+
+A brief read's binding is all three of `brief_sha256`, `incarnation` and `brief_epoch`, or none:
+the receipt an `inbox_read` or a `team drops --read` writes for the general seat brief carries
+them, and no ordinary receipt does. The three must still be the claim's when the receipt is read —
+the epoch ties the receipt to the runtime process that wrote it, so a receipt an earlier process,
+an earlier text or an earlier delivery left does not count for the current claim.
 
 ### The route record
 
@@ -154,17 +183,24 @@ team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--
 team send --list [--json]
 ```
 
-- `--file <path>` reads the body from a file instead of the one `<message>` argument; the two
-  cannot both be given.
+- `--file <path>` reads the body from a file instead of the one `<message>` argument, and
+  `--file -` reads it from standard input (`--brief -` does the same); the two cannot both be
+  given. A multiline body that looks like terminal output — two or more lines starting with a
+  check mark or a bracketed number — is warned about on stderr and sent unchanged.
 - `--wait` asks and waits for the reply. **Refused for every seat at the tag** (`send.refused`):
   the frame it rides is a socket write this build does not make; a Claude Code seat's refusal names
   the native leg (`team route` and the caller's own cross-session tool) that will carry a waited
   send once it ships. `--timeout <s>` sets the wait window, a whole number of seconds, and is only
   meaningful with `--wait`.
 - `--json` prints one document: `{format, dry_run, status, action_summary, project, session, seat,
-  channel, ids, reply?, plan?}`; `--list` prints its own: `{format, project, session, seats,
-  summary}`. A run that exits 1 or 2 writes the structured error.
-- `--dry-run` resolves the seat and shows what would be sent, and sends nothing.
+  channel, ids, delivery?, reply?, plan?}`; `--list` prints its own: `{format, project, session, seats,
+  summary}`. A run that exits 1 or 2 writes the structured error. `delivery` is the resolved walk's
+  legs in order, each `attempted`, `queued` (another command holds the seat's lock, so the leg left
+  the record and its marker for the delivery that follows), `skipped`, `refused` or `not-reached`,
+  with the reason a leg was kept out; a dry run lists `candidate` or `skipped` with `eligible`
+  instead.
+- `--dry-run` resolves the seat and shows what would be sent, and sends nothing: no record, no
+  socket dial, no type, no log line.
 - `--list` shows the seats a message could reach; it sends nothing and needs no caller check.
 - `--record` writes no drop file, sends no frame and touches no pane: the sender writes down a
   delivery it made itself — one history line, outcome `delivered`, `via` `native`, with `--ms`.
@@ -269,7 +305,9 @@ through (`src/send/admit.ts`; proof: the admit tests at the tag):
 7. an assistant seat to its entity's coordinator;
 8. a seat to its own team's orchestrator;
 9. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
-   its agent id, never a runner or process name.
+   its agent id, never a runner or process name;
+10. a seat to a declared seat of its own team — any two roster-declared seats of one team, asked
+    after every rule above, the grant, and the open-thread reply rule.
 
 The project rules are asked first and are decided by the project record and the `leads`
 capability, never by a role's word; a pair whose teams share no project keeps the team rules.
@@ -299,13 +337,21 @@ it, and the header says the record is missing; it is never granted. Every other 
 
 ### What `delivered` means
 
-`delivered` means the line left the seat's input box after that one line and Enter — the pane's
-status reported the seat working (or done or blocked, and not the status read before Enter), or
-the transcript shows the drop being read — not that its agent read the message
-(`src/send/deliver.ts`). A line that left the box with no status or transcript evidence inside the
-window is reported `taken, not yet confirmed`. A seat whose CLI builds its own work item from its
-screens gets the drop file but the body typed through those screens; `delivered` there means the
-CLI printed the line that creates the item. A hold on the receiver's side — a message that reached
+`delivered` means the message reached the seat by a path that reports its own receipt: the
+socket frame was written, or a `--confirm` run found the handoff's nonce in the recipient's
+transcript. The typed leg claims it only through the seat's own receipt: the line it types is
+`Run team drops --read --seat <seat> --session <session> and do that.`, whose first act is the
+signed read receipt, and a receipt that verifies inside the delivery's window is
+`delivered (read)`. Without one, a trigger line that left the seat's input box after that one
+line and Enter — the pane's status reported the seat working (or done or blocked, and not the
+status read before Enter), or the transcript shows the drop being read — is a trigger sent,
+reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a message read
+(`src/send/deliver.ts`). A line that left the box with no status, transcript or receipt evidence
+inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed send, and
+never a read. Only a signed read receipt makes a message `delivered (read)`. A seat
+whose CLI builds its own work item from its screens gets the drop file but the body typed
+through those screens; `delivered` there means the CLI printed the line that creates the item. A
+hold on the receiver's side — a message that reached
 a session but sits in a dialog the sender cannot see — is `held`, with the side named, never
 `delivered`. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
 further window for a cleared box to show the seat took the line. The whole verify window is

@@ -60,6 +60,6 @@ export const deliveryOrder: Section = {
     minItems: 1,
     uniqueItems: true,
     items: { enum: DELIVERY_LEGS },
-    $comment: 'the legs a send may walk: native, mcp-inbox, typed, drop; the order in force when nothing declares one is mcp-inbox, drop, typed, and a level may drop or reorder those legs and may add only native',
+    $comment: 'the legs a send may walk: socket, native, mcp-inbox, typed, drop, headless-resume; the order in force when nothing declares one is mcp-inbox, typed, drop, and a level may drop or reorder those legs and may add native, headless-resume, or place socket anywhere',
   },
 };

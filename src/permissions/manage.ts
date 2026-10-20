@@ -20,6 +20,7 @@
 import { homedir } from 'node:os';
 import type { AuthorityEditOptions, AuthorityEditResult } from '../authority-edit.ts';
 import { describeCaller, isOwner, walkCaller } from '../caller.ts';
+import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { grantsDir } from '../grant.ts';
 import { cleanedIo, type Io } from '../io.ts';
@@ -32,6 +33,7 @@ import {
   planRevocation,
   readGrants,
   RECORD_NAME_PATTERN,
+  standingRevocationName,
   writeGrant,
   writeRevocation,
   type GrantRecord,
@@ -68,12 +70,17 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
   const caller = walkCaller(io);
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (json) {
-      writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant` from a terminal outside herdr', 1, 'owner-only');
-    } else {
-      io.stderr(`team grant: ${msg}\n`);
+    // The owner's dev-mode admission for exactly this gate.
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, home: options.home ?? homedir() });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        io.stderr(`team grant: ${msg}\n`);
+      }
+      return 'refused';
     }
-    return 'refused';
+    io.stderr(`${lift.warning}\n`);
   }
 
   const home = options.home ?? homedir();
@@ -172,12 +179,17 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
   const caller = walkCaller(io);
   if (!isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
-    if (json) {
-      writeJsonError(rawIo, 'revoke.refused', plainText(msg), 'the owner runs `team revoke` from a terminal outside herdr', 1, 'owner-only');
-    } else {
-      io.stderr(`team revoke: ${msg}\n`);
+    // The owner's dev-mode admission for exactly this gate.
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'revoke', refusal: msg, home: options.home ?? homedir() });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(rawIo, 'revoke.refused', plainText(msg), 'the owner runs `team revoke` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        io.stderr(`team revoke: ${msg}\n`);
+      }
+      return 'refused';
     }
-    return 'refused';
+    io.stderr(`${lift.warning}\n`);
   }
 
   const home = options.home ?? homedir();
@@ -221,7 +233,11 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
       }
       return 'ok';
     }
-    const request: RevocationRequest = { name: `revoke-${grant.name}`, grant: grant.name, generation: grant.generation };
+    const request: RevocationRequest = {
+      name: standingRevocationName(grant.name, grant.generation, grants, revocations),
+      grant: grant.name,
+      generation: grant.generation,
+    };
     const plan = planRevocation(home, request);
     if (!plan.ok) {
       if (json) {
@@ -232,7 +248,7 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
       return 'invalid';
     }
     if (options.dryRun) {
-      const summary = `revoke: would revoke the grant ${grant.name} at generation ${grant.generation}, writing the record ${request.name}; nothing written`;
+      const summary = `revoke: would revoke the grant ${grant.name} at generation ${grant.generation}, writing the record ${plan.record.name}; nothing written`;
       if (json) {
         writeJson(rawIo, 'team.revoke', {
           format: 1 as const,

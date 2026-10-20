@@ -24,6 +24,12 @@ export type Caller =
   // comes from the hint; the pid is what places it. `session` is recorded when the placement
   // was asked about one, and absent when none was.
   | { kind: 'pane'; pane: string; session?: string }
+  // The watch process's own principal for a direct-work send: established internally by
+  // `sendWatchDirect` after `verifyWatchAuthority` proves this process holds the watch, and never
+  // returned by `placeCaller`. No command line sets it and no io seam of the ordinary CLI can
+  // carry it. It is a non-seat sender: admission never reads it as a seat, it never falls back to
+  // the owner label, and it may never address the owner.
+  | { kind: 'watch'; session: string; pane?: string }
   | { kind: 'unplaced'; reason: string };
 
 export type Process = { pid: number; name: string };
@@ -389,6 +395,7 @@ export function describeCaller(caller: Caller): string {
     if (caller.session === undefined) return `it runs in pane ${caller.pane}`;
     return `it runs in pane ${caller.session}/${caller.pane}, which no grant lists`;
   }
+  if (caller.kind === 'watch') return 'the watch';
   return `unplaced (${caller.reason})`;
 }
 
@@ -402,6 +409,7 @@ export function logTag(caller: Caller): string {
   // A passed run's log names the pane. The refusal, which says no grant lists it, stays in
   // `describeCaller` and is not this bracket.
   if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
+  if (caller.kind === 'watch') return 'watch';
   return caller.name;
 }
 

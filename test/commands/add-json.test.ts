@@ -8,7 +8,6 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
-import { generalBriefId } from '../../src/launch/general-brief.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
@@ -201,16 +200,18 @@ describe('team add --json', () => {
 
   test('a brief that cannot be written is a note in the document', async () => {
     const made = world();
-    const path = join(project, '.agents', 'send-drops', 'acme', 'worker', generalBriefId());
+    // A fresh seat's record id is derived from a lifetime the delivery mints at the write, so the
+    // scene holds the seat's own drop folder shut instead: a file where the folder must be.
+    const path = join(project, '.agents', 'send-drops', 'acme', 'worker');
     mkdirSync(dirname(path), { recursive: true });
-    mkdirSync(path);
+    writeFileSync(path, 'not a folder\n');
     const io = testIo(project, owner);
     expect(await runAdd(['worker', '--json'], io, sources(made))).toBe(0);
     expect(io.err).toBe('');
     const doc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(io.out, ADD_OUTPUT_SCHEMA);
     expect(doc.status).toBe('ready');
     expect(doc.notes).toEqual([
-      'team add: worker: the general seat brief was not delivered (the record path is a folder)',
+      'team add: worker: the general seat brief was not delivered (the record could not be written)',
     ]);
   });
 

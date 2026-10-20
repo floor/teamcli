@@ -49,7 +49,7 @@ describe('registerInbox', () => {
     const gemini = profileFor('gemini');
     expect(gemini?.mcpInbox).toEqual({
       launchArgs: [],
-      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}', '{file}'],
+      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}', '{epoch}', '{file}'],
       target: '.gemini/settings.json',
       file: null,
     });
@@ -59,7 +59,7 @@ describe('registerInbox', () => {
     const grok = profileFor('grok');
     expect(grok?.mcpInbox).toEqual({
       launchArgs: [],
-      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}', '{file}'],
+      add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '{epoch}', '--session', '{session}', '{file}'],
       target: '.grok/config.toml',
       file: null,
     });

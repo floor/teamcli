@@ -123,7 +123,7 @@ describe('a seat, where the registry holds no record of the team', () => {
   test('a coordinator-keyed file leads: the normalised lead decides, not a per-seat mark', () => {
     // The loader normalises both spellings — the top-level `coordinator:` key and a `leads: true`
     // mark — into `team.orchestrator`, and the bridge must read that: a coordinator-keyed lead
-    // (material, vlist and others declare theirs this way) holds `leads` for the map's rows
+    // (some teams declare theirs this way) holds `leads` for the map's rows
     // without any mark on its seat.
     const text = [
       'format: 1',
@@ -250,6 +250,8 @@ describe('each mapped row pins the module function its kind names', () => {
     const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.kind === 'team-change');
     expect(rows.map(([command]) => command).sort()).toEqual([
       'hold',
+      'swap:cancel',
+      'swap:queue',
       'worktree',
       'worktree:list',
       'worktree:new',
@@ -320,7 +322,7 @@ describe('each mapped row pins the module function its kind names', () => {
     const { root, home, id } = world();
     const team = fileTeam(id);
     const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.terminal !== undefined);
-    expect(rows.map(([command]) => command).sort()).toEqual(['pause', 'proc', 'proc:add', 'proc:done', 'resume', 'watch']);
+    expect(rows.map(([command]) => command).sort()).toEqual(['ack', 'pause', 'proc', 'proc:add', 'proc:done', 'resume', 'swap:now', 'watch']);
     const noTty: Caller = { kind: 'owner-no-tty' };
     for (const [command, gate] of rows) {
       const sentence = detachedRefusal(noTty, gate.terminal);
@@ -334,6 +336,9 @@ describe('each mapped row pins the module function its kind names', () => {
       if (gate.kind === 'team-pause') {
         // The orchestrator's seat is admitted, and a plain seat is not.
         expect(gateVerdict(seatCaller('lead'), team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'ok' });
+        expect(gateVerdict(seatCaller('worker'), team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'refused' });
+      } else if (gate.kind === 'owner-only') {
+        // The owner's word: a seat is refused even on its recorded pane.
         expect(gateVerdict(seatCaller('worker'), team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'refused' });
       } else {
         expect(gateVerdict(seatCaller('worker'), team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'ok' });

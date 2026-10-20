@@ -21,10 +21,15 @@ export function filed(body: string): string {
 
 export type World = { root: string; dir: string; sockets: string; home: string; cleanup: () => void };
 
-/** One more file line, launched as a Claude Code seat: the role word a scene wants to give it. */
-export type ExtraSeat = { name: string; role: string };
+/** One more file line, launched as a Claude Code seat: the role word a scene wants to give it,
+ *  and the launch line when the scene needs one other than plain `claude`. */
+export type ExtraSeat = { name: string; role: string; launch?: string };
 
-function teamFile(root: string, lobby: string, order: readonly string[], extraSeats: readonly ExtraSeat[]): string {
+/** Launch-line overrides for the three standard seats, for scenes that spy on the wrapper a
+ *  seat's line names. Unset seats keep their plain CLI line. */
+export type LaunchLines = Partial<Record<'lead' | 'helper' | 'native', string>>;
+
+function teamFile(root: string, lobby: string, order: readonly string[] | null, extraSeats: readonly ExtraSeat[], launches: LaunchLines): string {
   const extra = extraSeats
     .map(
       (seat) => `  - role: ${seat.role}
@@ -33,7 +38,7 @@ function teamFile(root: string, lobby: string, order: readonly string[], extraSe
     vendor: test
     model: Test
     version: "1"
-    launch: claude
+    launch: ${seat.launch ?? 'claude'}
 `,
     )
     .join('');
@@ -54,30 +59,36 @@ seats:
     vendor: test
     model: Test
     version: "1"
-    launch: claude
+    launch: ${launches.lead ?? 'claude'}
+    inbound: accept
   - role: implementer
     name: helper
     cli: claude-code
     vendor: test
     model: Test
     version: "1"
-    launch: claude
+    launch: ${launches.helper ?? 'claude'}
+    inbound: accept
   - role: reviewer
     name: native
     cli: codex
     vendor: test
     model: Test
     version: "1"
-    launch: codex -m test
+    launch: ${launches.native ?? 'codex -m test'}
 ${extra}# The team's word is the walk these scenes resolve. The plain-send suites keep the typed trigger:
 # the inbox is tried and skipped for want of a listener, then the line is typed, and the default's
 # drop step stays out. The native suite declares native first, because the handoff is the leg a
-# declared order is what puts in the walk.
-delivery_order: [${order.join(', ')}]
-`;
+# declared order is what puts in the walk. A null order writes no word at all: the scene resolves
+# the build's own default, which is where the socket leg is walked for an accepting receiver.
+${order === null ? '' : `delivery_order: [${order.join(', ')}]\n`}`;
 }
 
-export function world(order: readonly string[] = ['mcp-inbox', 'typed'], extraSeats: readonly ExtraSeat[] = []): World {
+export function world(
+  order: readonly string[] | null = ['mcp-inbox', 'typed'],
+  extraSeats: readonly ExtraSeat[] = [],
+  launches: LaunchLines = {},
+): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-native-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
@@ -86,7 +97,7 @@ export function world(order: readonly string[] = ['mcp-inbox', 'typed'], extraSe
   mkdirSync(sockets, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home), order, extraSeats));
+  writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home), order, extraSeats, launches));
   return {
     root,
     dir: join(root, '.agents'),

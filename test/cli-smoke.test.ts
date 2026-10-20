@@ -46,9 +46,13 @@ const allCommandNames = Array.from(
  * state, require live tmux/herdr panes or network/Keychain access, or run long-lived daemons.
  */
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
+  ack: "writes one signed read receipt into the addressee's folder",
   answer: 'types an answer into a live herdr pane dialog',
+  client: 'writes an Ed25519 client key pair into an owner folder and reads no project state',
+  'development-mode': 'reads or writes the machine development-mode record, which is an owner setting with no registered output schema',
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
   bus: 'starts a long-running local event bus server on .agents/bus.sock',
+  daemon: 'starts the one machine daemon, and installs or removes its user service unit through the system service manager',
   hold: 'mutates .agents/state.json to place or clear a team hold',
   pause: 'writes pause state for one or more teams',
   resume: 'clears pause state for one or more teams',
@@ -80,6 +84,9 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: '--about', args: ['--about'], schemaKey: 'team.about' },
   { command: 'status', args: ['status'], schemaKey: 'team.status' },
   { command: 'seats', args: ['seats'], schemaKey: 'team.seats' },
+  { command: 'settings', args: ['settings', 'claude-keeper'], schemaKey: 'team.settings' },
+  { command: 'seat', args: ['seat', 'claude-keeper'], schemaKey: 'team.seat' },
+  { command: 'config', args: ['config', 'keys'], schemaKey: 'team.config-keys' },
   { command: 'sessions', args: ['sessions'], schemaKey: 'team.sessions' },
   { command: 'doctor', args: ['doctor'], schemaKey: 'team.doctor' },
   { command: 'check', args: ['check'], schemaKey: 'team.check' },
@@ -89,6 +96,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'proc', args: ['proc', 'list'], schemaKey: 'team.proc' },
   { command: 'issues', args: ['issues'], schemaKey: 'team.issues' },
   { command: 'plan', args: ['plan'], schemaKey: 'team.plan', asSeat: true },
+  { command: 'queue', args: ['queue', 'list'], schemaKey: 'team.queue' },
   { command: 'feed', args: ['feed'], schemaKey: 'team.feed' },
   { command: 'messages', args: ['messages'], schemaKey: 'team.messages' },
   { command: 'worktree', args: ['worktree', 'list'], schemaKey: 'team.worktree' },
@@ -110,6 +118,8 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'grant', args: ['grant', 'claude-keeper', '--scope', 'up', '--dry-run'], schemaKey: 'team.grant' },
   { command: 'delegate', args: ['delegate', 'ext/w1:p1', '--commands', 'add', '--dry-run'], schemaKey: 'team.delegate' },
   { command: 'revoke', args: ['revoke', 'grant', '--dry-run'], schemaKey: 'team.revoke' },
+  { command: 'brief', args: ['brief', 'rollout'], schemaKey: 'team.brief' },
+  { command: 'swap', args: ['swap'], schemaKey: 'team.swap' },
 ];
 
 async function runCli(

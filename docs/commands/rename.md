@@ -20,6 +20,7 @@ Renaming `<seat>` to `<new-seat>` moves the seat's name while keeping the same s
 - **Task leases**: re-keys active task leases under `.agents/leases/<task>.json` held by the seat.
 - **Send-drops and mailbox**: moves pending drop folders under `.agents/send-drops/` and mailbox records under `.agents/messages/<seat>/`, re-signing mailbox payloads and receipts for the new seat name when the message key is present.
 - **Rules, queue, notes, and brief files**: renames `rules/<seat>.md`, `queue/<seat>.md`, `queues/<seat>.md`, and `notes/<seat>.md` in the project store and checkout, plus `briefs/<seat>-to-<other>.md` and `briefs/<other>-to-<seat>.md`.
+- **General seat brief**: after the state's rename, delivers the seat under its new name a fresh claim — a new incarnation, runtime epoch, the brief's sha256 and the record's expected id — and its signed drop at that id. The old name's claim cannot serve the new name: the record it names carries the old `to`, so the delivery is fresh and the old claim is left where it was.
 - **Message history**: rewrites `from` and `to` entries for the seat in `messages.jsonl`.
 
 ## Flags

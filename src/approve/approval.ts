@@ -91,8 +91,8 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
     const omitted = fingerprints({ ...checked.team, tempo: 'normal' }).sections.tempo;
     if (omitted !== undefined) sections = { ...sections, tempo: omitted };
   }
-  // A record written before `idle_owner` and `blind_after` joined `watch` — or before
-  // `idle_repeat` defaulted to off — carries a digest of the section as it read then. The
+  // A record written before `idle_owner`, `blind_after` and `unread_after` joined `watch` — or
+  // before `idle_repeat` defaulted to off — carries a digest of the section as it read then. The
   // arrival alone is not an edit: a stored digest in one of the earlier shapes is adopted as the
   // current one, so a later edit is judged against the section as it reads now.
   if (checked.ok) {

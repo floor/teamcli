@@ -1,6 +1,7 @@
-// The one machine check a reading cannot pass: the check in force asks for more free swap than the
-// machine has in total. `doctor` reports it as one warning, `status` as one note, and neither
-// changes an exit: `up`'s own refusal is where it bites, and it is unaffected.
+// The one machine check a reading cannot pass: the watch's `swap-free` check asks for more free
+// swap than the machine has in total. `doctor` reports it as one warning, `status` as one note,
+// and neither changes an exit: free swap is not a launch limit, so the sentence names the
+// reading and the setting, not a refusal.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,12 +20,13 @@ const NOW = new Date('2026-10-04T09:00:00Z');
 
 // The file declares no `swap_free_min`, so the check in force is the 2GB default.
 const SENTENCE =
-  'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep';
+  'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep';
 
 // A machine reading whose 1GB of swap in total cannot hold the 2GB the check wants.
 const SMALL: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
 // The same machine with room in total and none of it free right now: the check can pass in
-// principle, `up` refuses today, and nothing new is said — that is `up`'s line and the watch's.
+// principle, the watch reports the low free figure, and nothing new is said — that is the
+// watch's line, not a launch refusal.
 const ROOMY: Machine = { ...SMALL, swapTotal: 16e9 };
 
 let base: string;
@@ -130,10 +132,10 @@ describe('the swap the check can never meet', () => {
 
   test('a total that moves: the line is the reading it came from, and promises nothing', async () => {
     // The after-review's case: on macOS `vm.swapusage`'s total moves with pressure, so one reading
-    // cannot promise what a later `team up` will meet. The same commands over the machine twice,
-    // with the total moved between the runs: the line is there for the reading the check cannot
-    // meet and gone for the next one, and its words are the reading's own (`would refuse now`) —
-    // never what a later run will do.
+    // cannot promise what a later pass will meet. The same commands over the machine twice, with
+    // the total moved between the runs: the line is there for the reading the check cannot meet
+    // and gone for the next one, and its words are the reading's own (`cannot meet it`) — never
+    // what a later run will do.
     expect((await approve()).code).toBe(0);
     let machine: Machine = SMALL;
     const firstDoctor = await doctor(doctorSources(() => machine));
@@ -146,7 +148,8 @@ describe('the swap the check can never meet', () => {
     expect(lineOf(secondDoctor.out)).toBeUndefined();
     expect(firstStatus.out).toContain(`note: ${SENTENCE}\n`);
     expect(secondStatus.out).not.toContain('the machine check asks');
-    expect(SENTENCE).toContain('would refuse now');
+    expect(SENTENCE).toContain('this reading cannot meet it');
+    expect(SENTENCE).not.toContain('would refuse now');
     expect(SENTENCE).not.toContain('will');
   });
 });

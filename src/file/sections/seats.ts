@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
+import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
 import { displayEffort } from '../../profiles/profile.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
@@ -16,6 +17,9 @@ import type { Budgeted } from './budgets.ts';
 import { readDeliveryOrder } from './delivery_order.ts';
 import { readSenderName } from './sender_name.ts';
 import { MODES } from './workspace.ts';
+
+/** The words a seat's `inbound` key may name: the same three the receiving CLI accepts. */
+const INBOUND_WORDS: readonly CrossSessionInbound[] = ['accept', 'hold', 'refuse'];
 
 export type DraftSeat = Omit<Seat, 'mode'> & { mode?: Mode };
 
@@ -93,6 +97,10 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
+        inbound: {
+          enum: [...INBOUND_WORDS],
+          $comment: 'the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch\'s crossSessionInbound accept, and any other launch still needs accept here',
+        },
         count: { type: 'integer', minimum: 1 },
         reach: {
           type: 'object',
@@ -134,7 +142,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'inbound', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -206,6 +214,10 @@ function readSeats(
     // nudge there either. A field of the built seat like `assistant`, omitted when the file
     // marks none — every file that marks no seat keeps the digest it had.
     const human = check.flag(fields.get('human'), `${at}: human`);
+    // The seat's own word on cross-session socket frames. A field of the built seat like
+    // `human`, omitted when the file writes none — every file that writes none keeps the
+    // digest it had, and a written word is part of the digest the owner approves.
+    const inbound = check.oneOf<CrossSessionInbound>(fields.get('inbound'), `${at}: inbound`, [...INBOUND_WORDS]);
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     if (assistant && count > 1) {
       check.fail(assistantField?.value.line ?? line, `\`assistant\` on "${name}" can't be a seat with count`);
@@ -265,6 +277,8 @@ function readSeats(
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         // Omitted when the file marks no human, for the same reason.
         ...(human ? { human: true as const } : {}),
+        // Omitted when the file writes no inbound word, for the same reason.
+        ...(inbound ? { inbound } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
         ...(reach ? { reach } : {}),
@@ -446,11 +460,14 @@ export function nicknameProblem(
   }
   for (const other of seats) {
     if (other.name === own) continue;
+    // A roster seat the file no longer declares carries no line: its word still addresses it,
+    // and the refusal says where the seat is rather than printing a line no file holds.
+    const where = other.line > 0 ? `(line ${other.line})` : '(no longer declared in the team file)';
     if (other.nickname === nickname) {
-      return { line: other.line, message: `the nickname "${nickname}" is also on seat "${other.name}" (line ${other.line})` };
+      return { line: other.line, message: `the nickname "${nickname}" is also on seat "${other.name}" ${where}` };
     }
     if (other.name === nickname) {
-      return { line: other.line, message: `the nickname "${nickname}" is the name of another seat (line ${other.line})` };
+      return { line: other.line, message: `the nickname "${nickname}" is the name of another seat ${where}` };
     }
   }
   return null;

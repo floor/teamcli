@@ -8,6 +8,7 @@
 import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
 import * as projects from '../registry/projects.ts';
+import { loadTeamFile } from '../file/load.ts';
 import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -126,6 +127,9 @@ function recordProjectLead(input: RegistryTeam, teamId: string): void {
  * register or relaunch to answer. A delegated run states its delegation beside the mark — the
  * owner as signer, the pane as actor, the one command it speaks for — and the owner's own write
  * in force takes that off too; another caller's routine write leaves it.
+ * `agentSession` is the agent session herdr reported, the same id the launch wrote in the seat
+ * state: when the reading has one it re-points `reach.agent_session` beside the pane, and when
+ * it has none the record keeps the id it already holds.
  * Returns the agent's id, or the note to log.
  */
 export function registerLaunch(
@@ -133,6 +137,7 @@ export function registerLaunch(
   seat: Seat,
   pane: string,
   handle?: string,
+  agentSession?: string,
 ): { id: string } | { note: string } {
   try {
     const { home, team, by } = input;
@@ -148,7 +153,14 @@ export function registerLaunch(
     // The seat's stable handle, kept on the agent for continuity: set when the agent has none, and
     // never changed after, so a handle the state minted later does not rewrite the record.
     const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known?.seat_handle ? { seat_handle: handle as string } : {};
-    const reach = { team: teamId, seat: seat.name, session: input.session ?? team.session, pane, address: known?.reach.address ?? null };
+    const reach = {
+      team: teamId,
+      seat: seat.name,
+      session: input.session ?? team.session,
+      pane,
+      address: known?.reach.address ?? null,
+      ...(agentSession ? { agent_session: agentSession } : {}),
+    };
     const signing = { model: seat.model, version: seat.version, role: seat.role };
     const devMode = input.devMode === true;
     // A write's provenance: a dev-mode run states its mark and the caller it admitted; a run in
@@ -172,6 +184,10 @@ export function registerLaunch(
     const agent = known
       ? updateAgent(home, known.id, {
         name: seat.name, signing, lab: seat.vendor, cli: seat.cli, launch: seat.launch, lifecycle: 'running', reach,
+        // The declaration and this launch both name the seat again: the current orphan marker
+        // comes off the live record with its id and signed settings kept. Only the current mark
+        // is cleared; the record and its signed entries stay.
+        orphaned_at: null,
         ...(stated === undefined ? {} : { provenance: stated }), ...seatHandle,
       })
       : registerAgent(home, {
@@ -186,6 +202,63 @@ export function registerLaunch(
   } catch (error) {
     return { note: noteOf(error) };
   }
+}
+
+/**
+ * Creates the record of a seat the team file declares but that has never launched: the first
+ * write the bootstrap ruling names. The identity words come from the declaration, so nothing is
+ * invented; the record is `registered` with no pane, session address or state touched, so no
+ * launch, attach or typed key happens here. A later launch finds this record by (team, seat) and
+ * keeps its id, so the settings signed before it are the ones the seat runs with.
+ */
+export function registerDeclaredSeat(input: RegistryTeam, seat: Seat): { id: string } | { note: string } {
+  try {
+    const agent = registerAgent(input.home, {
+      name: seat.name,
+      signing: { model: seat.model, version: seat.version, role: seat.role },
+      lab: seat.vendor,
+      cli: seat.cli,
+      launcher: null,
+      launch: seat.launch,
+      reach: { team: teamIdOf(input.root), seat: seat.name, session: input.team.session, pane: null, address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'registered',
+      by: input.by,
+    });
+    return { id: agent.id };
+  } catch (error) {
+    return { note: noteOf(error) };
+  }
+}
+
+/**
+ * Marks the retained record of a seat the team file no longer declares: the bootstrap ruling's
+ * orphan marker. Nothing is deleted and no signed entry is touched, so every setting stays
+ * readable; a record already marked is left as it is. A team file that does not load declares
+ * nothing here, so no file this build cannot read can orphan a record.
+ */
+export function markOrphanedSeats(home: string, root: string, now: Date): string[] {
+  const marked: string[] = [];
+  let declared: Set<string>;
+  try {
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok) return marked;
+    declared = new Set(loaded.team.seats.map((seat) => seat.name));
+  } catch {
+    return marked;
+  }
+  const teamId = teamIdOf(root);
+  for (const agent of readAgents(home)) {
+    if (agent.reach.team !== teamId || declared.has(agent.reach.seat) || agent.orphaned_at != null) continue;
+    try {
+      updateAgent(home, agent.id, { orphaned_at: now.toISOString() });
+      marked.push(agent.id);
+    } catch {
+      // The next pass retries; a record this build cannot write marks nothing now.
+    }
+  }
+  return marked;
 }
 
 /**
@@ -261,7 +334,13 @@ export function registerEnd(
     if (known.reach.session !== (input.session ?? input.team.session)) {
       return notes.length === 0 ? null : { note: notes.join('; ') };
     }
-    updateAgent(input.home, known.id, { lifecycle: ending, reach: { ...known.reach, pane: null } });
+    // A retired seat's declaration is gone with its roster line: the record is retained and
+    // marked orphaned, never deleted, so its signed settings stay readable.
+    updateAgent(input.home, known.id, {
+      lifecycle: ending,
+      reach: { ...known.reach, pane: null },
+      ...(ending === 'retired' ? { orphaned_at: new Date().toISOString() } : {}),
+    });
     if (ending === 'retired') writeRoster(input, teamId, seat, null);
     return notes.length === 0 ? null : { note: notes.join('; ') };
   } catch (error) {
@@ -308,11 +387,11 @@ export function registerSessionEnd(input: RegistryTeam, why: SessionEndReason = 
  *  a session. The team record is stopped when no seat is left running. */
 export function registerRun(
   input: RegistryTeam,
-  seats: ReadonlyArray<{ seat: Seat; pane: string | null; handle?: string }>,
+  seats: ReadonlyArray<{ seat: Seat; pane: string | null; handle?: string; agent_session?: string }>,
 ): string[] {
   const notes: string[] = [];
   let running = 0;
-  for (const { seat, pane, handle } of seats) {
+  for (const { seat, pane, handle, agent_session } of seats) {
     if (seat.stopped) {
       const ended = registerEnd(input, seat.name, 'stopped');
       if (ended) notes.push(ended.note);
@@ -321,7 +400,7 @@ export function registerRun(
     // A seat still finding its feet has a live session, even when this run did not see it ready:
     // ending it here would close a record the process still fills, with no start to reopen it.
     if (pane === null) continue;
-    const made = registerLaunch(input, seat, pane, handle);
+    const made = registerLaunch(input, seat, pane, handle, agent_session);
     if ('note' in made) notes.push(made.note);
     else running += 1;
   }

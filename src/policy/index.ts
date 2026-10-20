@@ -1,15 +1,27 @@
 export {
   ADVISED_POLICY_NAMES,
+  DELIVERY_ESCALATION_SECONDS,
+  DELIVERY_TIMEOUT_DEFAULTS,
+  DELIVERY_TIMEOUT_ROUTES,
+  deliveryTimeoutOf,
   DEV_MODE_OPERATIONS,
   ENFORCED_POLICY_NAMES,
   getPolicySpec,
   normalizePolicyName,
+  parseWatchRhythmValue,
   POLICY_CATALOGUE,
   POLICY_DOMAIN,
   POLICY_LEVELS,
   POLICY_NAME_ALIASES,
+  WATCH_RHYTHM_FACTOR,
+  WATCH_RHYTHM_SWEEP,
+  WATCH_RHYTHMS,
+  WATCH_SWEEP_MAX,
+  WATCH_SWEEP_MIN,
+  watchRhythmValueOf,
   type AdvisedPolicyName,
   type CataloguePolicyName,
+  type DeliveryTimeoutRoute,
   type DevModeOperation,
   type EnforcedPolicyName,
   type Policy,
@@ -17,7 +29,22 @@ export {
   type PolicyLevel,
   type PolicySpec,
   type PolicyValue,
+  type WatchRhythm,
+  type WatchRhythmPreset,
 } from './types.ts';
+
+export {
+  DELIVERY_LEGACY_ESCALATION_DEFAULT_SECONDS,
+  DELIVERY_PREPROBE_MS,
+  DELIVERY_RECEIPT_SECONDS,
+  deliveryEscalationDelay,
+  deliveryTimeoutInForce,
+  receiptSecondsFor,
+  type DeliveryEscalationDelay,
+  type DeliveryEscalationSource,
+  type DeliveryPolicyInput,
+  type DeliveryTimeoutInForce,
+} from './delivery.ts';
 
 export {
   EVENT_KINDS,
@@ -54,6 +81,16 @@ export {
 } from './resolve.ts';
 
 export {
+  formatModelRule,
+  modelRuleAllows,
+  modelRuleEntryFor,
+  modelRuleProblem,
+  parseModelRule,
+  parseModelRuleValue,
+  type ModelRuleEntry,
+} from './model-rule.ts';
+
+export {
   eventThresholdsInForce,
   eventThresholdsOf,
   type EventThresholds,
@@ -82,3 +119,21 @@ export {
   type PolicyWritePlan,
   type SignedPolicyDiskEntry,
 } from './sources.ts';
+
+export {
+  briefTransportOf,
+  type BriefTransport,
+  type BriefTransportReading,
+} from './brief-transport.ts';
+
+export {
+  resolveOwnerReplyTo,
+  type OwnerReplyResolution,
+} from './owner-reply.ts';
+
+export {
+  OWNER_REPLY_DEFAULT,
+  OWNER_REPLY_FLOOR_ENTITY,
+  ownerReplyToValueProblem,
+  parseOwnerReplyToValue,
+} from '../settings/owner-reply.ts';

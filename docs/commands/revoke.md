@@ -9,10 +9,13 @@ section.
     team revoke grant [--dry-run] [--json]
     team revoke delegate <session/pane> [--dry-run] [--json]
     team revoke <name> [--dry-run] [--json]
+    team revoke <client-grant-id> [--json]
+    team revoke --client <client-grant-id> [--json]
 
 The delegate target is exact. There is no wildcard or revoke-all form. The bare `<name>` form
 revokes a standing grant only when a record with that name exists; any other word is the
-invocation error.
+invocation error. A target that reads as a client grant id — `cg_` and twenty-four hex digits —
+takes the client form whether it is bare or named with `--client`.
 
 ## Who may run it
 
@@ -35,6 +38,14 @@ does not touch. Revoking a team grant that carries the `dialogs.trust` setting t
 answering off at the next dialog. A record already revoked is an unchanged no-op. A revocation is always its own
 file: a record name that is the grant's own, or another grant's stem, is refused before anything
 is written, so a revocation never overwrites a grant.
+
+A client grant id appends one owner-signed per-event revocation record into the same grants folder,
+beside the grant and every other revocation; nothing is deleted or rewritten. Each event covers the
+whole signed bytes it was made from, and a revocation record that cannot be read or verified fails
+closed — the client grant is treated as revoked, never as still valid. A client request is
+revalidated against the grant, its expiry and these events when it lands, so a revocation ends the
+client's access even for a request composed before it. A grant already revoked is an unchanged
+no-op.
 
 Removal withdraws the named record only. Another independent grant, delegate or intrinsic lead
 capability can still authorize an operation. The next admission check reads the live file and the

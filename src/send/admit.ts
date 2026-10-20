@@ -107,6 +107,11 @@ export type DeclaredSender = SendSeat & { declared: true };
  *  the sender has no record yet. */
 export type SendSide = Agent | SendSeat | DeclaredSender;
 
+/** The declared same-team seat-to-seat rule: any roster-declared seat of a team writes to any
+ *  roster-declared seat of that same team, asked after every specific rule, grant, and reply so
+ *  all earlier verdict labels remain unchanged. */
+export const DECLARED_SEAT_RULE = 'a seat to a declared seat of its own team';
+
 /** The rules, in the order they are asked. Named once, so a refusal, a caller that has no
  *  identity to judge by, and the docs all read alike. */
 export const RULE_SUMMARY = [
@@ -117,6 +122,7 @@ export const RULE_SUMMARY = [
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
   'an owner-signed grant naming send',
+  DECLARED_SEAT_RULE,
 ].join('; ');
 
 /**
@@ -243,14 +249,32 @@ export function admitSend(
     return { ok: true, rule: "a seat to its own team's orchestrator" };
   }
   if (grant !== undefined) return { ok: true, rule: `an owner-signed grant naming send (${grant.name})` };
-  // Asked last: a reply to a record on an open thread, when every rule above leaves the pair
-  // unadmitted. The caller has already verified the record and the thread.
+  // Asked last before the declared same-team rule: a reply to a record on an open thread, when
+  // every rule above leaves the pair unadmitted. The caller has already verified the record and
+  // the thread.
   if (context?.reply === 'open-thread') return { ok: true, rule: REPLY_RULE };
+  // Any declared seat writes to any declared seat of its own team: the whole team coordinates
+  // inside itself without relaying through the orchestrator, while a seat off the roster and
+  // every cross-team pair stay refused unless an earlier rule, project setting, grant, or open
+  // thread admitted them.
+  if (
+    callerTeam !== undefined && targetTeam === callerTeam
+    && declaredInRoster(caller, callerTeam)
+    && declaredInRoster(target, targetTeam)
+  ) {
+    return { ok: true, rule: DECLARED_SEAT_RULE };
+  }
 
   return {
     ok: false,
     why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${summaryFor(context)})`,
   };
+}
+
+/** Whether `side` sits in a seat that `team`'s roster declares. */
+function declaredInRoster(side: SendSide, team: AdmitTeam): boolean {
+  const seat = seatOf(side);
+  return team.roster.some((entry) => entry.seat === seat);
 }
 
 /** The rules a refusal names, in the order they were asked: every rule above, and the reply rule
@@ -333,8 +357,11 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
  * `sender_name` word (`src/send/names.ts`), so a person sees a nickname or `seat@team` where an
  * earlier build printed `agt_…`.
  */
-export function senderHeader(caller: SendSide | 'owner', rule: string, naming: SenderNaming = defaultNaming()): string {
+export function senderHeader(caller: SendSide | 'owner' | 'watch', rule: string, naming: SenderNaming = defaultNaming()): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
+  // The watch's own direct-work principal: a non-seat sender, named by its reserved word so no
+  // reader mistakes it for the owner or for the lead's seat.
+  if (caller === 'watch') return `from the watch — admitted by: ${rule}\n`;
   const readable = senderDisplayName(senderIdentityOf(caller), naming);
   // A declared seat: the id the receiver would judge by is the one the registry has not written
   // yet, so the header says whose seat it is instead of an id.

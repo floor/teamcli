@@ -16,7 +16,7 @@ when `--all` is given, with its human name when the file writes one, its stable 
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
-| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` where it applies |
+| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` where it applies; a seat the daemon observes also carries `presence` — the canonical four-state word (`working`, `idle`, `waiting-for-a-person`, `gone`), its runtime source (`runtime-hook`, `runtime-event`, `daemon-launch`), the event and its `since` instant, and `live` — beside the legacy state word |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Columns
@@ -32,7 +32,7 @@ when `--all` is given, with its human name when the file writes one, its stable 
 | EFFORT | the effort level, or `-` when unset |
 | STATUS | the comparison's phrase for the seat against the session (`working`, `missing`, `stopped`, …) |
 | STATE | the seat's own reading, best source first — `working`, `idle`, `done`, `blocked`, `held`, `unreachable` or `unknown`; an `unknown` past the blind threshold (five minutes shipped, tightened by the machine, an entity, a project, the team or the seat, and opened again only by a project) reads `unknown (blind)` |
-| SOURCE | where that reading came from — `cli`, `cli-hook`, `herdr`, `trace`, `process`, `hold` or `none` |
+| SOURCE | where that reading came from — `cli`, `presence`, `cli-hook`, `herdr`, `trace`, `process`, `hold` or `none`; `presence` is the daemon's reading of the seat's own turn events, its last known word when the route is not currently healthy, and `cli` is the screen's fallback classification, used only when no such reading exists |
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
 

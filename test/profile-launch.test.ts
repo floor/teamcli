@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
-import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, startupReadsList } from '../src/profiles/profile.ts';
+import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, startupReadsList, withResume } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
@@ -129,7 +129,7 @@ const differences: [string, string, (launch: string) => { model: string; version
 
 const commands: [string, string, string, string][] = [
   ['claude-code', 'claude --model claude-opus-5-5 ', "Don't stop.\n- two", "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt 'Don'\\''t stop.\n- two'"],
-  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen'],
+  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'],
   ['cursor', 'cursor-agent', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --force --sandbox disabled'],
   ['cursor', 'cursor-agent --model grok-4.7-high', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --model grok-4.7-high --force --sandbox disabled'],
   ['antigravity', 'agy --model gemini-3.8-flash-high', 'Rules.', 'AGENT_UNATTENDED=1 agy --model gemini-3.8-flash-high --dangerously-skip-permissions'],
@@ -408,5 +408,17 @@ input:
     - ctrl+c
   paste: bracketed
   mid_turn: true`)).toThrow('"input.clear_working" is required when "input.mid_turn" is true');
+  });
+});
+
+describe('the resume line a swap appends', () => {
+  test('a launch line that already names a session is left as it is', () => {
+    for (const line of ['claude --resume abc', 'claude -r abc', 'claude --continue', 'claude -c', 'claude --session-id abc']) {
+      expect(withResume('claude-code', line, 'ses_1')).toBeNull();
+    }
+  });
+
+  test('a plain launch line takes the recorded id', () => {
+    expect(withResume('claude-code', 'claude --model deepseek-flash', 'ses_1')).toBe('claude --model deepseek-flash --resume ses_1');
   });
 });

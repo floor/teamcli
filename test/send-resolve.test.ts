@@ -6,18 +6,22 @@
 // registry refuses types nowhere.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { registerAgent, updateAgent, type Agent } from '../src/registry/agents.ts';
+import { agentsDir, registerAgent, updateAgent, type Agent } from '../src/registry/agents.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, senderHeader } from '../src/send/admit.ts';
 import { historyPath } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type LiveAgent } from '../src/send/resolve.ts';
+import { signConfigRecord } from '../src/config/record.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
+import { installKey, keyOf } from '../src/store/keys.ts';
 import { updateState } from '../src/state.ts';
 import { gitEnv, recordBody, testIo } from './helpers.ts';
 
@@ -122,6 +126,15 @@ function seatOf(w: World, project: string, session: string, seat: string, role: 
   const made = agent(w.home, { name: seat, role, cli, team: id, seat, session, pane });
   team(w.home, id, project, session, w.root, [{ agent: made.id, seat, role, leads: extra.leads === true, ...(extra.nickname === undefined ? {} : { nickname: extra.nickname }) }]);
   return made;
+}
+
+/** One signed nickname on an agent record, through the store's own plan and write. */
+function signNickname(home: string, agentId: string, nickname: string): void {
+  installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const plan = planConfigSet(home, { level: 'seat', target: agentId, settings: [{ key: 'nickname', value: nickname }] });
+  if (!plan.ok) throw new Error(`the plan was refused: ${plan.why}`);
+  const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T08:00:00.000Z') });
+  if (!written.ok) throw new Error(`the write was refused: ${written.why}`);
 }
 
 // ---- unit: the spec grammar, and what each refusal says -------------------------------------
@@ -265,6 +278,100 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     const bySeat = resolveTarget(w.home, 'builder-1', { cwd: w.root });
     if ('error' in bySeat) throw new Error(`the seat did not resolve: ${bySeat.error}`);
     expect(bySeat.agent.id).toBe(builder.id);
+  });
+
+  test('a signed nickname is the address, and the roster word it replaced names nobody', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'hephaestus' },
+    ]);
+    signNickname(w.home, builder.id, 'wren');
+
+    // The signed word stands where the file's word did: both spellings reach the seat…
+    for (const spec of ['wren@alpha', '@wren']) {
+      const target = resolveTarget(w.home, spec, { cwd: w.root });
+      if ('error' in target) throw new Error(`${spec} did not resolve: ${target.error}`);
+      expect(target.agent.id).toBe(builder.id);
+    }
+    // …and the word the signed record replaced addresses nobody any more.
+    expect(resolveTarget(w.home, '@hephaestus', { cwd: w.root })).toEqual({
+      error: '@hephaestus: no seat carries the nickname "hephaestus"; `team send --list` shows the addresses',
+    });
+  });
+
+  test('a signed nickname equal to another seat\'s name is refused, naming both', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false },
+    ]);
+    signNickname(w.home, lead.id, 'builder-1');
+
+    expect(resolveTarget(w.home, 'builder-1', { cwd: w.root })).toEqual({
+      error: 'builder-1: the spec matches two seats — the seat "builder-1" and the nickname "builder-1" of the seat "lead"; nothing was sent',
+      kind: 'ambiguous',
+    });
+  });
+
+  test('a nickname over a record that does not verify is refused, never read as absence', () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false },
+    ]);
+    signNickname(w.home, builder.id, 'wren');
+    const path = join(agentsDir(w.home), `${builder.id}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('value: "wren"', 'value: "crow"'));
+
+    // Falling back to the roster's projection would resolve an address the store disowns; the
+    // send refuses and names the record instead.
+    const target = resolveTarget(w.home, '@wren', { cwd: w.root });
+    expect('error' in target).toBe(true);
+    if (!('error' in target)) return;
+    expect(target.kind).toBe('configuration');
+    expect(target.error).toContain(path);
+    expect(target.error).toContain('signature verification failed');
+  });
+
+  test('a project record the roster line never names is still read: the project registry supplies the context', () => {
+    const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const id = teamIdOf(w.root);
+    const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-alpha-atlas' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: id, seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    // The team record carries a roster line and names no project; the project registry names it.
+    team(w.home, id, 'alpha', 'alpha', w.root, [
+      { agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
+    ]);
+    const record = upsertTeam(w.home, id, { project: 'alpha', session: 'alpha', root: w.root, projectId: null, roster: [
+      { agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
+    ] });
+    expect(record.projectId).toBeNull();
+    upsertProject(w.home, 'acme-proj', { name: 'Acme', teams: [id] });
+    installKey(w.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    // A record at a level the key does not reach is damage the resolution must see, not skip.
+    const signed = signConfigRecord(
+      { key: 'nickname', value: 'crow', level: 'project', target: 'acme-proj', setter: 'owner', date: '2026-10-19T08:00:00.000Z', generation: 1 },
+      keyOf(w.home),
+    );
+    upsertProject(w.home, 'acme-proj', {
+      settingsDelta: { nickname: { value: 'crow', setter: signed.setter, date: signed.date, target: signed.target, generation: signed.generation, signature: signed.signature } },
+    });
+
+    const target = resolveTarget(w.home, '@zeus', { cwd: w.root });
+    expect('error' in target).toBe(true);
+    if (!('error' in target)) return;
+    expect(target.kind).toBe('configuration');
+    expect(target.error).toContain('project acme-proj');
+    expect(target.error).toContain('may not be set at level project');
   });
 
   test('no role addresses: a spec equal to a seat\'s role names nobody', () => {
@@ -565,10 +672,14 @@ function sendHost(w: World, session: string, seats: Record<string, { pane: strin
 
 /** The record the trigger names: the typed line's whitespace-free token that is a path, and
  *  the signed record's body. */
-function dropOf(typed: string): { path: string; text: string } {
-  const word = typed.split(/\s+/).find((part) => part.startsWith('/'));
-  if (!word) throw new Error(`no absolute path in the typed trigger: ${typed}`);
-  return { path: word, text: recordBody(word) };
+/** The one drop in a seat's folder — the message the send wrote. The typed trigger is the
+ *  seat's own receipt-writing read and names no path, so the folder is read, not the line. */
+function dropOf(root: string, session: string, seat: string): { path: string; text: string } {
+  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const name = readdirSync(dir).find((one) => !one.includes('.'));
+  if (name === undefined) throw new Error(`no drop was written in ${dir}`);
+  const path = join(dir, name);
+  return { path, text: recordBody(path) };
 }
 
 describe('the whole command on a registry-resolved spec', () => {
@@ -592,11 +703,31 @@ describe('the whole command on a registry-resolved spec', () => {
     const typed = betaPane.typed[0] as Typed;
     expect(typed.session).toBe('beta');
     expect(typed.pane).toBe('pane-beta-lead');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(beta.root, 'beta', 'lead');
     const admitted = admitSend('owner', betaAgent, readTeams(beta.home));
     if (!admitted.ok) throw new Error(`the owner's send is not admitted: ${admitted.why}`);
     expect(drop.text).toBe(`${senderHeader('owner', admitted.rule)}\n${BODY}`);
     expect(drop.path.startsWith(join(beta.root, '.agents', 'send-drops', 'beta', 'lead'))).toBe(true);
+  });
+
+  test('--list prints the nickname a seat signed, and every row is a spec the resolver takes', async () => {
+    const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: teamIdOf(w.root), seat: 'lead', session: 'alpha', pane: 'pane-alpha-lead' });
+    const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(w.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    team(w.home, teamIdOf(w.root), 'alpha', 'alpha', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true, nickname: 'zeus' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'hephaestus' },
+    ]);
+    signNickname(w.home, builder.id, 'wren');
+    const host = sendHost(w, 'alpha', {});
+    const io = testIo(w.root, OWNER);
+
+    const code = await runSend(['--list'], io, host);
+
+    expect(code).toBe(0);
+    // The signed word replaces the file's in the row: the printed address is the one @wren takes.
+    expect(io.out).toContain('@wren');
+    expect(io.out).not.toContain('@hephaestus');
   });
 
   test('a spec the registry refuses types nowhere and leaves no drop behind', async () => {
@@ -631,7 +762,7 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(builderPane.typed.length).toBe(1);
     const typed = builderPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-live-builder');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text.split('\n')[0]).toBe(senderHeader('owner', admitRuleFor(alpha.home, builder)).trimEnd());
     expect(drop.text).toContain(BODY);
   });
@@ -670,7 +801,7 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(builderPane.typed.length).toBe(1);
     const typed = builderPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-new');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text).toContain(BODY);
   });
 
@@ -692,7 +823,8 @@ describe('the whole command on a registry-resolved spec', () => {
 
     expect(code).toBe(0);
     const typed = builderPane.typed[0] as Typed;
-    const drop = dropOf(typed.text);
+    expect(typed.pane).toBe('pane-builder');
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text.split('\n')[0]).toBe(
       "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team",
     );
@@ -714,7 +846,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const code = await runSend([chief.id, BODY], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('lead: no agent record on this machine, so no rule admits the send');
+    expect(io.err).toContain('sender lead has no agent record on this machine, so no rule admits the send');
     // The file declares this caller's seat, so the refusal names both commands that record it:
     // `register` is the one that does it where the seat already runs, and it is named first.
     expect(io.err).toContain('`team register lead` records the seat where it already runs, or `team up` registers a seat it leaves standing');
@@ -771,9 +903,42 @@ describe('the whole command on a registry-resolved spec', () => {
     expect(helperPane.typed.length).toBe(1);
     const typed = helperPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-builder');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
     expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
+  });
+
+  test('a bare nickname the registry has no record for answers to the word its record signs', async () => {
+    const alpha = world('alpha', 'alpha', 'lead', [
+      seatBlock('coordinator', 'lead', 'claude-code', 'anthropic'),
+      `${seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')}    nickname: hephaestus\n`,
+    ]);
+    // The seat's record signs another word: the declared-seat path takes the word the listing
+    // prints and the registry addresses, so the file's replaced word names nobody.
+    const builder = agent(alpha.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: teamIdOf(alpha.root), seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
+    signNickname(alpha.home, builder.id, 'wren');
+    const helperPane = scripted(['idle', 'working']);
+    const host = sendHost(alpha, 'alpha', { 'builder-1': { pane: 'pane-builder', paneStatus: helperPane } });
+    const io = testIo(alpha.root, OWNER);
+
+    const code = await runSend(['wren', BODY], io, host);
+
+    expect(code).toBe(0);
+    expect(helperPane.typed.length).toBe(1);
+    const typed = helperPane.typed[0] as Typed;
+    expect(typed.pane).toBe('pane-builder');
+    const drop = dropOf(alpha.root, 'alpha', 'builder-1');
+    expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
+
+    // The native handoff names the same seat: the recorded run resolves the word as the send
+    // does, so a delivery the sender makes itself reaches the seat the word signs.
+    const recorded = testIo(alpha.root, OWNER);
+    expect(await runSend(['--record', 'wren', '--channel', 'native', '--ms', '812', '--dry-run'], recorded, host)).toBe(0);
+    expect(recorded.out).toContain('builder-1: would record (native, 812 ms); nothing was written');
+
+    const replaced = testIo(alpha.root, OWNER);
+    expect(await runSend(['hephaestus', BODY], replaced, host)).toBe(1);
+    expect(replaced.err).toBe(`team send: refused: hephaestus: it is not a declared seat; the file's seats are lead, builder-1\n`);
   });
 });
 
@@ -814,7 +979,7 @@ describe('the whole command from a folder that is no team', () => {
       const typed = sent.panes['builder-1'].typed;
       expect(typed.length).toBe(1);
       expect((typed[0] as Typed).pane).toBe('pane-builder');
-      const drop = dropOf((typed[0] as Typed).text);
+      const drop = dropOf(w.root, 'alpha', 'builder-1');
       expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
       expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
       expect(sent.panes.atlas.typed).toEqual([]);
@@ -861,7 +1026,7 @@ describe('the whole command on a legacy seat named lead', () => {
     expect(leadPane.typed.length).toBe(1);
     const typed = leadPane.typed[0] as Typed;
     expect(typed.pane).toBe('pane-alpha-lead');
-    const drop = dropOf(typed.text);
+    const drop = dropOf(w.root, 'alpha', 'lead');
     expect(drop.text).toContain(BODY);
     expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'lead'))).toBe(true);
     expect(AGENT_ID.test(lead.id)).toBe(true);
@@ -895,4 +1060,3 @@ describe('the whole command on a legacy seat named lead', () => {
     expect(atlasPane.typed.length).toBe(1);
   });
 });
-

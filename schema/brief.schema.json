@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/brief.schema.json",
+  "title": "team brief rollout --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "project",
+    "session",
+    "apply",
+    "seats",
+    "counts"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.brief"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": "string",
+      "minLength": 1
+    },
+    "apply": {
+      "type": "boolean"
+    },
+    "seats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seat",
+          "action",
+          "hash12",
+          "id",
+          "from",
+          "reason",
+          "current"
+        ],
+        "properties": {
+          "seat": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "current",
+              "deliver",
+              "recover",
+              "recovered",
+              "not-running",
+              "human",
+              "stale-listener",
+              "failed"
+            ]
+          },
+          "hash12": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "current",
+        "deliver",
+        "recover",
+        "not_running",
+        "human",
+        "stale_listener",
+        "failed"
+      ],
+      "properties": {
+        "current": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deliver": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recover": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_running": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "human": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stale_listener": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

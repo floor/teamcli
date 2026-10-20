@@ -4,8 +4,9 @@
 // observation it is handed (RFC 0002 § 4.2).
 import { observe, observeCheck, type Seen } from '../budgets/readings.ts';
 import type { CheckOutcome } from '../budgets/run.ts';
+import { CLIS } from '../clis.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { payingAccountOf, payingPoolOf } from '../information/machine-accounts.ts';
+import { labOfRunningModel, payingAccountOf, payingPoolOf } from '../information/machine-accounts.ts';
 import type { MachineFigure } from '../information/machine-readings.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -21,12 +22,14 @@ import type { Tempo } from '../file/sections/tempo.ts';
 import { pauseText, type PauseRecord, type SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
-import { seatModel } from '../status/statusline.ts';
+import { seatModel, runningModel } from '../status/statusline.ts';
 import { liveDisplayAgent } from './seat-label.ts';
 import {
   ALWAYS_ON,
   type Attention,
   type CheckContext,
+  type ModelRulePass,
+  type PaneModelReading,
   type Report,
   type SeatCheck,
   type SeatHistory,
@@ -46,6 +49,7 @@ import { load } from './checks/load.ts';
 import { memory as memoryCheck } from './checks/memory.ts';
 import { missing } from './checks/missing.ts';
 import { modelDrift } from './checks/model-drift.ts';
+import { modelRule } from './checks/model-rule.ts';
 import { promptEscalation } from './checks/prompt-escalation.ts';
 import { restored } from './checks/restored.ts';
 import { swapFree } from './checks/swap-free.ts';
@@ -129,9 +133,13 @@ export type { Report } from './check.ts';
 // report does not concern.
 export const NUDGE_TEXT = 'Team watch: reports are waiting in .agents/team.log';
 
-// The one line the watch types into a seat's pane when a message is waiting. Fixed, and not the
-// body: the body is what `team messages` prints after it verifies.
-export const RING_TEXT = 'Team: run team messages';
+/** The one line the watch types into a seat's pane when a message is waiting. Fixed, and not the
+ *  body: the body is what the seat's own read prints after it verifies. The seat and session are
+ *  the receiving record's own, so the line reads exactly that seat's unread folder — never a
+ *  broad log of what every seat in the session has waiting. */
+export function ringText(seat: string, session: string): string {
+  return `Team: run team drops --read --seat ${seat} --session ${session}`;
+}
 
 /** One unacked message the watch has already verified, joined to the seat's pane when it has one. */
 export type MailboxWaiting = {
@@ -169,8 +177,8 @@ export type PassResult = {
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
-// run, except the five that can't be turned off.
-export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, attention, providerError, unsent, idle];
+// run, except the six that can't be turned off.
+export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, modelRule, attention, providerError, unsent, idle];
 export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
@@ -256,8 +264,15 @@ export type PassInput = {
   processes?: Readonly<Record<string, PaneProcesses | null>>;
   /** Screen readings with the approved overrides applied. The shipped profiles, when omitted. */
   readScreen?: (cli: string, screen: string | undefined) => Screen;
+  /** The seats this pass must not type at or count idle: their native presence proves a turn, a
+   *  person wait or a session end, or the record or channel cannot be trusted. Absent, the screen
+   *  classification is exactly the one a watch without the native store makes. */
+  nativeHeld?: ReadonlySet<string>;
   /** Quota patterns in force, shipped plus the approved override. The shipped list, when omitted. */
   quotaFor?: (cli: string) => readonly QuotaPattern[];
+  /** The entity model rule as the caller read it once for this pass. Omitted or null, no rule is
+   *  in force; a refusal is said once, to the owner. The pass never reads the entity's files. */
+  modelRule?: ModelRulePass;
   /** Unacked messages already verified. Omitted, the pass rings nothing. */
   mailbox?: readonly MailboxWaiting[];
   /**
@@ -289,9 +304,11 @@ export function pass({
   foreground,
   processes,
   readScreen: read = readScreen,
+  nativeHeld,
   quotaFor: patternsOf = shippedQuota,
   mailbox = [],
   pause,
+  modelRule: rule = null,
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
@@ -378,6 +395,7 @@ export function pass({
       observations.push({
         name,
         seat,
+        rule: rule !== null && rule.ok ? rule.breaches.get(name) : undefined,
         agent: undefined,
         herdr: live.running,
         screen: { kind: 'unknown' },
@@ -410,9 +428,12 @@ export function pass({
     // reading there, and the two states `team` types into are an idle table and a composer
     // holding text. A screen it cannot read is not quiet.
     const theirWord = herdrUnreliable(cli);
-    const quiet = theirWord
+    // A seat the native store holds is not quiet, whatever the screen still shows: the store
+    // proved a turn, a person wait, a session end, or a projection this pass cannot trust.
+    const nativeBusy = nativeHeld?.has(name) === true;
+    const quiet = !nativeBusy && (theirWord
       ? screen.kind === 'idle' || screen.kind === 'unsent'
-      : agent.status === 'idle' || agent.status === 'done';
+      : agent.status === 'idle' || agent.status === 'done');
     // Working is herdr's word or the screen's: a seat mid-turn is never idle, whatever its
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
@@ -420,9 +441,14 @@ export function pass({
     if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt });
 
     // The history the idle clock counts from. A seat seen working starts it again; a seat quiet
-    // with no work behind it was already idle when the watch started, and counts from then.
+    // with no work behind it was already idle when the watch started, and counts from then. A
+    // native non-idle reading restarts the clock the same way without claiming the seat is
+    // working to any consumer: the next idle stretch counts from the last moment it was not idle.
     const history = (memory.history[name] ??= { lastWorking: undefined, idleSince: undefined });
-    if (working) {
+    if (nativeBusy) {
+      history.lastWorking = now;
+      delete history.idleSince;
+    } else if (working) {
       history.lastWorking = now;
       delete history.idleSince;
     } else if (quiet && !prompt && !lead && !parked && history.lastWorking === undefined) {
@@ -433,6 +459,7 @@ export function pass({
     observations.push({
       name,
       seat,
+      rule: rule !== null && rule.ok ? rule.breaches.get(name) : undefined,
       agent,
       herdr: live.running,
       screen,
@@ -508,6 +535,23 @@ export function pass({
     readings = observeCheck(readings, outcome.account, outcome.reading.windows);
   }
 
+  // The model every pane outside the file shows, where a shipped profile reads one. The lab is
+  // the one the pane's own model line names, never the CLI's name (the owner's rule); a pane no
+  // profile's process names claim, or whose screen names no maker, stays unread — the extra
+  // check reports it as it always did and judges no rule on it.
+  const paneModels = new Map<string, PaneModelReading>();
+  for (const agent of live.agents) {
+    if (known.has(agent.pane)) continue;
+    const names = foreground?.[agent.pane] ?? null;
+    const cli = CLIS.find((name) => reportedLiveAgent(names, profileFor(name)?.processNames ?? []));
+    if (cli === undefined) continue;
+    const running = runningModel(cli, live.screens[agent.pane] ?? '');
+    if (running === null) continue;
+    const lab = labOfRunningModel(`${running.model} ${running.version}`);
+    if (lab === undefined) continue;
+    paneModels.set(agent.pane, { model: running.model, version: running.version, lab });
+  }
+
   const teamObservation: TeamObservation = {
     team,
     state,
@@ -516,6 +560,8 @@ export function pass({
     limits: team.machine,
     seats: observations,
     known,
+    modelRule: rule,
+    paneModels,
     workers,
     approval,
     approvalReason,
@@ -549,6 +595,14 @@ export function pass({
   }
   for (const check of TEAM_CHECKS) if (enabled(check.name)) reports.push(...check.run(teamObservation, ctx));
 
+  // A rule that cannot be read is said once, to the owner, and no breach is judged: an
+  // unreadable rule must never read as a rule every seat satisfies. `team check` says the same
+  // sentence for the same refusal.
+  if (rule !== null && !rule.ok) {
+    const report = once('model-rule:unreadable', `the entity model rule cannot be read, so no breach is judged: ${rule.why}`, 'owner');
+    if (report) reports.push(report);
+  }
+
   // One pass of grace for an attention key that stops being named: a screen can flicker, and a
   // report for every flicker is noise. An attention key stays active through the first pass that
   // does not name it, and two in a row drop it — so a flicker reports once, and a condition that
@@ -581,12 +635,18 @@ export function pass({
   const ordered = [...mailbox].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
   for (const record of ordered) {
     const screen = record.pane ? read(record.cli, record.screen) : null;
+    // The receiver's own seat and the session the mailbox was read for: the line sends it to its
+    // own unread drops, never to a listing of the whole session's mail.
+    const text = ringText(record.to, team.session);
     const mine = record.pane !== null && screen?.kind === 'unsent'
-      && ownUnsent(memory, record.pane, RING_TEXT, record.cli, record.screen);
-    const free = record.pane !== null && (record.status === 'idle' || record.status === 'done')
+      && ownUnsent(memory, record.pane, text, record.cli, record.screen);
+    // A held seat's record is not rung: a native turn, a person wait, a session end or an
+    // unproven projection outranks the idle screen the mailbox record carries.
+    const held = nativeHeld?.has(record.to) === true;
+    const free = !held && record.pane !== null && (record.status === 'idle' || record.status === 'done')
       && (screen?.kind === 'idle' || mine);
     if (free && ring === null && record.pane !== null) {
-      ring = { pane: record.pane, text: RING_TEXT, cli: record.cli, to: record.to, id: record.id };
+      ring = { pane: record.pane, text, cli: record.cli, to: record.to, id: record.id };
       continue;
     }
     const toldKey = `${record.to}/${record.id}`;
@@ -597,7 +657,7 @@ export function pass({
   }
   return {
     reports,
-    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read) : workDrops(team, live, observations, watch, now, memory, read),
+    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read, nativeHeld) : workDrops(team, live, observations, watch, now, memory, read, nativeHeld),
     ring,
     mailboxNote,
     readings,
@@ -619,6 +679,7 @@ function workDrops(
   now: number,
   memory: Memory,
   read: (cli: string, screen: string | undefined) => Screen,
+  nativeHeld: ReadonlySet<string> | undefined,
 ): PassResult['work'] {
   const sent = (memory.slots['work-nudge'] ??= {}) as Record<string, number>;
   const body = team.watch.nudge ?? NUDGE_TEXT;
@@ -626,6 +687,12 @@ function workDrops(
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
     if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
+      delete sent[obs.name];
+      continue;
+    }
+    // A held seat is not due a work drop: native presence outranks the idle screen, and the
+    // stamp is cleared so a later stretch starts fresh after the hold lifts.
+    if (nativeHeld?.has(obs.name) === true) {
       delete sent[obs.name];
       continue;
     }
@@ -674,6 +741,7 @@ function pauseDrops(
   now: number,
   memory: Memory,
   read: (cli: string, screen: string | undefined) => Screen,
+  nativeHeld: ReadonlySet<string> | undefined,
 ): PassResult['work'] {
   const slot = (memory.slots['pause-notice'] ??= {}) as { at?: string; seats?: Record<string, number> };
   if (slot.at !== pause.at) {
@@ -686,6 +754,9 @@ function pauseDrops(
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
     if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
+    // The pause's notice is typed too: a seat the native store holds is skipped and stays due
+    // when the hold lifts, because no stamp is written for it here.
+    if (nativeHeld?.has(obs.name) === true) continue;
     if (live.agents.filter((agent) => agent.name === obs.name).length !== 1) continue;
     if (told[obs.name] !== undefined) continue;
     const quiet = (obs.agent.status === 'idle' || obs.agent.status === 'done') && !obs.working && !obs.prompt;
