@@ -29,6 +29,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
+import { loadTeamFile } from '../file/load.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -36,9 +37,10 @@ import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
-import { readState } from '../state.ts';
+import { readState, type SessionState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
+import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliver.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
@@ -454,7 +456,30 @@ export type StartSendDaemonInput = {
   lockPath?: string;
   pid?: number;
   alive?: (pid: number) => boolean;
+  /** The actual folder holding the team file (today `.agents`), where the presence store lives.
+   *  When unset the daemon resolves it from the loaded team path, so a custom layout is read as
+   *  it is; a folder that cannot be resolved is held, never taken for an absent projection. */
+  presenceStateDir?: string;
+  /** The host's fresh per-seat native channel health. Unset leaves every native projection
+   *  unproven, so this build never believes the store's last word on its own. */
+  presenceChannelHealthy?: (seat: string) => boolean;
 };
+
+/** Where the presence store actually lives, or why it could not be named. Unknown is a hold:
+ *  it must never read as an absent projection licensed for the screen fallback. */
+type PresenceState = { dir: string } | { why: string };
+
+/** Resolves the presence folder from the team file the daemon was started for, not from a
+ *  hardcoded `.agents`: a plain-folder team keeps its state beside its own file. */
+function resolvePresenceStateDir(root: string, home: string): PresenceState {
+  try {
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok) return { why: loaded.errors[0]?.message ?? 'the team file could not be read' };
+    return { dir: dirname(loaded.path) };
+  } catch (error) {
+    return { why: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 export type SendDaemonHandle = {
   socketPath: string;
@@ -485,6 +510,9 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
   const host = input.host ?? realDaemonHost;
   const pid = input.pid ?? process.pid;
   const alive = input.alive ?? isAlivePid;
+  const presenceState: PresenceState = input.presenceStateDir === undefined
+    ? resolvePresenceStateDir(input.root, host.home)
+    : { dir: input.presenceStateDir };
   const store = storePath(input.team.project, input.root, host.home);
   const ladder = ensureLadder(host.home, store, ['send']);
   if (!ladder.ok) return { kind: 'bind-failed', reason: ladder.reason };
@@ -538,7 +566,16 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     while (queue.length > 0) {
       const item = queue.shift()!;
       try {
-        const response = await executeQueuedSend(input.dir, input.root, input.team, host, item.request, alive);
+        const response = await executeQueuedSend(
+          input.dir,
+          input.root,
+          input.team,
+          host,
+          item.request,
+          alive,
+          presenceState,
+          input.presenceChannelHealthy,
+        );
         item.resolve(response);
       } catch {
         item.resolve({
@@ -822,6 +859,31 @@ async function acquireSeatLockWithRetry(
   }
 }
 
+/** The one proof this daemon takes before typing: the seat's own presence record, read at the
+ *  last mile. Null means the proof allows the type; anything else is the hold's reason. A state
+ *  folder that cannot be named, a state that cannot be read, an unproven projection and an
+ *  unproven channel all hold: none of them is an absent projection licensed for the fallback. */
+async function nativeHoldOf(
+  session: string,
+  seat: string,
+  presenceState: PresenceState,
+  channelHealthy: ((seat: string) => boolean) | undefined,
+  now: Date,
+): Promise<string | null> {
+  if ('why' in presenceState) return `the presence state folder could not be resolved: ${presenceState.why}`;
+  let sessionState: SessionState | undefined;
+  try {
+    sessionState = readState(presenceState.dir).sessions[session];
+  } catch (error) {
+    return `the seat state could not be read: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const reads = await prefetchPresence({ stateDir: presenceState.dir, session, seatNames: [seat] });
+  const read = reads.get(seat) ?? { kind: 'absent' as const, why: 'the daemon read no presence for this seat' };
+  const verdict = presenceVerdict(read, presenceSeatOf(sessionState, seat, channelHealthy), { now, thresholdSeconds: 0 });
+  if (nativeAllowsTyping(verdict)) return null;
+  return verdict.idle ? null : `${verdict.reason}: ${verdict.why}`;
+}
+
 async function executeQueuedSend(
   dir: string,
   root: string,
@@ -829,6 +891,8 @@ async function executeQueuedSend(
   host: DaemonHost,
   request: DaemonSendRequest,
   alive: (pid: number) => boolean,
+  presenceState: PresenceState,
+  presenceChannelHealthy: ((seat: string) => boolean) | undefined,
 ): Promise<DaemonSendResponse> {
   const seatName = request.to;
   const from = request.from;
@@ -1071,6 +1135,21 @@ async function executeQueuedSend(
         lock = null;
         if (Date.now() >= deadline) {
           return recordHeld(`the seat is working; the drop file is at ${dropPath}`);
+        }
+        await host.native.wait(pollMs);
+        continue;
+      }
+
+      // The last mile is the one place this daemon types, so the native proof is read here:
+      // this caller's own reading of the store, at decision time. An unnameable state folder,
+      // an unproven record or a channel the host cannot vouch for holds; the screen's `idle`
+      // word never overrides the runtime's own record.
+      const nativeHold = await nativeHoldOf(team.session, seatName, presenceState, presenceChannelHealthy, host.now());
+      if (nativeHold !== null) {
+        lock.release();
+        lock = null;
+        if (Date.now() >= deadline) {
+          return recordHeld(`the seat's native presence does not allow typing (${nativeHold}); the drop file is at ${dropPath}`);
         }
         await host.native.wait(pollMs);
         continue;

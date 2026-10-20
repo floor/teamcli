@@ -34,7 +34,7 @@ import {
 import { readHistory } from '../src/send/history.ts';
 import { triggerLine } from '../src/send/native.ts';
 import { readPending } from '../src/send/pending.ts';
-import { LOG_FILE } from '../src/state.ts';
+import { LOG_FILE, readState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { filed } from './send-native-fixtures.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -228,6 +228,42 @@ describe('send daemon lifecycle and single-instance locking', () => {
 
 function ownerIo(root: string) {
   return testIo(root, { kind: 'owner' });
+}
+
+const SEAT_ID = 'seat_0123456789ab';
+const BINDING = 'prs_0123456789ab';
+/** The daemon reads the presence store itself, so a scene that exercises the last-mile guard
+ *  writes the daemon's own projection shape and the seat record that fences it. */
+function writePresence(w: ReturnType<typeof setupWorld>, seat: string, state: 'working' | 'idle'): void {
+  const since = '2026-10-14T15:50:00.000Z';
+  const observedAt = '2026-10-14T15:51:00.000Z';
+  const seatDir = join(w.dir, 'presence', 'acme', seat);
+  mkdirSync(seatDir, { recursive: true });
+  writeFileSync(join(seatDir, 'current.json'), `${JSON.stringify({
+    v: 1,
+    seq: 7,
+    id: `${since}-a1b2c3d4`,
+    state,
+    source: 'runtime-hook',
+    event: state === 'working' ? 'turn-start' : 'turn-end',
+    binding: BINDING,
+    since,
+    observedAt,
+  })}\n`);
+  const stored = readState(w.dir);
+  const session = stored.sessions.acme ?? { seats: {}, worktrees: {} };
+  session.seats[seat] = {
+    ...(session.seats[seat] ?? {}),
+    stage: 'ready',
+    id: SEAT_ID,
+    presence_binding: BINDING,
+    presence_applied: { seat_id: SEAT_ID, binding: BINDING, seq: 7, applied_at: observedAt },
+    last_active: since,
+  };
+  writeFileSync(
+    join(w.dir, 'team.state.json'),
+    `${JSON.stringify({ ...stored, format: 1, sessions: { ...stored.sessions, acme: session } })}\n`,
+  );
 }
 
 describe('per-seat FIFO queue and concurrent sends', () => {
@@ -483,6 +519,73 @@ describe('working seat retry and seat-lock coexistence', () => {
     if (hist.ok) {
       expect(hist.entries[0]?.outcome).toBe('held');
     }
+  });
+
+  // The daemon's last mile reads the store itself. A projected turn this process did not see
+  // in herdr's status still holds the drop: the runtime's own record outranks the screen.
+  test('holds the drop when the native proof says a turn is running, even with an idle screen', async () => {
+    const w = setupWorld();
+    writePresence(w, 'native', 'working');
+    const host = makeHost(w);
+    const started = await startSendDaemon({
+      root: w.root,
+      dir: w.dir,
+      team: w.team,
+      host,
+      presenceChannelHealthy: () => true,
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const io = ownerIo(w.root);
+    const code = await runSend(['native', 'do not clobber the projected turn', '--json'], io, host);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(io.out.trim()) as { error: { id: string; message: string } };
+    expect(parsed.error.id).toBe('send.held');
+    expect(parsed.error.message).toContain("the seat's native presence does not allow typing (working: the runtime reports a turn running)");
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+  });
+
+  test('delivers on a qualified native idle when the caller provides the channel proof', async () => {
+    const w = setupWorld();
+    writePresence(w, 'native', 'idle');
+    const host = makeHost(w);
+    const started = await startSendDaemon({
+      root: w.root,
+      dir: w.dir,
+      team: w.team,
+      host,
+      presenceChannelHealthy: () => true,
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const io = ownerIo(w.root);
+    const code = await runSend(['native', 'the projected turn ended'], io, host);
+    expect(code).toBe(0);
+    expect(io.out).toContain('native: sent (unconfirmed)');
+    expect(host.typed).toHaveLength(1);
+    expect(host.enters).toHaveLength(1);
+  });
+
+  // The contract makes an unproven channel a hold, never a fallback: without a provider the
+  // daemon cannot qualify the projection, so it does not type.
+  test('holds a native idle projection when no channel proof is provided', async () => {
+    const w = setupWorld();
+    writePresence(w, 'native', 'idle');
+    const host = makeHost(w);
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const io = ownerIo(w.root);
+    const code = await runSend(['native', 'unproven channel', '--json'], io, host);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(io.out.trim()) as { error: { id: string; message: string } };
+    expect(parsed.error.id).toBe('send.held');
+    expect(parsed.error.message).toContain('the presence channel is not known healthy this pass');
+    expect(host.typed).toEqual([]);
   });
 
   test('waits for acquireSeatLock held by another command and delivers when released, or returns held on timeout', async () => {
