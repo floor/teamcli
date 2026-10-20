@@ -30,7 +30,7 @@ import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
-import { presenceChannelHealthy } from '../labels/presence.ts';
+import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf } from '../launch/rules.ts';
 import {
@@ -386,12 +386,17 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // says serving and healthy for this session. Default closed — a persisted status word or a
   // health answer without a verdict proves nothing.
   const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
+  // The same fresh answer's per-seat verdicts: when the route carries them, a seat is live only
+  // by its own serving entry whose sampled binding matches the seat state's recorded one.
+  const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
   const registryRows = all || json
     ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, {
-        project: team.project, root, home: sources.home, stateDir: dir, session, presenceChannelHealthy: presenceHealthy,
+        project: team.project, root, home: sources.home, stateDir: dir, session,
+        presenceChannelHealthy: presenceHealthy,
+        ...(presenceSeats === undefined ? {} : { presenceSeats }),
       })
     : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
@@ -482,7 +487,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // A seat whose reading is blind — unknown past the blind threshold — counts as
     // not working, and is a must-fix here exactly as it is in `team check`.
     ...blindDifferences(team, state, live, comparison, now, hold !== null, {
-      project: team.project, root, home: sources.home, stateDir: dir, session, presenceChannelHealthy: presenceHealthy,
+      project: team.project, root, home: sources.home, stateDir: dir, session,
+      presenceChannelHealthy: presenceHealthy,
+      ...(presenceSeats === undefined ? {} : { presenceSeats }),
     }),
   ]);
 

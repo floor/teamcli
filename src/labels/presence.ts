@@ -84,6 +84,8 @@ export type PresenceRouteVerdict = {
   healthy?: unknown;
   checkedAt?: unknown;
   why?: unknown;
+  /** The route's fresh per-seat runtime answers; absent on a hook-only route. */
+  seats?: unknown;
 };
 
 export type PresenceHealthRoot = {
@@ -105,6 +107,106 @@ export type PresenceHealthReading = {
  * earlier probe's snapshot, never proof of live now.
  */
 export { PRESENCE_HEALTH_GRACE_MS };
+
+/** One fresh per-seat answer, held to the daemon client's strict reading: `serving` with
+ *  `healthy: true` is the only proof, and a serving seat names the binding it was sampled for. */
+export type PresenceSeatHealth = {
+  healthy: boolean;
+  /** The current managed binding at the sample; a serving entry always names one. */
+  binding: string | null;
+};
+
+export type PresenceSeatsRead =
+  /** The route carries no seat list: a hook-only route, whose own verdict is the answer. */
+  | { kind: 'absent' }
+  /** The seat list is malformed, or the route verdict that carried it is not fresh: no seat
+   *  in it may be called live, and the route's own health is not proof either. */
+  | { kind: 'invalid'; why: string }
+  | { kind: 'listed'; seats: ReadonlyMap<string, PresenceSeatHealth> };
+
+/**
+ * The strict client-side reading of a route's `seats`: one entry per seat, no repeats, a
+ * closed state word, `healthy` exactly when serving, a valid binding or null, and a pending
+ * entry that says what it waits for. Anything else is dropped whole, never partly served.
+ */
+function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
+  const raw = verdict.seats;
+  if (raw === undefined) return { kind: 'absent' };
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { kind: 'invalid', why: 'the seat list is not a non-empty list' };
+  }
+  const seats = new Map<string, PresenceSeatHealth>();
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      return { kind: 'invalid', why: 'a seat entry is not an object' };
+    }
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.seat !== 'string' || entry.seat === '' || seats.has(entry.seat)) {
+      return { kind: 'invalid', why: 'a seat entry does not name one unique seat' };
+    }
+    if (entry.state !== 'serving' && entry.state !== 'pending') {
+      return { kind: 'invalid', why: 'a seat entry names no known state' };
+    }
+    if (typeof entry.healthy !== 'boolean') {
+      return { kind: 'invalid', why: 'a seat entry healthy flag is not a boolean' };
+    }
+    if ((entry.state === 'serving') !== entry.healthy) {
+      return { kind: 'invalid', why: 'a seat entry state and healthy flag disagree' };
+    }
+    if (!(entry.binding === null || isPresenceBinding(entry.binding))) {
+      return { kind: 'invalid', why: 'a seat entry carries no valid binding' };
+    }
+    if (!(entry.why === null || typeof entry.why === 'string')) {
+      return { kind: 'invalid', why: 'a seat entry why is not text or null' };
+    }
+    if (entry.state === 'pending' && (typeof entry.why !== 'string' || entry.why === '')) {
+      return { kind: 'invalid', why: 'a pending seat entry says nothing about what it waits for' };
+    }
+    if (entry.state === 'serving' && entry.binding === null) {
+      return { kind: 'invalid', why: 'a serving seat entry names no binding' };
+    }
+    seats.set(entry.seat, {
+      healthy: entry.healthy,
+      binding: entry.binding as string | null,
+    });
+  }
+  return { kind: 'listed', seats };
+}
+
+/** The route's per-seat answers when its verdict is fresh and serving; every other answer is
+ *  invalid for qualification. A hook-only route (no `seats`) stays `absent`. */
+export function presenceSeatsOf(
+  reading: PresenceHealthReading,
+  root: string,
+  session: string,
+  now: Date,
+): PresenceSeatsRead {
+  if (!presenceChannelHealthy(reading, root, session, now)) {
+    return { kind: 'invalid', why: 'the route verdict is not fresh and serving for this session' };
+  }
+  const verdict = reading.roots.find((entry) => entry.root === root)?.presence;
+  if (verdict === undefined) return { kind: 'invalid', why: 'the route carries no presence verdict' };
+  return seatsOf(verdict);
+}
+
+/**
+ * Whether one seat's projection may be called live. The route must be fresh and serving, and
+ * when the route carries per-seat answers this seat must be listed serving with exactly the
+ * binding the seat's state records — a missing entry and a mismatched sampled binding are both
+ * last known, never live by route health alone. A hook-only route (no seat list) keeps the
+ * route's own answer.
+ */
+export function seatPresenceQualified(
+  seats: PresenceSeatsRead | undefined,
+  seat: string,
+  binding: unknown,
+): boolean {
+  if (seats === undefined || seats.kind === 'absent') return true;
+  if (seats.kind === 'invalid') return false;
+  const entry = seats.seats.get(seat);
+  if (entry === undefined || !entry.healthy) return false;
+  return isPresenceBinding(binding) && entry.binding === binding;
+}
 
 /**
  * Whether the display may mark this session's projections live. The answer is the fresh daemon
@@ -132,7 +234,10 @@ export function presenceChannelHealthy(
   if (!Number.isFinite(checkedAt) || !Number.isFinite(answeredAt) || !Number.isFinite(at)) return false;
   // Both instants must be this display's own: an old probe's answer is a snapshot, never proof.
   if (Math.abs(at - answeredAt) > PRESENCE_HEALTH_GRACE_MS) return false;
-  return Math.abs(at - checkedAt) <= PRESENCE_HEALTH_GRACE_MS;
+  if (Math.abs(at - checkedAt) > PRESENCE_HEALTH_GRACE_MS) return false;
+  // A route that carries a malformed seat list is not a trustworthy record: the daemon client
+  // drops it whole, and so does the display.
+  return seatsOf(verdict).kind !== 'invalid';
 }
 
 

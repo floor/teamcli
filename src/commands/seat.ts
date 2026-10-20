@@ -16,7 +16,7 @@ import { isParseError } from '../file/load.ts';
 import type { Problem } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
-import { presenceChannelHealthy } from '../labels/presence.ts';
+import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
 import {
   CLI_HOOK_FRESH_SECONDS,
   CLI_HOOK_FUTURE_SKEW_SECONDS,
@@ -207,6 +207,9 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     ? null
     : await sources.daemonHealth(sources.home);
   const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
+  // The same fresh answer's per-seat verdicts: a seat carried by the route's seat list is live
+  // only by its own serving entry and the binding that entry sampled.
+  const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
   const row = seatRegistryRows(team, state, live, comparison, now, true, liveHold(whole, now) !== null, {
     project: team.project,
     root,
@@ -214,6 +217,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     stateDir: dir,
     session,
     presenceChannelHealthy: presenceHealthy,
+    ...(presenceSeats === undefined ? {} : { presenceSeats }),
   }).find((candidate) => candidate.name === seatName);
   if (row === undefined) {
     // A declared seat always has a comparison row; this is the file and the state disagreeing

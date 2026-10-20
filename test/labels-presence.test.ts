@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
-import { presenceChannelHealthy, readPresenceForSeat } from '../src/labels/presence.ts';
+import { presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceQualified } from '../src/labels/presence.ts';
 
 const SESSION = 'session-one';
 const SEAT = 'worker';
@@ -168,5 +168,86 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
     expect(presenceChannelHealthy(reading([]), ROOT, SESSION, NOW)).toBe(false);
     // The persisted close record carries no `healthy` and can never be proof.
     expect(presenceChannelHealthy(reading([{ root: ROOT, presence: { state: 'pending', why: 'closed' } }]), ROOT, SESSION, NOW)).toBe(false);
+  });
+
+  // The route's per-seat answers are the second half of live: a seat carried by the seat list
+  // is live only by its own serving entry, sampled under the binding the seat's state records.
+  // A hook-only route carries no seat list and keeps the route's own verdict.
+  describe("the route's per-seat answers", () => {
+    const serving = (seat: string, binding: string | null = BINDING) => ({
+      seat, state: 'serving', healthy: true, binding, why: null,
+    });
+    const withSeats = (seats: unknown) => reading([verdict({ seats })]);
+
+    test('a hook-only route has no seat list and keeps the route verdict', () => {
+      const seats = presenceSeatsOf(withSeats(undefined), ROOT, SESSION, NOW);
+      expect(seats).toEqual({ kind: 'absent' });
+      // No health answer at all is the caller's route-health case too.
+      expect(seatPresenceQualified(undefined, SEAT, BINDING)).toBe(true);
+      expect(seatPresenceQualified(seats, SEAT, BINDING)).toBe(true);
+    });
+
+    test('a listed seat is live only when serving and sampled under the recorded binding', () => {
+      const seats = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
+      expect(seats.kind).toBe('listed');
+      expect(seatPresenceQualified(seats, SEAT, BINDING)).toBe(true);
+      // A sampled binding that differs from the seat's own record is a predecessor's run, or a
+      // relaunch the display has not caught up with: last known, never live by route health.
+      expect(seatPresenceQualified(seats, SEAT, PREDECESSOR)).toBe(false);
+      expect(seatPresenceQualified(seats, SEAT, undefined)).toBe(false);
+      // An expected native seat the route does not list is not proven either.
+      expect(seatPresenceQualified(seats, 'other', BINDING)).toBe(false);
+    });
+
+    test('a pending or unhealthy entry, or a pending entry for the seat, is not proof', () => {
+      const pending = presenceSeatsOf(withSeats([
+        serving(SEAT),
+        { seat: 'other', state: 'pending', healthy: false, binding: null, why: 'hook not yet seen' },
+      ]), ROOT, SESSION, NOW);
+      expect(pending.kind).toBe('listed');
+      expect(seatPresenceQualified(pending, SEAT, BINDING)).toBe(true);
+      expect(seatPresenceQualified(pending, 'other', BINDING)).toBe(false);
+      // `serving` with `healthy: false` is the daemon client's disagreement case: dropped whole.
+      const unhealthy = withSeats([{ seat: SEAT, state: 'serving', healthy: false, binding: BINDING, why: null }]);
+      expect(presenceSeatsOf(unhealthy, ROOT, SESSION, NOW).kind).toBe('invalid');
+      expect(seatPresenceQualified(presenceSeatsOf(unhealthy, ROOT, SESSION, NOW), SEAT, BINDING)).toBe(false);
+      expect(presenceChannelHealthy(unhealthy, ROOT, SESSION, NOW)).toBe(false);
+    });
+
+    test('a malformed seat list is dropped whole and leaves the route unqualified', () => {
+      const malformed: unknown[] = [
+        [],
+        'not a list',
+        [serving(SEAT), serving(SEAT)],
+        [{ seat: '', state: 'serving', healthy: true, binding: BINDING, why: null }],
+        [{ seat: SEAT, state: 'absent', healthy: true, binding: BINDING, why: null }],
+        [{ seat: SEAT, state: 'serving', healthy: true, binding: null, why: null }],
+        [{ seat: SEAT, state: 'serving', healthy: true, binding: 'not-a-binding', why: null }],
+        [{ seat: SEAT, state: 'serving', healthy: true, binding: BINDING, why: 7 }],
+        [{ seat: SEAT, state: 'pending', healthy: false, binding: null, why: null }],
+        [{ seat: SEAT, state: 'pending', healthy: false, binding: null, why: '' }],
+        [null],
+        [[serving(SEAT)]],
+      ];
+      for (const seats of malformed) {
+        const route = withSeats(seats);
+        expect(presenceChannelHealthy(route, ROOT, SESSION, NOW)).toBe(false);
+        expect(presenceSeatsOf(route, ROOT, SESSION, NOW).kind).toBe('invalid');
+        expect(seatPresenceQualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING)).toBe(false);
+      }
+    });
+
+    test('a stale, other-session or other-root verdict carries no usable seat list', () => {
+      const stale = reading([verdict({ seats: [serving(SEAT)] })], at(-600_000));
+      const otherSession = reading([verdict({ session: 'other', seats: [serving(SEAT)] })]);
+      const otherRoot = reading([verdict({ seats: [serving(SEAT)] })]);
+      for (const route of [stale, otherSession]) {
+        expect(presenceSeatsOf(route, ROOT, SESSION, NOW).kind).toBe('invalid');
+        expect(seatPresenceQualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING)).toBe(false);
+      }
+      expect(presenceSeatsOf(otherRoot, '/srv/other', SESSION, NOW).kind).toBe('invalid');
+      // A fresh, serving route with a well-formed list stays healthy.
+      expect(presenceChannelHealthy(reading([verdict({ seats: [serving(SEAT)] })]), ROOT, SESSION, NOW)).toBe(true);
+    });
   });
 });

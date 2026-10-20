@@ -19,7 +19,7 @@ import {
 } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type PresenceObservation, type SeatStateWord, type StateSource } from '../labels/state.ts';
-import { presenceChannelHealthy, readPresenceForSeat } from '../labels/presence.ts';
+import { presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceQualified, type PresenceSeatsRead } from '../labels/presence.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
@@ -62,6 +62,13 @@ export type SeatTraceSources = {
    * record can outlive the channel it describes.
    */
   presenceChannelHealthy?: boolean;
+  /**
+   * The same fresh answer's per-seat runtime verdicts. When the route carries a seat list, a
+   * seat is qualified only by its own serving entry whose sampled binding equals the binding
+   * the seat state records; route health alone is not enough. A hook-only route (no list)
+   * keeps the route's own answer.
+   */
+  presenceSeats?: PresenceSeatsRead;
 };
 
 /**
@@ -216,9 +223,9 @@ export function seatRegistryRows(
   // The registry read once for the whole table: each row resolves its own chain over it.
   const home = traceSources?.home;
   const teamId = traceSources === undefined ? undefined : teamIdOf(traceSources.root);
-  // The channel's health is the session's, not a seat's: the caller supplies it from the one
-  // fresh daemon health answer this display command makes. An unqualified channel makes every
-  // projection last known; it never removes one.
+  // The route's freshness is the session's, not a seat's; when the fresh answer carries a seat
+  // list, each row's own serving entry and sampled binding decide whether its projection is
+  // live. Everything else is last known, never removed.
   const presenceQualified = traceSources?.presenceChannelHealthy === true;
   for (const row of comparison.rows) {
     if (!all && row.state === 'stopped') continue;
@@ -265,7 +272,8 @@ export function seatRegistryRows(
     // did not launch.
     const presenceRead = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
       ? readPresenceForSeat(
-          traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding, presenceQualified,
+          traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding,
+          presenceQualified && seatPresenceQualified(traceSources.presenceSeats, row.name, recorded?.presence_binding),
         )
       : null;
     // The seat-state reading: the daemon's presence projection for this launch, the CLI's own
@@ -515,6 +523,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       ? null
       : await sources.daemonHealth(sources.home);
     const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
+    const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
     const rows = seatRegistryRows(team, state, live, comparison, now, all, liveHold(whole, now) !== null, {
       project: team.project,
       root,
@@ -522,6 +531,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       stateDir: dir,
       session,
       presenceChannelHealthy: presenceHealthy,
+      ...(presenceSeats === undefined ? {} : { presenceSeats }),
     });
 
     if (json) {
