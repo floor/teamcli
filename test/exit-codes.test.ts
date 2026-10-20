@@ -48,6 +48,7 @@ import { runHold } from '../src/commands/hold.ts';
 import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
+import { runAck } from '../src/commands/ack.ts';
 import { runDevelopmentMode } from '../src/commands/development-mode.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
@@ -5465,6 +5466,30 @@ for (const [name, command, args, invalidArgs] of [
     return show(await replied(place, [SENT, 'the answer']), 'team reply:');
   });
   scene('reply.usage', async (place) => show(await replied(place, []), '<id> is required'));
+}
+
+{
+  const SENT = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  const FILE = TWO.replace('workspace:', 'session: acme\nworkspace:');
+  async function acked(place: Place, argv: readonly string[]): Promise<Ran> {
+    const io = testIo(place.root, owner);
+    return { code: await runAck([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('ack.read', async (place) => {
+    write(place, FILE);
+    plantRecord(place.home, place.root, 'acme', 'owner', SENT, "from the file's seat worker (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\nquestion", { from: 'worker', at: NOW.toISOString() });
+    return show(await acked(place, [SENT]), `${SENT}: read`);
+  });
+  scene('ack.refused', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(await acked(place, [SENT]), 'no record named');
+  });
+  scene('ack.configuration', async (place) => {
+    write(place, 'format: [\n');
+    return show(await acked(place, [SENT]), 'team ack:');
+  });
+  scene('ack.usage', async (place) => show(await acked(place, []), '<id> is required'));
 }
 
 {

@@ -778,6 +778,20 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           counts: { drops: 1 },
         }),
       ],
+      'team.ack': [
+        jsonEnvelope('team.ack', {
+          format: 1 as const,
+          status: 'read',
+          action_summary: '0f0e0d0c-0b0a-4a4b-8c8d-9e9f0a1b2c3d: read',
+          project: 'beacon',
+          session: 'beacon',
+          record: '0f0e0d0c-0b0a-4a4b-8c8d-9e9f0a1b2c3d',
+          to: 'worker',
+          thread: '0f0e0d0c-0b0a-4a4b-8c8d-9e9f0a1b2c3d',
+          written: false,
+          at: '2026-10-18T15:30:00.000Z',
+        }),
+      ],
       'team.reply': [
         jsonEnvelope('team.reply', {
           format: 1 as const,

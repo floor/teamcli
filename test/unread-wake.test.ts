@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listUnacked } from '../src/commands/messages.ts';
+import { runAck } from '../src/commands/ack.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
@@ -1040,5 +1041,34 @@ describe('team watch wakes an unread seat', () => {
     expect(owner.body).toContain('no wake line was typed');
     expect(mailboxBody(directory, 'claude-coordinator-acme', `unread-${UNREAD_B}`).body).toBe(owner.body);
     expect(io.out).toContain('deepseek-acme: a message from owner was still unread after 21 min; reported to owner and claude-coordinator-acme');
+  });
+});
+
+describe('an acknowledged message is not woken or reported', () => {
+  test('team ack stops both passes for that id and leaves the other message still ringing', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    updateState(made.dir, (state) => {
+      state.sessions.acme = { seats: { lead: { stage: 'ready' as const, pane: 'w1:p1' } } } as never;
+    });
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nseen already', new Date(NOW.getTime() - 25 * MIN));
+    seedMessage(made, 'acme', 'lead', UNREAD_B, 'from the owner\n\nstill waiting', new Date(NOW.getTime() - 25 * MIN));
+    const io = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+    expect(await runAck([UNREAD_A], io, { home: made.home, now: () => NOW })).toBe(0);
+
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
+    expect(one.typed).toHaveLength(1);
+
+    reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
+    expect(existsSync(reportedPath(dropDir, UNREAD_B))).toBe(true);
+    expect(said.some((line) => line.includes('was still unread after 25 min'))).toBe(true);
+    // The report names only the message still unread: no mailbox record was written for the ack.
+    expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`))).toBe(false);
+    expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_B}.json`))).toBe(true);
   });
 });
