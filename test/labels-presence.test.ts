@@ -182,13 +182,17 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
     });
     const withSeats = (seats: unknown) => reading([verdict({ seats })]);
 
-    test('a hook-only route has no seat list and keeps the route verdict', () => {
+    test('a hook-only route has no seat list: a hook seat keeps the route verdict, an expected native seat is held', () => {
       const seats = presenceSeatsOf(withSeats(undefined), ROOT, SESSION, NOW);
       expect(seats).toEqual({ kind: 'absent' });
-      // No health answer at all is the caller's route-health case too.
-      expect(seatPresenceQualified(undefined, SEAT, BINDING, true)).toBe(true);
-      expect(seatPresenceQualified(seats, SEAT, BINDING, true)).toBe(true);
       expect(seatPresenceQualified(seats, SEAT, BINDING, false)).toBe(true);
+      // With no list at all, the source an expected native seat needed was never classified:
+      // route health cannot stand in for it, exactly as a missing entry cannot.
+      expect(seatPresenceQualified(seats, SEAT, BINDING, true)).toBe(false);
+      // No health answer at all carries no route verdict either; the caller's route gate is
+      // false there, and the expectation alone still closes an expected native seat.
+      expect(seatPresenceQualified(undefined, SEAT, BINDING, false)).toBe(true);
+      expect(seatPresenceQualified(undefined, SEAT, BINDING, true)).toBe(false);
     });
 
     test('a listed seat is live only when serving and sampled under the recorded binding', () => {
@@ -209,6 +213,19 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
       expect(seatPresenceQualified(seats, 'other', BINDING, true)).toBe(false);
       // A hook seat absent from the native list is the ordinary mixed-route case.
       expect(seatPresenceQualified(seats, 'other', BINDING, false)).toBe(true);
+    });
+
+    test('a whole absent list holds an expected native seat exactly as a missing entry does', () => {
+      const absent = presenceSeatsOf(withSeats(undefined), ROOT, SESSION, NOW);
+      const listed = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
+      for (const seats of [absent, listed]) {
+        expect(seatPresenceQualified(seats, 'other', BINDING, true)).toBe(false);
+        expect(seatPresenceQualified(seats, 'other', BINDING, false)).toBe(true);
+      }
+      // A listed entry still decides over the conservative expectation: the daemon's own
+      // classification is authoritative, and its serving binding fence is the proof.
+      expect(seatPresenceQualified(listed, SEAT, BINDING, true)).toBe(true);
+      expect(seatPresenceQualified(absent, SEAT, BINDING, false)).toBe(true);
     });
 
     test('a pending entry is not proof for a seat of either class', () => {

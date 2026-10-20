@@ -193,14 +193,15 @@ export function presenceSeatsOf(
  * Whether one seat's projection may be called live. The route must be fresh and serving, and
  * when the route carries per-seat answers this seat must be listed serving with exactly the
  * binding the seat's state records — a missing entry and a mismatched sampled binding are both
- * last known, never live by route health alone. A hook-only route (no seat list) keeps the
- * route's own answer.
+ * last known, never live by route health alone.
  *
  * The list is the daemon's native-source answers, not a census of every seat on the route: a
  * hook seat sharing the route with a native sibling is expected to be absent, and keeps the
- * route verdict. Absence is only fatal for a seat that explicitly expects a native channel
- * (`nativeExpected`), where it means the expected source was never classified and there is no
- * proof to inherit.
+ * route verdict. An absent list is only informative for a seat that does not expect a native
+ * channel: a seat that does (`nativeExpected`) is held whether the whole list is missing or
+ * only its entry — in both cases the source it expected was never classified, and there is no
+ * proof to inherit. The expectation is conservative: the daemon's own policy and target
+ * classification are authoritative, and an entry the daemon lists always decides over it.
  */
 export function seatPresenceQualified(
   seats: PresenceSeatsRead | undefined,
@@ -208,7 +209,7 @@ export function seatPresenceQualified(
   binding: unknown,
   nativeExpected: boolean,
 ): boolean {
-  if (seats === undefined || seats.kind === 'absent') return true;
+  if (seats === undefined || seats.kind === 'absent') return !nativeExpected;
   if (seats.kind === 'invalid') return false;
   const entry = seats.seats.get(seat);
   if (entry === undefined) return !nativeExpected;
