@@ -530,6 +530,7 @@ seats: [
 
 ```console
 $ team watch ; echo "exit $?"
+2026-10-04T09:00:00.000Z the watch-rhythm policy could not be read: team: policy source cannot be read or verified (./.agents/team.yaml: line 3: "[" is not closed on its line); automated work, nudges and escalations are held until it can be read
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
 2026-10-04T09:00:00.000Z team.yaml is invalid (line 3: "[" is not closed on its line); using the copy of 2026-10-04T09:00:00.000Z
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
