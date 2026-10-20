@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator } from '../bus/seats.ts';
+import type { DirectSendResult } from '../commands/send.ts';
 import type { IdleWorkInput, IdleWorkReport } from '../idle_work.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { liveLeases } from '../tasks/lease.ts';
@@ -28,6 +29,22 @@ export type WorkPushRequest = { seat: string; pane: string; cli: string; body: s
  *  route never flattens `code0`, a held delivery or a durable copy into a successful wake. A
  *  push result is never read or claim proof. */
 export type WorkPushResult = { ok: true; outcome: string } | { ok: false; refused: string };
+
+/**
+ * What the idle dispatcher reads back from one direct send. Only a route that delivered is a
+ * wake; a stored copy, a timeout, an unreachable or a refused ending is `ok: false`, whatever the
+ * command's exit code was. A run that ended before any route was attempted is a refusal too, with
+ * the command's own words when it said any.
+ */
+export function workPushResultOf(result: DirectSendResult | null, said: string): WorkPushResult {
+  if (result === null) {
+    const why = said.replace(/\s+/g, ' ').trim();
+    return { ok: false, refused: why === '' ? 'the send ended before any direct route was attempted' : why };
+  }
+  const detail = result.reason === undefined ? '' : `: ${result.reason}`;
+  if (result.outcome === 'delivered') return { ok: true, outcome: `${result.route}: delivered${detail}` };
+  return { ok: false, refused: `${result.route}: ${result.outcome}${detail}` };
+}
 
 /** The direct route a watch's sources may wire. Absent, this dispatcher sends nothing and types
  *  nothing; it never falls back to a keystroke of its own. */

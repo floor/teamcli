@@ -125,7 +125,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   const processes = host.processInfo(recipient.reach.session, pane);
   const address = readRouteAddress(recipient.reach.address, processes, socketFolders(host));
   const native = recipient.cli === 'claude-code';
-  const fromId = admission.sender !== 'owner' && 'id' in admission.sender ? admission.sender.id : null;
+  const fromId = typeof admission.sender === 'object' && 'id' in admission.sender ? admission.sender.id : null;
   const record: RouteRecord = {
     ts: host.now().toISOString(),
     from: who,

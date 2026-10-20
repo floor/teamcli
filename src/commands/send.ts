@@ -236,8 +236,28 @@ export type DirectSendHook = {
    *  seat the session no longer lists at that pane, or whose file names another CLI, is refused
    *  before any route is attempted. */
   expect?: { pane: string; cli: string };
+  /** The direct-only caller's recheck, run after preparation and immediately before each route
+   *  a direct walk could transport on, socket or a functional headless route. A refusal ends the
+   *  walk without another transport attempt; a throw is read as a refusal, never as consent. */
+  guard?: () => { ok: true } | { ok: false; why: string };
   /** Called once, when a route's ending closes the walk, before the command returns. */
   ended(result: DirectSendResult): void;
+};
+
+/**
+ * The watch process's own principal for one direct-work send. It is established only by the
+ * internal `sendWatchDirect`, after `verifyWatchAuthority` proves this process holds the watch:
+ * no command line, no delivery-order request and no io caller can set it. `recheck` is the actual
+ * verifier bound to the host's captured epoch, asked again before every direct transport; the
+ * watch host's own report or a wrapper's boolean is never read as authority.
+ */
+export type WatchSendPrincipal = {
+  /** The team root this watch host captured. Admission compares it, canonically, with the team
+   *  file the run loaded: equal session names in another root are not this watch's team. */
+  root: string;
+  session: string;
+  pane?: string;
+  recheck(): { ok: true } | { ok: false; why: string };
 };
 
 export type SendHost = {
@@ -290,6 +310,9 @@ export type SendHost = {
   /** The direct-only ending hook: when set, the typed leg is never walked and the ending is
    *  reported once. The watch's idle dispatch is its caller. */
   direct?: DirectSendHook;
+  /** The watch's own sender principal, set only by the internal `sendWatchDirect`. Absent, the
+   *  caller is placed from the ordinary sources (`io.caller`, `io.callerSources`, ancestry). */
+  watch?: WatchSendPrincipal;
 };
 
 export const realHost: SendHost = {
@@ -440,10 +463,15 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   // is refused by its own answer; a plain seat the registry cannot answer keeps the
   // declared-seat path below. The live read the resolution may fall back to is the host's, one
   // reader for the session's agents, so a fake host answers it in tests.
-  const judged = judgeCallerIn(io, dir, team);
+  // A direct-work run's caller is the watch principal its internal entry established and
+  // verified: the file's own session is the only one it is judged in, and no ambient placement
+  // or io caller is read. Every other run places its caller as it always has.
+  const judged = host.watch === undefined
+    ? judgeCallerIn(io, dir, team)
+    : { caller: watchCaller(host.watch), shown: watchCaller(host.watch), session: host.watch.session };
   const { caller } = judged;
   const who = logTag(caller);
-  const from = caller.kind === 'seat' ? caller.name : 'owner';
+  const from = senderLabelOf(caller);
   const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
   // A settings record that exists and does not verify refuses the send: the address it may
   // stand for cannot be decided from a record the store disowns.
@@ -564,7 +592,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (args.values.key !== undefined || args.values['request-id'] !== undefined) {
     return usage(io, '--key and --request-id are only meaningful with --client', report);
   }
-  const detached = detachedRefusal(callerOf(io), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
+  // The no-terminal refusal judges the ordinary caller. A direct-work run's caller is the watch
+  // principal, established and verified by its internal entry, which may run with no terminal;
+  // it is judged at admission by its own branch, never by the process's placement.
+  const detached = detachedRefusal(host.watch === undefined ? callerOf(io) : watchCaller(host.watch), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     if (report.json) writeJsonError(io, 'send.detached', detached, 'run team send from a terminal outside herdr');
     else io.stderr(`team send: ${detached}\n`);
@@ -652,7 +683,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuse(io, dir, who, admission.why, host, report);
@@ -663,7 +694,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuse(io, dir, who, admission.why, host, report);
@@ -691,7 +722,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // Whether this sender can make the native leg itself: a seat whose registry record or team file
   // declares Claude Code carries the cross-session SendMessage the leg is made with. The owner's
   // terminal, and every other CLI, do not, and their native leg stays a skip.
-  const senderCli = admission.sender !== 'owner' && 'cli' in admission.sender ? admission.sender.cli : declaredCaller?.cli;
+  const senderCli = typeof admission.sender === 'object' && 'cli' in admission.sender ? admission.sender.cli : declaredCaller?.cli;
   const callerNative = senderCli === 'claude-code';
   report.seat = to.seat;
   // The team and session the send addresses, for the context line and the document: the
@@ -865,6 +896,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return refuse(io, dir, who, `${to.seat}: its pane is now ${here.pane}, not the ${bound.pane} the pass saw; nothing was sent`, host, report);
     }
   }
+  // The watch's own direct send is bound to exact target evidence, not only to the pair the pass
+  // read: the seat's registry record must be running and name this seat, session, pane and CLI,
+  // and the state must record the same pane for it. Anything less is refused before a route is
+  // attempted, so a stale, renamed or unrecorded target stages nothing.
+  if (host.watch !== undefined && bound !== undefined) {
+    const evidence = exactWatchTarget(host, to, bound, dir);
+    if (evidence !== null) return refuse(io, dir, who, evidence, host, report);
+  }
 
   // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
   // the send ends the walk; a leg that definitely cannot take it hands the send to the next
@@ -989,6 +1028,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // The dial is the route attempt: the signed record is staged before the frame reaches the
       // transport, so a connection that refuses or half-takes the frame still leaves a copy.
       await ensureEpisode();
+      // A direct-only caller's authority is rechecked after preparation and immediately before
+      // the dial: an epoch replaced while the record was staged ends the walk here, and no other
+      // route is attempted in a walk the caller no longer stands behind.
+      const socketGuard = guardRefusal(host.direct?.guard);
+      if (socketGuard !== null) {
+        failures.push(`socket: refused: ${socketGuard.why}`);
+        note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
+        break;
+      }
       const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root);
       if (attempt.kind === 'delivered') {
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -1143,6 +1191,17 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // The seat's own CLI resumed headlessly for one turn: no TUI pane, so no keystroke. This
       // build carries no headless runtime yet, so the declared leg is recorded as unavailable and
       // the walk moves on; it never falls through to the typed leg in its place.
+      //
+      // A direct-only caller's authority is rechecked before this leg's own route as well, even
+      // while the build carries no resume runtime: a refusal here ends the walk rather than
+      // recording an unavailable leg, and when a functional resume lands here it sits behind the
+      // same recheck, never after it. A refusal never reaches the walk's next route.
+      const resumeGuard = guardRefusal(host.direct?.guard);
+      if (resumeGuard !== null) {
+        failures.push(`headless-resume: refused: ${resumeGuard.why}`);
+        note(walkAttempt('headless-resume', 'refused', false, host.now(), startedAt, { reason: resumeGuard.why }));
+        break;
+      }
       failures.push('headless-resume: this build carries no headless resume runtime');
       note(walkAttempt('headless-resume', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: 'this build carries no headless resume runtime' }));
       continue;
@@ -1312,15 +1371,24 @@ export type DirectSendRun = { code: number; result: DirectSendResult | null };
 export async function sendDirect(
   io: Io,
   host: SendHost,
-  input: { seat: string; pane: string; cli: string; body: string },
+  input: {
+    seat: string;
+    pane: string;
+    cli: string;
+    body: string;
+    guard?: () => { ok: true } | { ok: false; why: string };
+    watch?: WatchSendPrincipal;
+  },
 ): Promise<DirectSendRun> {
   const captured: { result: DirectSendResult | null } = { result: null };
   const code = await runSend([input.seat, input.body], io, {
     ...host,
     direct: {
       expect: { pane: input.pane, cli: input.cli },
+      ...(input.guard === undefined ? {} : { guard: input.guard }),
       ended: (ending) => { captured.result = ending; },
     },
+    ...(input.watch === undefined ? {} : { watch: input.watch }),
   });
   return { code, result: captured.result };
 }
@@ -1390,10 +1458,11 @@ function fallbackAfterNative(
     .filter((leg): leg is PendingNativeFallbackLeg => leg === 'mcp-inbox' || leg === 'typed' || leg === 'drop');
 }
 
-/** The registry id the sender's record carries, when it has one: the owner is named by `owner`
- *  alone, and a declared sender the store holds no record for carries none. */
+/** The registry id the sender's record carries, when it has one: the owner and the watch are
+ *  named by their reserved words alone, and a declared sender the store holds no record for
+ *  carries none. */
 export function senderIdOf(admission: Admission): string | null {
-  if (!admission.ok || admission.sender === 'owner') return null;
+  if (!admission.ok || admission.sender === 'owner' || admission.sender === 'watch') return null;
   return 'id' in admission.sender ? admission.sender.id : null;
 }
 
@@ -1485,7 +1554,7 @@ async function handOff(
     nonce,
     ts: host.now().toISOString(),
     from,
-    from_id: admission.sender === 'owner' ? null : 'id' in admission.sender ? admission.sender.id : null,
+    from_id: senderIdOf(admission),
     to: to.seat,
     to_id: to.agentId,
     team: teamIdOf(to.root),
@@ -1624,7 +1693,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing);
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuse(io, dir, who, admission.why, host, report);
@@ -1635,7 +1704,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing);
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuse(io, dir, who, admission.why, host, report);
@@ -1748,7 +1817,7 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   const judged = judgeCallerIn(io, dir, team);
   const { caller } = judged;
   const who = logTag(caller);
-  const from = caller.kind === 'seat' ? caller.name : 'owner';
+  const from = senderLabelOf(caller);
   const read = readPending(team.project, root, host.home, id, host.now());
   if (!read.ok) return refuse(io, dir, who, `${id}: the pending record cannot be read (${read.reason}); nothing was recorded`, host, report);
   if (read.record === null) return refuse(io, dir, who, `${id}: no pending native record holds that id; nothing was recorded`, host, report);
@@ -3045,6 +3114,38 @@ function raiseSecurityRefusal(
   });
 }
 
+/** The caller a direct-work run names: the watch itself, built from the principal
+ *  `sendWatchDirect` established after the actual verifier passed. It is never derived from io
+ *  and never from the request. */
+function watchCaller(principal: WatchSendPrincipal): Caller {
+  return { kind: 'watch', session: principal.session, ...(principal.pane === undefined ? {} : { pane: principal.pane }) };
+}
+
+/** The watch context admission reads, or undefined for an ordinary run: the verified principal
+ *  and the root this run actually loaded. The two are compared canonically at admission, so the
+ *  context selects the loaded file, never an ambient working directory. */
+function watchContext(host: SendHost, root: string): { principal: WatchSendPrincipal; root: string } | undefined {
+  return host.watch === undefined ? undefined : { principal: host.watch, root };
+}
+
+/** The sender label a record and a history line carry: a seat's name, the reserved word `watch`
+ *  for the watch's own direct-work principal, or `owner` for every other non-seat. */
+function senderLabelOf(caller: Caller): string {
+  return caller.kind === 'seat' ? caller.name : caller.kind === 'watch' ? 'watch' : 'owner';
+}
+
+/** One direct route's recheck, read as a refusal on any refusal or throw: a guard that cannot
+ *  answer never lets a transport stand. The reason travels to the walk's attempt ledger unchanged. */
+function guardRefusal(guard: (() => { ok: true } | { ok: false; why: string }) | undefined): { ok: false; why: string } | null {
+  if (guard === undefined) return null;
+  try {
+    const verdict = guard();
+    return verdict.ok ? null : { ok: false, why: verdict.why };
+  } catch (error) {
+    return { ok: false, why: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /**
  * Why the caller is not placed to send, or null — placement alone, never authority. The owner
  * always is; an unplaced caller is refused with its own reason; a seat must be the seat it names
@@ -3078,7 +3179,7 @@ function declaredPlacementProblem(caller: Caller, name: string, at: SeatStanding
 }
 
 /** Why the send is admitted, and the rule that admitted it — or why it is not. */
-export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' } | { ok: false; why: string };
+export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' | 'watch' } | { ok: false; why: string };
 
 /**
  * The authority rule for this send: `admitSend`, over the registry's own records, default deny.
@@ -3125,8 +3226,10 @@ export function admissionOf(
   now: () => Date,
   at: SeatStanding,
   reply?: 'open-thread',
+  watch?: { principal: WatchSendPrincipal; root: string },
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
+  if (caller.kind === 'watch') return watchAdmissionOf(caller, team, target, seatName, watch);
   const record = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
   // A record is bound to a call only where the call stands as it: the record's own seat, running,
   // on the pane the record holds, in its session, and on the pane the state records for that seat
@@ -3179,6 +3282,96 @@ export function admissionOf(
     }
   }
   return { ok: false, why: verdict.why };
+}
+
+/**
+ * The watch's own admission. A watch is not a seat: no seat or registry-record identity rule can
+ * bind it, and its authority is the direct-work record `sendWatchDirect` verified with the actual
+ * verifier before this run began. It admits exactly what the watch is for — one declared seat of
+ * the team file it was verified against, in that file's session, under that file's canonical
+ * root — and nothing else. A resolved address is read only where it resolves to this same root,
+ * session and declared seat; every other address, grant, file or reply refuses. The target may
+ * never be a person's pane or the owner.
+ */
+function watchAdmissionOf(
+  caller: Extract<Caller, { kind: 'watch' }>,
+  team: TeamFile,
+  target: Target | null,
+  seatName: string,
+  watch: { principal: WatchSendPrincipal; root: string } | undefined,
+): Admission {
+  if (watch === undefined) {
+    return { ok: false, why: 'the watch sends only through its own verified direct-work entry; no principal stands behind this run' };
+  }
+  // The captured root, canonically, is the only root this watch may act in. A team file with the
+  // same session name in another root is another team, and the refusal comes before any staging.
+  if (!samePath(watch.principal.root, watch.root)) {
+    return { ok: false, why: `the watch was verified for its captured root, and this run loaded another root: same session names do not make another root's team` };
+  }
+  if (caller.session !== team.session || watch.principal.session !== team.session) {
+    return { ok: false, why: `the watch stands in session ${caller.session}, not this team file's ${team.session}; nothing was sent` };
+  }
+  // A resolved address is allowed only when it is the plain declared seat this same file names;
+  // an agent id, nickname or another team's seat is a spec the watch never carries.
+  if (target !== null) {
+    if (!samePath(target.team.root, watch.root)) {
+      return { ok: false, why: `${target.agent.reach.seat}: it resolves to another team's record, and the watch wakes a seat of its own team file only` };
+    }
+    if (seatName !== target.agent.reach.seat || target.agent.reach.session !== team.session) {
+      return { ok: false, why: `${seatName}: the watch addresses a declared seat by its own name and session, never a resolved spec` };
+    }
+  }
+  const seat = target === null ? seatName : target.agent.reach.seat;
+  const declared = team.seats.find((entry) => entry.name === seat);
+  if (declared === undefined) {
+    return { ok: false, why: `${seat}: it is not a declared seat; the watch wakes a seat of its own team file only` };
+  }
+  if (declared.human === true) {
+    return { ok: false, why: `${seat}: the pane is a person's, and the watch wakes seats only` };
+  }
+  return { ok: true, rule: "the watch's direct-work authority", sender: 'watch' };
+}
+
+/** Whether two paths name the same place canonically; an unreadable side is not the same place. */
+function samePath(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why the watch's target is not the exact seat its own pass read, or null when it is. The watch
+ * wakes a seat the registry holds a running record for, and the record, the state and the pass
+ * must all name the same seat, session, pane and CLI: a record that stopped, a pane reused, or a
+ * file that now names another CLI refuses before any route is attempted. The live pane read
+ * (`direct.expect`) already answered the session's own view; this is the durable evidence behind it.
+ */
+function exactWatchTarget(host: SendHost, to: Aim, bound: { pane: string; cli: string }, dir: string): string | null {
+  const record = recordFor(host.home, to.session, to.seat);
+  if (record === null) {
+    return `${to.seat}: the registry holds no record for it in session ${to.session}, and the watch wakes a recorded seat only; nothing was sent`;
+  }
+  if (record.lifecycle !== 'running') {
+    return `the registry's record for seat ${to.seat} is ${record.lifecycle}, not running; nothing was sent`;
+  }
+  if (record.reach.seat !== to.seat || record.reach.session !== to.session) {
+    return `the registry's record names ${record.reach.seat} in session ${record.reach.session}, not ${to.seat} in ${to.session}; nothing was sent`;
+  }
+  if (record.reach.pane !== bound.pane) {
+    const on = record.reach.pane === null ? 'no pane' : `pane ${record.reach.pane}`;
+    return `the registry records ${on} for seat ${to.seat}, and the pass read pane ${bound.pane}; nothing was sent`;
+  }
+  if (record.cli !== bound.cli) {
+    return `the registry records ${record.cli} for seat ${to.seat}, and the pass read ${bound.cli}; nothing was sent`;
+  }
+  const recorded = standingOf(dir, to.session, { kind: 'seat', name: to.seat, pane: bound.pane, session: to.session }).recordedPane;
+  if (recorded !== bound.pane) {
+    const on = recorded === undefined ? 'no pane' : `pane ${recorded}`;
+    return `the state records ${on} for seat ${to.seat}, and the pass read pane ${bound.pane}; nothing was sent`;
+  }
+  return null;
 }
 
 /** Why a caller with no registry record is refused, with the commands that write the record: a

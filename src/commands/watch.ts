@@ -23,7 +23,7 @@ import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
 import { watchCommand, watchWouldRead } from './up.ts';
-import { realHost, sendDirect, type DirectSendResult } from './send.ts';
+import { realHost, sendDirect } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
@@ -35,7 +35,7 @@ import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
-import { dispatchIdleWork, type IdleDispatchResult, type WorkPush, type WorkPushResult } from '../watch/dispatch.ts';
+import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
@@ -278,20 +278,10 @@ export const realWatchSources: WatchSources = {
 };
 
 /**
- * What the idle dispatcher reads back from one direct send. Only a route that delivered is a
- * wake; a stored copy, a timeout, an unreachable or a refused ending is `ok: false`, whatever the
- * command's exit code was. A run that ended before any route was attempted is a refusal too, with
- * the command's own words when it said any.
+ * The idle dispatcher's read-back lives beside its own types, in `src/watch/dispatch.ts`; it is
+ * re-exported here so every existing reader of `team watch` keeps its import.
  */
-export function workPushResultOf(result: DirectSendResult | null, said: string): WorkPushResult {
-  if (result === null) {
-    const why = said.replace(/\s+/g, ' ').trim();
-    return { ok: false, refused: why === '' ? 'the send ended before any direct route was attempted' : why };
-  }
-  const detail = result.reason === undefined ? '' : `: ${result.reason}`;
-  if (result.outcome === 'delivered') return { ok: true, outcome: `${result.route}: delivered${detail}` };
-  return { ok: false, refused: `${result.route}: ${result.outcome}${detail}` };
-}
+export { workPushResultOf } from '../watch/dispatch.ts';
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
 export default watch;

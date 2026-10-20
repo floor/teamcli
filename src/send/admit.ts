@@ -333,8 +333,11 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
  * `sender_name` word (`src/send/names.ts`), so a person sees a nickname or `seat@team` where an
  * earlier build printed `agt_…`.
  */
-export function senderHeader(caller: SendSide | 'owner', rule: string, naming: SenderNaming = defaultNaming()): string {
+export function senderHeader(caller: SendSide | 'owner' | 'watch', rule: string, naming: SenderNaming = defaultNaming()): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
+  // The watch's own direct-work principal: a non-seat sender, named by its reserved word so no
+  // reader mistakes it for the owner or for the lead's seat.
+  if (caller === 'watch') return `from the watch — admitted by: ${rule}\n`;
   const readable = senderDisplayName(senderIdentityOf(caller), naming);
   // A declared seat: the id the receiver would judge by is the one the registry has not written
   // yet, so the header says whose seat it is instead of an id.
