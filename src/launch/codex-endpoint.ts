@@ -25,7 +25,7 @@
 //   ended it with exit 143 and empty stdout/stderr. The launch spawns the same command with the
 //   state folder's own path, never a path derived from HOME.
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
-import { lstatSync, mkdirSync, unlinkSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { isPresenceBinding } from '../daemon/presence/contract.ts';
 import {
@@ -34,7 +34,7 @@ import {
   readRecordedCodexEndpoint,
   type CodexEndpointRecord,
 } from '../daemon/presence/endpoint-record.ts';
-import { presencePaths } from '../daemon/presence/spool.ts';
+import { isPresenceSeatName, presenceSessionFolder } from '../daemon/presence/spool.ts';
 import { readState, updateState } from '../state.ts';
 
 /** The longest unix socket path this build will ask Codex to bind: macOS refuses paths over 104
@@ -57,6 +57,15 @@ export type ManagedEndpointRead =
 
 export type EndpointStopRead = { stopped: boolean; why?: string };
 
+/** The folder holding one seat's managed endpoint sockets: under the team state folder, beside
+ *  the presence tree, keyed by the same session encoding so a session name can never escape it
+ *  and a seat always owns exactly one folder. Null when either name cannot be a folder. */
+function endpointFolder(dir: string, session: string, seat: string): string | null {
+  const folder = presenceSessionFolder(session);
+  if (folder === null || !isPresenceSeatName(seat)) return null;
+  return join(dir, 'run', folder, seat);
+}
+
 /** The explicit endpoint a managed launch would give this seat incarnation. Null when the state
  *  folder, the session or the seat cannot name one this build can bind to. */
 export function codexEndpointSocket(
@@ -65,9 +74,9 @@ export function codexEndpointSocket(
   seat: string,
   binding: string,
 ): { url: string; path: string } | null {
-  const paths = presencePaths(dir, session, seat);
-  if (paths === null || !isPresenceBinding(binding)) return null;
-  const path = join(paths.root, `${binding}.sock`);
+  const folder = endpointFolder(dir, session, seat);
+  if (folder === null || !isPresenceBinding(binding)) return null;
+  const path = join(folder, `${binding}.sock`);
   if (Buffer.byteLength(path) > MAX_SOCKET_PATH_BYTES) return null;
   return { url: `unix://${path}`, path };
 }
@@ -80,11 +89,11 @@ function ownedSocketPath(
   seat: string,
   record: CodexEndpointRecord,
 ): string | null {
-  const paths = presencePaths(dir, session, seat);
-  if (paths === null) return null;
+  const folder = endpointFolder(dir, session, seat);
+  if (folder === null) return null;
   const path = codexEndpointPath(record);
   if (path === null) return null;
-  if (dirname(path) !== paths.root) return null;
+  if (dirname(path) !== folder) return null;
   if (basename(path) !== `${record.binding}.sock`) return null;
   return path;
 }
@@ -154,6 +163,33 @@ function dropFile(path: string): void {
   } catch {
     // Already gone, or never there.
   }
+}
+
+/** The binding-named socket files in this seat's own folder that this launch neither binds nor
+ *  can tie to a record: left where they are, never removed, because no record proves their
+ *  process has gone. A socket is only ever unlinked through the record that names it. */
+function socketsLeftAlone(
+  folder: string,
+  accounted: readonly (string | null)[],
+  isSocket: (path: string) => boolean,
+): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return [];
+  }
+  const known = new Set(accounted.filter((path): path is string => path !== null));
+  const left: string[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.sock')) continue;
+    const binding = name.slice(0, -'.sock'.length);
+    if (!isPresenceBinding(binding)) continue;
+    const path = join(folder, name);
+    if (known.has(path) || !isSocket(path)) continue;
+    left.push(name);
+  }
+  return left.sort();
 }
 
 export type CodexEndpointDeps = {
@@ -356,17 +392,24 @@ export async function ensureCodexEndpoint(
     }
   }
 
-  const paths = presencePaths(input.dir, input.session, input.seat);
-  if (paths === null) {
-    return { kind: 'unmanaged', why: 'the session or seat cannot name a presence folder' };
+  const folder = endpointFolder(input.dir, input.session, input.seat);
+  if (folder === null) {
+    return { kind: 'unmanaged', why: 'the session or seat cannot name an endpoint folder' };
   }
   try {
-    mkdirSync(paths.root, { recursive: true, mode: 0o700 });
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
   } catch {
     return { kind: 'unmanaged', why: 'the endpoint folder could not be made' };
   }
-  if (!plainDir(paths.root)) {
+  if (!plainDir(folder)) {
     return { kind: 'unmanaged', why: 'the endpoint folder is not a plain directory' };
+  }
+  // A socket is only ever removed through the record that names it, before the new server binds.
+  // A socket no record names is reported and left: nothing proves its process has gone.
+  const priorPath = prior === null ? null : ownedSocketPath(input.dir, input.session, input.seat, prior);
+  const leftAlone = socketsLeftAlone(folder, [socketPath.path, priorPath], socket);
+  if (leftAlone.length > 0) {
+    notes.push(`an endpoint socket no record names was left in place: ${leftAlone.join(', ')}; nothing proves its process has gone`);
   }
   const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }) });
   if (started === null) {

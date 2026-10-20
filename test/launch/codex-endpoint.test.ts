@@ -2,13 +2,14 @@
 // here starts, signals or reads another process, and no CLI home is touched. The rules pinned
 // are the ones a launch depends on — a record is written under the seat's current binding, a
 // server this call started is stopped when its record cannot land, a reused pid is never
-// signalled, and only the endpoint's own socket under the seat's own folder is ever removed.
+// signalled, and only the endpoint's own socket under the seat's own run folder is ever removed.
+// A socket no record names is left where it is, and said.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emptySession, readState, updateState } from '../../src/state.ts';
-import { presencePaths } from '../../src/daemon/presence/spool.ts';
+import { presenceSessionFolder } from '../../src/daemon/presence/spool.ts';
 import {
   codexEndpointSocket,
   ensureCodexEndpoint,
@@ -34,9 +35,9 @@ function scratch(): string {
 }
 
 function rootOf(dir: string): string {
-  const paths = presencePaths(dir, SESSION, SEAT);
-  if (paths === null) throw new Error('the scene names no presence folder');
-  return paths.root;
+  const folder = presenceSessionFolder(SESSION);
+  if (folder === null) throw new Error('the scene names no session folder');
+  return join(dir, 'run', folder, SEAT);
 }
 
 /** A state that records the seat's current binding, as a managed launch reads it. */
@@ -63,7 +64,7 @@ function ownedRecord(dir: string, extra: Partial<CodexEndpointRecord> = {}): Cod
 }
 
 describe('the endpoint socket path', () => {
-  test('is binding-scoped, under the seat’s own presence folder', () => {
+  test('is binding-scoped, under the seat’s own run folder', () => {
     const dir = scratch();
     try {
       const socket = codexEndpointSocket(dir, SESSION, SEAT, BINDING);
@@ -242,6 +243,79 @@ describe('ensuring the endpoint', () => {
       expect(dropped).toEqual([]);
       expect(recordedAt(dir)?.url).toBe(`unix://${socketPath}`);
       expect(recordedAt(dir)?.pid).toBe(9004);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a socket no record names is never removed, and is said', async () => {
+    const dir = scratch();
+    try {
+      seed(dir);
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      const strangerPath = join(rootOf(dir), `${OTHER}.sock`);
+      mkdirSync(rootOf(dir), { recursive: true });
+      writeFileSync(strangerPath, '');
+      let listening = false;
+      const dropped: string[] = [];
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          spawn: () => { listening = true; return { pid: 9010 }; },
+          isPlainDir: () => true,
+          isSocket: (path) => (listening && path === socketPath) || path === strangerPath,
+          drop: (path) => { dropped.push(path); },
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer.kind).toBe('up');
+      if (answer.kind === 'up') {
+        expect(answer.notes?.some((note) => note.includes(`${OTHER}.sock`))).toBe(true);
+        expect(answer.notes?.some((note) => note.includes('no record names'))).toBe(true);
+      }
+      expect(dropped).toEqual([]);
+      expect(existsSync(strangerPath)).toBe(true);
+      expect(recordedAt(dir)?.url).toBe(`unix://${socketPath}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('removes only the predecessor socket its record names, never a stranger', async () => {
+    const dir = scratch();
+    try {
+      const priorPath = join(rootOf(dir), `${OTHER}.sock`);
+      const stranger = 'prs_aaaabbbbcccc';
+      const strangerPath = join(rootOf(dir), `${stranger}.sock`);
+      seedRecord(dir, { url: `unix://${priorPath}`, binding: OTHER, pid: 700, started_at: T0 });
+      mkdirSync(rootOf(dir), { recursive: true });
+      writeFileSync(priorPath, '');
+      writeFileSync(strangerPath, '');
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      let listening = false;
+      const dropped: string[] = [];
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          spawn: () => { listening = true; return { pid: 9011 }; },
+          // The recorded pid is gone: exactly the proof that lets its own socket go.
+          alive: () => false,
+          isPlainDir: () => true,
+          isSocket: (path) => path === priorPath || path === strangerPath
+            || (listening && path === socketPath),
+          drop: (path) => { dropped.push(path); },
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer.kind).toBe('up');
+      expect(dropped).toEqual([priorPath]);
+      if (answer.kind === 'up') {
+        expect(answer.notes?.some((note) => note.includes(`${stranger}.sock`))).toBe(true);
+      }
+      expect(existsSync(strangerPath)).toBe(true);
+      expect(recordedAt(dir)?.binding).toBe(BINDING);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
