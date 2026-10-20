@@ -254,6 +254,25 @@ describe('the lock', () => {
     expect(withLock(dir, () => 'ran', { waitMs: 0 })).toBe('ran');
     expect(existsSync(join(dir, LOCK_FILE))).toBe(false);
   });
+
+  test('waitMs 0 refuses at the first held lock with LockBusyError', () => {
+    writeFileSync(join(dir, LOCK_FILE), '1\n');
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(/another team command \(pid 1\) holds/);
+    expect(readFileSync(join(dir, LOCK_FILE), 'utf8')).toBe('1\n');
+  });
+
+  test('waitMs 0 does not take over a young lock file whose holder cannot be read', () => {
+    writeFileSync(join(dir, LOCK_FILE), 'not a pid\n');
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    expect(readFileSync(join(dir, LOCK_FILE), 'utf8')).toBe('not a pid\n');
+  });
+
+  test('an update can ask for the one-attempt lock, and writes nothing when it is held', () => {
+    writeFileSync(join(dir, LOCK_FILE), '1\n');
+    expect(() => updateState(dir, (state) => { state.sessions.crew = emptySession(); }, { waitMs: 0 })).toThrow(LockBusyError);
+    expect(existsSync(join(dir, STATE_FILE))).toBe(false);
+  });
 });
 
 describe('the log', () => {

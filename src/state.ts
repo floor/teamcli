@@ -684,14 +684,16 @@ export function pruneProcs(session: SessionState, alive: (pid: number) => boolea
   }
 }
 
-// Reads the state, lets `change` edit it, and writes it back, all under the lock.
-export function updateState<T>(dir: string, change: (state: State) => T): T {
+// Reads the state, lets `change` edit it, and writes it back, all under the lock. `waitMs` is the
+// lock's; `0` makes one attempt and throws `LockBusyError` instead of pausing, for a caller on a
+// scheduler tick that must defer the same work to a later tick.
+export function updateState<T>(dir: string, change: (state: State) => T, options: { waitMs?: number } = {}): T {
   return withLock(dir, () => {
     const state = readState(dir);
     const result = change(state);
     writeAtomic(join(dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
     return result;
-  });
+  }, options);
 }
 
 export function writeAtomic(path: string, text: string): void {
@@ -784,8 +786,7 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       // A dead holder, or a lock file too young to hold its pid yet. A file just created holds
       // no pid until its writer writes one — it reads as 0, not as a number that names a
       // process — so anything that is not a positive integer is young, not stale.
-      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {
-        if (waitMs === 0) throw new LockBusyError(path, null);
+      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {        if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
       }
