@@ -38,6 +38,9 @@ function escapeXml(text: string): string {
 function programOf(program: ServiceProgram): string[] {
   const args = [program.execPath, program.entry, 'daemon', 'run', '--started-by', 'service-manager'];
   for (const root of program.roots) args.push('--root', root);
+  // The unit records the same opt-in a foreground run takes: without it the service-managed
+  // daemon hosts no presence at all, and with it every hosted route's pipeline starts at login.
+  if (program.presence === true) args.push('--presence');
   return args;
 }
 

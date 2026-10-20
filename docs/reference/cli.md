@@ -425,7 +425,7 @@ Usage:
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence]
-    team daemon install [--root <folder>] [--dry-run] [--json]
+    team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
     team daemon uninstall [--json]
 
 ### Who may run it
@@ -449,7 +449,7 @@ Hidden: no
 
 Usage:
 
-    team daemon install [--root <folder>] [--dry-run] [--json]
+    team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
 
 #### Who may run it
 
@@ -462,6 +462,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--presence` | no | no | no |
 | `--root` | yes | no | no |
 | `-h` | no | no | yes |
 

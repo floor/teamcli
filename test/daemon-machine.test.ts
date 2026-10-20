@@ -13,7 +13,7 @@ import type { HostedRoute } from '../src/daemon/routes.ts';
 import { STATE_FILE } from '../src/state.ts';
 import { daemonSocketPath as sendSocketPath, startSendDaemon } from '../src/send/daemon.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
-import type { ServiceManager, ServiceRunResult } from '../src/daemon/service.ts';
+import type { ServiceManager, ServiceProgram, ServiceRunResult } from '../src/daemon/service.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
 import { testIo } from './helpers.ts';
 
@@ -382,6 +382,27 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(existsSync(installed.unitPath)).toBe(false);
   });
 
+  test('the unit carries the presence opt-in exactly when the install program asks for it', () => {
+    const { home } = scratch();
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    expect(plain.ok).toBe(true);
+    if (!plain.ok) return;
+    expect(readFileSync(plain.unitPath, 'utf8')).not.toContain('--presence');
+
+    const opted = manager.install(home, {
+      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], presence: true,
+    });
+    expect(opted.ok).toBe(true);
+    if (!opted.ok) return;
+    const unit = readFileSync(opted.unitPath, 'utf8');
+    expect(unit).toContain('--presence');
+    // The same run command, one flag longer: the service manager still starts `daemon run` as the
+    // owner with no terminal, and the opt-in survives login restarts with the unit.
+    expect(unit).toContain('--started-by');
+    expect(unit).toContain('service-manager');
+  });
+
   test('a refused registration carries a neutral why, never the platform facility name', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({
@@ -397,17 +418,23 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
   });
 });
 
-type FakeService = ServiceManager & { calls: string[] };
+type FakeService = ServiceManager & { calls: string[]; programs: ServiceProgram[] };
 
 function fakeService(overrides: Partial<ServiceManager> = {}): FakeService {
   const calls: string[] = [];
+  const programs: ServiceProgram[] = [];
   const base: FakeService = {
     kind: 'system-service-manager',
     calls,
+    programs,
     unitPath: (home) => join(home, 'unit.plist'),
-    plan: (home, program) => ({ unitPath: join(home, 'unit.plist'), program: [program.execPath, program.entry, 'daemon', 'run'] }),
-    install: (home) => {
+    plan: (home, program) => {
+      programs.push(program);
+      return { unitPath: join(home, 'unit.plist'), program: [program.execPath, program.entry, 'daemon', 'run'] };
+    },
+    install: (home, program) => {
       calls.push('install');
+      programs.push(program);
       return { ok: true, unitPath: join(home, 'unit.plist') };
     },
     uninstall: (home) => {
@@ -415,7 +442,7 @@ function fakeService(overrides: Partial<ServiceManager> = {}): FakeService {
       return { ok: true, unitPath: join(home, 'unit.plist'), removed: true };
     },
   };
-  return { ...base, ...overrides, calls };
+  return { ...base, ...overrides, calls, programs };
 }
 
 const snapshot: DaemonHealthSnapshot = {
@@ -468,11 +495,22 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(await runDaemon(['install'], installed, sourcesOf(home, { service }))).toBe(0);
     expect(service.calls).toEqual(['install']);
     expect(installed.out).toContain('team daemon: installed');
+    // A plain install starts the service-managed daemon exactly as before: no presence opt-in.
+    expect(service.programs.at(-1)?.presence).toBeUndefined();
 
     const removed = testIo(root, owner);
     expect(await runDaemon(['uninstall'], removed, sourcesOf(home, { service }))).toBe(0);
     expect(service.calls).toEqual(['install', 'uninstall']);
     expect(removed.out).toContain('team daemon: uninstalled');
+  });
+
+  test('install --presence records the run opt-in in the unit program', async () => {
+    const { root, home } = scratch();
+    const service = fakeService();
+    const io = testIo(root, owner);
+    expect(await runDaemon(['install', '--presence'], io, sourcesOf(home, { service }))).toBe(0);
+    expect(service.programs.at(-1)).toMatchObject({ roots: [root], presence: true });
+    expect(io.out).toContain('team daemon: installed');
   });
 
   test('a seat cannot install or start the machine daemon', async () => {
@@ -554,7 +592,27 @@ describe('team daemon status, install, uninstall and run', () => {
 
     const refused = testIo(root, owner);
     expect(await runDaemon(['status', '--presence'], refused, sourcesOf(home))).toBe(2);
-    expect(refused.err).toContain('--presence belongs to run');
+    expect(refused.err).toContain('--presence belongs to run or install');
+  });
+
+  test('the service-manager start admits the presence opt-in; a manual no-terminal start does not', async () => {
+    const { root, home } = scratch();
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    // The unit is the one admitted no-terminal start, and it carries --presence only when it was
+    // installed with it; the run side accepts the same pair.
+    const unitCaller = testIo(root, { kind: 'owner-no-tty' });
+    expect(await runDaemon(['run', '--presence', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start }))).toBe(0);
+    expect(seen[0]?.presenceHosting).toBe(true);
+    expect(seen[0]?.startedBy).toBe('service-manager');
+
+    const manual = testIo(root, { kind: 'owner-no-tty' });
+    expect(await runDaemon(['run', '--presence'], manual, sourcesOf(home, { start }))).toBe(1);
+    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(seen.length).toBe(1);
   });
 
   test('run --presence hosts the real spool-to-health presence pipeline for its route', async () => {

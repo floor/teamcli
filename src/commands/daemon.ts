@@ -27,7 +27,7 @@ import { version as installedVersion } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence]
-       team daemon install [--root <folder>] [--dry-run] [--json]
+       team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
        team daemon uninstall [--json]
 
 One machine-wide daemon serves every team and clone on this machine. It answers its own
@@ -129,7 +129,7 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.extra !== undefined) return `unexpected "${parsed.extra}"`;
   if (parsed.verb === 'run' && parsed.json) return '--json belongs to status, install or uninstall';
   if (parsed.verb === 'run' && parsed.dryRun) return '--dry-run belongs to install';
-  if (parsed.verb !== 'run' && parsed.presence) return '--presence belongs to run';
+  if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
   if (parsed.verb === 'status' && parsed.dryRun) return '--dry-run belongs to install';
   if (parsed.verb === 'status' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'status' && parsed.startedBy !== undefined) return '--started-by belongs to run';
@@ -406,7 +406,14 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.entry-missing
     return 1;
   }
-  const fullProgram: ServiceProgram = { ...program, roots: named.roots };
+  const fullProgram: ServiceProgram = {
+    ...program,
+    roots: named.roots,
+    // The installed unit is the service-managed run lifecycle; the flag an owner gives here is
+    // written into its run command, so presence hosting survives login restarts. A plain install
+    // writes no flag and starts exactly the daemon it did before.
+    ...(parsed.presence ? { presence: true } : {}),
+  };
   const plan = manager.plan(home, fullProgram);
   if (parsed.dryRun) {
     if (parsed.json) {

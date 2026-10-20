@@ -14,7 +14,7 @@ machine with no broker handler never falls back to a per-clone broker.
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence]
-    team daemon install [--root <folder>] [--dry-run] [--json]
+    team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
     team daemon uninstall [--json]
 
 A subcommand is required. `--root` is repeatable and names the checkouts this one daemon hosts;
@@ -44,8 +44,10 @@ record: `manual` (the default), `service-manager` (the unit), or `team-up`.
 
 `run --presence` also hosts each checkout's presence pipeline: the spool ingester, the activity
 reconciler, the publisher and the per-seat health answer. Without the flag the daemon does not
-read presence at all, and a start without it behaves exactly as before. The opt-in is a `run`
-flag alone; there is no second policy key for it. A seat whose native attachment is expected but
+read presence at all, and a start without it behaves exactly as before. The opt-in is the `run`
+flag alone; `install --presence` writes that same flag into the unit's run command, so a
+service-managed daemon hosts presence only after an owner installs it that way. There is no
+second policy key for it. A seat whose native attachment is expected but
 cannot be proven is answered as unproven for that seat, never silently as its route's hook seat.
 A Codex seat attaches only to the explicit endpoint its own state record carries, and only while
 that record's binding is the seat's current presence binding; a missing, malformed or
@@ -67,7 +69,7 @@ under `--json`, and writes nothing: `… would install …; nothing was written`
 | --- | --- | --- |
 | `--root` | a checkout folder | host that checkout; repeatable, and validated when the unit is written; belongs to `run` and `install` |
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
-| `--presence` | — | host each checkout's presence pipeline; belongs to `run`, and is off by default |
+| `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
 | `--dry-run` | — | print the install plan and write nothing; belongs to `install` |
 | `--json` | — | one JSON document instead of the line; belongs to `status`, `install` and `uninstall` |
 | `--help`, `-h` | — | the usage, and exit 0 |

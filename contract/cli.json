@@ -680,6 +680,12 @@
             },
             {
               "hidden": false,
+              "name": "--presence",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--root",
               "repeatable": false,
               "takesValue": true
@@ -696,7 +702,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon install [--root <folder>] [--dry-run] [--json]"
+            "team daemon install [--root <folder>] [--presence] [--dry-run] [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -818,7 +824,7 @@
       "usage": [
         "team daemon status [--json]",
         "team daemon run [--root <folder>] [--started-by <source>] [--presence]",
-        "team daemon install [--root <folder>] [--dry-run] [--json]",
+        "team daemon install [--root <folder>] [--presence] [--dry-run] [--json]",
         "team daemon uninstall [--json]"
       ],
       "who": {

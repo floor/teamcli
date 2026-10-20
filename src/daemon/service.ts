@@ -14,6 +14,9 @@ export type ServiceProgram = {
   entry: string;
   /** The checkouts this one daemon process hosts. */
   roots: string[];
+  /** Whether the unit's run command carries the presence opt-in. Absent means the unit starts
+   *  the daemon without presence hosting, exactly as a plain `run` does. */
+  presence?: boolean;
 };
 
 export type ServicePlan = {
