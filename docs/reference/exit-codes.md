@@ -571,14 +571,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `sessions.shown` | `sessions` | 0 | the session records were listed | `team sessions` |
 | `sessions.read` | `sessions` | 1 | a session registry can't be read | `team sessions` |
 | `sessions.invocation` | `sessions` | 2 | the invocation can't be read | `team sessions --by nothing` |
-| `settings.dry-run` | `settings` | 0 | the change a write would make is printed and nothing is written | `team settings set lead nickname=Atlas --dry-run` |
-| `settings.set` | `settings` | 0 | the setting is signed into the seat's record and logged | `team settings set lead nickname=Atlas` |
+| `settings.dry-run` | `settings` | 0 | the change a write would make is printed and nothing is written | `team settings set lead nickname=Ada --dry-run` |
+| `settings.set` | `settings` | 0 | the setting is signed into the seat's record and logged | `team settings set lead nickname=Ada` |
 | `settings.shown` | `settings` | 0 | the seat's settings are printed | `team settings lead` |
 | `settings.unset` | `settings` | 0 | the setting is removed from the seat's record and logged | `team settings unset lead nickname` |
 | `settings.file-owner` | `settings` | 1 | --file is the owner's | `team settings lead --file .agents/team.yaml` |
-| `settings.no-agent` | `settings` | 1 | the seat has no registered agent record and one could not be created to hold its settings | `team settings set lead nickname=Atlas` |
+| `settings.no-agent` | `settings` | 1 | the seat has no registered agent record and one could not be created to hold its settings | `team settings set lead nickname=Ada` |
 | `settings.no-seat` | `settings` | 1 | the team file declares no seat of that name | `team settings ghost` |
-| `settings.not-owner` | `settings` | 1 | only the owner sets a seat's settings | `team settings set lead nickname=Atlas` |
+| `settings.not-owner` | `settings` | 1 | only the owner sets a seat's settings | `team settings set lead nickname=Ada` |
 | `settings.not-set` | `settings` | 1 | an unset names a setting that is not set on the seat | `team settings unset lead model` |
 | `settings.policy` | `settings` | 1 | a policy in force over the seat does not admit the value | `team settings set lead delivery_order=typed` |
 | `settings.file` | `settings` | 2 | the team file can't be found or read | `team settings lead --file missing.yaml` |
@@ -589,7 +589,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `settings.not-yours` | `settings` | 2 | the team is not the caller's to read | `team settings lead` |
 | `settings.source` | `settings` | 2 | a signed settings record can't be read or does not verify | `team settings lead` |
 | `settings.value` | `settings` | 2 | a value is outside what the seat's profile or the key's shape accepts | `team settings set lead model=nope` |
-| `settings.write` | `settings` | 2 | the seat's record can't be replaced | `team settings set lead nickname=Atlas` |
+| `settings.write` | `settings` | 2 | the seat's record can't be replaced | `team settings set lead nickname=Ada` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |

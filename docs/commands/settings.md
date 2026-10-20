@@ -57,7 +57,7 @@ event log as they were. An unset on such a seat reports the setting is not set a
 nothing either. A printed `team settings <seat>` reads the declaration and the team's records
 without creating anything.
 
-`team settings set lead nickname=Atlas` therefore works on a declared seat before its first
+`team settings set lead nickname=Ada` therefore works on a declared seat before its first
 launch, and the `settings.no-agent` refusal is left for a registry that cannot hold the record at
 all, such as a path that is not a directory.
 
