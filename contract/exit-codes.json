@@ -4260,6 +4260,13 @@
     {
       "code": 0,
       "command": "team",
+      "id": "team.presence-hook-ignored",
+      "meaning": "a notification other than the measured permission prompt was ignored and nothing was staged",
+      "trigger": "team presence-hook --event human-wait --notification permission_prompt"
+    },
+    {
+      "code": 0,
+      "command": "team",
       "id": "team.presence-hook-staged",
       "meaning": "the presence event was staged",
       "trigger": "team presence-hook --event turn-end"

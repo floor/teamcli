@@ -91,7 +91,9 @@ function readPayload(): string {
 
 export default function run(argv: readonly string[], readInput: () => string = readPayload): number {
   const parsed = parse(argv);
-  if (parsed === null) return 1; // exit: team.presence-hook-invalid
+  // exit: team.presence-hook-invalid
+  if (parsed === null) return 1;
+  // exit: team.presence-hook-ignored
   if (parsed.notification !== undefined && !isPermissionPromptPayload(readInput())) return 0;
   const staged = stagePresenceRecord(parsed.dir, {
     session: parsed.session,

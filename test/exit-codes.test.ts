@@ -2457,6 +2457,16 @@ scene('team.presence-hook-invalid', async (place) => {
   expect(existsSync(join(place.root, 'presence'))).toBe(false);
   return ran;
 });
+scene('team.presence-hook-ignored', async (place) => {
+  // A notification that is not the measured permission prompt declines with exit 0 and stages
+  // nothing: the payload filter, not the event word alone, is the whole condition.
+  const code = runPresenceHook(
+    ['--dir', place.root, '--session', 'crew', '--seat', 'writer', '--binding', HOOK_BINDING, '--event', 'human-wait', '--notification', 'permission_prompt'],
+    () => JSON.stringify({ hook_event_name: 'Notification', notification_type: 'idle_prompt' }),
+  );
+  expect(existsSync(join(place.root, 'presence'))).toBe(false);
+  return { code, out: '', err: '' };
+});
 scene('team.presence-hook-staged', async (place) => {
   const ran = hooked(place, ['--session', 'crew', '--seat', 'writer', '--binding', HOOK_BINDING, '--event', 'turn-end']);
   const spool = join(place.root, 'presence', 'crew', 'writer', 'spool');
