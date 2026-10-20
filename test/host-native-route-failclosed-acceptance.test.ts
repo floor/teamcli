@@ -6,10 +6,11 @@
 // The scenes hold the actual host to the behavior the consumer depends on:
 //   - a factory that throws while building the route's runtime subscriptions (or its unproven
 //     resolutions) holds the route: an expected native attachment can never inherit the ingest
-//     answer of the route it failed to classify, and the hold is visible in `daemon.health()`;
+//     answer of the route it failed to classify, and `daemon.health()` answers with the complete
+//     ordered seat list, every seat pending and `unknown`, never an omitted list;
 //   - a source whose step never settles holds only its own seat: the route's activity still runs
-//     and a healthy sibling is still sampled and served while the first pump is in flight, and
-//     shutdown cancels the held source so ownership is released;
+//     and a sibling whose transition is really staged, applied and fenced is served while the
+//     first pump is in flight, and shutdown cancels the held source so ownership is released;
 //   - a named source the host cannot drain is held as explicitly unproven, never sampled as a
 //     serving channel and never closing the door on the route's own answer;
 //   - a seat's sampled answer carries the current managed binding it was fenced on, so a reader
@@ -20,10 +21,11 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { startMachineDaemon, type StartMachineDaemonInput } from '../src/daemon/host.ts';
 import { daemonLockPath } from '../src/daemon/paths.ts';
-import type { PresenceActivityResult } from '../src/daemon/presence/activity.ts';
+import { createPresenceActivity, type PresenceActivityResult } from '../src/daemon/presence/activity.ts';
 import type { PresenceSource, PresenceSourceStatus } from '../src/daemon/presence/health.ts';
 import type { PresenceIngestResult, PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import type { PresencePublishResult } from '../src/daemon/presence/publish.ts';
+import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
 import { STATE_FILE } from '../src/state.ts';
 
 const CREW = `format: 1
@@ -105,11 +107,21 @@ afterEach(async () => {
   rmSync(world.base, { recursive: true, force: true });
 });
 
+/** The seat ids a launch writes beside each runtime incarnation binding. */
+const SEAT_IDS: Record<string, string> = {
+  'crew-lead': 'seat_111111111111',
+  'crew-op': 'seat_ba9876543210',
+  'worker-1': 'seat_0123456789ab',
+};
+
 /** The seat bindings the host fences a sample on, written as the machine does. */
 function bindSeats(bindings: Record<string, string>): void {
   const seats: Record<string, unknown> = {};
   for (const [seat, binding] of Object.entries(bindings)) {
-    seats[seat] = { stage: 'ready', presence_binding: binding };
+    const id = SEAT_IDS[seat];
+    seats[seat] = {
+      stage: 'ready', ...(id === undefined ? {} : { id }), presence_binding: binding,
+    };
   }
   writeFileSync(join(world.root, '.agents', STATE_FILE), JSON.stringify({
     format: 1,
@@ -155,6 +167,47 @@ function healthySource(seat: string, binding: string): PresenceSource {
   };
 }
 
+/** A runtime source whose first pump stages one real transition through the spool writer and
+ *  whose reading then names that staged identity and its instant. The host's real ingester must
+ *  apply it and the real activity must fence it before the seat can serve: a `serving` reading is
+ *  a claim about the channel, not proof of application. */
+function stagingSource(
+  seat: string,
+  binding: string,
+  transition: { event: 'turn-start' | 'turn-end' | 'human-wait'; ts: string; id: string },
+): PresenceSource {
+  let staged: string | null = null;
+  return {
+    seat,
+    step: async () => {
+      if (staged !== null) return;
+      const written = stagePresenceRecord(join(world.root, '.agents'), {
+        session: 'crew',
+        seat,
+        binding,
+        source: 'runtime-event',
+        event: transition.event,
+        ts: transition.ts,
+        id: transition.id,
+      });
+      if (written.kind !== 'staged') throw new Error(`the transition was not staged: ${written.why}`);
+      staged = transition.id;
+    },
+    status: () => ({
+      seat,
+      binding,
+      threadId: `thread-${seat}`,
+      channel: 'connected',
+      stream: 'initialized',
+      baseline: 'read',
+      evidenceAt: transition.ts,
+      stagedEventId: staged,
+      why: null,
+    }),
+    close: async () => ({ quiesced: true }),
+  };
+}
+
 const baseInput = {
   presenceHosting: true,
   presenceEveryMs: 10,
@@ -183,10 +236,26 @@ describe('the host holds unresolved native routes and never starves a sibling', 
     expect(await until(() => passes > 0)).toBe(true);
     const presence = presenceOf(daemon);
     // Nothing classified this route's native attachments, so no seat can be told apart from one
-    // that expected native; the ingest answer must not be published as the route's health.
+    // that expected native; the ingest answer must not be published as the route's health. The
+    // complete ordered list is still answered, every seat explicitly pending and `unknown` at the
+    // binding its record names: an omitted list is not the contract.
+    const hold = 'the runtime subscriptions were not built: the target resolver failed';
     expect(presence).toMatchObject({ state: 'pending', healthy: false });
-    expect(presence?.why).toContain('the runtime subscriptions were not built: the target resolver failed');
-    expect(presence?.seats).toBeUndefined();
+    expect(presence?.why).toContain(hold);
+    expect(presence?.seats).toEqual([
+      {
+        seat: 'crew-lead', state: 'pending', healthy: false, source: 'unknown',
+        binding: null, appliedEventId: null, why: hold,
+      },
+      {
+        seat: 'crew-op', state: 'pending', healthy: false, source: 'unknown',
+        binding: null, appliedEventId: null, why: hold,
+      },
+      {
+        seat: 'worker-1', state: 'pending', healthy: false, source: 'unknown',
+        binding: BINDING, appliedEventId: null, why: hold,
+      },
+    ]);
     await daemon.close();
   }, 15_000);
 
@@ -202,22 +271,50 @@ describe('the host holds unresolved native routes and never starves a sibling', 
       },
     });
     expect(await until(() => passes > 0)).toBe(true);
+    // The already-adopted source is still listed and held, never promoted to a healthy route. The
+    // channel answers the sticky classification failure for every seat, so no seat can claim its
+    // own verdict; the adopted seat still carries the binding its sample was fenced on.
+    const hold = 'the runtime resolutions were not built: the managed-target index was unreadable';
+    const adopted = () => presenceOf(daemon)?.seats?.find((seat) => seat.seat === 'worker-1');
+    expect(await until(() => adopted()?.binding === BINDING)).toBe(true);
     const presence = presenceOf(daemon);
     expect(presence).toMatchObject({ state: 'pending', healthy: false });
-    expect(presence?.why).toContain('the runtime resolutions were not built: the managed-target index was unreadable');
-    // The already-adopted source is still listed and held, not promoted to a healthy route.
-    expect(presence?.seats?.every((seat) => seat.healthy === false)).toBe(true);
+    expect(presence?.why).toContain(hold);
+    expect(presence?.seats).toEqual([
+      {
+        seat: 'crew-lead', state: 'pending', healthy: false, source: 'unknown',
+        binding: null, appliedEventId: null, why: hold,
+      },
+      {
+        seat: 'crew-op', state: 'pending', healthy: false, source: 'unknown',
+        binding: null, appliedEventId: null, why: hold,
+      },
+      {
+        seat: 'worker-1', state: 'pending', healthy: false, source: 'unknown',
+        binding: BINDING, appliedEventId: null, why: hold,
+      },
+    ]);
     await daemon.close();
   }, 15_000);
 
   test('a hung source pump holds only its own seat while the sibling and the route keep running', async () => {
     bindSeats({ 'worker-1': BINDING, 'crew-op': OTHER });
+    const OP_TS = CLOCK.toISOString();
+    const OP_ID = `${OP_TS}-bbbbbbbb`;
     let release: (() => void) | null = null;
     let cancelled = false;
     let activitySteps = 0;
     const daemon = await start({
-      ...baseInput,
-      presenceActivity: () => async () => { activitySteps += 1; return activityResult(); },
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => CLOCK,
+      // The sibling is proved only through the real pipeline: its staged transition must be
+      // applied by the real ingester and fenced by the real activity writer, which is what
+      // qualifies a runtime seat now. The route's activity is wrapped only to count its passes.
+      presenceActivity: (_route, stateDir) => {
+        const real = createPresenceActivity({ stateDir, session: 'crew' });
+        return async (at) => { activitySteps += 1; return real(at); };
+      },
       presenceSubscriptions: () => [
         {
           seat: 'worker-1',
@@ -229,25 +326,30 @@ describe('the host holds unresolved native routes and never starves a sibling', 
             return { quiesced: true };
           },
         },
-        healthySource('crew-op', OTHER),
+        stagingSource('crew-op', OTHER, { event: 'turn-start', ts: OP_TS, id: OP_ID }),
       ],
     });
     // The sibling must be served while the first source's step is still in flight, and the
-    // route's activity must not wait behind the hung pump either.
-    const sawSibling = await until(() => presenceOf(daemon)?.seats?.[1]?.healthy === true, 800);
+    // route's activity must not wait behind the hung pump either. Serving is not the source's own
+    // word: the entry names the exact transition the canonical projection applied and fenced.
+    const sibling = () => presenceOf(daemon)?.seats?.find((seat) => seat.seat === 'crew-op');
+    const sawSibling = await until(() => sibling()?.healthy === true, 1500);
     expect(sawSibling).toBe(true);
+    expect(sibling() as unknown as Record<string, unknown>).toEqual({
+      seat: 'crew-op', state: 'serving', healthy: true, source: 'runtime',
+      binding: OTHER, appliedEventId: OP_ID, why: null,
+    });
     const presence = presenceOf(daemon);
     expect(presence).toMatchObject({ state: 'serving', healthy: true });
     expect(activitySteps).toBeGreaterThan(0);
     expect(cancelled).toBe(false);
     expect(release).not.toBeNull();
-    // The sampled answer carries the managed binding it was fenced on (the fixed host's field);
-    // the cast keeps this one assertion compiling against the base shape too.
-    expect(presence?.seats?.[1] as unknown as Record<string, unknown>).toEqual({
-      seat: 'crew-op', state: 'serving', healthy: true, binding: OTHER, why: null,
+    // The held seat itself is honestly unsampled, never served by its last word: its pump never
+    // settled, so it staged no event and was never fenced on the current binding.
+    expect(presence?.seats?.find((seat) => seat.seat === 'worker-1') as unknown as Record<string, unknown>).toEqual({
+      seat: 'worker-1', state: 'pending', healthy: false, source: 'runtime',
+      binding: null, appliedEventId: null, why: 'the runtime channel has not been sampled yet',
     });
-    // The held seat itself is honestly unsampled, never served by its last word.
-    expect(presence?.seats?.[0]).toMatchObject({ seat: 'worker-1', state: 'pending', healthy: false });
 
     await daemon.close();
     expect(cancelled).toBe(true);
@@ -267,14 +369,18 @@ describe('the host holds unresolved native routes and never starves a sibling', 
       ...baseInput,
       presenceSubscriptions: () => [undrainable],
     });
-    expect(await until(() => presenceOf(daemon)?.seats?.[0] !== undefined)).toBe(true);
+    // The complete ordered list names every declared seat, so the unproven seat is found by its
+    // name: the route's hook seats are listed too, and the array index is not the seat's identity.
+    const unproven = () => presenceOf(daemon)?.seats?.find((seat) => seat.seat === 'worker-1');
+    expect(await until(() => unproven() !== undefined)).toBe(true);
     // Let several 10 ms passes sample the registered source.
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(await until(() => unproven()?.why === 'the runtime source cannot be closed')).toBe(true);
     const presence = presenceOf(daemon);
     expect(presence).toMatchObject({ state: 'serving', healthy: true });
-    expect(presence?.seats?.[0] as unknown as Record<string, unknown>).toEqual({
-      seat: 'worker-1', state: 'pending', healthy: false, binding: BINDING,
-      why: 'the runtime source cannot be closed',
+    expect(presence?.seats?.map((seat) => seat.seat)).toEqual(['crew-lead', 'crew-op', 'worker-1']);
+    expect(unproven() as unknown as Record<string, unknown>).toEqual({
+      seat: 'worker-1', state: 'pending', healthy: false, source: 'runtime', binding: BINDING,
+      appliedEventId: null, why: 'the runtime source cannot be closed',
     });
     await daemon.close();
   }, 15_000);
