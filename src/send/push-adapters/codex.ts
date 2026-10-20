@@ -1,7 +1,7 @@
 // The OpenAI Codex (0.161.0) runtime-push adapter: hands one pointer line to a running Codex
 // thread via `codex queue --thread <agent_session> --message <pointer>`.
 //
-// Rules enforced here (OD45 §3.2 & §5.1, FLO-1053, FLO-1054):
+// Rules enforced here (OD45 §3.2 & §5.1):
 //   - Requires a trusted session binding resolved via `recordedSeatSession` (`src/registry/resume.ts`)
 //     and verified `codex-daemon` policy (`src/policy/codex-daemon.ts`). Never opens or inspects
 //     the owner's `~/.codex` and never guesses a thread id from `request.seat` or `request.session`.
