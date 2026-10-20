@@ -37,6 +37,7 @@ import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './rout
 import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
+import { sendWatchDirect } from '../watch/direct-send.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import {
   ensureMachineDir,
@@ -514,6 +515,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           // The shared verifier judges the captured identity against the record under its own
           // lock immediately before every effect; a lifecycle report is never a substitute.
           verifyAuthority: (check) => verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK }),
+          // The watch's one outbound effect: the send command's own direct-wake legs, entered as
+          // the watch principal the shared verifier proves. The closure binds the acquisition
+          // this host captured; `sendWatchDirect` asks the verifier again before preparation and
+          // at every actual transport.
+          sender: (captured) => (request) => sendWatchDirect(
+            { root: route.root, session: route.session, capturedEpoch: captured.epoch },
+            request,
+          ),
         });
       hostedWatches.push({
         status,
