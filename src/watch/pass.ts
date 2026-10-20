@@ -264,6 +264,10 @@ export type PassInput = {
   processes?: Readonly<Record<string, PaneProcesses | null>>;
   /** Screen readings with the approved overrides applied. The shipped profiles, when omitted. */
   readScreen?: (cli: string, screen: string | undefined) => Screen;
+  /** The seats this pass must not type at or count idle: their native presence proves a turn, a
+   *  person wait or a session end, or the record or channel cannot be trusted. Absent, the screen
+   *  classification is exactly the one a watch without the native store makes. */
+  nativeHeld?: ReadonlySet<string>;
   /** Quota patterns in force, shipped plus the approved override. The shipped list, when omitted. */
   quotaFor?: (cli: string) => readonly QuotaPattern[];
   /** The entity model rule as the caller read it once for this pass. Omitted or null, no rule is
@@ -300,6 +304,7 @@ export function pass({
   foreground,
   processes,
   readScreen: read = readScreen,
+  nativeHeld,
   quotaFor: patternsOf = shippedQuota,
   mailbox = [],
   pause,
@@ -423,9 +428,12 @@ export function pass({
     // reading there, and the two states `team` types into are an idle table and a composer
     // holding text. A screen it cannot read is not quiet.
     const theirWord = herdrUnreliable(cli);
-    const quiet = theirWord
+    // A seat the native store holds is not quiet, whatever the screen still shows: the store
+    // proved a turn, a person wait, a session end, or a projection this pass cannot trust.
+    const nativeBusy = nativeHeld?.has(name) === true;
+    const quiet = !nativeBusy && (theirWord
       ? screen.kind === 'idle' || screen.kind === 'unsent'
-      : agent.status === 'idle' || agent.status === 'done';
+      : agent.status === 'idle' || agent.status === 'done');
     // Working is herdr's word or the screen's: a seat mid-turn is never idle, whatever its
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
@@ -433,9 +441,14 @@ export function pass({
     if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt });
 
     // The history the idle clock counts from. A seat seen working starts it again; a seat quiet
-    // with no work behind it was already idle when the watch started, and counts from then.
+    // with no work behind it was already idle when the watch started, and counts from then. A
+    // native non-idle reading restarts the clock the same way without claiming the seat is
+    // working to any consumer: the next idle stretch counts from the last moment it was not idle.
     const history = (memory.history[name] ??= { lastWorking: undefined, idleSince: undefined });
-    if (working) {
+    if (nativeBusy) {
+      history.lastWorking = now;
+      delete history.idleSince;
+    } else if (working) {
       history.lastWorking = now;
       delete history.idleSince;
     } else if (quiet && !prompt && !lead && !parked && history.lastWorking === undefined) {
@@ -627,7 +640,10 @@ export function pass({
     const text = ringText(record.to, team.session);
     const mine = record.pane !== null && screen?.kind === 'unsent'
       && ownUnsent(memory, record.pane, text, record.cli, record.screen);
-    const free = record.pane !== null && (record.status === 'idle' || record.status === 'done')
+    // A held seat's record is not rung: a native turn, a person wait, a session end or an
+    // unproven projection outranks the idle screen the mailbox record carries.
+    const held = nativeHeld?.has(record.to) === true;
+    const free = !held && record.pane !== null && (record.status === 'idle' || record.status === 'done')
       && (screen?.kind === 'idle' || mine);
     if (free && ring === null && record.pane !== null) {
       ring = { pane: record.pane, text, cli: record.cli, to: record.to, id: record.id };
@@ -641,7 +657,7 @@ export function pass({
   }
   return {
     reports,
-    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read) : workDrops(team, live, observations, watch, now, memory, read),
+    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read, nativeHeld) : workDrops(team, live, observations, watch, now, memory, read, nativeHeld),
     ring,
     mailboxNote,
     readings,
@@ -663,6 +679,7 @@ function workDrops(
   now: number,
   memory: Memory,
   read: (cli: string, screen: string | undefined) => Screen,
+  nativeHeld: ReadonlySet<string> | undefined,
 ): PassResult['work'] {
   const sent = (memory.slots['work-nudge'] ??= {}) as Record<string, number>;
   const body = team.watch.nudge ?? NUDGE_TEXT;
@@ -670,6 +687,12 @@ function workDrops(
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
     if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
+      delete sent[obs.name];
+      continue;
+    }
+    // A held seat is not due a work drop: native presence outranks the idle screen, and the
+    // stamp is cleared so a later stretch starts fresh after the hold lifts.
+    if (nativeHeld?.has(obs.name) === true) {
       delete sent[obs.name];
       continue;
     }
@@ -718,6 +741,7 @@ function pauseDrops(
   now: number,
   memory: Memory,
   read: (cli: string, screen: string | undefined) => Screen,
+  nativeHeld: ReadonlySet<string> | undefined,
 ): PassResult['work'] {
   const slot = (memory.slots['pause-notice'] ??= {}) as { at?: string; seats?: Record<string, number> };
   if (slot.at !== pause.at) {
@@ -730,6 +754,9 @@ function pauseDrops(
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
     if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
+    // The pause's notice is typed too: a seat the native store holds is skipped and stays due
+    // when the hold lifts, because no stamp is written for it here.
+    if (nativeHeld?.has(obs.name) === true) continue;
     if (live.agents.filter((agent) => agent.name === obs.name).length !== 1) continue;
     if (told[obs.name] !== undefined) continue;
     const quiet = (obs.agent.status === 'idle' || obs.agent.status === 'done') && !obs.working && !obs.prompt;

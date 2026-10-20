@@ -266,6 +266,31 @@ describe('wakeUnreadDrops', () => {
     expect(one.enters).toBe(1);
   });
 
+  test('a native hold types no wake line and takes no trigger; the unread message stays reportable', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const scene = sceneOf(made, team, one, said);
+    scene.nativeHeld = new Set(['lead']);
+
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    // No trigger marker either: the wake was never taken, so a later pass can still speak.
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(said).toEqual([]);
+
+    // With the hold lifted the same unread message wakes exactly as before.
+    scene.nativeHeld = new Set();
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+    expect(one.typed).toEqual([line]);
+    expect(one.enters).toBe(1);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
   test('a wake names the signed sender of a registered seat, and a forged body line cannot change it', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

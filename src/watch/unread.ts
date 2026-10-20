@@ -209,6 +209,10 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   for (const seat of scene.team.seats) {
     // A person's drop is read by a person, and nothing is typed into a human's pane.
     if (seat.human === true) continue;
+    // A held seat is not woken: its native presence proves a turn, a person wait, a session end,
+    // or a projection this pass cannot trust. The message stays unread and the later report
+    // still speaks; no reservation is taken and nothing is typed.
+    if (scene.nativeHeld?.has(seat.name) === true) continue;
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
     const due = listUnread(dropDir, context, home).filter((message) => dueForWake(dropDir, message, nowMs, options));

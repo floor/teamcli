@@ -296,6 +296,42 @@ describe('retryHeldDrops', () => {
     expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
   });
 
+  test('a native hold keeps the drop pending even at a free box, and the retry runs once it lifts', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-1', 'from the owner\n\nhello');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const at = {
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: (text: string) => said.push(text),
+    };
+
+    // The screen says free, but the native store says the seat is in a turn (or a person wait, a
+    // session end, or an unproven projection): the drop is left alone and the marker stays.
+    await retryHeldDrops(at);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toHaveLength(1);
+    expect(said).toEqual([]);
+
+    // The same scene with the hold lifted is the ordinary retry: one trigger, the marker gone.
+    at.nativeHeld = new Set();
+    await retryHeldDrops(at);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.enters).toBe(1);
+    expect(readPending(dropDir)).toEqual([]);
+  });
+
   test('a retry whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

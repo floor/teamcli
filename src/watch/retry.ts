@@ -70,6 +70,9 @@ export type RetryScene = {
   sources: RetrySources;
   now: Date;
   say(text: string, desktop: boolean): void;
+  /** The pass's native hold by seat: nothing is typed at a seat whose presence proves a turn, a
+   *  person wait, a session end, or cannot be trusted. Absent, the retry is exactly today's. */
+  nativeHeld?: ReadonlySet<string>;
 };
 
 /** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send
@@ -320,6 +323,10 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
       }
       continue;
     }
+    // A held seat is not retried: the native store proves it is not idle (or the projection
+    // cannot be trusted). The marker stays pending, so a later pass with the hold lifted still
+    // finds it; no age bound is applied while the hold stands.
+    if (scene.nativeHeld?.has(seat.name) === true) continue;
     // The age bound is applied before the pane is looked for: a seat that vanished leaves no
     // pane to retry, and its marker must not sit in the store forever. A drop-leg marker has
     // nothing to retry, only a receipt to wait for: past the bound it is given up on with the

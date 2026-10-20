@@ -133,6 +133,10 @@ async function expireOne(
   record: PendingNative,
   noNudge: boolean,
 ): Promise<void> {
+  // A held seat gets no fallback this pass: native presence proves a turn, a person wait or a
+  // session end, or the projection cannot be trusted. Nothing is taken, so the record stays
+  // pending for a later pass with the hold lifted.
+  if (scene.nativeHeld?.has(record.to) === true) return;
   const taken = takePending(scene.team.project, scene.root, home, record.id);
   if (!taken.ok) return;
 

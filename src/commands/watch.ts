@@ -36,6 +36,8 @@ import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
 import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
+import { nativeHeldSeats } from '../watch/idle-work.ts';
+import { prefetchPresence } from '../watch/presence.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
@@ -600,6 +602,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // The agents and panes of the last whole read: what the label sweep between passes works on.
   let lastLive: Live | null = null;
   let statusEngine: SeatStatusEngine | undefined;
+  /** The current pass's native hold, replaced before the status engine, the pass and every
+   *  automatic typed path read it. Empty until the first pass has read the store. */
+  let nativeHeldNow: ReadonlySet<string> = new Set();
   let statusWaiters: { stop(): void; done: Promise<void> } | undefined;
   let statusWaitersKey = '';
   try {
@@ -718,6 +723,22 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const whole = readState(dir);
         const state = whole.sessions[session] ?? emptySession();
         const now = sources.now().getTime();
+        // One presence snapshot for this pass, shared by the status engine, the pass's idle
+        // publication and every automatic typed path: they cannot disagree about a seat. The
+        // hold is the explicit allow (`nativeAllowsTyping`): only a qualified native idle or a
+        // genuinely absent or unsupported channel lets the screen path speak.
+        const presence = await prefetchPresence({
+          stateDir: dir,
+          session,
+          seatNames: team.seats.map((seat) => seat.name),
+        });
+        nativeHeldNow = nativeHeldSeats({
+          team,
+          state,
+          presence,
+          ...(sources.presenceChannelHealthy === undefined ? {} : { channelHealthy: sources.presenceChannelHealthy }),
+          now: sources.now(),
+        });
         if (!foreign && sources.statusSource !== undefined) {
           statusEngine ??= createSeatStatusEngine({
             team,
@@ -728,6 +749,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             now: () => sources.now().getTime(),
             graceMs: inForce.interval * 1000,
             publish: sources.busPublish,
+            nativeHeld: () => nativeHeldNow,
           });
           const panesBySeat: Record<string, string> = {};
           for (const seat of team.seats) {
@@ -841,6 +863,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           outcomes, budgets: budget,
           quotaFor: (cli) => quotaWith(cli, overrides.profiles),
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),
+          nativeHeld: nativeHeldNow,
           readings: stored, foreground, processes,
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
@@ -892,6 +915,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             // provider every seat's answer is not known and the dispatcher holds its native
             // projection.
             presenceChannelHealthy: sources.presenceChannelHealthy,
+            // The same snapshot and hold the rest of this pass reads, so the dispatcher, the
+            // status engine and the typed fallbacks cannot disagree about a seat.
+            presence,
           });
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;
@@ -1016,6 +1042,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign && !args.flags.has('no-nudge') && hosted === undefined && paceVerified) {
           await retryHeldDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+            nativeHeld: nativeHeldNow,
           });
         }
         // A delivered send whose seat was not seen acting on the line yet leaves a record of its
@@ -1023,7 +1050,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // so a watch without nudges still keeps that word for the sender.
         if (!foreign) {
           await expirePendingNative(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
+            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
             { noNudge: args.flags.has('no-nudge') },
           );
           confirmTakenDrops({
@@ -1035,7 +1062,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // mailbox record, so a watch without nudges keeps that word; the wake is typing, and
           // `--no-nudge` leaves it out.
           await wakeUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
+            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
             { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(

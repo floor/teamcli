@@ -238,3 +238,13 @@ export function presenceVerdict(read: PresenceRead, seat: PresenceSeat, clock: P
   }
   return { idle: true, source: reading.source, nativeSince: reading.since, observedAt: reading.observedAt };
 }
+
+/** The explicit allow list for an automatic typed path or an idle publication: only the proof's
+ *  own qualified native idle, or a channel this build genuinely cannot answer for (the labelled
+ *  terminal-host fallback), licenses the screen-derived path. A native turn, a person wait, a
+ *  session end, an unproven record and an unproven channel all hold. Callers read this as an
+ *  allow, never as a list of reasons to subtract. */
+export function nativeAllowsTyping(verdict: PresenceVerdict): boolean {
+  if (verdict.idle) return true;
+  return verdict.reason === 'fallback-absent' || verdict.reason === 'fallback-unsupported';
+}

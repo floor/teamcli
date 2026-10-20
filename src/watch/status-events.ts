@@ -370,6 +370,11 @@ export type SeatStatusEngineInput = {
   onLog?: (seat: string, message: string) => void;
   /** Optional callback invoked when a worker seat's idle window elapses and a nudge is due. */
   onNudge?: (seatName: string, pane: string) => void;
+  /** The watch's current native hold by seat. A held seat must not publish the legacy,
+   *  screen-derived `seat.idle` event: the canonical `presence.changed` record is the
+   *  authoritative idle source, and this event only speaks where native presence does not
+   *  contradict it. Read afresh when an idle event is due, never cached across passes. */
+  nativeHeld?: () => ReadonlySet<string>;
   /** Optional assigned-work predicate overriding or supplementing disk checks. */
   hasAssignedWork?: (seatName: string, atMs: number) => boolean;
   /** Optional set/list of seats with assigned work in unit tests without disk state. */
@@ -992,6 +997,14 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     // `status === 'idle'`
     delete state.promptSpell;
     state.status = 'idle';
+    // The canonical `presence.changed` record is the authoritative idle source. This legacy,
+    // screen-derived event is suppressed for a seat the watch's native gate holds: a turn, a
+    // person wait, a session end or an unproven projection must not be published as idle. The
+    // stretch is dropped, never carried across the hold, so it cannot fire stale later.
+    if (input.nativeHeld?.().has(seatName) === true) {
+      delete state.idleStretch;
+      return { seat: seatName, status, events, nudgeDue: false };
+    }
     const stretch = (state.idleStretch ??= { since: at, emitted: false, nudged: false });
     const idleWindowMs = idleWindowMsFor(seatName);
     if (
@@ -1033,6 +1046,10 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       const seat = team.seats.find((item) => item.name === seatName);
       if (!seat || seat.human === true || seat.stopped === true) continue;
       const isLead = leads.has(seatName);
+      // The legacy idle event never contradicts the native presence store: a held seat's stretch
+      // is dropped here as it is in `step`, and the canonical `presence.changed` record stands.
+      const nativeHeld = input.nativeHeld?.().has(seatName) === true;
+      if (nativeHeld) delete state.idleStretch;
 
       if (
         state.status === 'blocked'
@@ -1064,7 +1081,8 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       }
 
       if (
-        (state.status === 'idle' || state.status === 'done')
+        !nativeHeld
+        && (state.status === 'idle' || state.status === 'done')
         && state.idleStretch !== undefined
         && !state.idleStretch.emitted
         && !isLead

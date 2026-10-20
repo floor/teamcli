@@ -14,9 +14,9 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { idleWorkReport } from '../src/watch/idle-work.ts';
+import { idleWorkReport, nativeHeldSeats } from '../src/watch/idle-work.ts';
 import {
-  prefetchPresence, presenceVerdict,
+  nativeAllowsTyping, prefetchPresence, presenceVerdict,
   type PresenceRead, type PresenceSeat,
 } from '../src/watch/presence.ts';
 
@@ -433,5 +433,49 @@ describe('the report seam', () => {
       root: '/nonexistent-acme-root', team, state: writerState(), live: idleLive(), now: new Date(NOW),
     });
     expect(report.idle).toEqual([{ seat: 'writer', since: iso(10 * MIN) }]);
+  });
+});
+
+describe('the allow list that licenses an automatic typed path', () => {
+  test('only qualified native idle and the two labelled fallbacks are allowed; every other answer holds', () => {
+    expect(nativeAllowsTyping(verdict())).toBe(true);
+    expect(nativeAllowsTyping({ idle: false, reason: 'fallback-absent', why: 'no projection' })).toBe(true);
+    expect(nativeAllowsTyping({ idle: false, reason: 'fallback-unsupported', why: 'no channel' })).toBe(true);
+    for (const read of [
+      { kind: 'native' as const, reading: reading({ state: 'working', event: 'turn-start' }) },
+      { kind: 'native' as const, reading: reading({ state: 'waiting-for-a-person', event: 'human-wait' }) },
+      { kind: 'native' as const, reading: reading({ state: 'gone', event: 'session-end' }) },
+      { kind: 'native' as const, reading: reading({ since: iso(1_000) }) },
+      { kind: 'invalid' as const, why: 'the projection is unreadable' },
+    ]) {
+      const answer = presenceVerdict(read, seat(), { now: new Date(NOW), thresholdSeconds: 0 });
+      expect(nativeAllowsTyping(answer)).toBe(false);
+    }
+  });
+
+  test('the hold set uses one snapshot at threshold zero: a fresh native idle allows, a turn holds', () => {
+    const held = (read: PresenceRead | undefined, channelHealthy = true, state = writerState()): string[] => [...nativeHeldSeats({
+      team,
+      state,
+      presence: new Map(read === undefined ? [] : [['writer', read]]),
+      channelHealthy: () => channelHealthy,
+      now: new Date(NOW),
+    })];
+    // A transition one second old is what the seat's own runtime last said; the typing gate asks
+    // what the state is, not how long this episode has run. The persisted stamp is reconciled to it.
+    const fresh = reading({ since: iso(1_000) });
+    expect(held({ kind: 'native', reading: fresh }, true, writerState(iso(500)))).toEqual([]);
+    expect(held({ kind: 'native', reading: reading({ state: 'working', event: 'turn-start' }) }))
+      .toEqual(['writer']);
+    expect(held({ kind: 'native', reading: reading({ state: 'waiting-for-a-person', event: 'human-wait' }) }))
+      .toEqual(['writer']);
+    expect(held({ kind: 'native', reading: reading({ state: 'gone', event: 'session-end' }) }, false))
+      .toEqual(['writer']);
+    expect(held({ kind: 'invalid', why: 'the projection is unreadable' })).toEqual(['writer']);
+    expect(held({ kind: 'native', reading: reading() }, false)).toEqual(['writer']);
+    // The labelled fallback and a seat the pass read nothing for both allow the screen path.
+    expect(held({ kind: 'absent', why: 'no projection' })).toEqual([]);
+    expect(held({ kind: 'unsupported', why: 'this seat has no native channel' })).toEqual([]);
+    expect(held(undefined)).toEqual([]);
   });
 });

@@ -361,6 +361,53 @@ describe('status-to-event mapping table and screen-module boundaries', () => {
       'seat.idle',
     ]);
   });
+
+  test('a native-held seat publishes no legacy seat.idle and no nudge; the stretch starts afresh when the hold lifts', async () => {
+    const { root, home } = makeScratch();
+    const team = parseTeam();
+    let clock = 1_700_000_000_000;
+    let held = true;
+    const source: StatusSource = {
+      async waitStatus() {
+        return { outcome: 'timeout', at: clock };
+      },
+      promptKind() {
+        return 'unknown' as PromptKind;
+      },
+    };
+    const engine = createSeatStatusEngine({
+      team,
+      root,
+      home,
+      source,
+      now: () => clock,
+      idleThresholdSeconds: 300,
+      promptEscalationSeconds: 300,
+      graceMs: 120_000,
+      assignedSeats: ['worker-1'],
+      nativeHeld: () => (held ? new Set(['worker-1']) : new Set()),
+    });
+
+    await engine.observe('worker-1', 'working', clock);
+    clock += 600_000;
+    const stillHeld = await engine.observe('worker-1', 'idle', clock);
+    // The screen says idle for ten minutes, but the native store says the seat is not: no
+    // screen-derived idle record is written and nothing is nudged.
+    expect(stillHeld.events).toEqual([]);
+    expect(stillHeld.nudgeDue).toBe(false);
+    expect(await engine.tick(clock)).toEqual([]);
+
+    // The hold lifts: the old stretch was dropped, so the window must pass again from here.
+    held = false;
+    clock += 1_000;
+    const freed = await engine.observe('worker-1', 'idle', clock);
+    expect(freed.events).toEqual([]);
+    expect(freed.nudgeDue).toBe(false);
+    clock += 301_000;
+    const after = await engine.observe('worker-1', 'idle', clock);
+    expect(after.events.map((ev) => ev.input.kind)).toEqual(['seat.idle']);
+    expect(after.nudgeDue).toBe(true);
+  });
 });
 
 describe('lead-first prompt escalation and clearance', () => {

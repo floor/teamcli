@@ -10,7 +10,7 @@ import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { takeable } from '../commands/next.ts';
 import { liveLeases } from '../tasks/lease.ts';
 import { fileSourceOf, readFileSource } from '../tasks/queue.ts';
-import { fenceAt, presenceVerdict, type PresenceSeat, type PresenceVerdict } from './presence.ts';
+import { fenceAt, nativeAllowsTyping, presenceVerdict, type PresenceRead, type PresenceSeat, type PresenceVerdict } from './presence.ts';
 import { readScreen } from './screen.ts';
 
 /**
@@ -108,16 +108,7 @@ function idleSeatsOf(
     const record = state.seats[seat.name];
     const since = sinceOf(record?.last_active);
     if (reads !== null) {
-      const presence: PresenceSeat = {
-        seat: seat.name,
-        seatId: record?.id ?? null,
-        binding: record?.presence_binding ?? null,
-        fence: fenceAt(record),
-        lastActive: record?.last_active,
-        // The health answer is the caller's, per seat: a route-wide answer cannot prove this
-        // seat's stream, and a seat the caller cannot prove is held on its own.
-        channelHealthy: input.presenceChannelHealthy?.(seat.name) === true,
-      };
+      const presence = presenceSeatOf(state, seat.name, input.presenceChannelHealthy);
       const read = reads.get(seat.name) ?? {
         kind: 'absent' as const,
         why: 'the pass read no presence for this seat',
@@ -164,6 +155,56 @@ function idleSeatsOf(
     });
   }
   return unknown === undefined ? { seats: idle } : { seats: idle, unknown };
+}
+
+/** The seats no automatic path may type at or count idle this pass: a projection proven
+ *  working, waiting for a person or gone, and one that cannot be trusted at all. The allow is
+ *  explicit (`nativeAllowsTyping`): a qualified native idle or a genuinely absent or unsupported
+ *  channel leaves the labelled screen path in charge. The threshold is zero because this gate
+ *  asks only what the state is, not whether an idle episode has aged. */
+export function nativeHeldSeats(input: {
+  team: IdleWorkInput['team'];
+  state: IdleWorkInput['state'];
+  presence: ReadonlyMap<string, PresenceRead>;
+  channelHealthy?: (seat: string) => boolean;
+  now: Date;
+}): ReadonlySet<string> {
+  const held = new Set<string>();
+  for (const seat of input.team.seats) {
+    // Nothing is ever typed into a human's pane, and no human seat runs an idle episode.
+    if (seat.human === true) continue;
+    const read = input.presence.get(seat.name) ?? {
+      kind: 'absent' as const,
+      why: 'the pass read no presence for this seat',
+    };
+    const verdict = presenceVerdict(
+      read,
+      presenceSeatOf(input.state, seat.name, input.channelHealthy),
+      { now: input.now, thresholdSeconds: 0 },
+    );
+    if (!nativeAllowsTyping(verdict)) held.add(seat.name);
+  }
+  return held;
+}
+
+/** The seat facts a verdict is taken against, read from the same state record `idleSeatsOf`
+ *  proves: one construction, so the gate and the snapshot cannot disagree. */
+function presenceSeatOf(
+  state: IdleWorkInput['state'],
+  name: string,
+  channelHealthy: ((seat: string) => boolean) | undefined,
+): PresenceSeat {
+  const record = state.seats[name];
+  return {
+    seat: name,
+    seatId: record?.id ?? null,
+    binding: record?.presence_binding ?? null,
+    fence: fenceAt(record),
+    lastActive: record?.last_active,
+    // The health answer is the caller's, per seat: a route-wide answer cannot prove this
+    // seat's stream, and a seat the caller cannot prove is held on its own.
+    channelHealthy: channelHealthy?.(name) === true,
+  };
 }
 
 /** The persisted idle clock, or null when the state records no stamp the reader can parse: a

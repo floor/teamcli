@@ -642,6 +642,44 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
   ]);
 });
 
+test('a native hold keeps an expired handoff pending: no claim, no drop fallback, no pane write', async () => {
+  const made = nativeWorld();
+  cleanup = made.cleanup;
+  placeHelper(made);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, {
+    native: pane,
+    newId: () => ID,
+    delivery: { seat: ['native', 'drop'] },
+  });
+
+  expect(await runSend(['lead', 'hello'], helperCaller(made.root), host)).toBe(0);
+  expect(existsSync(pending(made))).toBe(true);
+
+  const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
+  const { scene, pane: watchPane } = watchScene(made, expiredAt);
+  // The native store says the seat is not idle — a turn, a person wait, a session end, or an
+  // unproven projection. Expiry is the last typing-free fallback and it waits too.
+  scene.nativeHeld = new Set(['lead']);
+  await expirePendingNative(scene);
+  expect(existsSync(pending(made))).toBe(true);
+  expect(pane.typed).toEqual([]);
+  expect(pane.enters).toBe(0);
+  expect(watchPane.typed).toEqual([]);
+  expect(watchPane.enters).toBe(0);
+  // The marker is what expiry's drop leg writes; the record file itself can pre-date it.
+  expect(existsSync(join(dropDir(made.dir, 'lead'), `${ID}.pending`))).toBe(false);
+
+  // Lifting the hold lets the ordinary expiry claim the record and write the marker.
+  scene.nativeHeld = new Set();
+  await expirePendingNative(scene);
+  expect(existsSync(pending(made))).toBe(false);
+  expect(existsSync(join(dropDir(made.dir, 'lead'), `${ID}.pending`))).toBe(true);
+  expect(pane.typed).toEqual([]);
+  expect(watchPane.typed).toEqual([]);
+});
+
 test('expiry writes the handoff into a live MCP inbox and leaves the retry a marker, zero pane writes', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
