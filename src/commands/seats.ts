@@ -19,7 +19,7 @@ import {
 } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type PresenceObservation, type SeatStateWord, type StateSource } from '../labels/state.ts';
-import { nativePresenceExpected, presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceQualified, type PresenceSeatsRead } from '../labels/presence.ts';
+import { nativePresenceExpected, presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceProof, type PresenceProjectionRead, type PresenceSeatsRead } from '../labels/presence.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
@@ -266,18 +266,20 @@ export function seatRegistryRows(
       ? readCliHook(traceSources.stateDir, traceSources.session, row.name)
       : null;
     // The daemon's presence projection. It answers whenever the file exists — live with this
-    // incarnation's binding on a qualified channel, last known otherwise — and only a genuine
-    // absence leaves the screen to answer: an existing projection the seat's binding does not
-    // fence is unknown from presence, never a screen's reading. Never read for a pane TeamCLI
-    // did not launch.
-    const presenceRead = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
-      ? readPresenceForSeat(
-          traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding,
-          presenceQualified && seatPresenceQualified(
-            traceSources.presenceSeats, row.name, recorded?.presence_binding, nativePresenceExpected(cli),
-          ),
-        )
-      : null;
+    // incarnation's binding on a qualified channel and under the applied transition the fresh
+    // answer vouches for, last known otherwise — and only a genuine absence leaves the screen
+    // to answer: an existing projection the seat's binding does not fence is unknown from
+    // presence, never a screen's reading. Never read for a pane TeamCLI did not launch.
+    let presenceRead: PresenceProjectionRead | null = null;
+    if (!untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined) {
+      const proof = seatPresenceProof(
+        traceSources.presenceSeats, row.name, recorded?.presence_binding, nativePresenceExpected(cli),
+      );
+      presenceRead = readPresenceForSeat(
+        traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding,
+        presenceQualified && proof.qualified, proof.appliedEventId,
+      );
+    }
     // The seat-state reading: the daemon's presence projection for this launch, the CLI's own
     // hook when its launch keeps one, the CLI's own
     // screen, then herdr, then the traces (a fresh one even over an idle word) — and the

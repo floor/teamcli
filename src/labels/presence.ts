@@ -5,7 +5,9 @@
 // Live is the contract's own test (`presenceLive`): the projection's binding must be the one the
 // seat's state records, and the route's presence channel must be healthy by a *fresh* answer
 // from the daemon that owns it — never the persisted `status.json` word, which can outlive the
-// channel it describes. A projection that exists under this incarnation but is not live is
+// channel it describes. When that fresh answer names the applied transition it vouches for, the
+// projection's own id must be exactly it: a projection ahead of the proof, or one the proof does
+// not name, stays last known. A projection that exists under this incarnation but is not live is
 // still the runtime's last known word, and the display keeps showing it. A projection the
 // seat's recorded binding does not fence to *this* incarnation — missing, malformed, or a
 // predecessor's — is invalid: it is an existing projection, never genuine absence, so no screen
@@ -13,6 +15,7 @@
 // projection lets the labelled terminal-host screen answer.
 import { readFileSync } from 'node:fs';
 import {
+  PRESENCE_ID,
   isPresenceBinding,
   presenceLive,
   readPresenceReading,
@@ -31,13 +34,19 @@ export type PresenceProjectionRead =
 
 /** The projection file is the reading, even when it is not live — but only under the binding the
  *  seat's state records. Absent is the one case that permits a terminal-host fallback; an
- *  existing projection this incarnation cannot claim is invalid, never absence. */
+ *  existing projection this incarnation cannot claim is invalid, never absence.
+ *
+ *  `appliedEventId` is the applied transition a fresh per-seat answer vouches for, when it names
+ *  one: a projection whose id is not that transition has advanced past (or never reached) the
+ *  proof and stays last known. `null` is an answer that names none — a hook seat or a hook-only
+ *  route — where the route verdict is the whole answer. */
 export function readPresenceForSeat(
   stateDir: string,
   session: string,
   seat: string,
   binding: unknown,
   channelHealthy: boolean,
+  appliedEventId: string | null = null,
 ): PresenceProjectionRead {
   const paths = presencePaths(stateDir, session, seat);
   if (paths === null) return { kind: 'absent' };
@@ -59,6 +68,11 @@ export function readPresenceForSeat(
   if (read.reading.binding !== binding) {
     return { kind: 'invalid', why: 'the projection belongs to another runtime incarnation' };
   }
+  // A fresh answer that names an applied transition covers exactly that projection. One that
+  // has advanced past it, or a proof naming another application, is not this answer's: the
+  // word is kept as last known, never promoted on the route verdict alone.
+  const live = presenceLive(read.reading, binding, channelHealthy)
+    && (appliedEventId === null || read.reading.id === appliedEventId);
   return {
     kind: 'ok',
     observation: {
@@ -66,7 +80,7 @@ export function readPresenceForSeat(
       source: read.reading.source,
       event: read.reading.event,
       since: read.reading.since,
-      live: presenceLive(read.reading, binding, channelHealthy),
+      live,
     },
   };
 }
@@ -109,11 +123,16 @@ export type PresenceHealthReading = {
 export { PRESENCE_HEALTH_GRACE_MS };
 
 /** One fresh per-seat answer, held to the daemon client's strict reading: `serving` with
- *  `healthy: true` is the only proof, and a serving seat names the binding it was sampled for. */
+ *  `healthy: true` is the only proof, and a serving seat names the binding it was sampled for
+ *  and the applied transition identity it vouches for. */
 export type PresenceSeatHealth = {
   healthy: boolean;
   /** The current managed binding at the sample; a serving entry always names one. */
   binding: string | null;
+  /** The canonical projection id the daemon applied from the latest staged record at the
+   *  sample; a serving entry always names one, and a reader's projection must carry exactly
+   *  this id to be live. `null` is an answer that names no applied transition. */
+  appliedEventId: string | null;
 };
 
 export type PresenceSeatsRead =
@@ -126,8 +145,10 @@ export type PresenceSeatsRead =
 
 /**
  * The strict client-side reading of a route's `seats`: one entry per seat, no repeats, a
- * closed state word, `healthy` exactly when serving, a valid binding or null, and a pending
- * entry that says what it waits for. Anything else is dropped whole, never partly served.
+ * closed state word, `healthy` exactly when serving, a valid binding or null, a valid applied
+ * transition id or null, and a pending entry that says what it waits for. A serving entry
+ * names both the binding and the applied transition it vouches for; anything else is dropped
+ * whole, never partly served.
  */
 function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
   const raw = verdict.seats;
@@ -156,6 +177,10 @@ function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
     if (!(entry.binding === null || isPresenceBinding(entry.binding))) {
       return { kind: 'invalid', why: 'a seat entry carries no valid binding' };
     }
+    if (!(entry.appliedEventId === null
+      || (typeof entry.appliedEventId === 'string' && PRESENCE_ID.test(entry.appliedEventId)))) {
+      return { kind: 'invalid', why: 'a seat entry carries no valid applied transition id' };
+    }
     if (!(entry.why === null || typeof entry.why === 'string')) {
       return { kind: 'invalid', why: 'a seat entry why is not text or null' };
     }
@@ -165,9 +190,13 @@ function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
     if (entry.state === 'serving' && entry.binding === null) {
       return { kind: 'invalid', why: 'a serving seat entry names no binding' };
     }
+    if (entry.state === 'serving' && entry.appliedEventId === null) {
+      return { kind: 'invalid', why: 'a serving seat entry names no applied transition' };
+    }
     seats.set(entry.seat, {
       healthy: entry.healthy,
       binding: entry.binding as string | null,
+      appliedEventId: entry.appliedEventId as string | null,
     });
   }
   return { kind: 'listed', seats };
@@ -190,10 +219,10 @@ export function presenceSeatsOf(
 }
 
 /**
- * Whether one seat's projection may be called live. The route must be fresh and serving, and
- * when the route carries per-seat answers this seat must be listed serving with exactly the
- * binding the seat's state records — a missing entry and a mismatched sampled binding are both
- * last known, never live by route health alone.
+ * Whether one seat's projection may be called live, and the applied transition it must carry.
+ * The route must be fresh and serving, and when the route carries per-seat answers this seat
+ * must be listed serving with exactly the binding the seat's state records — a missing entry
+ * and a mismatched sampled binding are both last known, never live by route health alone.
  *
  * The list is the daemon's native-source answers, not a census of every seat on the route: a
  * hook seat sharing the route with a native sibling is expected to be absent, and keeps the
@@ -202,19 +231,33 @@ export function presenceSeatsOf(
  * only its entry — in both cases the source it expected was never classified, and there is no
  * proof to inherit. The expectation is conservative: the daemon's own policy and target
  * classification are authoritative, and an entry the daemon lists always decides over it.
+ *
+ * A listed entry also names the applied transition the sample vouches for; the projection read
+ * must carry exactly that id, or the word is last known. An answer that names no applied
+ * transition (a hook seat, a hook-only route) leaves the route verdict as the answer.
  */
-export function seatPresenceQualified(
+export type PresenceSeatProof = {
+  /** Whether the route's fresh verdict may apply to this seat at all. */
+  qualified: boolean;
+  /** The applied transition identity the fresh answer vouches for; the projection read must
+   *  carry exactly this id to be live. `null` when the answer names none. */
+  appliedEventId: string | null;
+};
+
+export function seatPresenceProof(
   seats: PresenceSeatsRead | undefined,
   seat: string,
   binding: unknown,
   nativeExpected: boolean,
-): boolean {
-  if (seats === undefined || seats.kind === 'absent') return !nativeExpected;
-  if (seats.kind === 'invalid') return false;
+): PresenceSeatProof {
+  if (seats === undefined || seats.kind === 'absent') {
+    return { qualified: !nativeExpected, appliedEventId: null };
+  }
+  if (seats.kind === 'invalid') return { qualified: false, appliedEventId: null };
   const entry = seats.seats.get(seat);
-  if (entry === undefined) return !nativeExpected;
-  if (!entry.healthy) return false;
-  return isPresenceBinding(binding) && entry.binding === binding;
+  if (entry === undefined) return { qualified: !nativeExpected, appliedEventId: null };
+  const fenced = entry.healthy && isPresenceBinding(binding) && entry.binding === binding;
+  return { qualified: fenced, appliedEventId: entry.appliedEventId };
 }
 
 /**
