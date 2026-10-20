@@ -18,6 +18,7 @@ import {
   readPresenceReading,
 } from '../daemon/presence/contract.ts';
 import { presencePaths } from '../daemon/presence/spool.ts';
+import { PRESENCE_HEALTH_GRACE_MS } from '../daemon/presence/health.ts';
 import type { PresenceObservation } from './state.ts';
 
 export type PresenceProjectionRead =
@@ -99,12 +100,11 @@ export type PresenceHealthReading = {
 
 /**
  * How far a route's `checkedAt`, and the probe answer that carried it, may sit from the display's
- * own instant. It is the daemon's shared bound — `PRESENCE_HEALTH_GRACE_MS` in
- * src/daemon/presence/health.ts, the same window a finished presence step vouches for its channel
- * — and this copy becomes an import once the daemon branches meet. An answer outside it is an
+ * own instant. It is the daemon's shared bound, imported from src/daemon/presence/health.ts —
+ * the same window a finished presence step vouches for its channel. An answer outside it is an
  * earlier probe's snapshot, never proof of live now.
  */
-export const PRESENCE_HEALTH_GRACE_MS = 2_000;
+export { PRESENCE_HEALTH_GRACE_MS };
 
 /**
  * Whether the display may mark this session's projections live. The answer is the fresh daemon
