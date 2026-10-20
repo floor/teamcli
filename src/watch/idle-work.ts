@@ -7,7 +7,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { IdleWorkInput, IdleWorkReport, PresenceSource } from '../idle_work.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
-import { takeable } from '../commands/next.ts';
+import { takeable } from '../tasks/select.ts';
 import type { TaskRecord } from '../tasks/adapter.ts';
 import { liveLeases } from '../tasks/lease.ts';
 import { fileSourceOf, readFileSource } from '../tasks/queue.ts';

@@ -28,6 +28,7 @@ import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
 import { claimLocal, releaseLocal } from '../tasks/lease.ts';
+import { order, takeable } from '../tasks/select.ts';
 import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
 import { pauseText, readState, type State } from '../state.ts';
 import { queuedSwap, swapLine } from '../swap/queue.ts';
@@ -351,40 +352,6 @@ export function place(team: TeamFile, root: string, io: Io): { kind: 'ok'; seat:
   if (verdict.kind === 'another-pane') return { kind: 'refused', message: anotherPaneRefusal(verdict.name, verdict.recordedPane) };
   if (verdict.kind !== 'ok') return { kind: 'refused', message: `only a seat of this team pulls a task; this call is ${describeCaller(shown)}` };
   return { kind: 'ok', seat: named.name, pane: named.pane };
-}
-
-/** The records a claim would consider for this seat — `team plan` shows what this returns. */
-export function takeable(records: readonly TaskRecord[], seat: string, pull: 'self' | 'any', mine: boolean): TaskRecord[] {
-  return records.filter((record) => {
-    if (record.blockedBy && record.blockedBy.length) return false;
-    if (record.repos && record.repos.length) return false;
-    if (record.needs && record.needs.length) return false;
-    if (mine) return record.assignee === seat;
-    if (pull === 'self') return record.assignee === undefined || record.assignee === seat;
-    return true;
-  });
-}
-
-/** The claim order both commands show: priority first, then `fallback`. */
-export function order(records: readonly TaskRecord[], fallback: 'file' | 'id'): TaskRecord[] {
-  return records
-    .map((record, index) => ({ record, index }))
-    .sort((a, b) => {
-      const left = rank(a.record);
-      const right = rank(b.record);
-      if (left.kind !== right.kind) return left.kind - right.kind;
-      if (left.kind === 0 && right.kind === 0 && left.n !== right.n) return left.n - right.n;
-      if (left.kind === 1 && right.kind === 1 && left.text !== right.text) return left.text.localeCompare(right.text);
-      if (left.kind === 2 && fallback === 'id' && a.record.id !== b.record.id) return a.record.id < b.record.id ? -1 : 1;
-      return a.index - b.index;
-    })
-    .map((item) => item.record);
-}
-
-function rank(record: TaskRecord): { kind: 0; n: number } | { kind: 1; text: string } | { kind: 2 } {
-  if (typeof record.priority === 'number' && Number.isFinite(record.priority)) return { kind: 0, n: record.priority };
-  if (typeof record.priority === 'string') return { kind: 1, text: record.priority };
-  return { kind: 2 };
 }
 
 function invocation(io: Io, message: string, usage: boolean, json = false): number {
