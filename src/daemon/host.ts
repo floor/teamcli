@@ -601,8 +601,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   /**
    * One presence pass for one route: the ingester's bounded step, then the activity reconciler
-   * over what it appended. It is asynchronous from end to end, so a slow or broken spool holds
-   * only its own route; the beat that starts it never awaits it.
+   * over what it appended. Its log reads are asynchronous and bounded; its state write is the
+   * same synchronous read-modify-write under the zero-wait lock every state writer uses. A slow
+   * or broken spool therefore holds only its own route, and the beat that starts it never awaits
+   * it.
    */
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
@@ -723,72 +725,119 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   let admissionClosed = false;
   let ownershipReleased = false;
-  let presenceCloses: Promise<unknown>[] | null = null;
+  /** One close attempt at a time: a second caller joins the run in flight, so the release below
+   *  can never happen twice. When the run settles, the next caller may try again. */
+  let closeRun: Promise<void> | null = null;
+  /**
+   * Per-ingester close state. Only a truthful quiescence is cached: a false or rejected answer
+   * clears the in-flight slot, so a later close retries that handle once the writer may have
+   * recovered. At most one close call per handle is ever in flight.
+   */
+  const presenceCloses = presenceWork.map(() => ({
+    attempt: null as Promise<unknown> | null,
+    closed: false,
+  }));
 
-  const close = async (): Promise<void> => {
+  const closeIngester = (index: number): Promise<unknown> => {
+    const slot = presenceCloses[index];
+    const one = presenceWork[index];
+    if (slot === undefined || one === undefined || slot.closed) return Promise.resolve();
+    if (slot.attempt === null) {
+      let attempt: Promise<unknown>;
+      try {
+        attempt = Promise.resolve(one.ingester.close());
+      } catch (error) {
+        attempt = Promise.reject(error);
+      }
+      slot.attempt = attempt;
+      void attempt.then(
+        (value) => {
+          if (slot.attempt !== attempt) return;
+          const quiesced = value !== null && typeof value === 'object'
+            && (value as { quiesced?: unknown }).quiesced === true;
+          if (quiesced) slot.closed = true;
+          else slot.attempt = null;
+        },
+        () => {
+          if (slot.attempt === attempt) slot.attempt = null;
+        },
+      );
+    }
+    return slot.attempt;
+  };
+
+  const closeOnce = async (): Promise<void> => {
     if (ownershipReleased) return;
     if (!admissionClosed) {
       admissionClosed = true;
       closed = true;
       clearInterval(timer);
       if (presenceTimer !== null) clearInterval(presenceTimer);
-      // Admission first: effects close, hosted passes abort, and send, bus and the machine
-      // endpoint stop taking work. Presence never outlives admission; its drain comes after.
-      // Each watch leaves through its own loop: the stop resolves its wait false and awaits the
-      // pass in flight, so nothing is left half-written. The state record's last write keeps the
-      // stopped phase and its reason.
-      await Promise.all(hostedWatches.map(async (one) => {
+      // Admission first, and every stop is started before the first await: a watch pass that is
+      // slow to drain must not leave send or bus admitting beside it. The machine endpoint stops
+      // answering at once through the `closed` guard; its listener stays bound until release,
+      // because closing it unlinks the socket a pending drain must retain.
+      const admissions: Promise<unknown>[] = [];
+      for (const one of hostedWatches) {
+        let stopping: Promise<unknown>;
         try {
-          await one.watch.stop('the daemon is closing');
-        } catch {
-          // Closing is best effort; the process is ending.
+          stopping = Promise.resolve(one.watch.stop('the daemon is closing'));
+        } catch (error) {
+          stopping = Promise.reject(error);
         }
-        one.status.watch = one.watch.state();
-      }));
+        admissions.push(stopping.catch(() => undefined).then(() => {
+          one.status.watch = one.watch.state();
+        }));
+      }
       for (const handle of busHandles.splice(0)) {
         try {
-          await handle.close();
+          admissions.push(Promise.resolve(handle.close()).catch(() => undefined));
         } catch {
-          // Closing is best effort; the process is ending.
+          // A synchronous throw is a handle that was already closed.
         }
       }
       for (const handle of sendHandles.splice(0)) {
         try {
-          await handle.close();
+          admissions.push(Promise.resolve(handle.close()).catch(() => undefined));
         } catch {
-          // Closing is best effort; the process is ending.
+          // A synchronous throw is a handle that was already closed.
         }
       }
-      // The machine endpoint stops taking work here, but its listener stays bound: closing it
-      // unlinks the socket file, and the socket is part of the ownership a non-truthful drain
-      // must retain. It refuses every request while `closed` and is closed on release below.
+      // The record says the daemon is closing before anything unbounded is awaited: a hung
+      // presence drain must not leave the old serving record standing behind it. A route that
+      // does quiesce is released below and its record is unlinked; one that does not keeps this
+      // entry with the drain's own reason.
+      for (const one of presenceWork) {
+        const status = roots.find((entry) => entry.root === one.route.root);
+        if (status !== undefined) {
+          status.presence = { state: 'pending', why: 'the daemon is closing' };
+        }
+      }
+      writeState(true);
+      await Promise.all(admissions);
     }
     // Presence drain: the in-flight pass of each route (an ingester step and the activity write
     // that follows it) finishes, then every ingester's own truthful close. No timeout races the
     // teardown: a write that cannot finish is the honest reason ownership is not released.
     await Promise.allSettled([...presenceRuns.values()]);
-    presenceCloses ??= presenceWork.map((one) => one.ingester.close());
-    const drained = await Promise.allSettled(presenceCloses);
     const unsettled: { route: HostedRoute; why: string }[] = [];
-    drained.forEach((outcome, index) => {
-      const one = presenceWork[index];
-      if (one === undefined) return;
-      if (outcome.status === 'rejected') {
-        unsettled.push({ route: one.route, why: messageOf(outcome.reason) });
-        return;
+    await Promise.all(presenceWork.map(async (one, index) => {
+      try {
+        const value = await closeIngester(index);
+        if (presenceCloses[index]?.closed === true) return;
+        const why = value !== null && typeof value === 'object' && typeof (value as { why?: unknown }).why === 'string'
+          ? (value as { why: string }).why
+          : 'the ingester did not quiesce';
+        unsettled.push({ route: one.route, why });
+      } catch (error) {
+        unsettled.push({ route: one.route, why: messageOf(error) });
       }
-      const value = outcome.value as { quiesced?: unknown; why?: unknown } | null;
-      if (value !== null && typeof value === 'object' && value.quiesced === true) return;
-      const why = value !== null && typeof value === 'object' && typeof value.why === 'string'
-        ? value.why
-        : 'the ingester did not quiesce';
-      unsettled.push({ route: one.route, why });
-    });
+    }));
     if (unsettled.length > 0) {
       // Ownership is retained on purpose: the lock, the socket and the state record stand, so no
       // new daemon can take the routes while an old writer might still append. A later close
-      // retries the same promises; only a truthful quiescence releases. A killed process falls to
-      // the existing dead-pid lock path.
+      // retries only the handles whose own close did not quiesce; a cached true is never re-run,
+      // and only a truthful quiescence releases. A killed process falls to the dead-pid lock path.
       for (const one of unsettled) {
         const status = roots.find((entry) => entry.root === one.route.root);
         if (status !== undefined) status.presence = { state: 'pending', why: one.why };
@@ -810,6 +859,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     releaseLock();
     ownershipReleased = true;
+  };
+
+  const close = (): Promise<void> => {
+    if (closeRun !== null) return closeRun;
+    const run = closeOnce().finally(() => {
+      if (closeRun === run) closeRun = null;
+    });
+    closeRun = run;
+    return run;
   };
 
   return {

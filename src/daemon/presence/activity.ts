@@ -138,7 +138,9 @@ function unchanged(seat: string, base: ScanCursor, overrides: Partial<PresenceAc
 
 /**
  * Builds one route's activity reconciler. It reads the canonical state and the transition log,
- * both asynchronous, then applies every seat's batch in one locked write. A call with nothing new
+ * both asynchronous and bounded, then applies every seat's batch in one locked write. The
+ * write itself is the existing synchronous state read-modify-write under the zero-wait lock:
+ * the same limit every other state writer has. A call with nothing new
  * writes nothing.
  */
 export function createPresenceActivity(input: PresenceActivityInput): PresenceActivityStep {

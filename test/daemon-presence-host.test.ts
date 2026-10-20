@@ -261,9 +261,65 @@ describe('closing', () => {
         why: 'the presence log write is stuck',
       });
     }
-    // A second close re-awaits the same promises; a settled non-quiescence never releases.
+    // A second close retries the handle whose own answer was not truthful; ownership still holds.
+    await daemon.close();
+    expect(closeCalls).toBe(2);
+    expect(existsSync(daemonLockPath(world.home))).toBe(true);
+  }, 15_000);
+
+  test('a false, then a rejected, then a truthful close: one retry per handle and release only on true', async () => {
+    let closeCalls = 0;
+    let answer: 'false' | 'reject' | 'true' = 'false';
+    const ingester: PresenceIngester = {
+      step: async () => emptyIngest(),
+      close: async () => {
+        closeCalls += 1;
+        if (answer === 'reject') throw new Error('the presence log write is stuck');
+        if (answer === 'false') {
+          return { quiesced: false, why: 'the presence log write is stuck' } as unknown as { quiesced: true };
+        }
+        return { quiesced: true };
+      },
+      isClosed: () => false,
+    };
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      presenceIngest: () => ingester,
+      presenceActivity: () => async () => activityResult(),
+    });
+
     await daemon.close();
     expect(closeCalls).toBe(1);
     expect(existsSync(daemonLockPath(world.home))).toBe(true);
+    expect(existsSync(daemonSocketPath(world.home))).toBe(true);
+    const first = readDaemonState(world.home);
+    if (first.kind === 'ok') {
+      expect(first.state.roots[0]?.presence).toEqual({
+        state: 'pending',
+        why: 'the presence log write is stuck',
+      });
+    }
+
+    answer = 'reject';
+    await daemon.close();
+    expect(closeCalls).toBe(2);
+    expect(existsSync(daemonLockPath(world.home))).toBe(true);
+    const second = readDaemonState(world.home);
+    if (second.kind === 'ok') {
+      expect(second.state.roots[0]?.presence?.why).toBe('the presence log write is stuck');
+    }
+
+    // Two concurrent callers join one run: the retried handle is closed once, and only a truthful
+    // quiescence releases the lock, socket and record.
+    answer = 'true';
+    const left = daemon.close();
+    const right = daemon.close();
+    expect(right).toBe(left);
+    await Promise.all([left, right]);
+    expect(closeCalls).toBe(3);
+    expect(existsSync(daemonLockPath(world.home))).toBe(false);
+    expect(existsSync(daemonSocketPath(world.home))).toBe(false);
+    expect(readDaemonState(world.home).kind).toBe('missing');
   }, 15_000);
 });
