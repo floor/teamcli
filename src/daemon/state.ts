@@ -24,6 +24,9 @@ export type DaemonRootSeatPresenceHealth = {
   seat: string;
   state: 'serving' | 'pending';
   healthy: boolean;
+  /** The seat's current managed binding at the sampled instant, so a reader can name the
+   *  incarnation this answer fences; null when no sample or no valid binding was read. */
+  binding: string | null;
   why: string | null;
 };
 

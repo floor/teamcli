@@ -51,6 +51,69 @@ export type PresenceSource = {
 };
 
 /**
+ * A source as a producer hands it over. The transport adapter may expose its alias spellings:
+ * `state` for `status`, `cancel` for `close`, and the seat either on the source or only on its
+ * status reading. The host adopts it once at registration, so an adapter is never required to
+ * carry a second, host-only field.
+ */
+export type PresenceSourceRuntime = {
+  seat?: string;
+  step(at: Date): Promise<unknown>;
+  status?(at: Date): PresenceSourceStatus;
+  state?(at: Date): PresenceSourceStatus;
+  close?(): Promise<{ quiesced: true }>;
+  cancel?(): Promise<{ quiesced: true }>;
+};
+
+export type PresenceSourceAdoption =
+  | { source: PresenceSource }
+  | { seat: string | null; why: string };
+
+/**
+ * Adopts one producer source into the host's registered shape, reading its seat before the first
+ * pump and accepting the adapter's aliases. A source that cannot say which seat it serves, or
+ * cannot be drained, is not adopted: the caller turns a named seat into an explicit unproven
+ * source and an unnamed failure into an unresolved route, never into a silent fallback.
+ */
+export function adoptPresenceSource(
+  runtime: PresenceSourceRuntime,
+  at: Date,
+): PresenceSourceAdoption {
+  const named = typeof runtime.seat === 'string' && runtime.seat !== '' ? runtime.seat : null;
+  const read = typeof runtime.status === 'function' ? runtime.status : runtime.state;
+  const errorText = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+  if (typeof read !== 'function') {
+    return { seat: named, why: 'the runtime source has no status reader' };
+  }
+  let first: PresenceSourceStatus;
+  try {
+    first = read.call(runtime, at);
+  } catch (error) {
+    return { seat: named, why: `the runtime source status failed: ${errorText(error)}` };
+  }
+  const reported = first !== null && typeof first === 'object' && typeof first.seat === 'string'
+    ? first.seat
+    : '';
+  const seat = named ?? (reported !== '' ? reported : null);
+  if (seat === null) return { seat: null, why: 'the runtime source does not name its seat' };
+  if (named !== null && reported !== '' && reported !== named) {
+    return { seat: named, why: 'the runtime source answered for another seat' };
+  }
+  const closer = runtime.close ?? runtime.cancel;
+  if (typeof closer !== 'function') return { seat, why: 'the runtime source cannot be closed' };
+  return {
+    source: {
+      seat,
+      step: (when) => runtime.step(when),
+      status: (when) => read.call(runtime, when),
+      close: () => closer.call(runtime),
+    },
+  };
+}
+
+
+/**
  * An explicit source for a seat that expects a managed native runtime channel but whose target
  * resolution or start failed. It answers unproven forever, so the seat can never silently fall
  * back to the route's hook health as if no native attachment had been expected.
@@ -151,6 +214,14 @@ export type PresenceChannelHealth = {
    *  expected seat that has not been sampled yet is not healthy, so the window before the first
    *  pass can never inherit the route's ingest answer. */
   seatExpected(seat: string): void;
+  /** Marks the route's managed-runtime classification unresolved: a factory that builds sources
+   *  or resolution failures threw, so no seat can be told apart from one that expected native.
+   *  No route-level or seat-level answer may claim health while this stands. It is sticky for
+   *  the process: classification happens at start, and a later read cannot repair it. */
+  unresolved(why: string): void;
+  /** The current managed binding captured with this seat's last sample, for a reader's own fence;
+   *  null before the first sample or when the seat record named no valid binding. */
+  seatBinding(seat: string): string | null;
   /** Whether this seat's runtime channel is serving now: the route's ingest is healthy and, when
    *  the seat has a source, its last sample inside this grace window was continuous under this
    *  epoch. A seat with no source keeps the route's answer; siblings never affect each other. */
@@ -166,15 +237,23 @@ export function createPresenceChannelHealth(
   let lastOkAt: number | null = null;
   let lastStepOk = false;
   let lastWhy: string | null = null;
+  let unresolvedWhy: string | null = null;
   const seats = new Map<
     string,
-    { epoch: string; continuous: boolean; why: string | null; atMs: number }
+    { epoch: string; continuous: boolean; why: string | null; atMs: number; binding: string | null }
   >();
   const expected = new Set<string>();
   const healthy = (at: Date): boolean => {
+    if (unresolvedWhy !== null) return false;
     if (!lastStepOk || lastOkAt === null) return false;
     const age = at.getTime() - lastOkAt;
     return age >= 0 && age <= graceMs;
+  };
+  const reason = (at: Date): string | null => {
+    if (unresolvedWhy !== null) return unresolvedWhy;
+    if (healthy(at)) return null;
+    if (!lastStepOk) return lastWhy ?? 'the presence channel did not answer healthy';
+    return 'no presence step finished inside the liveness window';
   };
   return {
     stepped(ok, at, why = null) {
@@ -183,11 +262,7 @@ export function createPresenceChannelHealth(
       if (ok) lastOkAt = at.getTime();
     },
     healthy,
-    reason(at) {
-      if (healthy(at)) return null;
-      if (!lastStepOk) return lastWhy ?? 'the presence channel did not answer healthy';
-      return 'no presence step finished inside the liveness window';
-    },
+    reason,
     seatObserved(input, at) {
       const verdict = sourceContinuity(input.source, input.currentBinding, at);
       seats.set(input.source.seat, {
@@ -195,10 +270,18 @@ export function createPresenceChannelHealth(
         continuous: verdict.continuous,
         why: verdict.why,
         atMs: at.getTime(),
+        binding: input.currentBinding,
       });
     },
     seatExpected(seat) {
       expected.add(seat);
+    },
+    unresolved(why) {
+      // The first failure is the root cause a reader needs; later ones cannot classify better.
+      if (unresolvedWhy === null) unresolvedWhy = why;
+    },
+    seatBinding(seat) {
+      return seats.get(seat)?.binding ?? null;
     },
     seatHealthy(seat, at) {
       if (!healthy(at)) return false;
@@ -209,7 +292,7 @@ export function createPresenceChannelHealth(
       return record.continuous && age >= 0 && age <= graceMs;
     },
     seatReason(seat, at) {
-      if (!healthy(at)) return this.reason(at);
+      if (!healthy(at)) return reason(at);
       const record = seats.get(seat);
       if (record === undefined) {
         return expected.has(seat) ? 'the runtime channel has not been sampled yet' : null;

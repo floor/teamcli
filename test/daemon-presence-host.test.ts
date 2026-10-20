@@ -18,7 +18,8 @@ import { daemonLockPath, daemonSocketPath } from '../src/daemon/paths.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 import type { PresenceActivityResult } from '../src/daemon/presence/activity.ts';
 import {
-  PRESENCE_HEALTH_GRACE_MS, type PresenceSource, type PresenceSourceStatus,
+  PRESENCE_HEALTH_GRACE_MS, type PresenceSource, type PresenceSourceRuntime,
+  type PresenceSourceStatus,
 } from '../src/daemon/presence/health.ts';
 import type { PresenceIngestResult, PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import type { PresencePublishResult } from '../src/daemon/presence/publish.ts';
@@ -563,8 +564,11 @@ describe('the per-seat runtime sources', () => {
     // The route's own answer is still the ingest answer, and the refused seat never inherits it.
     expect(presence).toMatchObject({ session: 'crew', state: 'serving', healthy: true, why: null });
     expect(presence?.seats).toEqual([
-      { seat: 'worker-1', state: 'serving', healthy: true, why: null },
-      { seat: 'crew-op', state: 'pending', healthy: false, why: 'the managed thread is archived' },
+      { seat: 'worker-1', state: 'serving', healthy: true, binding: BINDING, why: null },
+      {
+        seat: 'crew-op', state: 'pending', healthy: false, binding: 'prs_ffffffffffff',
+        why: 'the managed thread is archived',
+      },
     ]);
     await daemon.close();
   }, 15_000);
@@ -593,10 +597,12 @@ describe('the per-seat runtime sources', () => {
     await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats?.[1]?.healthy === true);
     expect(daemon.health().roots?.[0]?.presence?.seats).toEqual([
       {
-        seat: 'worker-1', state: 'pending', healthy: false,
+        seat: 'worker-1', state: 'pending', healthy: false, binding: BINDING,
         why: 'the runtime channel belongs to another incarnation',
       },
-      { seat: 'crew-op', state: 'serving', healthy: true, why: null },
+      {
+        seat: 'crew-op', state: 'serving', healthy: true, binding: 'prs_ffffffffffff', why: null,
+      },
     ]);
     await daemon.close();
   }, 15_000);
@@ -652,4 +658,129 @@ describe('the per-seat runtime sources', () => {
     expect(ingestClosed).toBe(1);
     expect(existsSync(daemonLockPath(world.home))).toBe(false);
   }, 15_000);
+
+  test('a factory that throws holds the route, so no seat inherits the hook answer', async () => {
+    const clock = new Date('2026-10-20T00:00:00.000Z');
+    writeSeatBindings({ 'worker-1': BINDING });
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => servingIngester(),
+      presenceActivity: () => async () => activityResult(),
+      presenceSubscriptions: (): PresenceSourceRuntime[] => {
+        throw new Error('the target resolver failed');
+      },
+    });
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.state === 'pending');
+    // Ingest is healthy, but the unclassified native attachment holds the route: an expected
+    // seat can never hide behind the route's hook answer.
+    expect(daemon.health().roots?.[0]?.presence).toMatchObject({
+      session: 'crew', state: 'pending', healthy: false,
+      why: 'the runtime subscriptions were not built: the target resolver failed',
+    });
+    expect(daemon.health().roots?.[0]?.presence?.seats).toBeUndefined();
+    await daemon.close();
+    expect(existsSync(daemonLockPath(world.home))).toBe(false);
+  }, 15_000);
+
+  test('a named adoption failure holds its seat, and an unnamed one holds the route', async () => {
+    const clock = new Date('2026-10-20T00:00:00.000Z');
+    writeSeatBindings({ 'worker-1': BINDING });
+    const named = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => servingIngester(),
+      presenceActivity: () => async () => activityResult(),
+      // The producer names its seat but offers nothing that can drain the source.
+      presenceSubscriptions: (): PresenceSourceRuntime[] => [{
+        seat: 'worker-1',
+        step: async () => {},
+        status: () => ({
+          seat: 'worker-1', binding: BINDING, threadId: 'thread-1', channel: 'connected',
+          stream: 'initialized', baseline: 'read', evidenceAt: clock.toISOString(), why: null,
+        }),
+      }],
+    });
+    await waitUntil(
+      () => named.health().roots?.[0]?.presence?.seats?.[0]?.why === 'the runtime source cannot be closed',
+    );
+    const namedPresence = named.health().roots?.[0]?.presence;
+    expect(namedPresence).toMatchObject({ state: 'serving', healthy: true });
+    expect(namedPresence?.seats).toEqual([{
+      seat: 'worker-1', state: 'pending', healthy: false, binding: BINDING,
+      why: 'the runtime source cannot be closed',
+    }]);
+    await named.close();
+
+    const unnamed = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => servingIngester(),
+      presenceActivity: () => async () => activityResult(),
+      presenceSubscriptions: (): PresenceSourceRuntime[] => [{ step: async () => {} }],
+    });
+    await waitUntil(() => unnamed.health().roots?.[0]?.presence?.state === 'pending');
+    expect(unnamed.health().roots?.[0]?.presence).toMatchObject({
+      state: 'pending', healthy: false,
+      why: 'the runtime subscriptions were not classified: the runtime source has no status reader',
+    });
+    await unnamed.close();
+  }, 20_000);
+
+  test('a hung source pump holds only its own seat, never a sibling or the route', async () => {
+    const clock = new Date('2026-10-20T00:00:00.000Z');
+    writeSeatBindings({ 'worker-1': BINDING, 'crew-op': 'prs_ffffffffffff' });
+    let release: (() => void) | null = null;
+    let activitySteps = 0;
+    let closedHung = false;
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => servingIngester(),
+      presenceActivity: () => async () => {
+        activitySteps += 1;
+        return activityResult();
+      },
+      presenceSubscriptions: (): PresenceSource[] => [
+        {
+          seat: 'worker-1',
+          step: () => new Promise<void>((resolve) => { release = resolve; }),
+          status: () => ({
+            seat: 'worker-1', binding: BINDING, threadId: 'thread-1', channel: 'connecting',
+            stream: 'uninitialized', baseline: 'pending', evidenceAt: null,
+            why: 'the stream is connecting',
+          }),
+          close: async () => {
+            closedHung = true;
+            release?.();
+            return { quiesced: true };
+          },
+        },
+        started('crew-op', () => ({
+          seat: 'crew-op', binding: 'prs_ffffffffffff', threadId: 'thread-2',
+          channel: 'connected', stream: 'initialized', baseline: 'read',
+          evidenceAt: clock.toISOString(), why: null,
+        })),
+      ],
+    });
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats?.[1]?.healthy === true);
+    const presence = daemon.health().roots?.[0]?.presence;
+    // The route and the sibling are measured while the first source's step is still pending.
+    expect(presence).toMatchObject({ state: 'serving', healthy: true });
+    expect(presence?.seats?.[0]).toEqual({
+      seat: 'worker-1', state: 'pending', healthy: false, binding: null,
+      why: 'the runtime channel has not been sampled yet',
+    });
+    expect(activitySteps).toBeGreaterThan(0);
+    expect(closedHung).toBe(false);
+
+    // Shutdown cancels the hung source; its pump drains before ownership is released.
+    await daemon.close();
+    expect(closedHung).toBe(true);
+    expect(existsSync(daemonLockPath(world.home))).toBe(false);
+  }, 20_000);
 });

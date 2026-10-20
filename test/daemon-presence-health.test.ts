@@ -9,7 +9,8 @@ import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { hostedWatchSources } from '../src/daemon/watch-run.ts';
 import {
-  PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth, presenceStepHealth, unprovenSource,
+  PRESENCE_HEALTH_GRACE_MS, adoptPresenceSource, createPresenceChannelHealth, presenceStepHealth,
+  unprovenSource,
   type PresenceSourceStatus,
 } from '../src/daemon/presence/health.ts';
 import { presenceId } from '../src/daemon/presence/contract.ts';
@@ -205,6 +206,41 @@ describe('the per-seat runtime answer', () => {
     expect(health.seatReason(SEAT, START)).toBe('the runtime reports the session ended');
   });
 
+  test('an unresolved route holds every seat, sampled or not', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    health.seatExpected(SEAT);
+    health.seatObserved({ source: reading(), currentBinding: BINDING, epoch: 'epoch-a' }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(true);
+    health.unresolved('the runtime subscriptions were not built: the resolver failed');
+    // The route is the first thing a seat inherits, so holding it holds every seat.
+    expect(health.healthy(START)).toBe(false);
+    expect(health.reason(START)).toBe(
+      'the runtime subscriptions were not built: the resolver failed',
+    );
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatHealthy('crew-op', START)).toBe(false);
+    expect(health.seatReason('crew-op', START)).toBe(
+      'the runtime subscriptions were not built: the resolver failed',
+    );
+  });
+
+  test('the sampled binding is kept beside the answer so a reader can fence it', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    expect(health.seatBinding(SEAT)).toBeNull();
+    health.seatObserved({ source: reading(), currentBinding: BINDING, epoch: 'epoch-a' }, START);
+    expect(health.seatBinding(SEAT)).toBe(BINDING);
+    // A seat record that no longer names a binding can never be fenced, and the sample says so.
+    health.seatObserved({
+      source: reading({ binding: 'prs_999999999999' }),
+      currentBinding: null,
+      epoch: 'epoch-a',
+    }, START);
+    expect(health.seatBinding(SEAT)).toBeNull();
+    expect(health.seatReason(SEAT, START)).toBe('the runtime channel belongs to another incarnation');
+  });
+
   test('a refused attachment is registered as an explicit unproven source that closes cleanly', async () => {
     const source = unprovenSource(SEAT, 'the managed thread could not be resolved');
     await source.step(START);
@@ -214,6 +250,47 @@ describe('the per-seat runtime answer', () => {
       why: 'the managed thread could not be resolved',
     });
     expect(await source.close()).toEqual({ quiesced: true });
+  });
+});
+
+// The producer's final source shape is adopted once, at registration: its seat may be named on
+// the source or only on its status reading, and its alias spellings are the adapter's own.
+describe('adopting a producer source', () => {
+  const SEAT = 'worker-1';
+  const STATUS: PresenceSourceStatus = {
+    seat: SEAT, binding: 'prs_0123456789ab', threadId: 'thread-1', channel: 'connecting',
+    stream: 'uninitialized', baseline: 'pending', evidenceAt: null, why: 'the stream is connecting',
+  };
+
+  test('the seat may live on the status reading, and state/cancel are accepted aliases', async () => {
+    const adopted = adoptPresenceSource({
+      step: async () => {},
+      state: () => STATUS,
+      cancel: async () => ({ quiesced: true }),
+    }, START);
+    if (!('source' in adopted)) throw new Error(adopted.why);
+    expect(adopted.source.seat).toBe(SEAT);
+    expect(adopted.source.status(START)).toEqual(STATUS);
+    expect(await adopted.source.close()).toEqual({ quiesced: true });
+  });
+
+  test('an unnamed, unreadable or unclosable source is not adopted', () => {
+    expect(adoptPresenceSource({
+      step: async () => {},
+      status: () => ({ ...STATUS, seat: '' }),
+    }, START)).toEqual({ seat: null, why: 'the runtime source does not name its seat' });
+    expect(adoptPresenceSource({ seat: SEAT, step: async () => {} }, START)).toEqual({
+      seat: SEAT, why: 'the runtime source has no status reader',
+    });
+    expect(adoptPresenceSource({
+      seat: SEAT, step: async () => {}, status: () => STATUS,
+    }, START)).toEqual({ seat: SEAT, why: 'the runtime source cannot be closed' });
+    expect(adoptPresenceSource({
+      seat: 'crew-op',
+      step: async () => {},
+      status: () => STATUS,
+      close: async () => ({ quiesced: true }),
+    }, START)).toEqual({ seat: 'crew-op', why: 'the runtime source answered for another seat' });
   });
 });
 

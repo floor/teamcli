@@ -42,8 +42,9 @@ import { createPresenceActivity, type PresenceActivityStep } from './presence/ac
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
 import { isPresenceBinding } from './presence/contract.ts';
 import {
-  PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth, presenceStepHealth, unprovenSource,
-  type PresenceChannelHealth, type PresenceSource, type PresenceSourceStatus,
+  PRESENCE_HEALTH_GRACE_MS, adoptPresenceSource, createPresenceChannelHealth, presenceStepHealth,
+  unprovenSource, type PresenceChannelHealth, type PresenceSource, type PresenceSourceRuntime,
+  type PresenceSourceStatus,
 } from './presence/health.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
@@ -130,14 +131,18 @@ export type StartMachineDaemonInput = {
    * none: a seat with no source keeps the route's own hook answer, correct only for a seat that
    * genuinely has no managed native channel (the target resolver's `skip`). A resolution or start
    * failure is not a skip: it belongs in `presenceUnproven`, so the seat is explicitly unhealthy.
-   * The wiring resolves targets under the existing policy; the host only fences, samples and
-   * closes what it is given.
+   * A producer may name the seat on the source or only on its status reading, and `state` /
+   * `cancel` are accepted as aliases; the host adopts the first reading at registration. The
+   * wiring resolves targets under the existing policy; the host only fences, samples and closes
+   * what it is given. A factory that throws leaves the route's classification unresolved, which
+   * holds every seat rather than letting an expected native attachment inherit hook health.
    */
-  presenceSubscriptions?: (route: HostedRoute, stateDir: string) => PresenceSource[];
+  presenceSubscriptions?: (route: HostedRoute, stateDir: string) => PresenceSourceRuntime[];
   /**
    * Seats this route expected to carry a managed native channel but whose target resolution or
    * start did not succeed, with the truthful why. Each becomes an explicit unproven source, so a
-   * failed expected attachment can never fall back to the route's hook answer.
+   * failed expected attachment can never fall back to the route's hook answer. A factory that
+   * throws is unresolved classification and holds the whole route.
    */
   presenceUnproven?: (route: HostedRoute, stateDir: string) => Array<{ seat: string; why: string }>;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
@@ -333,6 +338,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     publisher: PresencePublisherStep;
     /** One read-only runtime source per managed seat; empty for a hook-only route. */
     sources: PresenceSource[];
+    /** One in-flight pump per source, so a slow source holds only its own seat's answer. */
+    sourceRuns: (Promise<void> | null)[];
     /** This route's fixed liveness, answered per seat to its hosted watch's dispatcher. */
     health: PresenceChannelHealth;
   }[] = [];
@@ -387,6 +394,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           seat: source.seat,
           state: seatHealthy ? 'serving' as const : 'pending' as const,
           healthy: seatHealthy,
+          binding: presence.health.seatBinding(source.seat),
           why: seatWhy,
         };
       });
@@ -566,16 +574,33 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         sources.push(source);
       };
       try {
-        for (const source of input.presenceSubscriptions?.(route, stateDir) ?? []) register(source);
+        for (const runtime of input.presenceSubscriptions?.(route, stateDir) ?? []) {
+          const adopted = adoptPresenceSource(runtime, now());
+          if ('source' in adopted) {
+            register(adopted.source);
+          } else if (adopted.seat !== null) {
+            // A named seat whose source could not be adopted expected a native channel: it is
+            // explicitly unproven rather than silently inheriting the route's hook answer.
+            register(unprovenSource(adopted.seat, adopted.why));
+          } else {
+            // Without a seat the failure cannot be attributed; the route itself must not claim
+            // health, or an expected attachment could still hide behind hook health.
+            health.unresolved(`the runtime subscriptions were not classified: ${adopted.why}`);
+          }
+        }
       } catch (error) {
-        appendDaemonLog(home, `presence ${route.root}: runtime subscriptions were not built: ${messageOf(error)}`, now());
+        const why = `the runtime subscriptions were not built: ${messageOf(error)}`;
+        health.unresolved(why);
+        appendDaemonLog(home, `presence ${route.root}: ${why}`, now());
       }
       try {
         for (const failed of input.presenceUnproven?.(route, stateDir) ?? []) {
           register(unprovenSource(failed.seat, failed.why));
         }
       } catch (error) {
-        appendDaemonLog(home, `presence ${route.root}: runtime resolutions were not built: ${messageOf(error)}`, now());
+        const why = `the runtime resolutions were not built: ${messageOf(error)}`;
+        health.unresolved(why);
+        appendDaemonLog(home, `presence ${route.root}: ${why}`, now());
       }
       presenceWork.push({
         route,
@@ -593,6 +618,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             home,
           }),
         sources,
+        sourceRuns: sources.map(() => null),
         health,
       });
     }
@@ -752,46 +778,39 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
-  /** One in-memory sample of one source, forced to answer for its own seat and never allowed to
-   *  throw into the pass: a source whose bounded step failed is unproven, which is not healthy.
-   *  Only the sample taken here counts; a persisted source record is never read for health. */
-  const observeSource = async (
+  /** One failed reading for a source that could not be sampled: never healthy, and never the
+   *  source's last word, which may still claim a connection that is no longer measured. */
+  const failedReading = (source: PresenceSource, why: string): PresenceSourceStatus => ({
+    seat: source.seat,
+    binding: '',
+    threadId: '',
+    channel: 'unknown',
+    stream: 'uninitialized',
+    baseline: 'pending',
+    evidenceAt: null,
+    why,
+  });
+
+  /** Records one in-memory sample, forced to answer for the source's own seat and fenced on the
+   *  seat's current managed binding at this instant. Only the sample taken here counts; a
+   *  persisted source record is never read for health. */
+  const sampleSource = (
     one: (typeof presenceWork)[number],
     source: PresenceSource,
+    reading: PresenceSourceStatus,
     at: Date,
-  ): Promise<void> => {
-    let reading: PresenceSourceStatus;
-    try {
-      // The stream pump is the pass's measured read. A pump that fails leaves no current
-      // evidence for this seat even when its last status still said connected.
-      await source.step(at);
-      reading = source.status(at);
-    } catch (error) {
-      reading = {
-        seat: source.seat,
-        binding: '',
-        threadId: '',
-        channel: 'unknown',
-        stream: 'uninitialized',
-        baseline: 'pending',
-        evidenceAt: null,
-        why: `the runtime source step failed: ${messageOf(error)}`,
-      };
-    }
-    if (reading.seat !== source.seat) {
-      reading = {
-        seat: source.seat,
-        binding: reading.binding,
-        threadId: reading.threadId,
-        channel: 'unknown',
-        stream: reading.stream,
-        baseline: reading.baseline,
-        evidenceAt: null,
-        why: 'the runtime source answered for another seat',
-      };
-    }
+  ): void => {
+    const sampled = reading.seat === source.seat
+      ? reading
+      : {
+          ...failedReading(source, 'the runtime source answered for another seat'),
+          binding: reading.binding,
+          threadId: reading.threadId,
+          stream: reading.stream,
+          baseline: reading.baseline,
+        };
     one.health.seatObserved({
-      source: reading,
+      source: sampled,
       currentBinding: currentBindingOf(one.stateDir, one.route.session, source.seat),
       epoch: since,
     }, at);
@@ -801,6 +820,36 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         `${source.seat}: ${one.health.seatReason(source.seat, at) ?? 'the runtime channel is not serving'}`,
       );
     }
+  };
+
+  /** One bounded, independent pump per source: at most one step is in flight for a source, so a
+   *  source whose step is slow or hung holds only its own seat's answer — never the route's
+   *  ingest, activity or publication, and never a sibling's sample. The sample is stamped when
+   *  the reading actually arrives, not when the pass began. */
+  const pumpSource = (one: (typeof presenceWork)[number], index: number): void => {
+    if (closed) return;
+    const source = one.sources[index];
+    if (source === undefined || one.sourceRuns[index] !== null) return;
+    const run = (async () => {
+      try {
+        await source.step(now());
+      } catch (error) {
+        sampleSource(one, source, failedReading(source, `the runtime source step failed: ${messageOf(error)}`), now());
+        return;
+      }
+      let reading: PresenceSourceStatus;
+      try {
+        reading = source.status(now());
+      } catch (error) {
+        sampleSource(one, source, failedReading(source, `the runtime source status failed: ${messageOf(error)}`), now());
+        return;
+      }
+      sampleSource(one, source, reading, now());
+    })().catch(() => undefined);
+    one.sourceRuns[index] = run;
+    void run.then(() => {
+      if (one.sourceRuns[index] === run) one.sourceRuns[index] = null;
+    });
   };
 
   /**
@@ -832,10 +881,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // The channel's fixed liveness is that typed outcome: only a step that finished with no
       // persistent fault and no known backlog vouches for the grace window.
       one.health.stepped(healthy, now(), why);
-      // Each managed seat's runtime evidence is sampled from memory on every pass and fenced
-      // now: this daemon epoch, the seat's current managed binding, this instant. A seat's
-      // source answer never changes the route's ingest answer or a sibling's.
-      for (const source of one.sources) await observeSource(one, source, now());
+      // Each managed seat's runtime evidence is sampled from memory and fenced at the instant it
+      // arrives: this daemon epoch, the seat's current managed binding. Each source runs in its
+      // own one-flight pump, so the route's ingest, activity and publication below, and every
+      // sibling source, never wait for one source's step. A seat's answer never changes the
+      // route's ingest answer.
+      for (let index = 0; index < one.sources.length; index += 1) pumpSource(one, index);
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.
@@ -1117,6 +1168,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // that follows it) finishes, then every ingester's own truthful close. No timeout races the
     // teardown: a write that cannot finish is the honest reason ownership is not released.
     await Promise.allSettled([...presenceRuns.values()]);
+    // Source pumps are part of the same drain: their steps were already cancelled in the
+    // admission block, and no new pump starts once `closed` is set. A pump that still cannot
+    // finish keeps its route unsettled below, exactly as a non-quiesced source close does.
+    const sourceDrains: Promise<void>[] = [];
+    for (const one of presenceWork) {
+      for (const run of one.sourceRuns) if (run !== null) sourceDrains.push(run);
+    }
+    await Promise.allSettled(sourceDrains);
     // A later attempt retries the sources whose close did not resolve. It runs before any
     // ingester close, and only a resolved drain now counts as quiescence.
     if (resumed) {

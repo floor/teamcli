@@ -16,10 +16,12 @@ import {
   readDaemonState,
   type DaemonFeatures,
   type DaemonRootPresenceHealth,
+  type DaemonRootSeatPresenceHealth,
   type DaemonRootState,
   type DaemonState,
   type DaemonStuckRequest,
 } from './state.ts';
+import { isPresenceBinding } from './presence/contract.ts';
 
 export type DaemonProbe =
   | { state: 'answered'; at: string }
@@ -181,7 +183,9 @@ function mergedRoots(state: DaemonState, answer: DaemonHealthSnapshot): DaemonRo
 /**
  * One fresh presence record, or null when it is not the exact shape the daemon promises. `serving`
  * and `healthy: true` are one fact: a record that says one without the other is not known, and a
- * pending record without a non-empty why cannot say what it is waiting for.
+ * pending record without a non-empty why cannot say what it is waiting for. A seat entry is held
+ * to the same rule and must name the binding it was sampled for when it claims to serve; a
+ * malformed seat list drops the whole record rather than serving a partial one.
  */
 function freshPresenceOf(raw: unknown): DaemonRootPresenceHealth | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -193,13 +197,57 @@ function freshPresenceOf(raw: unknown): DaemonRootPresenceHealth | null {
   if (typeof entry.checkedAt !== 'string' || entry.checkedAt === '') return null;
   if (!(entry.why === null || typeof entry.why === 'string')) return null;
   if (entry.state === 'pending' && (typeof entry.why !== 'string' || entry.why === '')) return null;
+  const seats = freshSeatsOf(entry.seats);
+  if (seats === INVALID_SEATS) return null;
   return {
     session: entry.session,
     state: entry.state,
     healthy: entry.healthy,
     checkedAt: entry.checkedAt,
     why: entry.why as string | null,
+    ...(seats === undefined ? {} : { seats }),
   };
+}
+
+const INVALID_SEATS = Symbol('invalid seats');
+
+/**
+ * The fresh per-seat answers, or `undefined` when the route carries none. An empty list is not
+ * the promised shape (the daemon omits the field for a hook-only route), and a seat may not be
+ * repeated. A serving seat must carry a valid binding, because that is the incarnation a reader
+ * fences; a pending seat may have none yet.
+ */
+function freshSeatsOf(
+  raw: unknown,
+): DaemonRootSeatPresenceHealth[] | undefined | typeof INVALID_SEATS {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0) return INVALID_SEATS;
+  const seats: DaemonRootSeatPresenceHealth[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return INVALID_SEATS;
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.seat !== 'string' || entry.seat === '') return INVALID_SEATS;
+    if (seen.has(entry.seat)) return INVALID_SEATS;
+    if (entry.state !== 'serving' && entry.state !== 'pending') return INVALID_SEATS;
+    if (typeof entry.healthy !== 'boolean') return INVALID_SEATS;
+    if ((entry.state === 'serving') !== entry.healthy) return INVALID_SEATS;
+    if (!(entry.binding === null || isPresenceBinding(entry.binding))) return INVALID_SEATS;
+    if (!(entry.why === null || typeof entry.why === 'string')) return INVALID_SEATS;
+    if (entry.state === 'pending' && (typeof entry.why !== 'string' || entry.why === '')) {
+      return INVALID_SEATS;
+    }
+    if (entry.state === 'serving' && entry.binding === null) return INVALID_SEATS;
+    seen.add(entry.seat);
+    seats.push({
+      seat: entry.seat,
+      state: entry.state,
+      healthy: entry.healthy,
+      binding: entry.binding as string | null,
+      why: entry.why as string | null,
+    });
+  }
+  return seats;
 }
 
 function runningFromState(state: DaemonState, socket: string, probe: DaemonProbe): DaemonHealth {

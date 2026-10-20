@@ -214,6 +214,50 @@ describe('the reading carries fresh presence by canonical root', () => {
     }]);
   });
 
+  test('a seat answer merges only when it carries the binding it was sampled for', async () => {
+    const home = scratchHome();
+    writeDaemonState(home, stateWithRoots(home, [ROOT]));
+    const withSeats = {
+      ...serving,
+      seats: [
+        { seat: 'worker-1', state: 'serving' as const, healthy: true, binding: 'prs_0123456789ab', why: null },
+        {
+          seat: 'crew-op', state: 'pending' as const, healthy: false, binding: null,
+          why: 'the runtime channel has not been sampled yet',
+        },
+      ],
+    };
+    await serve(home, true, { ...snapshot, roots: [{ root: ROOT, presence: withSeats }] });
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots[0]?.presence).toEqual(withSeats);
+  });
+
+  test('a malformed seat list drops the whole record instead of serving part of it', async () => {
+    const home = scratchHome();
+    const roots = ['/tmp/a', '/tmp/b', '/tmp/c', '/tmp/d', '/tmp/e'];
+    writeDaemonState(home, stateWithRoots(home, roots));
+    const good = {
+      seat: 'worker-1', state: 'pending' as const, healthy: false, binding: null, why: 'not sampled',
+    };
+    await serve(home, true, {
+      ...snapshot,
+      roots: [
+        // A serving seat without a binding names no incarnation to fence.
+        { root: '/tmp/a', presence: { ...serving, seats: [{ ...good, state: 'serving', healthy: true }] } },
+        // A pending seat must say what it is waiting for.
+        { root: '/tmp/b', presence: { ...serving, seats: [{ ...good, why: '' }] } },
+        // A binding is either the managed shape or absent.
+        { root: '/tmp/c', presence: { ...serving, seats: [{ ...good, binding: 'prs_zzzzzzzzzzzz' }] } },
+        // A seat may not be repeated, and an empty list is not the promised shape.
+        { root: '/tmp/d', presence: { ...serving, seats: [] } },
+        { root: '/tmp/e', presence: { ...serving, seats: [{ ...good }, { ...good }] } },
+      ],
+    });
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots.map((root) => root.root)).toEqual(roots);
+    expect(health.roots.every((root) => root.presence === undefined)).toBe(true);
+  });
+
   test('a pending answer keeps its why and is never healthy', async () => {
     const home = scratchHome();
     writeDaemonState(home, stateWithRoots(home, [ROOT]));
