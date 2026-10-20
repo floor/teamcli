@@ -178,6 +178,9 @@ export function presenceRecordOf(input: {
   const id = input.id ?? presenceId(input.ts);
   if (id === null || !PRESENCE_ID.test(id)) return null;
   if (!isPresenceTime(input.ts)) return null;
+  // The id is built from the event instant, so the two must agree even when a caller supplies
+  // an id: a replay keeps its bytes, and a reader can trust the id's embedded time.
+  if (id.slice(0, -9) !== input.ts) return null;
   if (typeof input.session !== 'string' || input.session === '') return null;
   if (typeof input.seat !== 'string' || input.seat === '') return null;
   if (!isPresenceBinding(input.binding)) return null;
@@ -212,6 +215,7 @@ function commonOf(value: Record<string, unknown>): PresenceRecord | string {
     return 'the record id is not <event time>-<8 lowercase hex>';
   }
   if (!isPresenceTime(value.ts)) return 'the record ts is not a UTC instant';
+  if (value.id.slice(0, -9) !== value.ts) return 'the record id does not embed its event time';
   if (typeof value.session !== 'string' || value.session === '') return 'the record names no session';
   if (typeof value.seat !== 'string' || value.seat === '') return 'the record names no seat';
   if (!isPresenceBinding(value.binding)) return 'the record binding is not prs_<12 lowercase hex>';
@@ -318,6 +322,11 @@ export function readPresenceReading(text: string): PresenceReadingRead {
     return { kind: 'bad', why: 'the projection state does not match its event' };
   }
   if (!isPresenceTime(value.since)) return { kind: 'bad', why: 'the projection since is not a UTC instant' };
+  // `since` is the event's own instant and the id embeds that same instant. A projection whose
+  // since is the ingest instant (or any other time) is half-read and refused whole.
+  if (value.id.slice(0, -9) !== value.since) {
+    return { kind: 'bad', why: 'the projection since is not the event time in its id' };
+  }
   const reading: PresenceReading = {
     v: PRESENCE_FORMAT,
     seq: value.seq,

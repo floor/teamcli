@@ -83,6 +83,16 @@ describe('the record a runtime writes', () => {
     expect(made!.id).toBe(id);
   });
 
+  test('an id that does not embed the record time is refused, so the id cannot lie', () => {
+    const other = '2026-10-01T10:00:09.000Z-deadbeef';
+    expect(presenceRecordOf({
+      ts: T0, session: SESSION, seat: SEAT, binding: BINDING, source: 'runtime-hook',
+      event: 'turn-start', id: other,
+    })).toBeNull();
+    expect(readPresenceRecord(JSON.stringify(record({ id: other }))).kind).toBe('bad');
+    expect('why' in readPresenceLogLine(JSON.stringify(line({ id: other })))).toBe(true);
+  });
+
   test('a binding is prs_ and twelve lowercase hex, minted fresh', () => {
     expect(isPresenceBinding(BINDING)).toBe(true);
     expect(isPresenceBinding('prs_0123456789AB')).toBe(false);

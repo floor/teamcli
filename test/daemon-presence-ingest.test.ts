@@ -364,6 +364,91 @@ describe('durable dedupe and recovery', () => {
     expect(recovered.ingested.map((line) => line.id)).toEqual([pending.id]);
     expect(spoolNames(world)).toEqual([]);
   });
+
+  test('an append whose bytes landed before fsync failed is not appended twice', async () => {
+    const world = makeWorld();
+    let attempts = 0;
+    const ingester = ingesterFor(world, {
+      append: async (path, line) => {
+        attempts += 1;
+        // The write reached the file; the failure is the sync after it. The bytes are durable
+        // in the log even though the writer could not report success.
+        writeFileSync(path, `${JSON.stringify(line)}\n`, { flag: 'a' });
+        if (attempts === 1) throw new Error('fsync failed after the bytes landed');
+      },
+    });
+    const staged = stage(world, 'turn-start', { ts: past(5) });
+    const first = await ingester.step();
+    expect(first.ingested).toEqual([]);
+    expect(first.errors.some((entry) => entry.why.includes('outcome is unknown'))).toBe(true);
+    expect(spoolNames(world)).toContain(`${staged.id}.json`);
+    expect(logLines(world).map((line) => line.id)).toEqual([staged.id]);
+
+    // The replay finds the id in the durable log: the spool file is consumed, no second line.
+    const recovered = await ingester.step();
+    expect(recovered.errors).toEqual([]);
+    expect(recovered.ingested).toEqual([]);
+    expect(logLines(world)).toHaveLength(1);
+    expect(logLines(world)[0]!.id).toBe(staged.id);
+    expect(spoolNames(world)).toEqual([]);
+    expect(await current(world)).toMatchObject({ id: staged.id, seq: 1, binding: BINDING });
+  });
+
+  test('a torn append is truncated, then the record is appended exactly once', async () => {
+    const world = makeWorld();
+    let attempts = 0;
+    const ingester = ingesterFor(world, {
+      append: async (path, line) => {
+        attempts += 1;
+        if (attempts === 1) {
+          // Half a line, no newline: the crash-mid-append shape.
+          writeFileSync(path, JSON.stringify(line).slice(0, 20), { flag: 'a' });
+          throw new Error('the write stopped half way');
+        }
+        writeFileSync(path, `${JSON.stringify(line)}\n`, { flag: 'a' });
+      },
+    });
+    const staged = stage(world, 'turn-start', { ts: past(5) });
+    const first = await ingester.step();
+    expect(first.ingested).toEqual([]);
+    expect(spoolNames(world)).toContain(`${staged.id}.json`);
+    const recovered = await ingester.step();
+    expect(recovered.repaired.some((entry) => entry.includes('truncated an incomplete'))).toBe(true);
+    expect(recovered.ingested.map((line) => line.id)).toEqual([staged.id]);
+    const lines = logLines(world);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.id).toBe(staged.id);
+    expect(lines[0]!.seq).toBe(1);
+    expect(spoolNames(world)).toEqual([]);
+  });
+
+  test('an uncertain append stops the seat batch; no later record is appended against the unknown tail', async () => {
+    const world = makeWorld();
+    let failNext = true;
+    const ingester = ingesterFor(world, {
+      append: async (path, line) => {
+        writeFileSync(path, `${JSON.stringify(line)}\n`, { flag: 'a' });
+        if (failNext) {
+          failNext = false;
+          throw new Error('the sync failed after the bytes landed');
+        }
+      },
+    });
+    const first = stage(world, 'turn-start', { ts: past(20) });
+    const second = stage(world, 'turn-end', { ts: past(10) });
+    const failed = await ingester.step();
+    expect(failed.ingested).toEqual([]);
+    expect(failed.pending).toBe(true);
+    expect(spoolNames(world).sort()).toEqual([`${first.id}.json`, `${second.id}.json`].sort());
+    // Only the attempted line is in the log; the second record was never committed against it.
+    expect(logLines(world).map((line) => line.id)).toEqual([first.id]);
+
+    const recovered = await ingester.step();
+    expect(recovered.ingested.map((line) => line.id)).toEqual([second.id]);
+    expect(logLines(world).map((line) => line.id)).toEqual([first.id, second.id]);
+    expect(logLines(world).map((line) => line.seq)).toEqual([1, 2]);
+    expect(spoolNames(world)).toEqual([]);
+  });
 });
 
 describe('the runtime incarnation binding', () => {
@@ -387,6 +472,55 @@ describe('the runtime incarnation binding', () => {
     const applied = await ingester.step();
     expect(applied.ingested.map((line) => line.id)).toEqual([fresh.id]);
     expect(await current(world)).toMatchObject({ state: 'working', binding: SUCCESSOR, seq: 2 });
+  });
+
+  test('a successor with an earlier clock is not gated by a predecessor event that sorts later', async () => {
+    const world = makeWorld({ [SEAT]: BINDING });
+    const ingester = ingesterFor(world);
+    // The predecessor's last event is two seconds old.
+    stage(world, 'turn-start', { ts: past(2), binding: BINDING });
+    await ingester.step();
+    expect(await current(world)).toMatchObject({ binding: BINDING, seq: 1 });
+
+    // The relaunch mints a successor whose clock is ten seconds behind that event. The order of
+    // the two incarnations is not comparable: the successor starts from its own projection.
+    writeSeats(world, { [SEAT]: SUCCESSOR });
+    const earlier = stage(world, 'turn-end', { ts: past(10), binding: SUCCESSOR });
+    const applied = await ingester.step();
+    expect(applied.ingested.map((line) => line.id)).toEqual([earlier.id]);
+    expect(applied.ingested[0]!.applied).toBe(true);
+    expect(applied.ingested[0]!.seq).toBe(2);
+    expect(await current(world)).toMatchObject({ id: earlier.id, state: 'idle', binding: SUCCESSOR, seq: 2 });
+
+    // A restart rebuilds the same projection: only the current binding's newest applied line.
+    await ingester.close();
+    const next = ingesterFor(world);
+    const restarted = await next.step();
+    expect(restarted.errors).toEqual([]);
+    expect(await current(world)).toMatchObject({ id: earlier.id, binding: SUCCESSOR, seq: 2 });
+  });
+
+  test('a restart before the successor emits keeps the predecessor projection as last-known', async () => {
+    const world = makeWorld({ [SEAT]: BINDING });
+    const ingester = ingesterFor(world);
+    const predecessor = stage(world, 'turn-start', { ts: past(20), binding: BINDING });
+    await ingester.step();
+    await ingester.close();
+
+    // The successor owns the seat but has not emitted an event: the old projection stays on
+    // disk as last-known (the reader sees its binding differ from the state), never as the
+    // successor's current reading and never with a fabricated line.
+    writeSeats(world, { [SEAT]: SUCCESSOR });
+    const next = ingesterFor(world);
+    const step = await next.step();
+    expect(step.ingested).toEqual([]);
+    expect(step.repaired).toEqual([]);
+    const read = await readPresenceCurrent(world.stateDir, SESSION, SEAT);
+    expect(read.kind).toBe('ok');
+    if (read.kind === 'ok') {
+      expect(read.value).toMatchObject({ id: predecessor.id, binding: BINDING, seq: 1 });
+      expect(read.value.binding).not.toBe(SUCCESSOR);
+    }
   });
 
   test('a seat with no current binding sets records aside instead of guessing', async () => {
@@ -437,17 +571,22 @@ describe('refusals', () => {
       source: 'runtime-hook', event: 'turn-start',
     };
     plant(world, 'broken.json', 'this is not json');
-    const unknownEvent = `${presenceId(past(29), nonce())!}.json`;
-    plant(world, unknownEvent, JSON.stringify({ ...base, id: unknownEvent.slice(0, -5), event: 'thinking' }));
-    const terminal = `${presenceId(past(28), nonce())!}.json`;
-    plant(world, terminal, JSON.stringify({ ...base, id: terminal.slice(0, -5), source: 'terminal-host' }));
-    const foreign = `${presenceId(past(27), nonce())!}.json`;
-    plant(world, foreign, JSON.stringify({ ...base, id: foreign.slice(0, -5), session: 'other-team' }));
-    const misnamedContentId = presenceId(past(26), nonce())!;
+    const unknownTs = past(29);
+    const unknownEvent = `${presenceId(unknownTs, nonce())!}.json`;
+    plant(world, unknownEvent, JSON.stringify({ ...base, ts: unknownTs, id: unknownEvent.slice(0, -5), event: 'thinking' }));
+    const terminalTs = past(28);
+    const terminal = `${presenceId(terminalTs, nonce())!}.json`;
+    plant(world, terminal, JSON.stringify({ ...base, ts: terminalTs, id: terminal.slice(0, -5), source: 'terminal-host' }));
+    const foreignTs = past(27);
+    const foreign = `${presenceId(foreignTs, nonce())!}.json`;
+    plant(world, foreign, JSON.stringify({ ...base, ts: foreignTs, id: foreign.slice(0, -5), session: 'other-team' }));
+    const misnamedTs = past(26);
+    const misnamedContentId = presenceId(misnamedTs, nonce())!;
     const misnamed = `${presenceId(past(25), nonce())!}.json`;
-    plant(world, misnamed, JSON.stringify({ ...base, id: misnamedContentId }));
-    const oversized = `${presenceId(past(24), nonce())!}.json`;
-    plant(world, oversized, JSON.stringify({ ...base, id: oversized.slice(0, -5), raw: 'x'.repeat(70 * 1024) }));
+    plant(world, misnamed, JSON.stringify({ ...base, ts: misnamedTs, id: misnamedContentId }));
+    const oversizedTs = past(24);
+    const oversized = `${presenceId(oversizedTs, nonce())!}.json`;
+    plant(world, oversized, JSON.stringify({ ...base, ts: oversizedTs, id: oversized.slice(0, -5), raw: 'x'.repeat(70 * 1024) }));
 
     const result = await ingester.step();
     const rejected = new Set(result.rejected.map((entry) => entry.why));

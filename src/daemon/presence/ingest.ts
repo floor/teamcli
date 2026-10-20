@@ -63,6 +63,9 @@ export type PresenceIngestInput = {
   maxRecords?: number;
   maxRecordBytes?: number;
   now?: () => Date;
+  /** The durable line writer. Production uses the fsync'd append above; a test replaces it to
+   *  stage the failure this module must survive: bytes that landed while fsync failed. */
+  append?: (path: string, line: PresenceLogLine) => Promise<void>;
 };
 
 export type PresenceCloseResult = { quiesced: true };
@@ -85,7 +88,14 @@ type SeatIndex = {
   retryAt: number;
   seq: number;
   seen: Set<string>;
+  /** The newest applied line for `currentBinding`, or null when that binding has none yet. */
   current: PresenceLogLine | null;
+  /** Which binding `current` belongs to. A successor launch moves it without a log reload. */
+  currentBinding: string | null;
+  selected: boolean;
+  /** The newest applied line per binding, from the whole log. Filtering by the current binding
+   *  keeps a predecessor's later-clocked event from gating a successor's projection. */
+  newest: Map<string, PresenceLogLine>;
   projectionDirty: boolean;
 };
 
@@ -178,6 +188,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
     throw new Error('presence ingester needs maxRecordBytes >= 256');
   }
   const now = input.now ?? (() => new Date());
+  const append = input.append ?? appendDurable;
   const stateDir = input.stateDir;
   const session = input.session;
   const indexes = new Map<string, SeatIndex>();
@@ -196,16 +207,21 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
     if (kept !== undefined) return kept;
     const made: SeatIndex = {
       loaded: false, faulted: null, faultReported: false, retryAt: 0,
-      seq: 0, seen: new Set(), current: null, projectionDirty: false,
+      seq: 0, seen: new Set(), current: null, currentBinding: null, selected: false,
+      newest: new Map(), projectionDirty: false,
     };
     indexes.set(seat, made);
     return made;
   }
 
-  // The state record is re-read only when its stat changes: one stat per seat per step, never a
-  // whole-file parse on every beat. A launch writes the successor binding into this file, so the
-  // first step after that write already sees it.
-  let bindingCache: { mtimeMs: number; size: number; seats: Map<string, string> } | null = null;
+  // The state record is re-read only when its identity changes: one stat per seat per batch
+  // (and one more before every commit), never a whole-file parse on every beat. `dev`+`ino`
+  // catch the atomic replace a launch performs, so a same-size write at the same timestamp
+  // cannot hide behind mtime+size alone; any content re-read is keyed by the full identity.
+  type BindingCache = {
+    dev: number; ino: number; mtimeMs: number; size: number; seats: Map<string, string>;
+  };
+  let bindingCache: BindingCache | null = null;
 
   /** The seat's current runtime incarnation, read from the managed state record. A missing state
    *  file or a missing field is "no binding" (fail closed to last-known); a malformed state is an
@@ -222,7 +238,8 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
       }
       return { kind: 'error', why: `the seat state is unreadable: ${messageOf(error)}` };
     }
-    if (bindingCache !== null && bindingCache.mtimeMs === info.mtimeMs && bindingCache.size === info.size) {
+    if (bindingCache !== null && bindingCache.dev === info.dev && bindingCache.ino === info.ino
+      && bindingCache.mtimeMs === info.mtimeMs && bindingCache.size === info.size) {
       return { kind: 'ok', binding: bindingCache.seats.get(seat) ?? null };
     }
     let text: string;
@@ -235,10 +252,12 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
     try {
       parsed = JSON.parse(text);
     } catch {
+      bindingCache = null;
       return { kind: 'error', why: 'the seat state is not JSON' };
     }
     const state = parsed as { format?: unknown; sessions?: unknown } | null;
     if (!state || typeof state !== 'object' || state.format !== 1 || !state.sessions || typeof state.sessions !== 'object') {
+      bindingCache = null;
       return { kind: 'error', why: 'the seat state is not a team state of format 1' };
     }
     const sessions = state.sessions as Record<string, unknown>;
@@ -253,8 +272,19 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
         if (isPresenceBinding(value)) found.set(name, value);
       }
     }
-    bindingCache = { mtimeMs: info.mtimeMs, size: info.size, seats: found };
+    bindingCache = { dev: info.dev, ino: info.ino, mtimeMs: info.mtimeMs, size: info.size, seats: found };
     return { kind: 'ok', binding: found.get(seat) ?? null };
+  }
+
+  /** Points the projection at one binding without touching id dedupe or the global seq. A
+   *  successor incarnation starts from its own newest line, even when a predecessor's event has
+   *  a later clock; with no line of its own yet there is no projection to serve. */
+  function selectBinding(index: SeatIndex, binding: string | null): void {
+    if (index.selected && binding === index.currentBinding) return;
+    index.selected = true;
+    index.currentBinding = binding;
+    index.current = binding === null ? null : index.newest.get(binding) ?? null;
+    index.projectionDirty = true;
   }
 
   async function moveAside(paths: PresencePaths, kind: 'rejected' | 'stale', source: string, name: string): Promise<void> {
@@ -372,8 +402,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
         }
       }
       return;
-    }
-    if (text !== null) {
+    }    if (text !== null) {
       const read = readPresenceReading(text);
       if (read.kind === 'ok' && sameReading(read.reading, current)) return;
     }
@@ -382,16 +411,46 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
     result.repaired.push(`${paths.root}: rebuilt the projection from the log`);
   }
 
-  /** Chunked log scan: builds the durable dedupe set, the last seq and the newest line, and
-   *  truncates an incomplete trailing line explicitly. A structurally corrupt line is a fault,
-   *  not something this process repairs. */
-  async function loadIndex(paths: PresencePaths, index: SeatIndex, result: PresenceIngestResult): Promise<void> {
+  /** Reconciles the selected projection. A current binding with no line of its own while the
+   *  log holds another incarnation's lines is not an orphan: the existing projection stays as
+   *  last-known, and the reader sees its binding differ from the state. An empty log still
+   *  removes a projection with nothing behind it. */
+  async function reconcileSelected(
+    paths: PresencePaths,
+    index: SeatIndex,
+    result: PresenceIngestResult,
+  ): Promise<void> {
+    if (index.current === null && index.seen.size > 0) return;
+    await reconcileProjection(paths, index.current, result);
+  }
+
+  /** Chunked log scan: rebuilds every id in the dedupe set, the last seq and the newest applied
+   *  line *per binding*, and truncates an incomplete trailing line explicitly. A structurally
+   *  corrupt line is a fault, not something this process repairs. The projection is then selected
+   *  for the binding this launch actually owns, never for a predecessor's later-clocked event. */
+  async function loadIndex(
+    paths: PresencePaths,
+    index: SeatIndex,
+    binding: string | null,
+    result: PresenceIngestResult,
+  ): Promise<void> {
+    // The scan rebuilds the view from the log: a reload after an uncertain append must not
+    // inherit a single id, seq or line from the batch that happened before it.
+    index.seen = new Set();
+    index.newest = new Map();
+    index.seq = 0;
+    index.current = null;
+    index.currentBinding = null;
+    index.selected = false;
+    index.projectionDirty = false;
     let handle;
     try {
       handle = await open(paths.log, 'r+');
     } catch (error) {
       if (codeOf(error) !== 'ENOENT') throw error;
-      await reconcileProjection(paths, null, result);
+      selectBinding(index, binding);
+      await reconcileSelected(paths, index, result);
+      index.projectionDirty = false;
       index.loaded = true;
       return;
     }
@@ -421,7 +480,10 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
           if (index.seen.has(line.id)) throw new PresenceLogFault(`the log repeats event id ${line.id}`);
           index.seen.add(line.id);
           index.seq = line.seq;
-          if (line.applied && (index.current === null || presenceNewer(line, index.current))) index.current = line;
+          if (line.applied) {
+            const known = index.newest.get(line.binding);
+            if (known === undefined || presenceNewer(line, known)) index.newest.set(line.binding, line);
+          }
           expectedSeq++;
           from = newline + 1;
         }
@@ -440,7 +502,9 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
     } finally {
       await handle.close();
     }
-    await reconcileProjection(paths, index.current, result);
+    selectBinding(index, binding);
+    await reconcileSelected(paths, index, result);
+    index.projectionDirty = false;
     index.loaded = true;
   }
 
@@ -539,15 +603,21 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
         .map((entry) => entry.name).sort();
       // The index loads even with an empty spool: a crash after consuming a record but before
       // writing `current.json` leaves the projection stale, and the next daemon must rebuild it
-      // from the log without waiting for a new event.
+      // from the log without waiting for a new event. The load selects the projection for the
+      // binding this launch owns, so a predecessor's log lines never seed a successor's state.
       const index = indexFor(seat);
       if (!index.loaded) {
         if (index.retryAt > now().getTime()) {
           result.pending = result.pending || names.length > 0;
           continue;
         }
+        const beforeLoad = await bindingFor(seat);
+        if (beforeLoad.kind === 'error') {
+          result.errors.push({ seat, id: '', why: beforeLoad.why });
+          continue;
+        }
         try {
-          await loadIndex(paths, index, result);
+          await loadIndex(paths, index, beforeLoad.binding, result);
         } catch (error) {
           if (error instanceof PresenceLogFault) {
             // Reported on the step that found it, not only on a later beat: the channel turns
@@ -561,6 +631,9 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
             index.loaded = false;
             index.seq = 0;
             index.current = null;
+            index.currentBinding = null;
+            index.selected = false;
+            index.newest = new Map();
             index.seen = new Set();
             index.retryAt = now().getTime() + PRESENCE_LOAD_RETRY_MS;
             result.errors.push({ seat, id: '', why: `the presence log could not be loaded: ${messageOf(error)}` });
@@ -576,61 +649,104 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
         }
         continue;
       }
-      if (names.length === 0) continue;
-      if (budget <= 0) {
-        result.pending = true;
-        break;
-      }
-      const take = names.slice(0, budget);
-      if (take.length < names.length) result.pending = true;
-      const binding = await bindingFor(seat);
-      if (binding.kind === 'error') {
-        result.errors.push({ seat, id: '', why: binding.why });
-        continue;
-      }
-      const candidates: PresenceRecord[] = [];
-      for (const name of take) {
-        const candidate = await readCandidate(paths, name, seat, binding.binding, result);
-        if (candidate !== null) candidates.push(candidate);
-      }
-      candidates.sort(byEventOrder);
-      for (const record of candidates) {
-        if (closing) {
-          result.closed = true;
+      if (names.length > 0) {
+        if (budget <= 0) {
           result.pending = true;
           break;
         }
-        budget--;
-        if (index.seen.has(record.id)) {
+        const take = names.slice(0, budget);
+        if (take.length < names.length) result.pending = true;
+        // One identity check per batch; the binding is checked again before every commit.
+        const binding = await bindingFor(seat);
+        if (binding.kind === 'error') {
+          result.errors.push({ seat, id: '', why: binding.why });
+          continue;
+        }
+        selectBinding(index, binding.binding);
+        const candidates: PresenceRecord[] = [];
+        for (const name of take) {
+          const candidate = await readCandidate(paths, name, seat, binding.binding, result);
+          if (candidate !== null) candidates.push(candidate);
+        }
+        candidates.sort(byEventOrder);
+        for (const record of candidates) {
+          if (closing) {
+            result.closed = true;
+            result.pending = true;
+            break;
+          }
+          budget--;
+          if (index.seen.has(record.id)) {
+            await consume(join(paths.spool, `${record.id}.json`), seat, record.id, result);
+            continue;
+          }
+          // Revalidate the incarnation immediately before the commit: a launch that landed
+          // while this batch was being read may have minted a successor, and no cached read
+          // proves which runtime is current. A predecessor record is then set aside, never
+          // applied to the successor.
+          const beforeCommit = await bindingFor(seat);
+          if (beforeCommit.kind === 'error') {
+            result.errors.push({ seat, id: record.id, why: beforeCommit.why });
+            result.pending = true;
+            break;
+          }
+          if (!index.selected || beforeCommit.binding !== index.currentBinding) {
+            selectBinding(index, beforeCommit.binding);
+          }
+          if (beforeCommit.binding === null || record.binding !== beforeCommit.binding) {
+            await refuse(
+              paths, 'stale', join(paths.spool, `${record.id}.json`), `${record.id}.json`, seat, record.id,
+              beforeCommit.binding === null
+                ? 'the seat has no current runtime binding'
+                : 'the record is from a predecessor runtime incarnation',
+              result,
+            );
+            // The remaining candidates were read under the previous binding; the next step
+            // re-lists the spool under the successor.
+            result.pending = true;
+            break;
+          }
+          const applied = index.current === null || presenceNewer(record, index.current);
+          const line: PresenceLogLine = {
+            ...record,
+            seq: index.seq + 1,
+            observedAt: now().toISOString(),
+            state: PRESENCE_STATE_OF[record.event],
+            applied,
+          };
+          try {
+            await append(paths.log, line);
+          } catch (error) {
+            // The append outcome is unknown: the bytes may have landed (a write can succeed
+            // while fsync or close fails) or a torn line may be trailing. Never append the next
+            // line against an unknown tail. The spool file stays, the index is dropped, and the
+            // next step rebuilds it from the durable log before appending anything; if the line
+            // did land, dedupe by id consumes the replay without a second line.
+            result.errors.push({ seat, id: record.id, why: `the log append failed; its outcome is unknown: ${messageOf(error)}` });
+            index.loaded = false;
+            index.retryAt = 0;
+            result.pending = true;
+            break;
+          }
+          index.seen.add(record.id);
+          index.seq = line.seq;
+          result.ingested.push(line);
+          if (applied) {
+            const known = index.newest.get(line.binding);
+            if (known === undefined || presenceNewer(line, known)) index.newest.set(line.binding, line);
+            if (line.binding === index.currentBinding) {
+              index.current = line;
+              index.projectionDirty = true;
+            }
+          }
           await consume(join(paths.spool, `${record.id}.json`), seat, record.id, result);
-          continue;
         }
-        const applied = index.current === null || presenceNewer(record, index.current);
-        const line: PresenceLogLine = {
-          ...record,
-          seq: index.seq + 1,
-          observedAt: now().toISOString(),
-          state: PRESENCE_STATE_OF[record.event],
-          applied,
-        };
-        try {
-          await appendDurable(paths.log, line);
-        } catch (error) {
-          result.errors.push({ seat, id: record.id, why: `the log append failed: ${messageOf(error)}` });
-          continue;
-        }
-        index.seen.add(record.id);
-        index.seq = line.seq;
-        result.ingested.push(line);
-        if (applied) {
-          index.current = line;
-          index.projectionDirty = true;
-        }
-        await consume(join(paths.spool, `${record.id}.json`), seat, record.id, result);
       }
-      if (index.projectionDirty && index.current !== null) {
+      if (index.projectionDirty) {
         try {
-          await writeReading(paths.current, index.current);
+          // Writes the current binding's newest applied line. When that binding has no line yet,
+          // a predecessor's projection stays as last-known rather than being served as current.
+          await reconcileSelected(paths, index, result);
           index.projectionDirty = false;
         } catch (error) {
           result.errors.push({ seat, id: '', why: `the projection could not be written: ${messageOf(error)}` });
