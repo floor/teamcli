@@ -2,7 +2,7 @@
 // injectable stand-ins the other command tests use: no herdr session, no user-level store.
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -4541,6 +4541,40 @@ scene('send.sent-unconfirmed', async (place) => {
   // never has time to land and the leg ends `sent (unconfirmed)` — exit 0, nothing typed.
   liveInbox(place);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: sent (unconfirmed) (mcp-inbox, 0 ms)');
+});
+scene('send.queued', async (place) => {
+  write(place, TEAM);
+  // A daemon that answers `queued`: the receiver is busy, the signed copy is stored, and the
+  // sender is answered now. The id on the line is the one the daemon will deliver under.
+  const id = '55555555-5555-4555-8555-555555555555';
+  const sock = join(place.base, 'daemon.sock');
+  const server = createServer((socket) => {
+    socket.on('data', () => {
+      socket.end(`${JSON.stringify({
+        v: 1,
+        ok: true,
+        id,
+        seat: 'lead',
+        outcome: 'queued',
+        status: 'receiver busy',
+        detail: 'lead: queued (receiver busy)',
+      })}\n`);
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(sock, resolve);
+  });
+  try {
+    const host = sendHost(place);
+    host.daemonSocket = sock;
+    return show(await sent(place, ['lead', 'hello'], owner, host), `lead: queued (receiver busy) (typed, 0 ms; id ${id})`);
+  } finally {
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  }
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
