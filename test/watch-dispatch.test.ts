@@ -706,7 +706,7 @@ describe('a durable episode claim', () => {
     expect(readState(join(root, '.agents')).sessions.crew?.idle_claims?.['worker-1']).toBeDefined();
   });
 
-  test('a second claim of the same stamp publishes a notice a reader can still read', async () => {
+  test('a second claim of the same stamp publishes a notice the receipt-aware unread check reports', async () => {
     queue([{ id: 't1', title: 'First' }]);
     let calls = 0;
     const push: WorkPush = async () => {
@@ -723,9 +723,10 @@ describe('a durable episode claim', () => {
     expect(recordsOnly(leadDir)).toHaveLength(2);
     expect(recordsOnly(mainDir)).toHaveLength(2);
 
-    // The lead consumes worker-1's notice through the real read gate: a signed read receipt
-    // beside the record, exactly as the inbox writes one. From now on that id is served forever,
-    // file or no file.
+    // The lead's read is on record in the shape the inbox's read gate writes: a signed receipt
+    // beside the record. This proof is receipt-aware (`listUnacked`, the same check the inbox
+    // applies), not the full reader path — the actual reader is the integration's proof. From
+    // now on that id is served, file or no file.
     const recordOf = (dir: string, needle: string): { id: string; path: string } => {
       for (const name of recordsOnly(dir)) {
         const path = join(dir, name);
