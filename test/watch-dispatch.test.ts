@@ -18,6 +18,7 @@ import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import type { HostedLoop } from '../src/watch/hosted.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -1023,6 +1024,48 @@ describe('the watch seam', () => {
     }));
     expect(code).toBe(0);
     expect(pushed).toEqual([]);
+  });
+
+  test('a tracker team with no broker reading holds instead of dispatching', async () => {
+    // Broker hosting off (the default): there is no reading to count, so the pass neither picks
+    // nor announces anything. Held is not empty: no fallback record is written and nobody is typed at.
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', linearFile()], io, sources({
+      wait: async () => false,
+      pushWork: async (request) => {
+        pushed.push(request);
+        return { ok: true, outcome: 'typed (unconfirmed)' };
+      },
+    }));
+    expect(code).toBe(0);
+    expect(pushed).toEqual([]);
+    expect(typed).toEqual([]);
+    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(0);
+  });
+
+  test('a hosted watch with no direct route never asks the broker', async () => {
+    // The daemon prefetches only for a pass it could dispatch from. Before a sender is wired the
+    // hosted watch dispatches nothing, so it opens no reading it could not act on.
+    const linear = linearFile();
+    writeFileSync(file, readFileSync(linear, 'utf8'));
+    const asked: string[] = [];
+    const brokerWork: BrokerWorkSource = async () => {
+      asked.push('asked');
+      return null;
+    };
+    const hosted: HostedLoop = {
+      signal: new AbortController().signal,
+      wait: async () => false,
+      cycled: () => {},
+      standby: () => {},
+    };
+    const code = await runWatch([], testIo(dir, { kind: 'owner' }), sources({
+      wait: async () => false,
+      brokerWork,
+      hosted,
+    }));
+    expect(code).toBe(0);
+    expect(asked).toEqual([]);
   });
 });
 
