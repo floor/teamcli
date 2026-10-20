@@ -152,6 +152,34 @@ export function socketSkipReason(
   return inboundSkipReason(policy);
 }
 
+/**
+ * Precise diagnostic reason why a Claude receiver's cross-session socket is skipped or refused,
+ * distinguishing team-file `inbound` omission/hold/refuse, generated hook settings without
+ * `crossSessionInbound`, and human-launched / wrapper launches without `--settings` (where owner
+ * CLI settings under `~/.claude` are never read).
+ */
+export function preciseSocketSkipReason(
+  teamWord: CrossSessionInbound | undefined,
+  declaration: InboundDeclaration,
+): string {
+  if (teamWord === 'hold' || teamWord === 'refuse') {
+    return `the receiving seat's team file declares inbound ${teamWord}`;
+  }
+  if (teamWord !== 'accept') {
+    return "the receiving seat's team file does not declare inbound accept";
+  }
+  if (declaration.policy === 'hold') {
+    return inboundSkipReason('hold');
+  }
+  if (declaration.policy === 'refuse') {
+    return inboundSkipReason('refuse');
+  }
+  if (declaration.source !== null) {
+    return `the receiving Claude session does not declare crossSessionInbound accept in its launch-effective settings (${declaration.source}); owner CLI settings are not read`;
+  }
+  return 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)';
+}
+
 /** The mark a held frame leaves: when the box held it, and the declaration in force then. */
 export type HeldSocket = Readonly<{ at: string; declaredAt: number | null; source: string | null }>;
 

@@ -34,6 +34,7 @@ import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, t
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
+import { claimBindingIn, receiptHeld } from '../mcp/inbox.ts';
 import { profileFor } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
@@ -573,6 +574,12 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     if (!queue) return;
     while (queue.length > 0) {
       const item = queue.shift()!;
+      let settled = false;
+      const resolveOnce = (res: DaemonSendResponse): void => {
+        if (settled) return;
+        settled = true;
+        item.resolve(res);
+      };
       try {
         const response = await executeQueuedSend(
           input.dir,
@@ -585,10 +592,11 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
           input.presenceChannelHealthy,
           item.queued === true,
           () => closed,
+          resolveOnce,
         );
-        item.resolve(response);
+        resolveOnce(response);
       } catch {
-        item.resolve({
+        resolveOnce({
           v: 1,
           ok: false,
           id: item.request.id ?? null,
@@ -662,6 +670,18 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: the pane is a human's, and nothing is typed into it`,
       });
     }
+    // A compose seat (such as Jules) has no queued daemon leg and is driven through its CLI's
+    // own screens by `team send` directly; refuse before any queue acceptance.
+    if (profileFor(configured.cli)?.compose != null) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName} runs ${configured.cli}: its brief is typed through the CLI's own screens, which this daemon does not drive; nothing was sent`,
+      });
+    }
     let queue = queues.get(seatName);
     if (!queue) {
       queue = [];
@@ -689,28 +709,53 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         }
       });
     }
-    // The receiver is busy: the signed copy was staged before the dial, the message takes one
-    // place in this seat's FIFO queue, and the sender is answered at once with the id and the
-    // reason. The delivery is the worker's, after the seat frees; its answer has no sender to
-    // return to, so it resolves this item's promise to nobody and writes the history line as
-    // every other ending does.
+    // The receiver is busy: stage the signed copy (create-or-match) in `<storeDir>/drops/<session>/<seat>/<id>`
+    // BEFORE answering `queued`, so a conflicting holder at the id still refuses with the held
+    // file untouched and `queued` means the durable copy is stored in the daemon's drop folder.
     const queuedId = request.id ?? randomUUID();
-    const accepted: DaemonSendResponse = {
-      v: 1,
-      ok: true,
-      id: queuedId,
-      seat: seatName,
-      outcome: 'queued',
-      status: 'receiver busy',
-      detail: `${seatName}: queued (receiver busy): ${busy}; the signed copy is stored and delivery follows when the seat is free`,
-    };
-    logLine(input.dir, 'send', request.from, `${seatName}: queued (receiver busy) (${busy}; id ${queuedId})`, host.now());
-    queue.push({ request: { ...request, id: queuedId }, resolve: () => {}, queued: true });
-    if (!activeWorkers.has(seatName)) {
-      const worker = drainSeat(seatName);
-      activeWorkers.set(seatName, worker);
+    const dropLadder = ensureLadder(host.home, store, ['drops', input.team.session, seatName]);
+    if (!dropLadder.ok) {
+      return Promise.resolve({
+        v: 1,
+        ok: false,
+        id: null,
+        seat: seatName,
+        outcome: 'refused',
+        detail: `${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`,
+      });
     }
-    return Promise.resolve(accepted);
+    return relayStage(
+      { dir: dropLadder.leaf, name: queuedId },
+      { id: queuedId, record: request.body },
+      { now: host.now },
+    ).then((staged): DaemonSendResponse => {
+      if (staged.outcome === 'refused') {
+        return {
+          v: 1,
+          ok: false,
+          id: null,
+          seat: seatName,
+          outcome: 'refused',
+          detail: `${seatName}: the drop file could not be written; nothing was typed`,
+        };
+      }
+      const accepted: DaemonSendResponse = {
+        v: 1,
+        ok: true,
+        id: queuedId,
+        seat: seatName,
+        outcome: 'queued',
+        status: 'receiver busy',
+        detail: `${seatName}: queued (receiver busy): ${busy}; the signed copy is stored and delivery follows when the seat is free`,
+      };
+      logLine(input.dir, 'send', request.from, `${seatName}: queued (receiver busy) (${busy}; id ${queuedId})`, host.now());
+      queue.push({ request: { ...request, id: queuedId }, resolve: () => {}, queued: true });
+      if (!activeWorkers.has(seatName)) {
+        const worker = drainSeat(seatName);
+        activeWorkers.set(seatName, worker);
+      }
+      return accepted;
+    });
   };
 
   // One dispatcher for this root: the socket server's `send` branch and the returned handle
@@ -911,6 +956,7 @@ async function executeQueuedSend(
    *  request's own, and stop waiting when the daemon closes (the drop stays on disk). */
   queued = false,
   stopping: () => boolean = () => false,
+  onQueuedAtDelivery?: (response: DaemonSendResponse) => void,
 ): Promise<DaemonSendResponse> {
   const seatName = request.to;
   const from = request.from;
@@ -1108,35 +1154,52 @@ async function executeQueuedSend(
   // Bounded wait loop: wait for `acquireSeatLock` and for the seat to finish any running turn (`working`).
   // A queued item was already answered at acceptance, so its wait ends only when the seat is
   // free or the daemon closes: a held line it could never show the sender would be a silent
-  // failure, and the drop file is the durable copy either way.
-  const deadline = queued ? Number.POSITIVE_INFINITY : Date.now() + waitMs;
+  // failure, and the drop file is the durable copy either way. A non-queued item that reaches
+  // delivery and finds the recipient seat lock held by another live command transitions to
+  // `queued (receiver busy)` under the same `msgId`, answers the caller immediately without
+  // claiming `delivered`, and continues waiting in the worker until the lock releases.
+  let isQueued = queued;
+  let deadline = isQueued ? Number.POSITIVE_INFINITY : Date.now() + waitMs;
   let lock: { release(): void } | null = null;
 
   try {
     for (;;) {
-      if (queued && stopping()) {
+      if (isQueued && stopping()) {
         return recordHeld(`the daemon closed before the seat was free; the drop file is at ${dropPath}`);
       }
-      const remaining = Math.max(0, deadline - Date.now());
       // A queued item waits without its own deadline, so it asks for the seat in slices and
-      // re-checks the close between them; a waiting send keeps the daemon's own deadline.
+      // re-checks the close between them; a non-queued item checks the lock immediately (after
+      // reclaiming any dead holder PID) and transitions to `queued` if a live command holds it.
       const acquired = await acquireSeatLockWithRetry(
         dir,
         team.session,
         seatName,
-        queued ? Math.max(pollMs, 1_000) : remaining,
+        isQueued ? Math.max(pollMs, 1_000) : 0,
         pollMs,
         (ms) => host.native.wait(ms),
         alive,
       );
       if (!acquired.ok) {
-        if (queued) {
-          if (stopping()) {
-            return recordHeld(`the daemon closed before the seat was free; the drop file is at ${dropPath}`);
-          }
-          continue;
+        if (stopping()) {
+          return recordHeld(`the daemon closed before the seat was free; the drop file is at ${dropPath}`);
         }
-        return recordHeld(`another command holds the seat (pid ${String(acquired.held)}); the drop file is at ${dropPath}`);
+        if (!isQueued) {
+          isQueued = true;
+          deadline = Number.POSITIVE_INFINITY;
+          const busy = `another command holds the seat (pid ${String(acquired.held)})`;
+          logLine(dir, 'send', from, `${seatName}: queued (receiver busy) (${busy}; id ${msgId})`, host.now());
+          onQueuedAtDelivery?.({
+            v: 1,
+            ok: true,
+            id: msgId,
+            seat: seatName,
+            outcome: 'queued',
+            status: 'receiver busy',
+            detail: `${seatName}: queued (receiver busy): ${busy}; the signed copy is stored and delivery follows when the seat is free`,
+          });
+          await host.native.wait(pollMs);
+        }
+        continue;
       }
       lock = acquired;
 
@@ -1196,10 +1259,58 @@ async function executeQueuedSend(
       break;
     }
 
+    const projectDropDir = join(dir, 'send-drops', team.session, seatName);
+    const hasVerifiedReceipt = (): boolean => {
+      const context = { to: seatName, root, session: team.session };
+      const binding = claimBindingIn(root, team.session, seatName, msgId);
+      return (
+        receiptHeld(projectDropDir, msgId, context, host.home, binding)
+        || receiptHeld(stateDropDir, msgId, context, host.home, binding)
+      );
+    };
+
+    // If the receiving seat already read the staged record and wrote its verified `<msgId>.read.json`
+    // receipt while holding the lock, do not type a duplicate trigger: record `delivered (read)`
+    // once under the preserved `msgId`.
+    if (hasVerifiedReceipt()) {
+      logLine(
+        dir,
+        'send',
+        who,
+        `${seatName}: delivered (read) (drop ${String(body.length)} characters, typed, receipt)`,
+        host.now(),
+      );
+      appendHistory(team.project, root, host.home, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        ...sentAs,
+        body,
+        id: msgId,
+        outcome: 'delivered (read)',
+        ms: Date.now() - startedAt,
+        via: 'typed',
+        failed: request.failed,
+      });
+      return {
+        v: 1,
+        ok: true,
+        id: msgId,
+        seat: seatName,
+        outcome: 'delivered',
+        status: 'idle',
+        evidence: 'taken',
+        drop_path: dropPath,
+      };
+    }
+
     // The last mile is the one `team send` itself takes: the box read with its styling, the line
     // typed, and a success only once the trigger has left the box and the seat is working. That
     // success is a trigger sent; the caller words it `sent (unconfirmed)` until a receipt comes.
-    const result = await deliverTrigger(bindPane(host.native, team.session), pane, trigger, configured.cli);
+    const result = await deliverTrigger(bindPane(host.native, team.session), pane, trigger, configured.cli, {
+      receipt: hasVerifiedReceipt,
+      dropPath,
+    });
     const where = `the drop file is at ${dropPath}`;
     // The draft's receipt travels with every exit that moved an unsent text: the caller, the log
     // line and the history entry all say where the owner's text went.
@@ -1238,6 +1349,39 @@ async function executeQueuedSend(
       };
     }
     const submittedStatus = result.status ?? 'working';
+    if (result.evidence === 'receipt' || (result.evidence === 'taken' && hasVerifiedReceipt())) {
+      logLine(
+        dir,
+        'send',
+        who,
+        `${seatName}: delivered (read) (drop ${String(body.length)} characters, typed, receipt${draft === undefined ? '' : `; ${draft}`})`,
+        host.now(),
+      );
+      appendHistory(team.project, root, host.home, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        ...sentAs,
+        body,
+        id: msgId,
+        outcome: 'delivered (read)',
+        ...(draft === undefined ? {} : { note: draft }),
+        ms: Date.now() - startedAt,
+        via: 'typed',
+        failed: request.failed,
+      });
+      return {
+        v: 1,
+        ok: true,
+        id: msgId,
+        seat: seatName,
+        outcome: 'delivered',
+        status: submittedStatus,
+        evidence: 'taken',
+        ...(draft === undefined ? {} : { draft }),
+        drop_path: dropPath,
+      };
+    }
     const taken = result.evidence === 'taken';
     // A trigger the seat took is a trigger sent, never a message read: no signed receipt has
     // come back. The note says so in every typed success, whatever evidence showed the take.

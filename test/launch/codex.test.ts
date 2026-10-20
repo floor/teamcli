@@ -169,6 +169,25 @@ describe('Codex launch and captured screens', () => {
     expect(readScreen('codex', vlist(latest('permission'))).kind).toBe('unknown');
     expect(classifyComposer('codex', vlist(latest('permission')).split('\n')).kind).toBe('unknown');
   });
+  test('the idle hint with its context shown used reads idle; near-matches stay non-ready', () => {
+    // `restart`'s ready detector classifies a pane with `readScreen`. A seat was up at
+    // `› Ask Codex to do anything` with 100% context and six restarts still said it did not
+    // reach a ready prompt. 0.161.0 draws the context either way — the installed binary's own
+    // strings pair `Context ` `% left` and `Context ` `% used`, beside the status-surface ids
+    // `context-remaining` and `context-used` — and the used row read `unknown`. The fixtures
+    // are constructed from idle-hint.txt (see that folder's README); each near-match below
+    // must stay one the launch does not type into.
+    const latest = (name: string) => readFileSync(new URL(`../fixtures/codex/0.161.0/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('codex', latest('ready-context-used')).kind).toBe('idle');
+    expect(classifyComposer('codex', latest('ready-context-used').split('\n')).kind).toBe('idle');
+    // A launch that draws no chrome row leaves the status row last.
+    expect(readScreen('codex', latest('ready-context-used-bare')).kind).toBe('idle');
+    // Text after the prompt is not ready, and the seat's own row under a status-shaped row
+    // means that row is not the composer's.
+    expect(readScreen('codex', latest('near-context-used-typed')).kind).toBe('unsent');
+    expect(readScreen('codex', latest('near-context-used-follower')).kind).toBe('unknown');
+    expect(readScreen('codex', latest('near-context-used-nostatus')).kind).toBe('unknown');
+  });
   test('a dialog above the status row and its chrome row is still the dialog', () => {
     // Constructed from the captures: permission.txt's dialog with idle-hint.txt's last two
     // lines (the status row and its chrome row) under it. Read before the mode changed:

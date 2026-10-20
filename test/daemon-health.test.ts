@@ -85,7 +85,7 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
-describe('one machine daemon: protocol v1 is health only and fails closed', () => {
+describe('one machine daemon: protocol frames fail closed', () => {
   test('health is the one supported op; a mutating op is auth-unsupported and an unknown op is unsupported', () => {
     expect(parseDaemonRequest(JSON.stringify({ v: 1, id: 'a', op: 'health' }))).toMatchObject({ ok: true });
     const send = parseDaemonRequest(JSON.stringify({ v: 1, id: 'b', op: 'send', scope: { root: '/tmp/x', team: 't', seat: 's', session: 'sx', agent: 'agt_1' } }));
@@ -103,7 +103,8 @@ describe('one machine daemon: protocol v1 is health only and fails closed', () =
 
   test('a bad frame names its error and never reaches a handler', () => {
     expect(parseDaemonRequest('not json')).toMatchObject({ ok: false, error: { code: 'daemon.bad-frame' } });
-    expect(parseDaemonRequest(JSON.stringify({ v: 2, id: 'a', op: 'health' }))).toMatchObject({ ok: false, error: { code: 'daemon.bad-frame' } });
+    expect(parseDaemonRequest(JSON.stringify({ v: 2, id: 'a', op: 'health' }))).toMatchObject({ ok: true });
+    expect(parseDaemonRequest(JSON.stringify({ v: 3, id: 'a', op: 'health' }))).toMatchObject({ ok: false, error: { code: 'daemon.bad-frame' } });
     expect(parseDaemonRequest(JSON.stringify({ v: 1, id: '', op: 'health' }))).toMatchObject({ ok: false, error: { code: 'daemon.bad-frame' } });
     expect(parseDaemonRequest(JSON.stringify({ v: 1, id: 'a', op: '' }))).toMatchObject({ ok: false, error: { code: 'daemon.bad-frame' } });
     expect(parseDaemonRequest(JSON.stringify({ v: 1, id: 'a', op: 'health', scope: { root: 7 } }))).toMatchObject({

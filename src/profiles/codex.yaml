@@ -162,11 +162,15 @@ screen:
     status_line: '^\s+GPT-[0-9][\w.-]*\s+[^·]*·'
     # 0.161.0 at 54 columns wraps the status row: `weekly 9` stays on the status line and
     # the next line is the ellipsis alone. A status line that already holds `…`, an `L:`
-    # quota, or that ends `% left` keeps the last-line reading. The wrap is the status
-    # row only when the line under it is that ellipsis and nothing follows it.
+    # quota, or that ends `% left` keeps the last-line reading, and so does one that ends
+    # `% used`: 0.161.0 draws the context either way — `Context 100% left` or
+    # `Context 100% used` are both its own status surfaces (`context-remaining` and
+    # `context-used`) — and a seat at its idle prompt with the used figure was read
+    # `unknown`, so `restart` called the already-fresh seat not ready. The wrap is the
+    # status row only when the line under it is that ellipsis and nothing follows it.
     status_below:
       line: '^…\s*$'
-      except: '…|L:|% left$'
+      except: '…|L:|% (?:left|used)$'
     # The pane's own row under the status line, and the whole of what may stand there: the
     # captures draw `← for agents · ? for shortcuts` (0.161.0/idle-hint.txt, working.txt), and
     # the same hint carries the account's warning on it — `? for shortcuts … ⚠ N warning · f2 to

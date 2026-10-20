@@ -21,6 +21,7 @@ import {
 } from '../caller.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
+import type { DaemonNextInput, DaemonNextOutcome } from '../daemon/next-client.ts';
 import type { Command, Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
@@ -28,6 +29,7 @@ import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
 import { claimLocal, releaseLocal } from '../tasks/lease.ts';
+import { order, takeable } from '../tasks/select.ts';
 import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
 import { pauseText, readState, type State } from '../state.ts';
 import { queuedSwap, swapLine } from '../swap/queue.ts';
@@ -55,6 +57,10 @@ export type NextSources = {
    *  own wait has. Injected the way the watch's sleep is: a test steps a virtual clock through
    *  it and never sleeps. The shipped wait is `waitOrStop`. */
   wait?: (seconds: number) => Promise<boolean>;
+  /** The machine daemon's next proxy. Absent, this command serves the source itself, byte for
+   *  byte as before; present, one request replaces the source read and the claim, and the daemon
+   *  applies its own caller, pause, swap and source gates after verifying the same claim. */
+  daemonNext?: (input: DaemonNextInput) => Promise<DaemonNextOutcome>;
 };
 
 /** The one run's output state: the context line's words, whether `--json` asked for the one
@@ -193,10 +199,7 @@ async function pass(
     const standing = state.pause;
     if (standing !== undefined) {
       const message = `the team is paused (${pauseText(standing)}); nothing new is claimed until \`team resume\``;
-      if (emit.json) writeJsonError(io, 'next.paused', message, 'team resume');
-      else io.stderr(`team next: ${message}\n`);
-      // exit: next.paused
-      return 1;
+      return pausedAnswer(io, message, 'team resume', emit.json);
     }
   }
   // The seat gate runs before either source, and so does the queue: a seat that waits on a swap
@@ -208,10 +211,10 @@ async function pass(
   if (waiting !== null) {
     const now = (sources.now ?? Date.now)();
     const message = `${placed.seat} waits on a swap: ${swapLine(placed.seat, waiting, new Date(now))}; nothing new is claimed until it runs or \`team swap cancel ${placed.seat}\``;
-    if (emit.json) writeJsonError(io, 'next.swap', message, `team swap cancel ${placed.seat}`);
-    else io.stderr(`team next: ${message}\n`);
-    // exit: next.swap
-    return 1;
+    return swapAnswer(io, message, `team swap cancel ${placed.seat}`, emit.json);
+  }
+  if (sources.daemonNext !== undefined) {
+    return nextViaDaemon(io, loaded, sources.daemonNext, mine, release, speak, emit, hold, placed);
   }
   if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold, placed);
   const registry = sources.registry ?? fileRegistry;
@@ -291,6 +294,92 @@ async function nextFromBroker(
   return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, emit, hold);
 }
 
+/** The daemon proxy's transport failures. The source being unavailable keeps the command's
+ *  existing `next.broker` exit; a daemon answer carries its own id and repair instead. */
+const DAEMON_UNAVAILABLE = 'the team daemon is not running; nothing is claimed';
+const DAEMON_WRONG_ANSWER = 'the team daemon\'s answer is not one this build knows; the owner restarts it';
+const DAEMON_DEADLINE = 'the team daemon accepted the request and did not answer; nothing is claimed';
+
+/**
+ * The proxied take: the local gates have already run, and one request now stands where the
+ * source read and the claim stood. The answer is the daemon's own — its success prints through
+ * the same record, release and empty printers, and its refusal prints through the same exit its
+ * code names, so a proxied run and a direct run cannot drift in bytes or exits.
+ */
+async function nextViaDaemon(
+  io: Io,
+  loaded: { team: TeamFile; root: string },
+  proxy: (input: DaemonNextInput) => Promise<DaemonNextOutcome>,
+  mine: boolean,
+  release: boolean,
+  speak: boolean,
+  emit: Emit,
+  hold: Hold | undefined,
+  placed: { seat: string; pane: string },
+): Promise<number> {
+  let outcome: DaemonNextOutcome;
+  try {
+    outcome = await proxy({
+      root: loaded.root,
+      team: loaded.team.project,
+      session: loaded.team.session,
+      caller: { seat: placed.seat, pane: placed.pane },
+      action: release ? 'release' : 'claim',
+      mine,
+    });
+  } catch (error) {
+    return daemonRefuse(io, plainText(error instanceof Error ? error.message : String(error)), emit.json);
+  }
+  if (outcome.kind === 'unavailable') return daemonRefuse(io, DAEMON_UNAVAILABLE, emit.json);
+  if (outcome.kind === 'wrong') return daemonRefuse(io, DAEMON_WRONG_ANSWER, emit.json);
+  if (outcome.kind === 'deadline') return daemonRefuse(io, DAEMON_DEADLINE, emit.json);
+  if (outcome.kind === 'refused') return daemonRefuse(io, outcome.message, emit.json);
+  const answer = outcome.answer;
+  if (answer.notice !== undefined && !emit.json) io.stderr(`team next: ${answer.notice}\n`);
+  if (answer.ok) {
+    if (answer.kind === 'claimed') return taken(io, answer.record, emit);
+    if (answer.kind === 'released') return released(io, answer.id, emit);
+    const sentence = answer.why === 'nothing-held'
+      ? 'nothing is held'
+      : answer.why === 'nothing-assigned' ? 'nothing is assigned to you' : 'nothing is takeable';
+    return blank(io, sentence, speak, emit, hold);
+  }
+  switch (answer.code) {
+    case 'next.caller': return callerRefuse(io, answer.message, emit.json);
+    case 'next.broker': return broker(io, answer.message, emit.json);
+    case 'next.read': return readFail(io, answer.message, emit.json);
+    case 'next.missing': return missing(io, emit.json);
+    case 'next.shape':
+      if (emit.json) writeJsonError(io, 'next.shape', answer.message, 'fix the named record or remove it from the task file');
+      else io.stderr(`team next: ${answer.message}\n`);
+      return shape();
+    case 'next.paused': return pausedAnswer(io, answer.message, answer.hint ?? null, emit.json);
+    case 'next.swap': return swapAnswer(io, answer.message, answer.hint ?? null, emit.json);
+    case 'next.file': return file(io, answer.message, emit.json);
+  }
+  return daemonRefuse(io, DAEMON_WRONG_ANSWER, emit.json);
+}
+
+/** A daemon that is not there — or whose line is not one this build knows — claims nothing.
+ *  It shares `broker`'s one `next.broker` site, with the daemon's own repair. */
+function daemonRefuse(io: Io, message: string, json: boolean): number {
+  return broker(io, message, json, 'the owner checks `team daemon status`');
+}
+
+function pausedAnswer(io: Io, message: string, hint: string | null, json: boolean): number {
+  if (json) writeJsonError(io, 'next.paused', message, hint);
+  else io.stderr(`team next: ${message}\n`);
+  // exit: next.paused
+  return 1;
+}
+
+function swapAnswer(io: Io, message: string, hint: string | null, json: boolean): number {
+  if (json) writeJsonError(io, 'next.swap', message, hint);
+  else io.stderr(`team next: ${message}\n`);
+  // exit: next.swap
+  return 1;
+}
+
 /**
  * The take itself, identical for both sources once a read exists: order the takeable records,
  * claim one — through the adapter when it carries a tracker-side claim, through the local lease
@@ -353,40 +442,6 @@ export function place(team: TeamFile, root: string, io: Io): { kind: 'ok'; seat:
   return { kind: 'ok', seat: named.name, pane: named.pane };
 }
 
-/** The records a claim would consider for this seat — `team plan` shows what this returns. */
-export function takeable(records: readonly TaskRecord[], seat: string, pull: 'self' | 'any', mine: boolean): TaskRecord[] {
-  return records.filter((record) => {
-    if (record.blockedBy && record.blockedBy.length) return false;
-    if (record.repos && record.repos.length) return false;
-    if (record.needs && record.needs.length) return false;
-    if (mine) return record.assignee === seat;
-    if (pull === 'self') return record.assignee === undefined || record.assignee === seat;
-    return true;
-  });
-}
-
-/** The claim order both commands show: priority first, then `fallback`. */
-export function order(records: readonly TaskRecord[], fallback: 'file' | 'id'): TaskRecord[] {
-  return records
-    .map((record, index) => ({ record, index }))
-    .sort((a, b) => {
-      const left = rank(a.record);
-      const right = rank(b.record);
-      if (left.kind !== right.kind) return left.kind - right.kind;
-      if (left.kind === 0 && right.kind === 0 && left.n !== right.n) return left.n - right.n;
-      if (left.kind === 1 && right.kind === 1 && left.text !== right.text) return left.text.localeCompare(right.text);
-      if (left.kind === 2 && fallback === 'id' && a.record.id !== b.record.id) return a.record.id < b.record.id ? -1 : 1;
-      return a.index - b.index;
-    })
-    .map((item) => item.record);
-}
-
-function rank(record: TaskRecord): { kind: 0; n: number } | { kind: 1; text: string } | { kind: 2 } {
-  if (typeof record.priority === 'number' && Number.isFinite(record.priority)) return { kind: 0, n: record.priority };
-  if (typeof record.priority === 'string') return { kind: 1, text: record.priority };
-  return { kind: 2 };
-}
-
 function invocation(io: Io, message: string, usage: boolean, json = false): number {
   if (json) writeJsonError(io, 'next.invocation', message, null);
   else io.stderr(`team next: ${message}\n${usage ? USAGE : ''}`);
@@ -423,8 +478,8 @@ function callerRefuse(io: Io, message: string, json: boolean): number {
   return 1;
 }
 
-function broker(io: Io, message: string, json: boolean): number {
-  if (json) writeJsonError(io, 'next.broker', message, 'the owner starts the broker with `team broker`');
+function broker(io: Io, message: string, json: boolean, repair = 'the owner starts the broker with `team broker`'): number {
+  if (json) writeJsonError(io, 'next.broker', message, repair);
   else io.stderr(`team next: ${message}\n`);
   // exit: next.broker
   return 1;

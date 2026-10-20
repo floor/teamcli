@@ -23,7 +23,8 @@ import {
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
-import { order, place, takeable } from './next.ts';
+import { order, takeable } from '../tasks/select.ts';
+import { place } from './next.ts';
 
 export const USAGE = `Usage: team plan [--json]
 
