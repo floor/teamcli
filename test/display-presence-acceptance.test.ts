@@ -168,7 +168,16 @@ describe('a live word is proven only by a fresh route verdict for this probe', (
   const AT = NOW.toISOString();
   const verdict = (over: Record<string, unknown> = {}) => ({
     root: ROOT,
-    presence: { session: SESSION, state: 'serving', healthy: true, checkedAt: AT, why: null, ...over },
+    presence: {
+      session: SESSION, state: 'serving', healthy: true, checkedAt: AT, why: null,
+      // A serving route carries its complete per-seat answer; route health is only trustworthy
+      // with one.
+      seats: [{
+        seat: 'writer', state: 'serving', healthy: true, source: 'hook',
+        binding: BINDING, appliedEventId: null, why: null,
+      }],
+      ...over,
+    },
   });
   const reading = (
     roots: readonly { root: string; presence?: Record<string, unknown> }[],
@@ -313,6 +322,17 @@ seats:
             healthy: verdict.healthy,
             checkedAt: verdict.checkedAt ?? at,
             why: verdict.why ?? (verdict.healthy ? null : 'the presence channel is not current'),
+            // A serving route carries its complete per-seat answer, and every declared seat
+            // states its source class: both seats here are hook channels, fenced by the binding
+            // their own state record names.
+            ...(verdict.state === 'serving' && verdict.healthy
+              ? {
+                  seats: [
+                    { seat: 'worker', state: 'serving' as const, healthy: true, source: 'hook' as const, binding: BINDING, appliedEventId: null, why: null },
+                    { seat: 'helper', state: 'serving' as const, healthy: true, source: 'hook' as const, binding: 'prs_222222222222', appliedEventId: null, why: null },
+                  ],
+                }
+              : {}),
           },
         }];
     return {

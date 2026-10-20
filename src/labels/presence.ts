@@ -5,9 +5,13 @@
 // Live is the contract's own test (`presenceLive`): the projection's binding must be the one the
 // seat's state records, and the route's presence channel must be healthy by a *fresh* answer
 // from the daemon that owns it — never the persisted `status.json` word, which can outlive the
-// channel it describes. When that fresh answer names the applied transition it vouches for, the
-// projection's own id must be exactly it: a projection ahead of the proof, or one the proof does
-// not name, stays last known. A projection that exists under this incarnation but is not live is
+// channel it describes. The fresh answer lists every declared seat with an explicit source class:
+// a `runtime` seat claims its sampled channel and names the exact applied transition it vouches
+// for, and the projection's own id must be exactly it — a projection ahead of the proof, or one
+// the proof does not name, stays last known. A `hook` seat claims the route's ingest answer and
+// names no transition; an `unknown` seat (classification itself failed) never serves. A list that
+// is missing, repeated, empty or malformed is an incomplete answer, and no seat in it is live. A
+// projection that exists under this incarnation but is not live is
 // still the runtime's last known word, and the display keeps showing it. A projection the
 // seat's recorded binding does not fence to *this* incarnation — missing, malformed, or a
 // predecessor's — is invalid: it is an existing projection, never genuine absence, so no screen
@@ -38,8 +42,8 @@ export type PresenceProjectionRead =
  *
  *  `appliedEventId` is the applied transition a fresh per-seat answer vouches for, when it names
  *  one: a projection whose id is not that transition has advanced past (or never reached) the
- *  proof and stays last known. `null` is an answer that names none — a hook seat or a hook-only
- *  route — where the route verdict is the whole answer. */
+ *  proof and stays last known. `null` is a hook seat's answer, which names none: the route's
+ *  fresh ingest is the whole answer there. */
 export function readPresenceForSeat(
   stateDir: string,
   session: string,
@@ -123,36 +127,42 @@ export type PresenceHealthReading = {
 export { PRESENCE_HEALTH_GRACE_MS };
 
 /** One fresh per-seat answer, held to the daemon client's strict reading: `serving` with
- *  `healthy: true` is the only proof, and a serving seat names the binding it was sampled for
- *  and the applied transition identity it vouches for. */
+ *  `healthy: true` is the only proof, and every entry states its source class explicitly. */
 export type PresenceSeatHealth = {
   healthy: boolean;
+  /** What the route expects of this seat: a managed native channel that needs its own applied
+   *  proof, the route's hook channel, or a classification that failed. Never inferred from
+   *  list membership. */
+  source: 'runtime' | 'hook' | 'unknown';
   /** The current managed binding at the sample; a serving entry always names one. */
   binding: string | null;
-  /** The canonical projection id the daemon applied from the latest staged record at the
-   *  sample; a serving entry always names one, and a reader's projection must carry exactly
-   *  this id to be live. `null` is an answer that names no applied transition. */
+  /** The canonical projection id the daemon proved applied for a serving `runtime` seat; a
+   *  reader's projection must carry exactly this id to be live. `null` for a `hook` seat,
+   *  whose answer is the route's own ingest. */
   appliedEventId: string | null;
 };
 
 export type PresenceSeatsRead =
-  /** The route carries no seat list: a hook-only route, whose own verdict is the answer. */
-  | { kind: 'absent' }
-  /** The seat list is malformed, or the route verdict that carried it is not fresh: no seat
-   *  in it may be called live, and the route's own health is not proof either. */
+  /** The seat list is missing, malformed, or the route verdict that carried it is not fresh:
+   *  no seat in it may be called live, and the route's own health is not proof either. */
   | { kind: 'invalid'; why: string }
   | { kind: 'listed'; seats: ReadonlyMap<string, PresenceSeatHealth> };
 
 /**
- * The strict client-side reading of a route's `seats`: one entry per seat, no repeats, a
- * closed state word, `healthy` exactly when serving, a valid binding or null, a valid applied
- * transition id or null, and a pending entry that says what it waits for. A serving entry
- * names both the binding and the applied transition it vouches for; anything else is dropped
- * whole, never partly served.
+ * The strict client-side reading of a route's `seats`: the list is complete for every declared
+ * seat or it is unreadable. One entry per seat, no repeats, a closed state word and source
+ * class, `healthy` exactly when serving, a valid binding or null, a valid applied transition id
+ * or null, and a pending entry that says what it waits for. A serving `runtime` entry names both
+ * the binding and the applied transition it vouches for; a serving `hook` entry names the
+ * binding and no transition; a serving `unknown` entry is a contradiction. Anything else is
+ * dropped whole, never partly served.
  */
 function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
   const raw = verdict.seats;
-  if (raw === undefined) return { kind: 'absent' };
+  // A complete list is the contract: a route with declared seats that carries none is an
+  // incomplete answer, not a hook-only route. Only a route with no declared seats omits it,
+  // and a seat this display reads was never classified by such an answer.
+  if (raw === undefined) return { kind: 'invalid', why: 'the route carries no seat list' };
   if (!Array.isArray(raw) || raw.length === 0) {
     return { kind: 'invalid', why: 'the seat list is not a non-empty list' };
   }
@@ -174,6 +184,9 @@ function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
     if ((entry.state === 'serving') !== entry.healthy) {
       return { kind: 'invalid', why: 'a seat entry state and healthy flag disagree' };
     }
+    if (entry.source !== 'runtime' && entry.source !== 'hook' && entry.source !== 'unknown') {
+      return { kind: 'invalid', why: 'a seat entry names no known source class' };
+    }
     if (!(entry.binding === null || isPresenceBinding(entry.binding))) {
       return { kind: 'invalid', why: 'a seat entry carries no valid binding' };
     }
@@ -190,11 +203,15 @@ function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
     if (entry.state === 'serving' && entry.binding === null) {
       return { kind: 'invalid', why: 'a serving seat entry names no binding' };
     }
-    if (entry.state === 'serving' && entry.appliedEventId === null) {
-      return { kind: 'invalid', why: 'a serving seat entry names no applied transition' };
+    if (entry.state === 'serving' && entry.source === 'unknown') {
+      return { kind: 'invalid', why: 'a serving seat entry has an unknown source class' };
+    }
+    if (entry.state === 'serving' && entry.source === 'runtime' && entry.appliedEventId === null) {
+      return { kind: 'invalid', why: 'a serving runtime seat names no applied transition' };
     }
     seats.set(entry.seat, {
       healthy: entry.healthy,
+      source: entry.source,
       binding: entry.binding as string | null,
       appliedEventId: entry.appliedEventId as string | null,
     });
@@ -202,45 +219,63 @@ function seatsOf(verdict: PresenceRouteVerdict): PresenceSeatsRead {
   return { kind: 'listed', seats };
 }
 
-/** The route's per-seat answers when its verdict is fresh and serving; every other answer is
- *  invalid for qualification. A hook-only route (no `seats`) stays `absent`. */
+/** The route's verdict when the fresh answer proves the channel current for this session: the
+ *  probe answered, the route is serving and healthy, and both the verdict's `checkedAt` and the
+ *  probe answer belong to the display's own instant. `undefined` otherwise. */
+function freshServingVerdict(
+  reading: PresenceHealthReading,
+  root: string,
+  session: string,
+  now: Date,
+): PresenceRouteVerdict | undefined {
+  if (reading.probe.state !== 'answered') return undefined;
+  const verdict = reading.roots.find((entry) => entry.root === root)?.presence;
+  if (verdict === undefined) return undefined;
+  if (verdict.state !== 'serving' || verdict.healthy !== true) return undefined;
+  if (verdict.session !== session) return undefined;
+  if (typeof verdict.checkedAt !== 'string') return undefined;
+  const checkedAt = Date.parse(verdict.checkedAt);
+  const answeredAt = Date.parse(reading.probe.at);
+  const at = now.getTime();
+  if (!Number.isFinite(checkedAt) || !Number.isFinite(answeredAt) || !Number.isFinite(at)) return undefined;
+  // Both instants must be this display's own: an old probe's answer is a snapshot, never proof.
+  if (Math.abs(at - answeredAt) > PRESENCE_HEALTH_GRACE_MS) return undefined;
+  if (Math.abs(at - checkedAt) > PRESENCE_HEALTH_GRACE_MS) return undefined;
+  return verdict;
+}
+
+/** The route's per-seat answers when its verdict is fresh and serving; every other answer,
+ *  including a route that carries no list where the contract requires one, is invalid. */
 export function presenceSeatsOf(
   reading: PresenceHealthReading,
   root: string,
   session: string,
   now: Date,
 ): PresenceSeatsRead {
-  if (!presenceChannelHealthy(reading, root, session, now)) {
+  const verdict = freshServingVerdict(reading, root, session, now);
+  if (verdict === undefined) {
     return { kind: 'invalid', why: 'the route verdict is not fresh and serving for this session' };
   }
-  const verdict = reading.roots.find((entry) => entry.root === root)?.presence;
-  if (verdict === undefined) return { kind: 'invalid', why: 'the route carries no presence verdict' };
   return seatsOf(verdict);
 }
 
 /**
  * Whether one seat's projection may be called live, and the applied transition it must carry.
- * The route must be fresh and serving, and when the route carries per-seat answers this seat
- * must be listed serving with exactly the binding the seat's state records — a missing entry
- * and a mismatched sampled binding are both last known, never live by route health alone.
+ * The route must be fresh and serving, and this seat must be listed serving with exactly the
+ * binding the seat's state records. Every declared seat is classified in the answer, so a
+ * missing entry, a missing list or a pending entry is an incomplete answer — last known, never
+ * live by route health alone.
  *
- * The list is the daemon's native-source answers, not a census of every seat on the route: a
- * hook seat sharing the route with a native sibling is expected to be absent, and keeps the
- * route verdict. An absent list is only informative for a seat that does not expect a native
- * channel: a seat that does (`nativeExpected`) is held whether the whole list is missing or
- * only its entry — in both cases the source it expected was never classified, and there is no
- * proof to inherit. The expectation is conservative: the daemon's own policy and target
- * classification are authoritative, and an entry the daemon lists always decides over it.
- *
- * A listed entry also names the applied transition the sample vouches for; the projection read
- * must carry exactly that id, or the word is last known. An answer that names no applied
- * transition (a hook seat, a hook-only route) leaves the route verdict as the answer.
+ * The entry's own source class decides the proof. A `runtime` seat vouches for the exact applied
+ * transition its sample reconciled, and the projection read must carry that id. A `hook` seat is
+ * qualified by the route's fresh ingest and names no transition; an `unknown` seat (the daemon
+ * could not classify what the seat expected) is never serving, so it never qualifies.
  */
 export type PresenceSeatProof = {
   /** Whether the route's fresh verdict may apply to this seat at all. */
   qualified: boolean;
   /** The applied transition identity the fresh answer vouches for; the projection read must
-   *  carry exactly this id to be live. `null` when the answer names none. */
+   *  carry exactly this id to be live. `null` when the entry names none (a hook seat). */
   appliedEventId: string | null;
 };
 
@@ -248,27 +283,21 @@ export function seatPresenceProof(
   seats: PresenceSeatsRead | undefined,
   seat: string,
   binding: unknown,
-  nativeExpected: boolean,
 ): PresenceSeatProof {
-  if (seats === undefined || seats.kind === 'absent') {
-    return { qualified: !nativeExpected, appliedEventId: null };
+  if (seats === undefined || seats.kind === 'invalid') {
+    return { qualified: false, appliedEventId: null };
   }
-  if (seats.kind === 'invalid') return { qualified: false, appliedEventId: null };
   const entry = seats.seats.get(seat);
-  if (entry === undefined) return { qualified: !nativeExpected, appliedEventId: null };
-  const fenced = entry.healthy && isPresenceBinding(binding) && entry.binding === binding;
-  return { qualified: fenced, appliedEventId: entry.appliedEventId };
-}
-
-/**
- * The CLIs whose presence this product samples from a managed native source. That explicit
- * classification, from the seat's own declaration, is what makes an absent seat-list entry
- * mean "expected and unproven" rather than "hook seat": the seat list itself never tells a
- * hook seat apart from a native source the daemon failed to classify. Codex is the only one
- * today; a new native runtime adds its name here, beside its source.
- */
-export function nativePresenceExpected(cli: string | null | undefined): boolean {
-  return cli === 'codex';
+  if (entry === undefined) return { qualified: false, appliedEventId: null };
+  if (!entry.healthy || !isPresenceBinding(binding) || entry.binding !== binding) {
+    return { qualified: false, appliedEventId: null };
+  }
+  // Only a runtime seat's sample names an applied transition; the hook answer is the route's
+  // own ingest, judged on the channel and the binding fence above.
+  return {
+    qualified: true,
+    appliedEventId: entry.source === 'runtime' ? entry.appliedEventId : null,
+  };
 }
 
 /**
@@ -285,21 +314,11 @@ export function presenceChannelHealthy(
   session: string,
   now: Date,
 ): boolean {
-  if (reading.probe.state !== 'answered') return false;
-  const verdict = reading.roots.find((entry) => entry.root === root)?.presence;
+  const verdict = freshServingVerdict(reading, root, session, now);
   if (verdict === undefined) return false;
-  if (verdict.state !== 'serving' || verdict.healthy !== true) return false;
-  if (verdict.session !== session) return false;
-  if (typeof verdict.checkedAt !== 'string') return false;
-  const checkedAt = Date.parse(verdict.checkedAt);
-  const answeredAt = Date.parse(reading.probe.at);
-  const at = now.getTime();
-  if (!Number.isFinite(checkedAt) || !Number.isFinite(answeredAt) || !Number.isFinite(at)) return false;
-  // Both instants must be this display's own: an old probe's answer is a snapshot, never proof.
-  if (Math.abs(at - answeredAt) > PRESENCE_HEALTH_GRACE_MS) return false;
-  if (Math.abs(at - checkedAt) > PRESENCE_HEALTH_GRACE_MS) return false;
-  // A route that carries a malformed seat list is not a trustworthy record: the daemon client
-  // drops it whole, and so does the display.
+  // A route whose per-seat record is missing where the complete-list contract requires one, or
+  // malformed, is not a trustworthy answer: the daemon client drops it whole, and so does the
+  // display.
   return seatsOf(verdict).kind !== 'invalid';
 }
 

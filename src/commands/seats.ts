@@ -19,7 +19,7 @@ import {
 } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type PresenceObservation, type SeatStateWord, type StateSource } from '../labels/state.ts';
-import { nativePresenceExpected, presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceProof, type PresenceProjectionRead, type PresenceSeatsRead } from '../labels/presence.ts';
+import { presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceProof, type PresenceProjectionRead, type PresenceSeatsRead } from '../labels/presence.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
@@ -63,10 +63,10 @@ export type SeatTraceSources = {
    */
   presenceChannelHealthy?: boolean;
   /**
-   * The same fresh answer's per-seat runtime verdicts. When the route carries a seat list, a
+   * The same fresh answer's complete per-seat verdicts. Every declared seat is classified: a
    * seat is qualified only by its own serving entry whose sampled binding equals the binding
-   * the seat state records; route health alone is not enough. A hook-only route (no list)
-   * keeps the route's own answer.
+   * the seat state records; route health alone is not enough, and a missing list or entry is an
+   * incomplete answer, never a hook-only route.
    */
   presenceSeats?: PresenceSeatsRead;
 };
@@ -273,7 +273,7 @@ export function seatRegistryRows(
     let presenceRead: PresenceProjectionRead | null = null;
     if (!untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined) {
       const proof = seatPresenceProof(
-        traceSources.presenceSeats, row.name, recorded?.presence_binding, nativePresenceExpected(cli),
+        traceSources.presenceSeats, row.name, recorded?.presence_binding,
       );
       presenceRead = readPresenceForSeat(
         traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding,

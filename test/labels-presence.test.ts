@@ -5,16 +5,17 @@
 // binding is answered even when the channel is not healthy — the runtime's last known word,
 // marked not live. Only a genuinely absent file is `absent`, and a malformed projection is
 // `bad` (unknown from presence, never a screen). The channel-health flag is the caller's, from a
-// fresh daemon answer; this module never reads a persisted status word. When that fresh answer
-// names the applied transition it vouches for, the projection's id must be exactly it, or the
-// word stays last known. Every projection below is synthetic and written under a fresh temporary
-// state folder.
+// fresh daemon answer; this module never reads a persisted status word. The same fresh answer's
+// complete per-seat list, with each seat's explicit source class, decides which projections are
+// live: a runtime seat's projection id must be exactly the applied transition it proved, while
+// a hook seat is judged by the route's fresh ingest. Every projection below is synthetic and
+// written under a fresh temporary state folder.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
-import { nativePresenceExpected, presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceProof } from '../src/labels/presence.ts';
+import { presenceChannelHealthy, presenceSeatsOf, readPresenceForSeat, seatPresenceProof } from '../src/labels/presence.ts';
 
 const SESSION = 'session-one';
 const SEAT = 'worker';
@@ -128,6 +129,12 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
       healthy: true,
       checkedAt: AT,
       why: null,
+      // A serving route carries its complete per-seat answer; route health is only trustworthy
+      // with one.
+      seats: [{
+        seat: SEAT, state: 'serving' as const, healthy: true, source: 'hook' as const,
+        binding: BINDING, appliedEventId: null, why: null,
+      }],
       ...over,
     },
   });
@@ -172,106 +179,106 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
     expect(presenceChannelHealthy(reading([{ root: ROOT, presence: { state: 'pending', why: 'closed' } }]), ROOT, SESSION, NOW)).toBe(false);
   });
 
-  // The route's per-seat answers are the second half of live: a seat carried by the seat list
-  // is live only by its own serving entry, sampled under the binding the seat's state records
-  // and under the applied transition the entry names. A hook-only route carries no seat list
-  // and keeps the route's own verdict. The list holds native-source seats, never a census: an
-  // unlisted hook seat sharing the route is expected and keeps the route verdict, while an
-  // unlisted seat that explicitly expects a native channel was never classified and inherits
-  // nothing.
+  // The route's per-seat answers are the second half of live: the list is complete for every
+  // declared seat and each entry states its source class. A list that is missing, repeated,
+  // empty or malformed is an incomplete answer, never a hook-only route. A seat is live only by
+  // its own serving entry under the binding its state records. A runtime entry names the applied
+  // transition it proved and the projection's id must be exactly that; a hook entry names no
+  // transition and is judged by the route's fresh ingest; an unknown source never serves.
   describe("the route's per-seat answers", () => {
     const APPLIED = `${SINCE}-ab12cd34`;
-    const serving = (seat: string, binding: string | null = BINDING, appliedEventId: string | null = APPLIED) => ({
-      seat, state: 'serving', healthy: true, binding, appliedEventId, why: null,
+    const runtime = (seat: string, binding: string | null = BINDING, appliedEventId: string | null = APPLIED) => ({
+      seat, state: 'serving', healthy: true, source: 'runtime', binding, appliedEventId, why: null,
     });
+    const hook = (seat: string, binding: string | null = BINDING) => ({
+      seat, state: 'serving', healthy: true, source: 'hook', binding, appliedEventId: null, why: null,
+    });
+    const pending = (
+      seat: string,
+      source: 'runtime' | 'hook' | 'unknown' = 'hook',
+      why: string | null = 'hook not yet seen',
+      binding: string | null = null,
+    ) => ({ seat, state: 'pending', healthy: false, source, binding, appliedEventId: null, why });
     const withSeats = (seats: unknown) => reading([verdict({ seats })]);
     const proof = (
       seats: ReturnType<typeof presenceSeatsOf> | undefined,
       seat = SEAT,
       binding: unknown = BINDING,
-      nativeExpected = true,
-    ) => seatPresenceProof(seats, seat, binding, nativeExpected);
+    ) => seatPresenceProof(seats, seat, binding);
     const qualified = (
       seats: ReturnType<typeof presenceSeatsOf> | undefined,
       seat = SEAT,
       binding: unknown = BINDING,
-      nativeExpected = true,
-    ): boolean => proof(seats, seat, binding, nativeExpected).qualified;
+    ): boolean => proof(seats, seat, binding).qualified;
 
-    test('a hook-only route has no seat list: a hook seat keeps the route verdict, an expected native seat is held', () => {
+    test('a missing seat list is an incomplete answer, never a hook-only route', () => {
       const seats = presenceSeatsOf(withSeats(undefined), ROOT, SESSION, NOW);
-      expect(seats).toEqual({ kind: 'absent' });
-      expect(qualified(seats, SEAT, BINDING, false)).toBe(true);
-      // With no list at all, the source an expected native seat needed was never classified:
-      // route health cannot stand in for it, exactly as a missing entry cannot.
-      expect(qualified(seats, SEAT, BINDING, true)).toBe(false);
-      // No health answer at all carries no route verdict either; the caller's route gate is
-      // false there, and the expectation alone still closes an expected native seat.
-      expect(qualified(undefined, SEAT, BINDING, false)).toBe(true);
-      expect(qualified(undefined, SEAT, BINDING, true)).toBe(false);
-      // An answer that names no applied transition leaves the route verdict as the answer.
-      expect(proof(seats, SEAT, BINDING, false)).toEqual({ qualified: true, appliedEventId: null });
+      expect(seats).toEqual({ kind: 'invalid', why: 'the route carries no seat list' });
+      // No health answer at all carries no route verdict either: the source was never classified,
+      // so route health cannot stand in for it.
+      expect(qualified(seats)).toBe(false);
+      expect(qualified(undefined)).toBe(false);
+      expect(presenceChannelHealthy(withSeats(undefined), ROOT, SESSION, NOW)).toBe(false);
     });
 
-    test('a listed seat is live only when serving and sampled under the recorded binding', () => {
-      const seats = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
+    test('a runtime seat is live only when serving under the recorded binding', () => {
+      const seats = presenceSeatsOf(withSeats([runtime(SEAT)]), ROOT, SESSION, NOW);
       expect(seats.kind).toBe('listed');
-      expect(qualified(seats)).toBe(true);
+      expect(proof(seats)).toEqual({ qualified: true, appliedEventId: APPLIED });
       // A sampled binding that differs from the seat's own record is a predecessor's run, or a
       // relaunch the display has not caught up with: last known, never live by route health.
       expect(qualified(seats, SEAT, PREDECESSOR)).toBe(false);
-      // Membership never overrides the fence, whichever class the seat is.
-      expect(qualified(seats, SEAT, PREDECESSOR, false)).toBe(false);
-      expect(seatPresenceProof(seats, SEAT, undefined, true).qualified).toBe(false);
+      expect(seatPresenceProof(seats, SEAT, undefined).qualified).toBe(false);
     });
 
-    test('an absent entry means held for an expected native seat, route health for a hook seat', () => {
-      const seats = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
-      // The native source this seat expects was never classified: no proof to inherit.
-      expect(qualified(seats, 'other', BINDING, true)).toBe(false);
-      // A hook seat absent from the native list is the ordinary mixed-route case.
-      expect(qualified(seats, 'other', BINDING, false)).toBe(true);
+    test('a hook seat is qualified by the route ingest and names no applied transition', () => {
+      const seats = presenceSeatsOf(withSeats([hook(SEAT)]), ROOT, SESSION, NOW);
+      expect(proof(seats)).toEqual({ qualified: true, appliedEventId: null });
+      // The binding fence still holds: a hook entry sampled under another incarnation is held.
+      expect(qualified(seats, SEAT, PREDECESSOR)).toBe(false);
+      // A hook entry that names an id (the schema permits it) is still judged on the route: the
+      // id is never used to compare against the projection.
+      const named = presenceSeatsOf(withSeats([{ ...hook(SEAT), appliedEventId: APPLIED }]), ROOT, SESSION, NOW);
+      expect(proof(named)).toEqual({ qualified: true, appliedEventId: null });
     });
 
-    test('a whole absent list holds an expected native seat exactly as a missing entry does', () => {
-      const absent = presenceSeatsOf(withSeats(undefined), ROOT, SESSION, NOW);
-      const listed = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
-      for (const seats of [absent, listed]) {
-        expect(qualified(seats, 'other', BINDING, true)).toBe(false);
-        expect(qualified(seats, 'other', BINDING, false)).toBe(true);
-      }
-      // A listed entry still decides over the conservative expectation: the daemon's own
-      // classification is authoritative, and its serving binding fence is the proof.
-      expect(qualified(listed, SEAT, BINDING, true)).toBe(true);
-      expect(qualified(absent, SEAT, BINDING, false)).toBe(true);
+    test('a missing entry is held, because every declared seat is classified', () => {
+      const seats = presenceSeatsOf(withSeats([runtime(SEAT), hook('other')]), ROOT, SESSION, NOW);
+      expect(qualified(seats, 'someone-else')).toBe(false);
+      // The listed seats are unaffected by their sibling's absence from a reader's team file.
+      expect(qualified(seats)).toBe(true);
+      expect(qualified(seats, 'other')).toBe(true);
     });
 
-    test('a pending entry is not proof for a seat of either class', () => {
-      const pending = presenceSeatsOf(withSeats([
-        serving(SEAT),
-        { seat: 'other', state: 'pending', healthy: false, binding: null, appliedEventId: null, why: 'hook not yet seen' },
+    test('a pending entry is not proof for any source class', () => {
+      const listed = presenceSeatsOf(withSeats([
+        runtime(SEAT),
+        pending('hook-pending'),
+        pending('runtime-pending', 'runtime', 'the runtime event has not been reconciled'),
+        pending('unknown-pending', 'unknown', 'the runtime subscriptions were not built'),
       ]), ROOT, SESSION, NOW);
-      expect(pending.kind).toBe('listed');
-      expect(qualified(pending, SEAT)).toBe(true);
-      expect(qualified(pending, 'other', BINDING, true)).toBe(false);
-      expect(qualified(pending, 'other', BINDING, false)).toBe(false);
+      expect(listed.kind).toBe('listed');
+      expect(qualified(listed)).toBe(true);
+      for (const seat of ['hook-pending', 'runtime-pending', 'unknown-pending']) {
+        expect(qualified(listed, seat, null)).toBe(false);
+      }
       // `serving` with `healthy: false` is the daemon client's disagreement case: dropped whole.
       const unhealthy = withSeats([
-        { seat: SEAT, state: 'serving', healthy: false, binding: BINDING, appliedEventId: APPLIED, why: null },
+        { seat: SEAT, state: 'serving', healthy: false, source: 'runtime', binding: BINDING, appliedEventId: APPLIED, why: null },
       ]);
       expect(presenceSeatsOf(unhealthy, ROOT, SESSION, NOW).kind).toBe('invalid');
       expect(qualified(presenceSeatsOf(unhealthy, ROOT, SESSION, NOW))).toBe(false);
       expect(presenceChannelHealthy(unhealthy, ROOT, SESSION, NOW)).toBe(false);
     });
 
-    test('a serving entry must name the applied transition it vouches for', () => {
+    test('a serving runtime entry must name the applied transition it vouches for', () => {
       const noId: unknown[] = [
-        [{ seat: SEAT, state: 'serving', healthy: true, binding: BINDING, why: null }],
-        [{ ...serving(SEAT), appliedEventId: null }],
-        [{ ...serving(SEAT), appliedEventId: undefined }],
-        [{ ...serving(SEAT), appliedEventId: 'not-a-record-id' }],
-        [{ ...serving(SEAT), appliedEventId: `${SINCE}-ABCDEF12` }],
-        [{ ...serving(SEAT), appliedEventId: 42 }],
+        [{ seat: SEAT, state: 'serving', healthy: true, source: 'runtime', binding: BINDING, why: null }],
+        [{ ...runtime(SEAT), appliedEventId: null }],
+        [{ ...runtime(SEAT), appliedEventId: undefined }],
+        [{ ...runtime(SEAT), appliedEventId: 'not-a-record-id' }],
+        [{ ...runtime(SEAT), appliedEventId: `${SINCE}-ABCDEF12` }],
+        [{ ...runtime(SEAT), appliedEventId: 42 }],
       ];
       for (const seats of noId) {
         const route = withSeats(seats);
@@ -279,61 +286,52 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
         expect(presenceSeatsOf(route, ROOT, SESSION, NOW).kind).toBe('invalid');
         expect(qualified(presenceSeatsOf(route, ROOT, SESSION, NOW))).toBe(false);
       }
-      // A pending seat may name none yet; it never qualifies either way.
-      const pending = presenceSeatsOf(withSeats([
-        { seat: SEAT, state: 'pending', healthy: false, binding: null, appliedEventId: null, why: 'no sample yet' },
-      ]), ROOT, SESSION, NOW);
-      expect(pending.kind).toBe('listed');
-      expect(qualified(pending)).toBe(false);
     });
 
-    test('a malformed seat list is dropped whole and leaves the route unqualified', () => {
+    test('a serving unknown source, a missing or foreign source class, and any other malformed entry drop the list whole', () => {
       const malformed: unknown[] = [
         [],
         'not a list',
-        [serving(SEAT), serving(SEAT)],
-        [{ seat: '', state: 'serving', healthy: true, binding: BINDING, appliedEventId: APPLIED, why: null }],
-        [{ seat: SEAT, state: 'absent', healthy: true, binding: BINDING, appliedEventId: APPLIED, why: null }],
-        [{ seat: SEAT, state: 'serving', healthy: true, binding: null, appliedEventId: APPLIED, why: null }],
-        [{ seat: SEAT, state: 'serving', healthy: true, binding: 'not-a-binding', appliedEventId: APPLIED, why: null }],
-        [{ seat: SEAT, state: 'serving', healthy: true, binding: BINDING, appliedEventId: APPLIED, why: 7 }],
-        [{ seat: SEAT, state: 'pending', healthy: false, binding: null, appliedEventId: null, why: null }],
-        [{ seat: SEAT, state: 'pending', healthy: false, binding: null, appliedEventId: null, why: '' }],
+        [runtime(SEAT), runtime(SEAT)],
+        [{ ...runtime(SEAT), seat: '' }],
+        [{ ...runtime(SEAT), state: 'absent' }],
+        [{ ...runtime(SEAT), source: 'unknown' }],
+        [{ ...runtime(SEAT), source: 'agent' }],
+        [{ seat: SEAT, state: 'serving', healthy: true, binding: BINDING, appliedEventId: APPLIED, why: null }],
+        [{ ...runtime(SEAT), binding: null }],
+        [{ ...runtime(SEAT), binding: 'not-a-binding' }],
+        [{ ...runtime(SEAT), why: 7 }],
+        [{ ...runtime(SEAT), state: 'pending', healthy: false }],
+        [pending(SEAT, 'hook', null)],
+        [pending(SEAT, 'hook', '')],
         [null],
-        [[serving(SEAT)]],
+        [[runtime(SEAT)]],
       ];
       for (const seats of malformed) {
         const route = withSeats(seats);
         expect(presenceChannelHealthy(route, ROOT, SESSION, NOW)).toBe(false);
         expect(presenceSeatsOf(route, ROOT, SESSION, NOW).kind).toBe('invalid');
-        expect(qualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING, true)).toBe(false);
-        expect(qualified(presenceSeatsOf(route, ROOT, SESSION, NOW), SEAT, BINDING, false)).toBe(false);
+        expect(qualified(presenceSeatsOf(route, ROOT, SESSION, NOW))).toBe(false);
+        expect(qualified(presenceSeatsOf(route, ROOT, SESSION, NOW), 'other')).toBe(false);
       }
     });
 
     test('a stale, other-session or other-root verdict carries no usable seat list', () => {
-      const stale = reading([verdict({ seats: [serving(SEAT)] })], at(-600_000));
-      const otherSession = reading([verdict({ session: 'other', seats: [serving(SEAT)] })]);
-      const otherRoot = reading([verdict({ seats: [serving(SEAT)] })]);
+      const stale = reading([verdict({ seats: [runtime(SEAT)] })], at(-600_000));
+      const otherSession = reading([verdict({ session: 'other', seats: [runtime(SEAT)] })]);
+      const otherRoot = reading([verdict({ seats: [runtime(SEAT)] })]);
       for (const route of [stale, otherSession]) {
         expect(presenceSeatsOf(route, ROOT, SESSION, NOW).kind).toBe('invalid');
         expect(qualified(presenceSeatsOf(route, ROOT, SESSION, NOW))).toBe(false);
       }
       expect(presenceSeatsOf(otherRoot, '/srv/other', SESSION, NOW).kind).toBe('invalid');
       // A fresh, serving route with a well-formed list stays healthy.
-      expect(presenceChannelHealthy(reading([verdict({ seats: [serving(SEAT)] })]), ROOT, SESSION, NOW)).toBe(true);
-    });
-
-    test('explicit native expectation comes from the seat, not from list absence', () => {
-      expect(nativePresenceExpected('codex')).toBe(true);
-      for (const cli of ['claude', 'cursor', 'gemini', '-', '', null, undefined]) {
-        expect(nativePresenceExpected(cli)).toBe(false);
-      }
+      expect(presenceChannelHealthy(reading([verdict({ seats: [runtime(SEAT)] })]), ROOT, SESSION, NOW)).toBe(true);
     });
 
     test('the applied transition id must match the projection the reader holds', () => {
       writeCurrent(projection());
-      const seats = presenceSeatsOf(withSeats([serving(SEAT)]), ROOT, SESSION, NOW);
+      const seats = presenceSeatsOf(withSeats([runtime(SEAT)]), ROOT, SESSION, NOW);
       const held = proof(seats);
       expect(held).toEqual({ qualified: true, appliedEventId: APPLIED });
       expect(readPresenceForSeat(stateDir, SESSION, SEAT, BINDING, true, held.appliedEventId))
@@ -345,31 +343,32 @@ describe('the fresh daemon health verdict is the only proof of live', () => {
       writeCurrent(projection({ id: `${SINCE}-ffffffff`, seq: 4 }));
       expect(readPresenceForSeat(stateDir, SESSION, SEAT, BINDING, true, held.appliedEventId))
         .toMatchObject({ kind: 'ok', observation: { state: 'idle', live: false } });
-      // No applied id (a hook seat or a hook-only route) keeps the route answer.
+      // A hook answer names no applied id and keeps the route answer, even when the projection
+      // has advanced: no comparison exists for it.
       expect(readPresenceForSeat(stateDir, SESSION, SEAT, BINDING, true, null))
         .toMatchObject({ kind: 'ok', observation: { state: 'idle', live: true } });
     });
 
-    test('a mixed route: the listed native seat and the unlisted hook seat are both live', () => {
-      // Same route, same fresh serving answer; the seat list names only the Codex seat.
+    test('a mixed route: the runtime seat and the hook sibling are both live', () => {
+      // Same route, same fresh serving answer; each entry states its own source class.
       writeCurrent(projection(), 'codex-seat');
       writeCurrent(projection({ binding: PREDECESSOR }), 'hook-seat');
-      const route = withSeats([serving('codex-seat')]);
+      const route = withSeats([runtime('codex-seat'), hook('hook-seat', PREDECESSOR)]);
       const seats = presenceSeatsOf(route, ROOT, SESSION, NOW);
       const healthy = presenceChannelHealthy(route, ROOT, SESSION, NOW);
-      const codex = proof(seats, 'codex-seat', BINDING, nativePresenceExpected('codex'));
-      const hook = proof(seats, 'hook-seat', PREDECESSOR, nativePresenceExpected('claude'));
+      const codex = proof(seats, 'codex-seat', BINDING);
+      const hookSeat = proof(seats, 'hook-seat', PREDECESSOR);
       expect(healthy && codex.qualified).toBe(true);
-      expect(healthy && hook.qualified).toBe(true);
+      expect(healthy && hookSeat.qualified).toBe(true);
       expect(codex.appliedEventId).toBe(APPLIED);
-      expect(hook.appliedEventId).toBeNull();
+      expect(hookSeat.appliedEventId).toBeNull();
       expect(readPresenceForSeat(stateDir, SESSION, 'codex-seat', BINDING, healthy && codex.qualified, codex.appliedEventId))
         .toMatchObject({ kind: 'ok', observation: { state: 'idle', live: true } });
-      expect(readPresenceForSeat(stateDir, SESSION, 'hook-seat', PREDECESSOR, healthy && hook.qualified, hook.appliedEventId))
+      expect(readPresenceForSeat(stateDir, SESSION, 'hook-seat', PREDECESSOR, healthy && hookSeat.qualified, hookSeat.appliedEventId))
         .toMatchObject({ kind: 'ok', observation: { state: 'idle', live: true } });
-      // A second Codex seat the route expected but never listed stays last known: no fallback.
-      expect(healthy && proof(seats, 'codex-missing', BINDING, nativePresenceExpected('codex')).qualified)
-        .toBe(false);
+      // A declared seat the complete list does not carry is an incomplete answer: held, with no
+      // route-health fallback for either class.
+      expect(healthy && proof(seats, 'missing-seat', BINDING).qualified).toBe(false);
     });
   });
 });
