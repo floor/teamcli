@@ -9,6 +9,7 @@ import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
 import { cleanIdleClaims, type IdleClaimEntry } from './watch/claim-record.ts';
 import { isWatchEpoch } from './watch/epoch.ts';
+import { isPresenceBinding } from './daemon/presence/contract.ts';
 
 // What a team keeps: the live session's seats, worktrees and watch, and the project's last
 // readings, which outlive every session (§ 4.4). It lives beside the team file and is written by
@@ -111,6 +112,30 @@ export type SeatState = {
    * presence writer, which the ingester treats as no live presence rather than guessing.
    */
   presence_binding?: string;
+  /**
+   * The daemon's activity reconciler's fence: the newest applied presence line of the seat's
+   * current runtime binding that the canonical state has reconciled. `seq` must equal the current
+   * projection's sequence for a consumer to treat the reading as known; while either side is
+   * ahead the answer is `unknown`, never idle and never a stale claim. `applied_at` is the
+   * writer's instant, never invented from the event. Absent until the first applied line.
+   */
+  presence_applied?: {
+    seat_id: string;
+    binding: string;
+    seq: number;
+    applied_at: string;
+  };
+  /**
+   * The activity reconciler's own resume point in the seat's transition log, persisted separately
+   * from `presence_applied`: it advances over every line read — audit lines that never became the
+   * projection and predecessor-incarnation lines included — so a skipped line is never re-read
+   * forever. Private to the scanner; no reader treats it as presence evidence.
+   */
+  presence_scan?: {
+    binding: string | null;
+    seq: number;
+    offset: number;
+  };
   /**
    * What this launch declared, written when the idle prompt appears and left in place when a
    * later ready write merges onto the record. A skip of a seat that is already ready does not
@@ -562,6 +587,27 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       if (seat.effort !== undefined && typeof seat.effort !== 'string') delete seat.effort;
       if (seat.launch_line !== undefined && typeof seat.launch_line !== 'string') delete seat.launch_line;
       if (seat.last_active !== undefined && typeof seat.last_active !== 'string') delete seat.last_active;
+      // The presence fence and cursor enter from the file like every other value. The fence is
+      // consumer evidence, so a malformed one is dropped whole — the consumer's answer is then
+      // `unknown`, never a guess — and a malformed cursor only makes the scanner start over.
+      if (seat.presence_applied !== undefined) {
+        const fence = seat.presence_applied;
+        if (fence === null || typeof fence !== 'object'
+          || !isSeatId(fence.seat_id) || !isPresenceBinding(fence.binding)
+          || !Number.isInteger(fence.seq) || fence.seq < 1
+          || typeof fence.applied_at !== 'string' || Number.isNaN(Date.parse(fence.applied_at))) {
+          delete seat.presence_applied;
+        }
+      }
+      if (seat.presence_scan !== undefined) {
+        const scan = seat.presence_scan;
+        if (scan === null || typeof scan !== 'object'
+          || !(scan.binding === null || isPresenceBinding(scan.binding))
+          || !Number.isInteger(scan.seq) || scan.seq < 0
+          || !Number.isInteger(scan.offset) || scan.offset < 0) {
+          delete seat.presence_scan;
+        }
+      }
       // A session id is the measured string herdr reported, never an object handed to this build
       // by a hand-edited file: anything else is not an id and is dropped the way a malformed
       // model or launch line is.
