@@ -34,7 +34,15 @@ import {
 } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import {
+  devModeCallerGate,
+  devModeExpiryNote,
+  devModeFileApproval,
+  devModeLevelNote,
+  logDevMode,
+  logDevModeState,
+  resolveDevMode,
+} from '../dev_mode.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
@@ -51,7 +59,7 @@ import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
-import { profileFor, versionVerdict } from '../profiles/profile.ts';
+import { parseVersion, profileFor, versionVerdict } from '../profiles/profile.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
@@ -93,6 +101,15 @@ function aim(session: string): string | undefined {
 /** A profile's tested range as `doctor` prints it. */
 function testedRange(tested: { from: string; to: string }): string {
   return tested.from === tested.to ? tested.from : `${tested.from} to ${tested.to}`;
+}
+
+/** The one release a dev-mode run reloads past its profile's tested range: Antigravity's `agy`
+ *  1.4.3, seen exactly. A fourth component, another release or another CLI is not it, and the
+ *  profile's tested range is never touched. */
+function isAgy143(cli: string, printed: string): boolean {
+  if (cli !== 'antigravity') return false;
+  const version = parseVersion(printed);
+  return version !== null && version.length === 3 && version[0] === 1 && version[1] === 4 && version[2] === 3;
 }
 
 const realLaunch: Launch = {
@@ -462,19 +479,29 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // screen is read through the CLI's profile: an installed version outside the profile's
     // tested range may draw a prompt no recogniser knows, and the seat would be closed and left
     // without one. The version is read once, before anything is closed. A version that cannot
-    // be read is not evidence against the CLI, and refuses nothing.
+    // be read is not evidence against the CLI, and refuses nothing. One dev-mode run continues
+    // past the refusal: AGY 1.4.3, the next release after the range, warns and reloads anyway
+    // while the tested range itself stays as it was. Every other CLI and version, and every run
+    // with dev mode off, is the refusal it always was.
     const profile = profileFor(seat.cli);
     const printed = profile === null || sources.version === undefined ? null : sources.version(profile.binary);
     if (profile !== null && printed !== null) {
       const verdict = versionVerdict(printed, profile.tested);
       if (verdict === 'older' || verdict === 'newer') {
-        refuse(io, json, 'reload', {
-          id: 'reload.untested',
-          message: `${seat.name}: ${plainLine(profile.binary)} ${plainLine(printed)} is ${verdict} than the tested ${plainLine(testedRange(profile.tested))}; its ready screen may not be recognised, so nothing closed`,
-          repair: null,
-        });
-        // exit: reload.untested
-        return 1;
+        const reading = `${seat.name}: ${plainLine(profile.binary)} ${plainLine(printed)} is ${verdict} than the tested ${plainLine(testedRange(profile.tested))}; its ready screen may not be recognised`;
+        const continues = dev.on && verdict === 'newer' && isAgy143(profile.cli, printed);
+        if (!continues) {
+          refuse(io, json, 'reload', {
+            id: 'reload.untested',
+            message: `${reading}, so nothing closed`,
+            repair: null,
+          });
+          // exit: reload.untested
+          return 1;
+        }
+        const warning = `warning: ${reading}; dev mode continues${devModeLevelNote(dev)}`;
+        out.stderr(`team reload: ${warning}\n`);
+        logDevMode(dir, 'reload', describeCaller(placed), warning, sources.now?.() ?? new Date());
       }
     }
 
