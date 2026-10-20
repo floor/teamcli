@@ -13,6 +13,7 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { findAgent, readAgents, recordAgentSession, registerAgent } from '../src/registry/agents.ts';
@@ -72,6 +73,11 @@ seats:
     stopped: true
 `;
 
+// The live restart reading: the file asks for 0.5 GB free swap, the machine reads 0.4 GB.
+const MACHINE_YAML = TEAM_YAML.replace('workspace:\n', 'machine:\n  swap_free_min: 0.5GB\nworkspace:\n');
+const ROOMY: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 8e9, swapFree: 4e9, swapUsed: 4e9 };
+const TIGHT: Machine = { ...ROOMY, swapFree: 0.4e9, swapUsed: 7.6e9 };
+
 type Fixture = {
   base: string;
   root: string;
@@ -126,6 +132,7 @@ function makeHarness(
     pasteDrops?: boolean;
     closeFails?: boolean;
     doctorVersion?: string | null;
+    machine?: (root: string) => Machine;
   } = {},
 ): {
   sources: RestartSources;
@@ -267,6 +274,7 @@ function makeHarness(
     launch: downLaunch,
     upLaunch,
     doctor,
+    ...(opts.machine ? { machine: opts.machine } : {}),
   };
 
   return { sources, did };
@@ -1019,5 +1027,64 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const logged = existsSync(join(fixture.dir, 'team.log')) ? readFileSync(join(fixture.dir, 'team.log'), 'utf8') : '';
     expect(logged).not.toContain('resuming session');
     expect(run.did.created).toBe(0);
+  });
+});
+
+describe('team restart machine atomicity', () => {
+  test('a machine refusal under the run lock leaves the running seat and its pane untouched', async () => {
+    const fixture = makeFixture(MACHINE_YAML);
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    // The live shape: the preflight reading passes, and by the time the run holds the lock
+    // the machine reads 0.4 GB free swap where the file asks 0.5 GB. The refusal must land
+    // before the stop, so the seat keeps its pane and nothing is typed, closed or created.
+    const readings = [ROOMY, TIGHT];
+    let calls = 0;
+    const { sources, did } = makeHarness(fixture, {
+      machine: () => readings[Math.min(calls++, readings.length - 1)]!,
+    });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: free swap is 0.4 GB, below 0.5 GB\n');
+    expect(calls).toBe(2);
+    expect(did.typed).toEqual([]);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    expect(did.runs).toEqual([]);
+    const after = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-old');
+  });
+
+  test('a reading that goes bad after the stop is never taken, so the stopped seat is not stranded', async () => {
+    const fixture = makeFixture(MACHINE_YAML);
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    // The reading is honest up to the stop and bad after it: the old workspace is closed and the
+    // machine now reads 0.4 GB free swap. The launch takes no reading after the stop, so the
+    // decision made before it stands and the seat comes back up.
+    const reads: number[] = [];
+    const { sources, did } = makeHarness(fixture, {
+      machine: () => {
+        reads.push(did.closed.length);
+        return did.closed.length === 0 ? ROOMY : TIGHT;
+      },
+    });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    // Both readings were taken while the old workspace was still open; none after the close.
+    expect(reads).toEqual([0, 0]);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(did.runs.join('\n')).toContain('claude --model claude-opus-5-5');
+    const after = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-new');
   });
 });
