@@ -55,6 +55,15 @@ afterEach(async () => {
   base = '';
 });
 
+/** Waits for a daemon-side delivery to land: a queued send is answered before its turn. */
+async function until(predicate: () => boolean, ms = 3_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!predicate()) {
+    if (Date.now() > end) throw new Error('timed out waiting for the delivery');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 function teamYaml(root: string, lobby: string): string {
   return `format: 1
 project: acme
@@ -407,8 +416,16 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     expect(c1).toBe(0);
     expect(c2).toBe(0);
     expect(io1.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
-    expect(io2.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    // The second send reached the daemon while the first was still being delivered: it is
+    // answered at once with the queue's word and the message id, and delivered behind it.
+    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    const queuedId = /id ([0-9a-f-]+)\)\n$/.exec(io2.out)?.[1] ?? '';
+    expect(queuedId).not.toBe('');
 
+    await until(() => {
+      const h = readHistory('acme', w.root, w.home);
+      return h.ok && h.entries.length === 2;
+    });
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
@@ -416,6 +433,9 @@ describe('per-seat FIFO queue and concurrent sends', () => {
       { body: filed('first message'), outcome: 'sent (unconfirmed)' },
       { body: filed('second message'), outcome: 'sent (unconfirmed)' },
     ]);
+    expect(hist.entries[0]?.id).toBeTruthy();
+    expect(hist.entries[1]?.id).toBe(queuedId);
+    expect(hist.entries[0]?.id).not.toBe(queuedId);
 
     const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'native');
     const dropFiles = readdirSync(drops);
@@ -426,6 +446,92 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     const logContent = readFileSync(join(w.dir, LOG_FILE), 'utf8');
     expect(logContent).not.toContain('first message');
     expect(logContent).not.toContain('second message');
+  });
+
+  test('two concurrent sends to a busy receiver are both accepted queued and delivered exactly once in FIFO order', async () => {
+    const w = setupWorld();
+    let pendingTake = 0;
+    const host = makeHost(w, {
+      native: {
+        typeText: (_s, pane, text) => {
+          host.typed.push({ pane, text });
+          return true;
+        },
+        pressEnter: (_s, pane) => {
+          host.enters.push(pane);
+          pendingTake++;
+          return true;
+        },
+        // The seat reads idle until a trigger is taken, then working for the one status read
+        // that proves the submission; each delivery gets its own take.
+        status: () => {
+          if (pendingTake > 0) {
+            pendingTake--;
+            return 'working';
+          }
+          return 'idle';
+        },
+        // A real yield, as the host's own wait does: the daemon may poll this while the
+        // receiver is busy, and an instantly-resolved wait would starve the event loop.
+        wait: async (ms) => {
+          await new Promise((r) => setTimeout(r, Math.min(ms, 5)));
+        },
+      },
+    });
+
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    // The receiver is busy before either send arrives: another command holds its seat lock.
+    const busyLock = acquireSeatLock(w.dir, 'acme', 'native');
+    if (!('release' in busyLock)) throw new Error('expected lock');
+
+    const io1 = ownerIo(w.root);
+    const io2 = ownerIo(w.root);
+    const p1 = runSend(['native', 'first queued'], io1, host);
+    await new Promise((r) => setTimeout(r, 10));
+    const p2 = runSend(['native', 'second queued'], io2, host);
+
+    const [c1, c2] = await Promise.all([p1, p2]);
+    expect(c1).toBe(0);
+    expect(c2).toBe(0);
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    const id1 = /id ([0-9a-f-]+)\)\n$/.exec(io1.out)?.[1] ?? '';
+    const id2 = /id ([0-9a-f-]+)\)\n$/.exec(io2.out)?.[1] ?? '';
+    expect(id1).not.toBe('');
+    expect(id2).not.toBe('');
+    expect(id1).not.toBe(id2);
+
+    // Both signed copies were stored in the transport tree before either was delivered, and
+    // nothing was typed while the receiver was busy.
+    const staged = join(w.dir, 'send-drops', 'acme', 'native');
+    expect(existsSync(join(staged, id1))).toBe(true);
+    expect(existsSync(join(staged, id2))).toBe(true);
+    expect(lstatSync(join(staged, id1)).mode & 0o777).toBe(0o600);
+    expect(lstatSync(join(staged, id2)).mode & 0o777).toBe(0o600);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+
+    busyLock.release();
+    await until(() => host.enters.length === 2);
+    await until(() => {
+      const h = readHistory('acme', w.root, w.home);
+      return h.ok && h.entries.length === 2;
+    });
+    // One delivery each, in the order the sends reached the queue: the ids in the senders'
+    // answers are the ids on the two receipts.
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (!hist.ok) return;
+    expect(hist.entries.map((e) => ({ id: e.id, body: e.body, outcome: e.outcome }))).toEqual([
+      { id: id1, body: filed('first queued'), outcome: 'sent (unconfirmed)' },
+      { id: id2, body: filed('second queued'), outcome: 'sent (unconfirmed)' },
+    ]);
+    expect(new Set(hist.entries.map((e) => e.id)).size).toBe(2);
+    expect(host.typed.length).toBe(2);
+    expect(host.enters.length).toBe(2);
   });
 
   test('concurrent sends to two different seats run in parallel', async () => {
@@ -555,13 +661,19 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io = ownerIo(w.root);
     const code = await runSend(['native', 'deliver after turn'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    // The seat is in a turn at acceptance: the send is answered at once as queued and waits in
+    // the seat's FIFO for the turn to end, instead of spending the caller's wait budget.
+    expect(io.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    await until(() => host.enters.length === 1);
     expect(polls).toBeGreaterThanOrEqual(3);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (hist.ok) expect(hist.entries[0]?.outcome).toBe('sent (unconfirmed)');
   });
 
-  test('never types into a busy working pane or returns false delivered when wait budget expires', async () => {
+  test('answers queued at once and types nothing into a busy pane, never a false delivered', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       deliverWaitMs: 25,
@@ -587,25 +699,25 @@ describe('working seat retry and seat-lock coexistence', () => {
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    const code = await runSend(['native', 'do not clobber working seat', '--json'], io, host);
-    expect(code).toBe(1);
-    const parsed = JSON.parse(io.out.trim()) as {
-      schema: { name: string; version: number };
-      error: { id: string; message: string; repair: null };
-    };
-    expect(parsed.schema).toEqual({ name: 'team.error', version: 1 });
-    expect(parsed.error.id).toBe('send.held');
-    expect(parsed.error.message).toStartWith('native: held: ');
-    expect(parsed.error.message).toContain('the seat is working');
-    expect(parsed.error.repair).toBeNull();
+    const code = await runSend(['native', 'do not clobber working seat'], io, host);
+    // Accepted, not refused: busy is the queue's word, and the line carries the id.
+    expect(code).toBe(0);
+    expect(io.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    const queuedId = /id ([0-9a-f-]+)\)\n$/.exec(io.out)?.[1] ?? '';
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
 
+    // The seat never becomes free. Closing the daemon ends the queued wait with a held receipt
+    // under the same id, so the send is neither lost nor reported as delivered.
+    await started.handle.close();
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (hist.ok) {
+      expect(hist.entries[0]?.id).toBe(queuedId);
       expect(hist.entries[0]?.outcome).toBe('held');
     }
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
   });
 
   // The daemon's last mile reads the store itself. A projected turn this process did not see
@@ -675,7 +787,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     expect(host.typed).toEqual([]);
   });
 
-  test('waits for acquireSeatLock held by another command and delivers when released, or returns held on timeout', async () => {
+  test('queues behind a seat lock held by another command and delivers once it is released', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       deliverWaitMs: 80,
@@ -702,27 +814,52 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const externalLock = acquireSeatLock(w.dir, 'acme', 'native');
     if (!('release' in externalLock)) throw new Error('expected lock');
-    setTimeout(() => externalLock.release(), 20);
 
     const io1 = ownerIo(w.root);
     expect(await runSend(['native', 'waited for seat lock'], io1, host)).toBe(0);
-    expect(io1.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    // The held lock is the queue's word: the sender is answered now, and the delivery follows
+    // once the other command lets go.
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    expect(host.typed).toEqual([]);
+    externalLock.release();
+    await until(() => host.enters.length === 1);
+    expect(host.typed.length).toBe(1);
+    // The delivery has ended and the worker has let the seat go before the next hold.
+    await until(() => {
+      const h = readHistory('acme', w.root, w.home);
+      return h.ok && h.entries.length === 1;
+    });
+    await until(() => {
+      const probe = acquireSeatLock(w.dir, 'acme', 'native');
+      if (!('release' in probe)) return false;
+      probe.release();
+      return true;
+    });
 
-    // Now hold seat lock past deliverWaitMs: daemon must return held without typing.
+    // Now hold the seat lock: the send is still accepted, queued behind the lock, and no leg
+    // is typed while the other command holds the seat. Releasing it delivers exactly once.
     host.typed.length = 0;
     host.enters.length = 0;
     const heldLock = acquireSeatLock(w.dir, 'acme', 'native');
     if (!('release' in heldLock)) throw new Error('expected lock');
+    const io2 = ownerIo(w.root);
     try {
-      const io2 = ownerIo(w.root);
-      expect(await runSend(['native', 'blocked by lock'], io2, host)).toBe(1);
-      expect(io2.err).toContain('held');
-      expect(io2.err).toContain('another command holds the seat');
+      expect(await runSend(['native', 'blocked by lock'], io2, host)).toBe(0);
+      expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
     } finally {
       heldLock.release();
     }
+    await until(() => host.enters.length === 1);
+    await until(() => {
+      const h = readHistory('acme', w.root, w.home);
+      return h.ok && h.entries.length === 2;
+    });
+    expect(host.typed.length).toBe(1);
+    const hist = readHistory('acme', w.root, w.home);
+    expect(hist.ok).toBe(true);
+    if (hist.ok) expect(hist.entries.map((e) => e.outcome)).toEqual(['sent (unconfirmed)', 'sent (unconfirmed)']);
   });
 
   test('reclaims stale seat-lock whose holder PID is dead', async () => {

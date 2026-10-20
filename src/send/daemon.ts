@@ -144,6 +144,18 @@ export type DaemonSendResponse =
   | { v: 1; ok: true; id: string; seat: string; outcome: 'answered'; reply: string; reply_id: string | null }
   | {
       v: 1;
+      ok: true;
+      id: string;
+      seat: string;
+      /** The receiver was busy when the send reached the daemon: the signed copy is stored, the
+       *  message holds one place in the seat's FIFO queue, and the daemon delivers it once the
+       *  seat's lock clears. The sender is answered at once and does not wait for the turn. */
+      outcome: 'queued';
+      status: 'receiver busy';
+      detail: string;
+    }
+  | {
+      v: 1;
       ok: false;
       id: string | null;
       seat: string;
@@ -466,6 +478,10 @@ export type StartSendDaemonResult =
 type QueuedItem = {
   request: DaemonSendRequest;
   resolve: (response: DaemonSendResponse) => void;
+  /** The sender was answered `queued` at acceptance: this item waits for the seat to free
+   *  instead of the bounded wait a caller still standing behind the request uses, and its late
+   *  delivery answer is written to the history rather than returned to anyone. */
+  queued?: true;
 };
 
 /**
@@ -524,6 +540,30 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
   // Per-seat FIFO queues and active worker flags.
   const queues = new Map<string, QueuedItem[]>();
   const activeWorkers = new Map<string, Promise<void>>();
+  // Read by a queued item's wait: a close stops waiting instead of holding the daemon open.
+  let closed = false;
+
+  /** Why this seat is busy right now, or null. A held seat lock, a running turn, or a worker
+   *  already draining this seat's queue all mean the sender is answered `queued` at once: the
+   *  message takes its place in the queue and the delivery follows when the seat is free. */
+  const receiverBusyOf = (seatName: string, cli: string): string | null => {
+    if (activeWorkers.has(seatName)) return 'a send to this seat is already being delivered';
+    const lock = acquireSeatLock(input.dir, input.team.session, seatName);
+    if ('release' in lock) {
+      // The check must not hold what it only asked about. A stale lock is reclaimed by this
+      // acquisition and released with it, which is the same takeover the delivery would make.
+      lock.release();
+    } else {
+      return `another command holds the seat (pid ${String(lock.held)})`;
+    }
+    const found = findSeatAgent(host, input.team.session, seatName);
+    if (!found.ok) return null; // the worker names the reason; a missing pane is not the queue's to judge
+    const status = host.native.status(input.team.session, found.pane);
+    if (status === 'working') return 'the seat is working';
+    const rawScreen = host.native.paneText?.(input.team.session, found.pane) ?? null;
+    if (rawScreen !== null && readScreen(cli, rawScreen).kind === 'working') return 'the seat is working';
+    return null;
+  };
 
   const drainSeat = async (seatName: string): Promise<void> => {
     const queue = queues.get(seatName);
@@ -540,6 +580,8 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
           alive,
           presenceState,
           input.presenceChannelHealthy,
+          item.queued === true,
+          () => closed,
         );
         item.resolve(response);
       } catch {
@@ -632,20 +674,45 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: send queue is full (${String(MAX_QUEUE_DEPTH)} messages waiting)`,
       });
     }
-    return new Promise<DaemonSendResponse>((resolve) => {
-      queue.push({ request, resolve });
-      if (!activeWorkers.has(seatName)) {
-        const worker = drainSeat(seatName);
-        activeWorkers.set(seatName, worker);
-      }
-    });
+    // A waited send asks the daemon for a reply, which a queued acceptance could not carry:
+    // it keeps the worker's own path and its bounded wait.
+    const busy = request.wait === true ? null : receiverBusyOf(seatName, configured.cli);
+    if (busy === null) {
+      return new Promise<DaemonSendResponse>((resolve) => {
+        queue.push({ request, resolve });
+        if (!activeWorkers.has(seatName)) {
+          const worker = drainSeat(seatName);
+          activeWorkers.set(seatName, worker);
+        }
+      });
+    }
+    // The receiver is busy: the signed copy was staged before the dial, the message takes one
+    // place in this seat's FIFO queue, and the sender is answered at once with the id and the
+    // reason. The delivery is the worker's, after the seat frees; its answer has no sender to
+    // return to, so it resolves this item's promise to nobody and writes the history line as
+    // every other ending does.
+    const queuedId = request.id ?? randomUUID();
+    const accepted: DaemonSendResponse = {
+      v: 1,
+      ok: true,
+      id: queuedId,
+      seat: seatName,
+      outcome: 'queued',
+      status: 'receiver busy',
+      detail: `${seatName}: queued (receiver busy): ${busy}; the signed copy is stored and delivery follows when the seat is free`,
+    };
+    logLine(input.dir, 'send', request.from, `${seatName}: queued (receiver busy) (${busy}; id ${queuedId})`, host.now());
+    queue.push({ request: { ...request, id: queuedId }, resolve: () => {}, queued: true });
+    if (!activeWorkers.has(seatName)) {
+      const worker = drainSeat(seatName);
+      activeWorkers.set(seatName, worker);
+    }
+    return Promise.resolve(accepted);
   };
 
   // One dispatcher for this root: the socket server's `send` branch and the returned handle
   // both call it, so a later machine route reaches exactly the behavior `team send` reaches.
   const deliver = enqueueSend;
-
-  let closed = false;
 
   const closeHandle = async (): Promise<void> => {
     if (closed) return;
@@ -837,6 +904,10 @@ async function executeQueuedSend(
   alive: (pid: number) => boolean,
   presenceState: PresenceState,
   presenceChannelHealthy: ((seat: string) => boolean) | undefined,
+  /** The sender was answered `queued` at acceptance: wait for the seat with no deadline of the
+   *  request's own, and stop waiting when the daemon closes (the drop stays on disk). */
+  queued = false,
+  stopping: () => boolean = () => false,
 ): Promise<DaemonSendResponse> {
   const seatName = request.to;
   const from = request.from;
@@ -1032,22 +1103,36 @@ async function executeQueuedSend(
   };
 
   // Bounded wait loop: wait for `acquireSeatLock` and for the seat to finish any running turn (`working`).
-  const deadline = Date.now() + waitMs;
+  // A queued item was already answered at acceptance, so its wait ends only when the seat is
+  // free or the daemon closes: a held line it could never show the sender would be a silent
+  // failure, and the drop file is the durable copy either way.
+  const deadline = queued ? Number.POSITIVE_INFINITY : Date.now() + waitMs;
   let lock: { release(): void } | null = null;
 
   try {
     for (;;) {
+      if (queued && stopping()) {
+        return recordHeld(`the daemon closed before the seat was free; the drop file is at ${dropPath}`);
+      }
       const remaining = Math.max(0, deadline - Date.now());
+      // A queued item waits without its own deadline, so it asks for the seat in slices and
+      // re-checks the close between them; a waiting send keeps the daemon's own deadline.
       const acquired = await acquireSeatLockWithRetry(
         dir,
         team.session,
         seatName,
-        remaining,
+        queued ? Math.max(pollMs, 1_000) : remaining,
         pollMs,
         (ms) => host.native.wait(ms),
         alive,
       );
       if (!acquired.ok) {
+        if (queued) {
+          if (stopping()) {
+            return recordHeld(`the daemon closed before the seat was free; the drop file is at ${dropPath}`);
+          }
+          continue;
+        }
         return recordHeld(`another command holds the seat (pid ${String(acquired.held)}); the drop file is at ${dropPath}`);
       }
       lock = acquired;

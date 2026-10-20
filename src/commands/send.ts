@@ -1948,6 +1948,13 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
     note(walkAttempt('typed', 'delivered', false, at, startedAt));
     return;
   }
+  // The daemon took the send into the seat's FIFO queue and will deliver it when the seat is
+  // free: the typed route has carried it, and no leg behind it is tried. The delivery's own
+  // receipt is the daemon's history line when it lands.
+  if (res.outcome === 'queued') {
+    note(walkAttempt('typed', 'delivered', false, at, startedAt));
+    return;
+  }
   const outcome: AttemptOutcome =
     res.outcome === 'held' || res.outcome === 'timeout' || res.outcome === 'unreachable' || res.outcome === 'refused'
       ? res.outcome
@@ -1978,6 +1985,21 @@ function finishDaemonSend(
     return sentUnconfirmed(io, seatName, report, ms, 'typed', notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
+  if (res.outcome === 'queued') {
+    // The receiver was busy when the send reached the daemon: the signed copy is stored and the
+    // message holds one place in that seat's FIFO, so the sender is answered now instead of
+    // waiting for the turn. The delivery receipt is the daemon's history line when the seat
+    // frees; the send id is the same one on both.
+    const ms = host.now().getTime() - startedAt;
+    const summary = `${seatName}: queued (receiver busy) (typed, ${String(ms)} ms; id ${res.id})`;
+    if (report.json) {
+      writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: 'typed' });
+    } else {
+      openText(io, report);
+      io.stdout(`${summary}\n`);
+    }
+    return 0;
+  }
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
   if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
   if (res.outcome === 'unreachable') return unreachable(io, dir, who, seatName, res.detail, host, report);
@@ -3712,7 +3734,15 @@ function configuration(io: Io, message: string, report: Report): number {
 /** The one action document's own fields: the frame is `writeAction`'s. `summary` is the closing
  *  line the plain run prints last, so the two faces say the same thing once. */
 type ActionFields = {
-  status: 'delivered' | 'delivered (read)' | 'sent (unconfirmed)' | 'answered' | 'recorded' | 'native' | 'dry-run';
+  status:
+    | 'delivered'
+    | 'delivered (read)'
+    | 'sent (unconfirmed)'
+    | 'queued (receiver busy)'
+    | 'answered'
+    | 'recorded'
+    | 'native'
+    | 'dry-run';
   summary: string;
   dryRun?: boolean;
   /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, or `native` for a
