@@ -23,7 +23,9 @@ import { emptySession, readState, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { captureIdleClaim, settleIdleClaim } from '../src/watch/claim.ts';
+import { captureIdleClaim, idleClaimOf, settleIdleClaim } from '../src/watch/claim.ts';
+import type { PresenceReading } from '../src/daemon/presence/contract.ts';
+import type { PresenceRead } from '../src/watch/presence.ts';
 import {
   dispatchIdleWork, forgetIdleEpisodes,
   type IdleDispatchInput, type WorkPush, type WorkPushRequest,
@@ -945,5 +947,142 @@ describe('the watch seam', () => {
     // The guard is narrow: with nothing to dispatch and a truthful clock, the mail ring is the
     // one typed path left, and it types.
     expect(typed.some((line) => line.includes('Team: run team drops --read --seat deepseek-acme-2'))).toBe(true);
+  });
+});
+
+const PRESENCE_BINDING = 'prs_0123456789ab';
+const PRESENCE_SEAT_ID = 'seat_0123456789ab';
+
+/** A native reading on the current incarnation. Ingest is derived from the event instant, so a
+ *  scene that only moves `since` stays coherent. */
+function presenceReading(over: Partial<PresenceReading> = {}): PresenceReading {
+  const since = over.since ?? new Date(NOW - 10 * MIN).toISOString();
+  const value = {
+    v: 1,
+    seq: 7,
+    id: `${since}-a1b2c3d4`,
+    state: 'idle',
+    source: 'runtime-hook',
+    event: 'turn-end',
+    binding: PRESENCE_BINDING,
+    since,
+    observedAt: new Date(NOW - 9 * MIN).toISOString(),
+    ...over,
+  } as PresenceReading;
+  if (over.id === undefined) value.id = `${value.since}-a1b2c3d4`;
+  if (over.observedAt === undefined) {
+    value.observedAt = new Date(Math.min(NOW, Date.parse(value.since) + MIN)).toISOString();
+  }
+  return value;
+}
+
+function presenceSessionAt(stamp: string, withFence = true): SessionState {
+  const session = emptySession();
+  const record: Record<string, unknown> = {
+    stage: 'ready',
+    last_active: stamp,
+    id: PRESENCE_SEAT_ID,
+    presence_binding: PRESENCE_BINDING,
+  };
+  if (withFence) {
+    record.presence_applied = { seat_id: PRESENCE_SEAT_ID, binding: PRESENCE_BINDING, seq: 7, applied_at: stamp };
+  }
+  session.seats['worker-1'] = record as unknown as SessionState['seats'][string];
+  return session;
+}
+
+describe('native presence before any dispatch', () => {
+  const stamp = new Date(NOW - 10 * MIN).toISOString();
+  const statePath = (): string => join(root, '.agents', 'team.state.json');
+
+  /** Hand-writes one old episode with a captured claim, dispatches one presence read over it,
+   *  and returns the state file before and after. */
+  async function heldPass(
+    read: PresenceRead,
+    extra: Partial<IdleDispatchInput> = {},
+    withFence = true,
+  ): Promise<{ before: string; after: string; result: Awaited<ReturnType<typeof dispatchIdleWork>> }> {
+    queue([{ id: 't1', title: 'First' }]);
+    handWritten(presenceSessionAt(stamp, withFence));
+    expect(captureIdleClaim(join(root, '.agents'), {
+      session: 'crew', seat: 'worker-1', idle_since: stamp, at: new Date(NOW - 5 * MIN),
+    }).kind).toBe('captured');
+    const before = readFileSync(statePath(), 'utf8');
+    const result = await dispatchIdleWork(input({
+      presence: new Map([['worker-1', read]]), presenceChannelHealthy: true, ...extra,
+    }));
+    return { before, after: readFileSync(statePath(), 'utf8'), result };
+  }
+
+  test('a malformed reading holds the claim byte-for-byte and writes no record', async () => {
+    const pass = await heldPass({ kind: 'invalid', why: 'the projection is unreadable' });
+    expect(pass.after).toBe(pass.before);
+    expect(pass.result.pushed).toEqual([]);
+    expect(pass.result.fallback).toBeUndefined();
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+  });
+
+  test('a native projection with no canonical fence holds, never falls back to the screen', async () => {
+    const pass = await heldPass({ kind: 'native', reading: presenceReading() }, {}, false);
+    expect(pass.after).toBe(pass.before);
+    expect(pass.result.pushed).toEqual([]);
+  });
+
+  test('a projection on a channel not known healthy holds even when it reads idle', async () => {
+    const pass = await heldPass(
+      { kind: 'native', reading: presenceReading() },
+      { presenceChannelHealthy: false },
+    );
+    expect(pass.after).toBe(pass.before);
+    expect(pass.result.pushed).toEqual([]);
+  });
+
+  test('a known working reading ends the episode; the claim is pruned', async () => {
+    const working = presenceReading({
+      state: 'working', event: 'turn-start', since: new Date(NOW - MIN).toISOString(),
+    });
+    const pass = await heldPass({ kind: 'native', reading: working });
+    expect(pass.after).not.toBe(pass.before);
+    expect(pass.result.pushed).toEqual([]);
+    const fresh = readState(join(root, '.agents')).sessions.crew!;
+    expect(idleClaimOf(fresh, 'worker-1')).toBeUndefined();
+  });
+
+  test('a native idle seat is eligible with no herdr, and the claim keeps the persisted stamp', async () => {
+    const claimStamp = new Date(NOW - 6 * MIN).toISOString();
+    const nativeSince = new Date(NOW - 10 * MIN).toISOString();
+    handWritten(presenceSessionAt(claimStamp));
+    queue([{ id: 't1', title: 'First' }]);
+    const push: WorkPush = async () => ({ ok: true, outcome: 'typed (unconfirmed)' });
+    const result = await dispatchIdleWork(input({
+      live: null,
+      presence: new Map([['worker-1', { kind: 'native' as const, reading: presenceReading({ since: nativeSince }) }]]),
+      presenceChannelHealthy: true,
+      push,
+    }));
+    // The native clock authorises the wake; the transport still has no live read to type through.
+    expect(result.pushed).toEqual([{ seat: 'worker-1', ok: false, refused: 'herdr gave no live read this pass' }]);
+    const fresh = readState(join(root, '.agents')).sessions.crew!;
+    const claim = idleClaimOf(fresh, 'worker-1');
+    if (claim === undefined || !('idle_since' in claim)) {
+      throw new Error('the refused capture left no readable claim');
+    }
+    expect(claim.idle_since).toBe(claimStamp);
+    expect(JSON.stringify(claim)).not.toContain(nativeSince);
+  });
+
+  test('a projection on disk with no health answer is default-closed', async () => {
+    handWritten(presenceSessionAt(stamp));
+    queue([{ id: 't1', title: 'First' }]);
+    const dir = join(root, '.agents', 'presence', 'crew', 'worker-1');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'current.json'), JSON.stringify(presenceReading()));
+    const built = input();
+    const before = readFileSync(statePath(), 'utf8');
+    const result = await dispatchIdleWork(built);
+    expect(result.pushed).toEqual([]);
+    expect(result.fallback).toBeUndefined();
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
   });
 });
