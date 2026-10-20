@@ -703,6 +703,54 @@ describe('a durable episode claim', () => {
     expect(calls.sort()).toEqual(['worker-1', 'worker-2']);
     expect(readState(join(root, '.agents')).sessions.crew?.idle_claims?.['worker-1']).toBeDefined();
   });
+
+  test('a second claim of the same stamp publishes its own refusal, not the first claim\'s silence', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: false, refused: 'the pane holds a dialog' };
+    };
+    const both = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1', 'worker-2']);
+    const leadDir = join(root, '.agents', 'messages', 'crew-lead');
+    const mainDir = join(entityRoot, '.agents', 'messages', 'head-lead');
+    const first = await dispatchIdleWork(input({ push, state: both }));
+    expect(first.pushed.map((one) => one.seat)).toEqual(['worker-1', 'worker-2']);
+    expect(recordsIn(leadDir)).toHaveLength(2);
+    expect(recordsIn(mainDir)).toHaveLength(2);
+
+    // The queue file goes away: a missing source reads as no takeable work (an existing but
+    // empty file is not a task list), and with no takeable work the contract ends every claim.
+    // Neither seat worked, so both stamps are the ones the next episode will carry.
+    rmSync(join(root, '.agents', 'queue.yaml'));
+    await dispatchIdleWork(input({ push, state: both, now: new Date(NOW + MIN) }));
+    expect(calls).toBe(2);
+    expect(readState(join(root, '.agents')).sessions.crew?.idle_claims).toBeUndefined();
+
+    // The lead and the main consumed the first refusal records; only the empty-source notice,
+    // sent by the drain, is left in each mailbox.
+    const consumed = (dir: string): void => {
+      for (const name of recordsIn(dir)) {
+        const full = join(dir, name);
+        const record = JSON.parse(readFileSync(full, 'utf8')) as { payload: { body: string } };
+        if (record.payload.body.includes('is idle')) rmSync(full, { force: true });
+      }
+    };
+    consumed(leadDir);
+    consumed(mainDir);
+    expect(recordsIn(leadDir)).toHaveLength(1);
+    expect(recordsIn(mainDir)).toHaveLength(1);
+
+    // Work returns while both seats are still idle at the same persisted stamps: two new claims,
+    // and their refusals are their own notices, under the same deterministic ids.
+    queue([{ id: 't1', title: 'First' }]);
+    const again = await dispatchIdleWork(input({ push, state: both, now: new Date(NOW + 2 * MIN) }));
+    expect(again.pushed.map((one) => one.seat)).toEqual(['worker-1', 'worker-2']);
+    expect(calls).toBe(4);
+    expect(again.fallback?.written).toHaveLength(4); // two seats, lead and main
+    expect(recordsIn(leadDir)).toHaveLength(3);
+    expect(recordsIn(mainDir)).toHaveLength(3);
+  });
 });
 
 // The seam: a full watch pass over the example team, with the local queue holding work and both

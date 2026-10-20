@@ -121,11 +121,13 @@ type PendingSettle = {
 
 const pendingSettles = new Map<string, PendingSettle>();
 
-/** The notices this process already published from a claim, keyed by kind and binding. It is a
- *  publication memory, not a spend: the claim's `notice` field holds the durable intent, and a
- *  new process starts with this empty and replays it (the same `once: true` ids make the replay
- *  the same records). Without it, a notice the claim still owes would be re-announced on every
- *  pass that follows its publication. */
+/** The notices this process already published, keyed by the capture's claim_id (a claim owes at
+ *  most one notice across its transitions). It is a publication memory, not a spend: the claim's
+ *  `notice` field holds the durable intent, and a new process starts with this empty and replays
+ *  it (the same `once: true` ids make the replay the same records). Without it, a notice the
+ *  claim still owes would be re-announced on every pass that follows its publication. Keying by
+ *  claim, not by the mailbox binding, keeps a second claim of the same seat and episode stamp —
+ *  after the first was pruned and the episode recaptured — free to publish its own notice. */
 const publishedNotices = new Set<string>();
 
 /** The empty-source notice ledger, keyed by scope: the signature of the idle stretch already
@@ -255,8 +257,8 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
       continue;
     }
     if (outcome.pushed.ok) continue;
-    replayNotice(input, result, 'push', seat, refusalText(input, seat, outcome.pushed.refused),
-      pushBinding(seat, since));
+    replayNotice(input, result, captured.claim.claim_id, 'push', seat,
+      refusalText(input, seat, outcome.pushed.refused), pushBinding(seat, since));
   }
   return result;
 }
@@ -293,8 +295,8 @@ async function followClaim(
       pendingSettles.delete(claim.claim_id);
       if (settled.kind !== 'settled') return;
       if (settled.claim.state === 'refused' && owed.refused !== undefined) {
-        replayNotice(input, result, 'push', seat, refusalText(input, seat, owed.refused),
-          pushBinding(seat, claim.idle_since));
+        replayNotice(input, result, claim.claim_id, 'push', seat,
+          refusalText(input, seat, owed.refused), pushBinding(seat, claim.idle_since));
       }
       return;
     }
@@ -310,7 +312,7 @@ async function followClaim(
       outcome: 'unknown',
     });
     if (settled.kind !== 'settled') return;
-    replayNotice(input, result, 'unknown', seat,
+    replayNotice(input, result, claim.claim_id, 'unknown', seat,
       `${input.team.project}: ${seat}'s direct work request of ${claim.claimed_at} has no recorded outcome; the attempt is held and will not be retried in this idle episode`,
       unknownBinding(seat, claim));
     return;
@@ -330,20 +332,20 @@ async function followClaim(
     });
     if (settled.kind !== 'settled') return;
     if (claimed || settled.claim.notice !== 'stalled') return;
-    replayNotice(input, result, 'stalled', seat, stalledText(input, seat),
+    replayNotice(input, result, claim.claim_id, 'stalled', seat, stalledText(input, seat),
       `stalled${SEP}${seat}${SEP}${claim.wake_at ?? claim.claimed_at}`);
     return;
   }
   if (claim.state === 'refused') {
     if (claim.notice !== 'refused') return;
-    replayNotice(input, result, 'push', seat,
+    replayNotice(input, result, claim.claim_id, 'push', seat,
       `${input.team.project}: ${seat} is idle with takeable work and its direct work request was refused earlier in this idle episode; nothing was typed for it`,
       pushBinding(seat, claim.idle_since));
     return;
   }
   // done: the pickup check is over; only the notice it may still owe is replayed.
   if (claim.notice === 'stalled') {
-    replayNotice(input, result, 'stalled', seat, stalledText(input, seat),
+    replayNotice(input, result, claim.claim_id, 'stalled', seat, stalledText(input, seat),
       `stalled${SEP}${seat}${SEP}${claim.wake_at ?? claim.claimed_at}`);
   }
 }
@@ -438,15 +440,15 @@ async function attempt(
 function replayNotice(
   input: IdleDispatchInput,
   result: IdleDispatchResult,
+  claim_id: string,
   kind: 'push' | 'stalled' | 'unknown',
   seat: string,
   text: string,
   binding: string,
 ): void {
-  const key = `${kind}${SEP}${binding}`;
-  if (publishedNotices.has(key)) return;
+  if (publishedNotices.has(claim_id)) return;
   mergeDelivery(result, announce(input, kind, seat, text, binding));
-  publishedNotices.add(key);
+  publishedNotices.add(claim_id);
 }
 
 function mergeDelivery(result: IdleDispatchResult, delivery: FallbackDelivery): void {
