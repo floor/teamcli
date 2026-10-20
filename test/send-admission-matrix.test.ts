@@ -18,10 +18,10 @@ import type { Agent } from '../src/registry/agents.ts';
 // The rules are the ones `src/send/admit.ts` names: the owner; a lead to another lead of its
 // entity; a lead or the operator place to a seat of its own team; two roster lines whose role
 // word is exactly `operator`; the entity's first assistant to its coordinator; any seat to its
-// own team's lead; an owner-signed grant; and, last, a reply on an open thread. The project
-// rules are asked first when a context is handed in, and an empty project registry adds their
-// names to a refusal without changing a verdict: the real project pairs are pinned in
-// `test/project-admit.test.ts`.
+// own team's lead; an owner-signed grant; a reply on an open thread; and, appended after every
+// branch above, a seat to a declared seat of its own team. The project rules are asked first
+// when a context is handed in, and an empty project registry adds their names to a refusal
+// without changing a verdict: the real project pairs are pinned in `test/project-admit.test.ts`.
 //
 // What this seam does not model, because the command resolves it before admission is asked:
 // a nickname is a second address of a seat (`erato` for `writer-06`) and reaches the same
@@ -211,8 +211,9 @@ const grid: GridRow[] = [
   { id: 'assistant-word', side: assistantWord },
 ];
 
-// The pairs the same-team rules admit, and the rule that answers each. Every pair not written
-// here is refused: the table is exhaustive over the grid, both as caller and as receiver.
+// The pairs a specific same-team rule admits, and the rule that answers each. Every pair not
+// written here is admitted by the declared-seat rule: the table is exhaustive over the grid,
+// both as caller and as receiver.
 const admittedSameTeam: Record<string, Partial<Record<string, string>>> = {
   lead: Object.fromEntries(grid.map((row) => [row.id, row.id === 'lead' ? RULE.leads : RULE.briefs])),
   'operator-place': Object.fromEntries(grid.map((row) => [row.id, RULE.briefs])),
@@ -236,9 +237,7 @@ function judgeSameTeam(context: AdmitContext | undefined, label: string): void {
       const pair = `${caller.id} -> ${target.id} (${label})`;
       const rule = admittedSameTeam[caller.id]?.[target.id];
       const verdict = admitSend(caller.side, target.side, teams, undefined, context);
-      const expected = rule === undefined
-        ? ({ pair, ok: false, why: refusalWhy(at(caller.side), at(target.side), context) } as const)
-        : ({ pair, ok: true, rule } as const);
+      const expected = ({ pair, ok: true, rule: rule ?? RULE.declaredSeat } as const);
       expect({ pair, ...verdict }).toEqual(expected);
     }
   }
@@ -264,11 +263,10 @@ describe('the same-team role matrix', () => {
 });
 
 describe('the final target: every seat reaches its own orchestrator', () => {
-  // The first half of the target is already the rules' shape: whatever a seat's role, its own
-  // team's orchestrator is one of the pairs admitted, and the rule that answers it is named here.
+  // The first half of the target is the rules' shape: whatever a seat's role, its own team's
+  // orchestrator is one of the pairs admitted, and the rule that answers it is named here.
   // The second half — every same-team seat-to-seat pair admitted through the declared signed
-  // rule — is the implementation slice builder-3 owns; the refusal table above stays the
-  // baseline record until that rule lands, then the pair expectations flip in one commit.
+  // rule — is pinned by the declared-seat block below, with the pair expectations flipped.
   const ownLeadRule: Record<string, string> = {
     lead: RULE.leads,
     'operator-place': RULE.briefs,
@@ -305,19 +303,17 @@ describe('the final target: every seat reaches its own orchestrator', () => {
   });
 });
 
-// The second half of the final target, once builder-3's rule lands: appended after every
-// current branch, so the 42 pairs the existing rules admit keep their verdicts, and every other
-// pair of one team — seat to self included — is answered by the declared-seat rule. Both
-// endpoints must be declared on the team's roster: a bootstrap DeclaredSender qualifies when its
-// seat is there, a seat off the roster does not, and a `team send --client` principal has no
-// face at this seam (it is not a roster seat). The block turns itself on when the rule's name
-// reaches RULE_SUMMARY, which is what a refusal and the drop header read.
+// The second half of the final target: the declared-seat rule is appended after every current
+// branch, so the 42 pairs the existing rules admit keep their verdicts, and every other pair of
+// one team — seat to self included — is answered by the new rule. Both endpoints must be
+// declared on the team's roster: a bootstrap DeclaredSender qualifies when its seat is there, a
+// seat off the roster does not, and a `team send --client` principal has no face at this seam
+// (it is not a roster seat). A refusal and the drop header read the rule's name in RULE_SUMMARY.
 describe('the final target: the declared-seat rule', () => {
-  const landed = RULE_SUMMARY.includes(RULE.declaredSeat);
   const targetVerdict = (caller: GridRow, target: GridRow): string =>
     admittedSameTeam[caller.id]?.[target.id] ?? RULE.declaredSeat;
 
-  test.skipIf(!landed)('every same-team pair is admitted, the existing verdicts kept', () => {
+  test('every same-team pair is admitted, the existing verdicts kept', () => {
     for (const caller of grid) {
       for (const target of grid) {
         const pair = `${caller.id} -> ${target.id}`;
@@ -326,13 +322,13 @@ describe('the final target: the declared-seat rule', () => {
     }
   });
 
-  test.skipIf(!landed)('seat-to-self is a declared-seat pair', () => {
+  test('seat-to-self is a declared-seat pair', () => {
     for (const row of grid.filter((entry) => admittedSameTeam[entry.id]?.[entry.id] === undefined)) {
       expect({ role: row.id, ...admitSend(row.side, row.side, teams) }).toEqual({ role: row.id, ok: true, rule: RULE.declaredSeat });
     }
   });
 
-  test.skipIf(!landed)('a bootstrap declared seat qualifies; a seat off the roster does not', () => {
+  test('a bootstrap declared seat qualifies; a seat off the roster does not', () => {
     const declaredArchitect: DeclaredSender = { seat: 'architect', team: 'floor', role: 'architect', declared: true };
     const declaredGhost: DeclaredSender = { seat: 'visitor', team: 'floor', role: 'writer', declared: true };
     expect(admitSend(declaredArchitect, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
@@ -344,7 +340,7 @@ describe('the final target: the declared-seat rule', () => {
     expect(admitSend(writer06, visitor, teams).ok).toBe(false);
   });
 
-  test.skipIf(!landed)('the two incident refusals close, and grant and reply stay ahead of the rule', () => {
+  test('the two incident refusals close, and grant and reply stay ahead of the rule', () => {
     expect(admitSend(architect, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
     expect(admitSend(operatorWord, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
     expect(admitSend(operatorWord, erato, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
@@ -412,23 +408,18 @@ describe('team relations: what crosses an edge', () => {
 });
 
 describe('the three refused role cases of 2026-10-18 and 2026-10-19', () => {
-  test('A: the architect reaches its own lead, and not the operator place', () => {
-    // The logged refusal targets the floor operator place, not the floor orchestrator; the
-    // seat-to-own-lead pair below is the rule that was already there.
-    expect(admitSend(architect, operatorPlace, teams)).toEqual({
-      ok: false,
-      why: refusalWhy('architect@floor', 'operator-3@floor'),
-    });
-    // The live line printed the project rules ahead of the team rules: same verdict, longer list.
-    expect(admitSend(architect, operatorPlace, teams, undefined, { projects: {} })).toEqual({
-      ok: false,
-      why: refusalWhy('architect@floor', 'operator-3@floor', { projects: {} }),
-    });
+  test('A: the architect reaches its own lead and the operator place', () => {
+    // The logged refusal targeted the floor operator place, not the floor orchestrator; the
+    // seat-to-own-lead pair below is the rule that was already there. The declared-seat rule,
+    // appended after every branch, now admits the operator-place pair too.
+    expect(admitSend(architect, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    // The live line printed the project rules ahead of the team rules: same verdict.
+    expect(admitSend(architect, operatorPlace, teams, undefined, { projects: {} })).toEqual({ ok: true, rule: RULE.declaredSeat });
     expect(admitSend(architect, floorLead, teams)).toEqual({ ok: true, rule: RULE.seat });
     // The place is reached by the lead and by the operator place itself.
     expect(admitSend(floorLead, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.briefs });
     expect(admitSend(operatorPlace, floorLead, teams)).toEqual({ ok: true, rule: RULE.briefs });
-    // A plain seat reaches it only through a verified grant or a reply on an open thread.
+    // A grant or a reply answers first when the caller hands one in.
     expect(admitSend(architect, operatorPlace, teams, { name: 'architect to the operators' })).toEqual({
       ok: true,
       rule: 'an owner-signed grant naming send (architect to the operators)',
@@ -439,22 +430,16 @@ describe('the three refused role cases of 2026-10-18 and 2026-10-19', () => {
     });
   });
 
-  test('B: a seat reaches no other seat of its team, by seat name or by nickname', () => {
-    const refusal = { projects: {} };
-    expect(admitSend(operatorWord, writer06, teams, undefined, refusal)).toEqual({
-      ok: false,
-      why: refusalWhy('operator-02@floor', 'writer-06@floor', refusal),
-    });
+  test('B: a seat reaches every declared seat of its team, and no other team', () => {
+    const context = { projects: {} };
+    expect(admitSend(operatorWord, writer06, teams, undefined, context)).toEqual({ ok: true, rule: RULE.declaredSeat });
     // `erato` is the nickname of the same writer: admission judges the string the command
-    // resolved, and the refusal is the same.
-    expect(admitSend(operatorWord, erato, teams, undefined, refusal)).toEqual({
-      ok: false,
-      why: refusalWhy('operator-02@floor', 'erato@floor', refusal),
-    });
-    // Plain seat to plain seat has no rule in either direction.
-    expect(admitSend(writer06, erato, teams).ok).toBe(false);
-    expect(admitSend(erato, writer06, teams).ok).toBe(false);
-    // The operator word reaches its own pair and its own team's lead, and nothing else.
+    // resolved, and the verdict is the same.
+    expect(admitSend(operatorWord, erato, teams, undefined, context)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    // Plain seat to plain seat, either way round.
+    expect(admitSend(writer06, erato, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    expect(admitSend(erato, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
+    // The operator word keeps its own pair and the seat rule its own team's lead.
     expect(admitSend(operatorWord, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.operators });
     expect(admitSend(operatorWord, floorLead, teams)).toEqual({ ok: true, rule: RULE.seat });
   });
@@ -514,7 +499,7 @@ describe('the three refused role cases of 2026-10-18 and 2026-10-19', () => {
 describe('role words that name no place', () => {
   test('a seat named and roled orchestrator is no lead: the capability is', () => {
     expect(admitSend(wordOrchestrator, wordLead, teams)).toEqual({ ok: true, rule: RULE.seat });
-    expect(admitSend(wordOrchestrator, wordBuilder, teams).ok).toBe(false);
+    expect(admitSend(wordOrchestrator, wordBuilder, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
     // The word on the receiver names nothing either: a lead writes to it as to any seat.
     expect(admitSend(wordLead, wordBuilder, teams)).toEqual({ ok: true, rule: RULE.briefs });
     expect(admitSend(wordLead, wordOrchestrator, teams)).toEqual({ ok: true, rule: RULE.briefs });
@@ -524,7 +509,7 @@ describe('role words that name no place', () => {
 
   test('a coordinator word with no mark is no lead, and reaches only its own lead', () => {
     expect(admitSend(coordinatorWord, floorLead, teams)).toEqual({ ok: true, rule: RULE.seat });
-    expect(admitSend(coordinatorWord, writer06, teams).ok).toBe(false);
+    expect(admitSend(coordinatorWord, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
     expect(admitSend(floorLead, coordinatorWord, teams)).toEqual({ ok: true, rule: RULE.briefs });
   });
 
@@ -541,7 +526,7 @@ describe('role words that name no place', () => {
     expect(admitSend(assistantWord, floorLead, teams)).toEqual({ ok: true, rule: RULE.seat });
     expect(admitSend(assistantWord, cliLead, teams).ok).toBe(false);
     expect(admitSend(assistantCapability, cliLead, teams).ok).toBe(false);
-    expect(admitSend(assistantCapability, writer06, teams).ok).toBe(false);
+    expect(admitSend(assistantCapability, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
   });
 });
 
@@ -550,17 +535,14 @@ describe('a declared sender: judged by its file seat, inside its own team', () =
   const declaredOperator: DeclaredSender = { seat: 'operator-02', team: 'floor', role: 'operator', declared: true };
   const declaredLead: DeclaredSender = { seat: 'orchestrator', team: 'floor', role: 'coordinator', declared: true };
 
-  test('a declared plain seat reaches its own lead and no other seat', () => {
+  test('a declared plain seat reaches its own lead and every declared seat of its team', () => {
     expect(admitSend(declaredArchitect, floorLead, teams)).toEqual({ ok: true, rule: RULE.seat });
-    expect(admitSend(declaredArchitect, operatorPlace, teams)).toEqual({
-      ok: false,
-      why: refusalWhy('architect@floor', 'operator-3@floor'),
-    });
+    expect(admitSend(declaredArchitect, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
   });
 
   test('the operator word decides the declared pair as the roster word does', () => {
     expect(admitSend(declaredOperator, operatorPlace, teams)).toEqual({ ok: true, rule: RULE.operators });
-    expect(admitSend(declaredOperator, writer06, teams).ok).toBe(false);
+    expect(admitSend(declaredOperator, writer06, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
   });
 
   test('a declared seat named as the file\'s lead is the place the file names', () => {
@@ -574,12 +556,12 @@ describe('the rules are asked in order: the grant and the reply come last', () =
     expect(admitSend(floorLead, cliLead, teams, { name: 'unused' })).toEqual({ ok: true, rule: RULE.leads });
   });
 
-  test('a grant admits the pair no rule does, and the verdict names the grant', () => {
+  test('a grant is asked before the declared-seat rule and names itself', () => {
     expect(admitSend(writer06, erato, teams, { name: 'the floor writers' })).toEqual({
       ok: true,
       rule: 'an owner-signed grant naming send (the floor writers)',
     });
-    expect(admitSend(writer06, erato, teams).ok).toBe(false);
+    expect(admitSend(writer06, erato, teams)).toEqual({ ok: true, rule: RULE.declaredSeat });
   });
 
   test('the owner is reached by the reply rule alone, and the owner reaches everyone', () => {
@@ -596,23 +578,23 @@ describe('the rules are asked in order: the grant and the reply come last', () =
     }
   });
 
-  test('a reply admits the pair every rule left unadmitted, and its refusal lists the reply rule', () => {
+  test('a reply is asked before the declared-seat rule, and both name themselves', () => {
     expect(admitSend(writer06, erato, teams, undefined, { projects: {}, reply: 'open-thread' })).toEqual({
       ok: true,
       rule: REPLY_RULE,
     });
     expect(admitSend(writer06, erato, teams, undefined, { projects: {}, reply: undefined })).toEqual({
-      ok: false,
-      why: refusalWhy('writer-06@floor', 'erato@floor', { projects: {} }),
+      ok: true,
+      rule: RULE.declaredSeat,
     });
     expect(admitSend(writer06, erato, teams, undefined, { projects: {}, reply: 'open-thread' })).toEqual({
       ok: true,
       rule: REPLY_RULE,
     });
-    // The summary names the reply rule only when the context carried it.
+    // The declared-seat rule answers with no reply context too; a cross-team pair still refuses.
     expect(admitSend(writer06, erato, teams, undefined, { projects: {} })).toEqual({
-      ok: false,
-      why: refusalWhy('writer-06@floor', 'erato@floor', { projects: {} }),
+      ok: true,
+      rule: RULE.declaredSeat,
     });
   });
 });
@@ -620,9 +602,11 @@ describe('the rules are asked in order: the grant and the reply come last', () =
 describe('the context: the entity reach and the project summary', () => {
   test('an empty project registry changes no verdict and names the project rules in a refusal', () => {
     expect(admitSend(floorLead, cliLead, teams, undefined, { projects: {} })).toEqual({ ok: true, rule: RULE.leads });
-    expect(admitSend(writer06, erato, teams, undefined, { projects: {} })).toEqual({
+    expect(admitSend(writer06, erato, teams, undefined, { projects: {} })).toEqual({ ok: true, rule: RULE.declaredSeat });
+    // A cross-team pair is refused, and the refusal lists the project rules ahead of the team rules.
+    expect(admitSend(writer06, cliWriter, teams, undefined, { projects: {} })).toEqual({
       ok: false,
-      why: refusalWhy('writer-06@floor', 'erato@floor', { projects: {} }),
+      why: refusalWhy('writer-06@floor', 'writer-06@teamcli', { projects: {} }),
     });
   });
 
