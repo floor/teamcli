@@ -45,7 +45,13 @@ export const PRESENCE_LOAD_RETRY_MS = 5_000;
 
 export type PresenceRefusal = { seat: string; id: string; why: string };
 
-/** What one bounded step did. `pending` means a later step has more spool work on this route. */
+/** What one bounded step did. `pending` means a later step has more spool work on this route.
+ *  `healthy` is the route verdict the daemon consumes: true only when this step ended fully
+ *  caught up, with no error, and every seat it has loaded is settled — its index loaded with no
+ *  structural fault, and no unreadable index or binding read still unrecovered. A fatal log fault
+ *  and an unrecovered append or binding failure keep it false on later steps even when the error
+ *  is reported only once. An absent route or a route with no current projection is false as
+ *  well: health is never asserted from no events. */
 export type PresenceIngestResult = {
   ingested: PresenceLogLine[];
   rejected: PresenceRefusal[];
@@ -54,6 +60,7 @@ export type PresenceIngestResult = {
   errors: PresenceRefusal[];
   pending: boolean;
   closed: boolean;
+  healthy: boolean;
 };
 
 export type PresenceIngestInput = {
@@ -102,7 +109,7 @@ type SeatIndex = {
 class PresenceLogFault extends Error {}
 
 function emptyResult(closed = false): PresenceIngestResult {
-  return { ingested: [], rejected: [], stale: [], repaired: [], errors: [], pending: false, closed };
+  return { ingested: [], rejected: [], stale: [], repaired: [], errors: [], pending: false, closed, healthy: false };
 }
 
 function messageOf(error: unknown): string {
@@ -201,6 +208,12 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
   let lastSuccessAt: string | null = null;
   let lastStatus: PresenceStatus | null = null;
   let lastStatusWrite = 0;
+  // Recovery markers for the channel verdict. A failed read stays unrecovered until the same
+  // read succeeds: a load or append failure until the log loads again, a binding failure until
+  // the state read answers. A step that reports nothing therefore cannot erase a failure that
+  // has not been retried.
+  const indexBlocked = new Set<string>();
+  const bindingBlocked = new Set<string>();
 
   function indexFor(seat: string): SeatIndex {
     const kept = indexes.get(seat);
@@ -234,18 +247,22 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
     } catch (error) {
       if (codeOf(error) === 'ENOENT') {
         bindingCache = null;
+        bindingBlocked.delete(seat);
         return { kind: 'ok', binding: null };
       }
+      bindingBlocked.add(seat);
       return { kind: 'error', why: `the seat state is unreadable: ${messageOf(error)}` };
     }
     if (bindingCache !== null && bindingCache.dev === info.dev && bindingCache.ino === info.ino
       && bindingCache.mtimeMs === info.mtimeMs && bindingCache.size === info.size) {
+      bindingBlocked.delete(seat);
       return { kind: 'ok', binding: bindingCache.seats.get(seat) ?? null };
     }
     let text: string;
     try {
       text = await readFile(path, 'utf8');
     } catch (error) {
+      bindingBlocked.add(seat);
       return { kind: 'error', why: `the seat state is unreadable: ${messageOf(error)}` };
     }
     let parsed: unknown;
@@ -253,11 +270,13 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
       parsed = JSON.parse(text);
     } catch {
       bindingCache = null;
+      bindingBlocked.add(seat);
       return { kind: 'error', why: 'the seat state is not JSON' };
     }
     const state = parsed as { format?: unknown; sessions?: unknown } | null;
     if (!state || typeof state !== 'object' || state.format !== 1 || !state.sessions || typeof state.sessions !== 'object') {
       bindingCache = null;
+      bindingBlocked.add(seat);
       return { kind: 'error', why: 'the seat state is not a team state of format 1' };
     }
     const sessions = state.sessions as Record<string, unknown>;
@@ -273,6 +292,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
       }
     }
     bindingCache = { dev: info.dev, ino: info.ino, mtimeMs: info.mtimeMs, size: info.size, seats: found };
+    bindingBlocked.delete(seat);
     return { kind: 'ok', binding: found.get(seat) ?? null };
   }
 
@@ -618,6 +638,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
         }
         try {
           await loadIndex(paths, index, beforeLoad.binding, result);
+          indexBlocked.delete(seat);
         } catch (error) {
           if (error instanceof PresenceLogFault) {
             // Reported on the step that found it, not only on a later beat: the channel turns
@@ -636,6 +657,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
             index.newest = new Map();
             index.seen = new Set();
             index.retryAt = now().getTime() + PRESENCE_LOAD_RETRY_MS;
+            indexBlocked.add(seat);
             result.errors.push({ seat, id: '', why: `the presence log could not be loaded: ${messageOf(error)}` });
           }
           continue;
@@ -725,6 +747,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
             result.errors.push({ seat, id: record.id, why: `the log append failed; its outcome is unknown: ${messageOf(error)}` });
             index.loaded = false;
             index.retryAt = 0;
+            indexBlocked.add(seat);
             result.pending = true;
             break;
           }
@@ -763,6 +786,25 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
       if (fault !== null) await writeStatus('failed', fault, result);
       else await writeStatus('serving', result.errors[0]?.why ?? null, result);
     }
+    // The channel verdict B5 consumes. A route is healthy only when this process has seen the
+    // route's spool, holds a native projection for the current binding, and is fully caught up:
+    // no backlog, no error, every loaded seat with a readable log and a state read that answered.
+    // The markers outlive the step that reported the failure, so a fatal fault, an uncertain
+    // append or an unreadable index cannot read healthy on a later quiet beat. A seat with no
+    // spool folder has no channel and is not a fault; one that was attempted and failed is.
+    const listed = new Set(seats);
+    for (const blocked of [indexBlocked, bindingBlocked]) {
+      for (const seat of [...blocked]) if (!listed.has(seat)) blocked.delete(seat);
+    }
+    const settled = seats.every((seat) => {
+      const index = indexes.get(seat);
+      if (index === undefined) return true;
+      return index.loaded && index.faulted === null
+        && !indexBlocked.has(seat) && !bindingBlocked.has(seat);
+    });
+    const continuity = seats.some((seat) => (indexes.get(seat)?.current ?? null) !== null);
+    result.healthy = everSawSpool && continuity && settled
+      && result.errors.length === 0 && !result.pending && !result.closed;
     return result;
   }
 

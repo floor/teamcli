@@ -791,3 +791,110 @@ describe('the sequenced transitions a 5-second consumer reads', () => {
     expect(done.nextOffset).toBe(Buffer.byteLength(readFileSync(log, 'utf8')));
   });
 });
+
+describe('the channel verdict the daemon consumes', () => {
+  test('an absent route, and a route with no events, never read healthy', async () => {
+    const world = makeWorld();
+    const ingester = ingesterFor(world);
+    expect((await ingester.step()).healthy).toBe(false);
+    await ingester.close();
+    // The second beat proves it is not a first-step artifact: still no spool, still no projection.
+    const next = ingesterFor(world);
+    expect((await next.step()).healthy).toBe(false);
+  });
+
+  test('a caught-up route with a native projection is healthy, with or without new events', async () => {
+    const world = makeWorld();
+    const ingester = ingesterFor(world);
+    const staged = stage(world, 'turn-start', { ts: past(5) });
+    const first = await ingester.step();
+    expect(first.healthy).toBe(true);
+    expect(await current(world)).toMatchObject({ id: staged.id });
+    // A state persists without a new event: the next beat is still healthy and ingests nothing.
+    const idle = await ingester.step();
+    expect(idle.healthy).toBe(true);
+    expect(idle.ingested).toEqual([]);
+  });
+
+  test('a fatal log fault keeps the verdict false on later quiet steps, not only where it was reported', async () => {
+    const world = makeWorld();
+    const ingester = ingesterFor(world);
+    stage(world, 'turn-start', { ts: past(10) });
+    await ingester.step();
+    await ingester.close();
+    const log = pathsOf(world).log;
+    writeFileSync(log, `${readFileSync(log, 'utf8')}not a presence line\n`);
+    const pending = stage(world, 'turn-end', { ts: past(1) });
+    const next = ingesterFor(world);
+    const found = await next.step();
+    expect(found.healthy).toBe(false);
+    expect(found.errors.some((entry) => entry.why.includes('not a presence line'))).toBe(true);
+    const quiet = await next.step();
+    expect(quiet.errors).toEqual([]);
+    expect(quiet.healthy).toBe(false);
+    expect(spoolNames(world)).toContain(`${pending.id}.json`);
+  });
+
+  test('an uncertain append stays false until the reload consumes the replay', async () => {
+    const world = makeWorld();
+    let attempts = 0;
+    const ingester = ingesterFor(world, {
+      append: async (path, line) => {
+        attempts += 1;
+        writeFileSync(path, `${JSON.stringify(line)}\n`, { flag: 'a' });
+        if (attempts === 1) throw new Error('the sync failed after the bytes landed');
+      },
+    });
+    const staged = stage(world, 'turn-start', { ts: past(5) });
+    const failed = await ingester.step();
+    expect(failed.healthy).toBe(false);
+    expect(failed.pending).toBe(true);
+    const recovered = await ingester.step();
+    expect(recovered.errors).toEqual([]);
+    expect(recovered.healthy).toBe(true);
+    expect(spoolNames(world)).toEqual([]);
+    expect(await current(world)).toMatchObject({ id: staged.id });
+  });
+
+  test('a backlog keeps the verdict false until a step has nothing left', async () => {
+    const world = makeWorld();
+    const ingester = ingesterFor(world, { maxRecords: 1 });
+    const first = stage(world, 'turn-start', { ts: past(20) });
+    const second = stage(world, 'turn-end', { ts: past(10) });
+    const one = await ingester.step();
+    expect(one.ingested.map((line) => line.id)).toEqual([first.id]);
+    expect(one.pending).toBe(true);
+    expect(one.healthy).toBe(false);
+    const two = await ingester.step();
+    expect(two.ingested.map((line) => line.id)).toEqual([second.id]);
+    // The batch spent its budget, so caught-up is not yet known either.
+    expect(two.healthy).toBe(false);
+    const three = await ingester.step();
+    expect(three.healthy).toBe(true);
+  });
+
+  test('an unreadable seat state is unhealthy until the next state read answers', async () => {
+    const world = makeWorld();
+    const ingester = ingesterFor(world);
+    const staged = stage(world, 'turn-start', { ts: past(5) });
+    writeFileSync(join(world.stateDir, STATE_FILE), 'not json\n');
+    const failed = await ingester.step();
+    expect(failed.healthy).toBe(false);
+    expect(failed.errors.some((entry) => entry.why.includes('not JSON'))).toBe(true);
+    writeSeats(world, { [SEAT]: BINDING });
+    const recovered = await ingester.step();
+    expect(recovered.ingested.map((line) => line.id)).toEqual([staged.id]);
+    expect(recovered.healthy).toBe(true);
+  });
+
+  test('a rejected record is refused as before and does not by itself fail health', async () => {
+    const world = makeWorld();
+    const ingester = ingesterFor(world);
+    stage(world, 'turn-start', { ts: past(5) });
+    await ingester.step();
+    plant(world, 'bad.json', '{"v":1}\n');
+    const refused = await ingester.step();
+    expect(refused.rejected).toHaveLength(1);
+    expect(refused.healthy).toBe(true);
+  });
+});
