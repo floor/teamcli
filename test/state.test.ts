@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logLine } from '../src/log.ts';
 import {
   LOCK_FILE,
   LOG_FILE,
+  LockBusyError,
   SEAT_ID_PATTERN,
   STATE_FILE,
   emptySession,
@@ -226,6 +227,32 @@ describe('the lock', () => {
     const stale: number[] = [];
     expect(withLock(dir, () => 'ran', { onStale: (pid) => stale.push(pid) })).toBe('ran');
     expect(stale).toEqual([Number(dead)]);
+  });
+
+  test('a lock file just created and still empty is not taken over', () => {
+    // `openSync(path, 'wx')` creates the file before its writer writes the pid; for that moment
+    // it reads as 0, which names no process.
+    writeFileSync(join(dir, LOCK_FILE), '');
+    const path = join(dir, LOCK_FILE);
+    const before = statSync(path);
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    const after = statSync(path);
+    expect(after.ino).toBe(before.ino);
+    expect(readFileSync(path, 'utf8')).toBe('');
+  });
+
+  test('a young lock file holding 0 is not taken over either', () => {
+    writeFileSync(join(dir, LOCK_FILE), '0\n');
+    expect(() => withLock(dir, () => 'ran', { waitMs: 0 })).toThrow(LockBusyError);
+    expect(readFileSync(join(dir, LOCK_FILE), 'utf8')).toBe('0\n');
+  });
+
+  test('an old lock file with no pid is taken over', () => {
+    writeFileSync(join(dir, LOCK_FILE), '');
+    const past = new Date(Date.now() - 5_000);
+    utimesSync(join(dir, LOCK_FILE), past, past);
+    expect(withLock(dir, () => 'ran', { waitMs: 0 })).toBe('ran');
+    expect(existsSync(join(dir, LOCK_FILE))).toBe(false);
   });
 });
 

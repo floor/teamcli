@@ -767,8 +767,10 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
         pause(50);
         continue;
       }
-      // A dead holder, or a lock file too young to hold its pid yet.
-      if (!Number.isInteger(holder) && Date.now() - statSync(path).mtimeMs < 1000) {
+      // A dead holder, or a lock file too young to hold its pid yet. A file just created holds
+      // no pid until its writer writes one — it reads as 0, not as a number that names a
+      // process — so anything that is not a positive integer is young, not stale.
+      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {
         if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
