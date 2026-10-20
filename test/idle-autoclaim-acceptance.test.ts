@@ -25,6 +25,9 @@ import { presenceId } from '../src/daemon/presence/contract.ts';
 import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
 import { readPresenceCurrent } from '../src/daemon/presence/read.ts';
 import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
+import { routeOf } from '../src/daemon/routes.ts';
+import { createHostedWatch } from '../src/daemon/watch.ts';
+import { hostedWatchRun } from '../src/daemon/watch-run.ts';
 import { sendDirect, type SendHost } from '../src/commands/send.ts';
 import { runWatch, workPushResultOf, type WatchSources } from '../src/commands/watch.ts';
 import type { WorkPush, WorkPushRequest } from '../src/watch/dispatch.ts';
@@ -723,6 +726,118 @@ describe('the native presence proof drives the same pickup', () => {
     expect(code).toBe(0);
     expect(typed).toEqual([]);
     expect(paneRuns).toEqual([]);
+    expect(sent.pushed).toEqual([]);
+    expect(sent.frames).toEqual([]);
+    expect(workerInbox()).toEqual([]);
+    expect(runtime.claims).toEqual([]);
+    expect(leases()).toEqual([]);
+  });
+});
+
+/** Waits for a hosted pass to finish, on the real clock; the pass itself never really sleeps. */
+async function waitForPass(check: () => boolean, ms = 3000, state?: () => unknown): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for a hosted pass: ${JSON.stringify(state?.())}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/** Runs this world under the production hosted binding: the daemon's own loop and source set,
+ *  with the admitted sender and the daemon's fresh per-seat channel answer supplied where the
+ *  daemon supplies them. Each pass after the first needs the host's tick, as a hosted watch keeps
+ *  no timer of its own; the receiving runtime pumps beside the pass, driven only by the
+ *  transport's delivery signal. */
+async function hostedPickup(options: {
+  channelHealthy: boolean;
+  runtime: ReturnType<typeof workerRuntime>;
+  sent: ReturnType<typeof pushViaSend>;
+  passes: number;
+}): Promise<void> {
+  const route = routeOf(root, 'acme', SESSION, ['lead', SEAT]);
+  // The base is this same world, minus the status-event source: a hosted loop's waits are its
+  // host's, so an event waiter here would never be settled inside the pass.
+  const base: WatchSources = { ...watchSources({ workerStatus: 'idle', screen: BUSY, passes: 13 }).sources, statusSource: undefined };
+  const log: string[] = [];
+  const host = createHostedWatch({
+    route,
+    now: () => new Date(clock),
+    effects: 'open',
+    run: hostedWatchRun({
+      route,
+      log: (text) => log.push(text),
+      base,
+      pushWork: options.sent.push,
+      pid: 4242,
+      ...(options.channelHealthy ? { presenceChannelHealthy: () => true } : {}),
+    }),
+  });
+  try {
+    for (let pass = 1; pass <= options.passes; pass += 1) {
+      if (pass > 1) {
+        // The verified file asks for 5s, which the sweep floor raises to 10s: a tick before the
+        // host's due instant wakes nothing.
+        clock += 10_000;
+        host.tick(new Date(clock));
+      }
+      await waitForPass(() => host.state().cycles === pass, 3000, () => ({ state: host.state(), log }));
+      await options.runtime.pump();
+    }
+  } finally {
+    await host.stop('the scene is done');
+  }
+}
+
+// The same end-to-end pickup under the production hosted binding: the daemon's own loop and
+// source set read this world's projection, the daemon supplies the sender and its fresh channel
+// answer, and the worker's runtime still claims through the real receiver. The proof is the same
+// one the live watch reads; only the loop that reads it changes.
+describe('the hosted watch pickup under the native proof', () => {
+  test('a proven native idle makes the hosted pass push once, and the worker claims once', async () => {
+    await nativeReading('turn-end');
+    directRoute();
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    await hostedPickup({ channelHealthy: true, runtime, sent, passes: 3 });
+    // The busy screen never disqualified the seat, and the hosted set typed nothing: the one
+    // wake was the signed direct request.
+    expect(sent.pushed).toHaveLength(1);
+    expect(sent.frames).toHaveLength(1);
+    expect(sent.typed).toEqual([]);
+    const inbox = workerInbox();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.payload.to).toBe(SEAT);
+    // The receiving runtime read the delivery through the real gate and claimed exactly once,
+    // even though later hosted passes ran and pumped again.
+    expect(runtime.claims).toHaveLength(1);
+    expect(runtime.claims[0]).toContain('claimed t1');
+    const held = leases();
+    expect(held.map((lease) => lease.id)).toEqual(['t1']);
+    expect(held[0]?.seat).toBe(SEAT);
+    expect(held[0]?.pane).toBe(PANE);
+  });
+
+  test('a native turn holds every hosted pass: no request, no inbox copy and no claim', async () => {
+    await nativeReading('turn-start');
+    directRoute();
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    await hostedPickup({ channelHealthy: true, runtime, sent, passes: 3 });
+    expect(sent.pushed).toEqual([]);
+    expect(sent.frames).toEqual([]);
+    expect(workerInbox()).toEqual([]);
+    expect(runtime.claims).toEqual([]);
+    expect(leases()).toEqual([]);
+  });
+
+  test('a native idle without the daemon\'s healthy answer holds every hosted pass', async () => {
+    await nativeReading('turn-end');
+    directRoute();
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    // The daemon hosts this route but answers nothing for the channel: the projection is
+    // default-closed, exactly as with no provider at all.
+    await hostedPickup({ channelHealthy: false, runtime, sent, passes: 3 });
     expect(sent.pushed).toEqual([]);
     expect(sent.frames).toEqual([]);
     expect(workerInbox()).toEqual([]);
