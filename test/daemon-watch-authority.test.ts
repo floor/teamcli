@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { routeOf } from '../src/daemon/routes.ts';
 import { createHostedWatch } from '../src/daemon/watch.ts';
-import { HOSTED_AUTHORITY_TICK_MS, hostedWatchAuthority, type WatchAuthorityCheck } from '../src/daemon/watch-authority.ts';
+import { HOSTED_AUTHORITY_TICK_MS, hostedWatchAuthority, type WatchAuthorityCheck, type WatchSenderFactory } from '../src/daemon/watch-authority.ts';
 import { emptySession, LOCK_FILE, readState, STATE_FILE, updateState } from '../src/state.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../src/watch/authority.ts';
 import { forgetIdleEpisodes, type WorkPushRequest } from '../src/watch/dispatch.ts';
@@ -332,6 +332,31 @@ describe('the authority under the hosted watch', () => {
     // No authority was ever acquired for the repointed route.
     expect(record()).toBeUndefined();
     await host.stop('done');
+  });
+
+  test('a factory that builds no sender leaves effects blocked and the read-only loop running', async () => {
+    bind();
+    writeFileSync(join(agents, 'queue.yaml'), '');
+    const clock = { at: NOW };
+    const build = hostedWatchAuthority({
+      route: route(),
+      teamFile,
+      log: () => {},
+      now: () => new Date(clock.at),
+      base: idleSources(clock),
+      verifyAuthority: (check) => verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK, now: new Date(clock.at) }),
+      // A broken factory must not open effects: the state stays truthful even off the type.
+      sender: (() => undefined) as unknown as WatchSenderFactory,
+    });
+    expect(effectsOf(build)).toBe('blocked');
+    const host = machine(build, clock);
+    await waitUntil(() => host.state().cycles === 1);
+    expect(host.state().effects).toBe('blocked');
+    // The watch still holds its captured authority and keeps cycling read-only.
+    expect(record()?.epoch).toBeDefined();
+    await host.stop('done');
+    expect(host.state().effects).toBe('blocked');
+    expect(record()).toBeUndefined();
   });
 
   test('a verifier refusal at effect time closes the push, drains and releases', async () => {
