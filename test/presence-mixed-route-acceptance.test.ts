@@ -23,8 +23,9 @@ import type { TeamFile } from '../src/file/types.ts';
 import {
   presenceChannelHealthy,
   presenceSeatsOf,
-  seatPresenceQualified,
+  seatPresenceProof,
   type PresenceHealthReading,
+  type PresenceSeatHealth,
   type PresenceSeatsRead,
 } from '../src/labels/presence.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
@@ -39,16 +40,17 @@ const HOOK_BINDING = 'prs_ba9876543210';
 const NOW = new Date('2026-10-20T05:00:00.000Z');
 const ago = (seconds: number): string => new Date(NOW.getTime() - seconds * 1000).toISOString();
 
-/** The followup adds the expectation flag as a fourth argument. The baseline's three-argument
- *  function ignores it at runtime, so this one contained cast keeps the same file bytes
- *  compiling — and asserting — at every SHA. */
+/** The followup adds the expectation flag as a fourth argument. This wrapper keeps the file's
+ *  scenes on the same boolean answer while the display's newer proof also returns the applied
+ *  transition the answer names; no assertion changes. */
 type Qualification = (
   seats: PresenceSeatsRead | undefined,
   seat: string,
   binding: unknown,
   nativeExpected: boolean,
 ) => boolean;
-const qualified = seatPresenceQualified as unknown as Qualification;
+const qualified: Qualification = (seats, seat, binding, nativeExpected) =>
+  seatPresenceProof(seats, seat, binding, nativeExpected).qualified;
 
 /** One fresh answered probe for ROOT. `seats` is the route's raw per-seat list, omitted for a
  *  hook-only route; `at` moves both the snapshot and the probe answer into the past. */
@@ -70,11 +72,23 @@ function healthReading(seats?: unknown, at: Date = NOW): PresenceHealthReading {
   };
 }
 
-const serving = (seat: string, binding: string = CODEX_BINDING): Record<string, unknown> =>
-  ({ seat, state: 'serving', healthy: true, binding, why: null });
+/** The projection id every scene writes; a serving answer must vouch for exactly it. */
+const APPLIED = `${ago(5)}-ab12cd34`;
 
-const listed = (entries: Array<[string, { healthy: boolean; binding: string | null }]>): PresenceSeatsRead =>
-  ({ kind: 'listed', seats: new Map(entries) });
+const serving = (
+  seat: string,
+  binding: string = CODEX_BINDING,
+  appliedEventId: string = APPLIED,
+): Record<string, unknown> =>
+  ({ seat, state: 'serving', healthy: true, binding, appliedEventId, why: null });
+
+const listed = (
+  entries: Array<[string, { healthy: boolean; binding: string | null; appliedEventId?: string | null }]>,
+): PresenceSeatsRead => ({
+  kind: 'listed',
+  seats: new Map(entries.map(([seat, entry]): [string, PresenceSeatHealth] =>
+    [seat, { appliedEventId: null, ...entry }])),
+});
 
 function projection(binding: string, state: 'working' | 'idle'): string {
   const since = ago(5);
