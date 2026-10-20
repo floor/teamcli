@@ -8,6 +8,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PresenceEvent, PresenceReading, PresenceWriterSource } from '../src/daemon/presence/contract.ts';
+import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
+import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
@@ -194,6 +196,47 @@ describe('prefetch and the labelled fallback', () => {
     })));
     const reads = await prefetchPresence({ stateDir, session: 'crew', seatNames: ['writer'] });
     expect(reads.get('writer')).toMatchObject({ kind: 'invalid' });
+  });
+
+  test('a projection written by the real ingester is read and proven end to end', async () => {
+    const { stateDir } = scratch();
+    const since = iso(10 * MIN);
+    writeFileSync(join(stateDir, 'team.state.json'), `${JSON.stringify({
+      format: 1,
+      sessions: {
+        crew: {
+          seats: {
+            writer: {
+              stage: 'ready',
+              last_active: since,
+              id: SEAT_ID,
+              presence_binding: BINDING,
+              presence_applied: { seat_id: SEAT_ID, binding: BINDING, seq: 1, applied_at: since },
+            },
+          },
+        },
+      },
+    }, null, 2)}\n`);
+    expect(stagePresenceRecord(stateDir, {
+      session: 'crew', seat: 'writer', binding: BINDING, source: 'runtime-hook', event: 'turn-end', ts: since,
+    }).kind).toBe('staged');
+    const ingester = createPresenceIngester({ stateDir, session: 'crew', now: () => new Date(NOW) });
+    const stepped = await ingester.step();
+    await ingester.close();
+    expect(stepped.ingested).toHaveLength(1);
+    const reads = await prefetchPresence({ stateDir, session: 'crew', seatNames: ['writer'] });
+    const read = reads.get('writer');
+    if (read?.kind !== 'native') throw new Error('the ingester wrote no native projection');
+    expect(presenceVerdict(read, {
+      seat: 'writer',
+      seatId: SEAT_ID,
+      binding: BINDING,
+      fence: { seat_id: SEAT_ID, binding: BINDING, seq: read.reading.seq, applied_at: since },
+      lastActive: since,
+      channelHealthy: true,
+    }, { now: new Date(NOW), thresholdSeconds: 300 })).toEqual({
+      idle: true, source: 'runtime-hook', nativeSince: since, observedAt: new Date(NOW).toISOString(),
+    });
   });
 });
 
