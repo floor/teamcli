@@ -32,7 +32,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../policy/codex-daemon.ts';
 import { findAgent } from '../../registry/agents.ts';
 import { recordedSeatSession } from '../../registry/resume.ts';
@@ -108,6 +108,13 @@ export type CodexPresenceSourceState = {
   evidenceAt: string | null;
   /** Alias of `evidenceAt` for the host adapter that already sampled that name. */
   lastRefreshAt: string | null;
+  /**
+   * The spool id (`<record stem>`, without `.json`) of the latest successfully staged event,
+   * null before any stage. This is the durable identity the host reconciles against its applied
+   * projection; `evidenceAt` is only a receipt and never proves the record was applied. A
+   * duplicate live notification keeps the same id; a failed stage never advances it.
+   */
+  stagedEventId: string | null;
   /** A transport loss after a successful baseline: transitions in that window are missing. */
   gap: boolean;
   events: number;
@@ -361,6 +368,7 @@ function writeDiagnostic(input: Internals): void {
       reason: input.state.reason,
       updatedAt: input.now().toISOString(),
       evidenceAt: input.state.evidenceAt,
+      stagedEventId: input.state.stagedEventId,
     });
     const temp = join(paths.root, `.source.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
     writeFileSync(temp, `${body}\n`, { mode: 0o600 });
@@ -445,6 +453,7 @@ function stageEvent(
   if (staged.kind === 'staged') {
     input.state.events += 1;
     input.lastApplied = event;
+    input.state.stagedEventId = basename(staged.path, '.json');
     return 'staged';
   }
   input.state.ignored += 1;
@@ -617,6 +626,7 @@ function applyBoundNotification(
   if (outcome.kind === 'staged') {
     input.state.events += 1;
     input.lastApplied = reading.event;
+    input.state.stagedEventId = basename(outcome.path, '.json');
     if (input.initializedSent) {
       input.state.channel = 'connected';
       input.state.reason = null;
@@ -839,6 +849,7 @@ export function codexPresenceFor(input: {
       baseline: 'pending',
       evidenceAt: null,
       lastRefreshAt: null,
+      stagedEventId: null,
       gap: false,
       events: 0,
       ignored: 0,

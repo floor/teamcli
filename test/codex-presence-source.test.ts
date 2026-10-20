@@ -35,7 +35,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import {
@@ -132,7 +132,7 @@ function registerBoundAgent(scene: Scene): void {
 }
 
 /** The spool's records, sorted by id (which starts with the event instant). */
-function spoolRecords(dir: string): { event: string; ts: string; source: string }[] {
+function spoolRecords(dir: string): { id: string; event: string; ts: string; source: string }[] {
   const paths = presencePaths(dir, SESSION, SEAT);
   if (paths === null || !existsSync(paths.spool)) return [];
   const files: string[] = [];
@@ -146,7 +146,10 @@ function spoolRecords(dir: string): { event: string; ts: string; source: string 
   walk(paths.spool);
   return files
     .sort()
-    .map((path) => JSON.parse(readFileSync(path, 'utf8')) as { event: string; ts: string; source: string });
+    .map((path) => ({
+      id: basename(path, '.json'),
+      ...(JSON.parse(readFileSync(path, 'utf8')) as { event: string; ts: string; source: string }),
+    }));
 }
 
 async function waitFor(what: string, predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -365,6 +368,7 @@ describe('the Codex presence source', () => {
       expect(first.events).toBe(1);
       expect(first.coverage).toEqual({ statusChanged: 'measured', turnFrames: 'unproven', waitingFlags: 'unproven' });
       expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end']);
+      expect(first.stagedEventId).toBe(spoolRecords(scene.dir)[0]!.id);
       expect(server.requests.map((request) => request.method)).toEqual(['initialize', 'initialized', 'thread/read']);
 
       const paths = presencePaths(scene.dir, SESSION, SEAT);
@@ -378,27 +382,34 @@ describe('the Codex presence source', () => {
         threadId: THREAD,
         channel: 'connected',
         evidenceAt: NOW.toISOString(),
+        stagedEventId: first.stagedEventId,
       });
       expect(Object.keys(diagnostic)).not.toContain('endpoint');
 
       server.push(active(OTHER_THREAD));
       await waitFor('the other thread to be counted', () => statusOf(source, scene).otherThread === 1);
       expect(statusOf(source, scene).events).toBe(1);
+      expect(statusOf(source, scene).stagedEventId).toBe(first.stagedEventId);
       expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end']);
 
       scene.clock.at = new Date(NOW.getTime() + 1_000);
       server.push(active());
       await waitFor('the bound active frame', () => statusOf(source, scene).events === 2);
       expect(statusOf(source, scene).evidenceAt).toBe(scene.clock.at.toISOString());
+      expect(statusOf(source, scene).stagedEventId).toBe(spoolRecords(scene.dir)[1]!.id);
+      expect(statusOf(source, scene).stagedEventId).not.toBe(first.stagedEventId);
       expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end', 'turn-start']);
 
       scene.clock.at = new Date(NOW.getTime() + 2_000);
       server.push(idle());
       await waitFor('the bound idle frame', () => statusOf(source, scene).events === 3);
+      const idleId = statusOf(source, scene).stagedEventId;
+      expect(idleId).toBe(spoolRecords(scene.dir)[2]!.id);
       scene.clock.at = new Date(NOW.getTime() + 3_000);
       server.push(idle());
       await waitFor('the repeated idle receipt', () => statusOf(source, scene).evidenceAt === scene.clock.at.toISOString());
       expect(statusOf(source, scene).events).toBe(3);
+      expect(statusOf(source, scene).stagedEventId).toBe(idleId);
       expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end', 'turn-start', 'turn-end']);
 
       // No polling and no evidence-age expiry: an hour of silence is still a connected channel.
@@ -473,6 +484,9 @@ describe('the Codex presence source', () => {
       expect(records.map((record) => record.event)).toEqual(['turn-end', 'turn-end']);
       expect(records[1]!.ts).toBe(scene.clock.at.toISOString());
       expect(records[0]!.ts).toBe(NOW.toISOString());
+      // The reconnect's fresh record is a new durable identity, not the pre-gap one.
+      expect(second.stagedEventId).toBe(records[1]!.id);
+      expect(second.stagedEventId).not.toBe(first.stagedEventId);
       expect(await source.close()).toEqual({ quiesced: true });
     } finally {
       await server.close();
@@ -492,6 +506,7 @@ describe('the Codex presence source', () => {
       expect(gone.reason).toBe('thread-closed');
       expect(gone.evidenceAt).toBe(scene.clock.at.toISOString());
       expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end', 'session-end']);
+      expect(gone.stagedEventId).toBe(spoolRecords(scene.dir)[1]!.id);
 
       server.drop();
       await new Promise((resolve) => setTimeout(resolve, 30));
@@ -633,6 +648,7 @@ describe('the Codex presence source', () => {
       const source = startSource(scene, server, sink);
       await source.step(NOW);
       expect(statusOf(source, scene).channel).toBe('connected');
+      const idleId = statusOf(source, scene).stagedEventId;
 
       scene.clock.at = new Date(NOW.getTime() + 1_000);
       server.push(active());
@@ -641,6 +657,8 @@ describe('the Codex presence source', () => {
       expect(failed.channel).toBe('unknown');
       expect(failed.gap).toBe(true);
       expect(failed.events).toBe(1);
+      // A failed stage never advances the durable identity the host reconciles.
+      expect(failed.stagedEventId).toBe(idleId);
       expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end']);
 
       fail = false;
@@ -648,6 +666,8 @@ describe('the Codex presence source', () => {
       server.push(active());
       await waitFor('the reconciled stage', () => statusOf(source, scene).channel === 'connected');
       expect(statusOf(source, scene).events).toBe(2);
+      expect(statusOf(source, scene).stagedEventId).toBe(spoolRecords(scene.dir)[1]!.id);
+      expect(statusOf(source, scene).stagedEventId).not.toBe(idleId);
       expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end', 'turn-start']);
       expect(await source.close()).toEqual({ quiesced: true });
     } finally {
