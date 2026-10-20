@@ -28,11 +28,16 @@
 // 9-10. A record bound to a predecessor, or absent on a managed seat, holds before any probe
 //    connection or queue process: the shared endpoint is never guessed in its place.
 // 11. An explicit remote naming another endpoint than the recorded one is refused before either.
+// 12. The real sender, not only the route function, probes and queues the recorded endpoint: a
+//     decoy daemon at the queue process's own CODEX_HOME receives no connection.
+// 13-15. A predecessor-bound record, a managed binding with no record, and unreadable seat state
+//     each hold the real sender's native leg before any probe connection or queue process, and
+//     the drop leg takes the send. Scenes 1 and 5 remain the measured unbound default: a seat
+//     with no managed binding and no record keeps the runtime's own endpoint.
 //
-// Scenes 5 run through `runSend`; scenes 6-11 call `deliverCodexNativeRoute` directly because
-// `runSend` supplies neither an explicit socket nor an explicit remote — the pair the refusal
-// exists for is only reachable at the route function, and this suite does not edit the product to
-// expose it.
+// Scenes 5 and 12-15 run through `runSend`; scenes 6-11 call `deliverCodexNativeRoute` directly
+// because they need route-only options (`remote`/`socketPath`) that `runSend` never supplies, and
+// this suite does not edit the product to expose them.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -915,5 +920,99 @@ describe('the ordinary send native leg (Codex)', () => {
     );
     expect(server.requests).toEqual([]);
     expect(queueCalls(scene.queueLog)).toEqual([]);
+  });
+
+  /** One ordinary send whose native leg must hold before contacting any endpoint: no queue
+   *  process, no connection to the shared-home daemon (nor to `recorded`, when given), and the
+   *  production walk's own native-then-drop ledger under the same message id. */
+  async function expectSenderHold(scene: Scene, reason: string, recorded?: AppServer): Promise<void> {
+    const codexHomeServer = await startAppServer(
+      join(scene.codexHome, 'app-server-control', 'app-server-control.sock'),
+      (threadId) => ({ id: threadId, status: { type: 'idle' }, canAcceptDirectInput: true }),
+    );
+    const sent = await sendWith(scene, codexHomeServer);
+    expect(sent.code).toBe(0);
+    expect(sent.err).toBe('');
+    expect(sent.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`);
+    expect(sent.calls).toEqual([]);
+    expect(codexHomeServer.requests).toEqual([]);
+    if (recorded !== undefined) expect(recorded.requests).toEqual([]);
+    expect(markerOf(scene).attempts).toEqual(nativeThenDropAttempts(reason));
+  }
+
+  test("the real sender probes and queues a managed seat's recorded endpoint, not the inherited home default", async () => {
+    const scene = makeScene();
+    const recordedSocket = join(scene.dir, 'state', 'codex-app-server.sock');
+    const server = await startAppServer(recordedSocket, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    recordSeatState(scene, recordedEndpointState(recordedSocket, RECORD_BINDING, RECORD_BINDING));
+    // The queue process inherits a CODEX_HOME of its own with a live decoy daemon: any connection
+    // there would prove the shared default was used instead of the recorded endpoint.
+    const decoyHome = join(scene.base, 'decoy-codex-home');
+    const decoy = await startAppServer(
+      join(decoyHome, 'app-server-control', 'app-server-control.sock'),
+      (threadId) => ({ id: threadId, status: { type: 'idle' }, canAcceptDirectInput: true }),
+    );
+    let sent: Awaited<ReturnType<typeof sendWith>>;
+    try {
+      sent = await sendWith(scene, server, decoyHome);
+    } finally {
+      await decoy.close();
+    }
+
+    expect(sent.code).toBe(0);
+    expect(sent.err).toBe('');
+    expect(sent.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`);
+    // The recorded URL is the one the queue is handed, verbatim, after the probe read that socket.
+    expect(sent.calls).toEqual([
+      ['queue', '--remote', `unix://${recordedSocket}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+    expect(server.requests).toEqual([
+      { method: 'initialize' },
+      { method: 'thread/read', threadId: THREAD_ID },
+    ]);
+    expect(decoy.requests).toEqual([]);
+  });
+
+  test('a predecessor-bound record holds the real sender before any probe or queue', async () => {
+    const scene = makeScene();
+    const recordedSocket = join(scene.dir, 'state', 'codex-app-server.sock');
+    const server = await startAppServer(recordedSocket, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    recordSeatState(scene, recordedEndpointState(recordedSocket, 'prs_ffffffffffff', RECORD_BINDING));
+
+    try {
+      await expectSenderHold(
+        scene,
+        "the seat's recorded Codex endpoint cannot be used (the endpoint record names another presence binding); refusing the shared app-server path",
+        server,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('a managed seat that recorded no endpoint holds the real sender instead of guessing a shared one', async () => {
+    const scene = makeScene();
+    recordSeatState(scene, { presence_binding: RECORD_BINDING });
+    await expectSenderHold(
+      scene,
+      'the managed seat records no Codex endpoint its launch wrote; refusing the shared app-server path',
+    );
+  });
+
+  test('unreadable seat state holds the real sender before any probe or queue', async () => {
+    const scene = makeScene();
+    writeFileSync(join(scene.dir, 'team.state.json'), '{ not json');
+    await expectSenderHold(
+      scene,
+      'no trusted runtime session is recorded for this seat (seat state could not be read)',
+    );
   });
 });
