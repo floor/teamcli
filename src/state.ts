@@ -686,14 +686,36 @@ export function pruneProcs(session: SessionState, alive: (pid: number) => boolea
 
 // Reads the state, lets `change` edit it, and writes it back, all under the lock. `waitMs` is the
 // lock's; `0` makes one attempt and throws `LockBusyError` instead of pausing, for a caller on a
-// scheduler tick that must defer the same work to a later tick.
-export function updateState<T>(dir: string, change: (state: State) => T, options: { waitMs?: number } = {}): T {
+// scheduler tick that must defer the same work to a later tick. `writeWhen` decides from the
+// result whether the file is written at all: a caller that found the record it must not act on
+// can leave the file exactly as it stands, sanitizing read included.
+export function updateState<T>(
+  dir: string,
+  change: (state: State) => T,
+  options: { waitMs?: number; writeWhen?: (result: T) => boolean } = {},
+): T {
   return withLock(dir, () => {
     const state = readState(dir);
     const result = change(state);
-    writeAtomic(join(dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
+    if (!options.writeWhen || options.writeWhen(result)) {
+      writeAtomic(join(dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
+    }
     return result;
   }, options);
+}
+
+/** The watch record exactly as the state file holds it, before the read door cleans it. A record
+ *  the parser cannot use must not look absent to a writer that has to judge the holder: this lets
+ *  a locked writer tell a malformed record that stands from no record at all. */
+export function storedWatchRecord(dir: string, session: string): unknown {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8')) as {
+      sessions?: Record<string, { watch?: unknown }>;
+    };
+    return raw.sessions?.[session]?.watch;
+  } catch {
+    return undefined;
+  }
 }
 
 export function writeAtomic(path: string, text: string): void {

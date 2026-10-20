@@ -8,7 +8,12 @@ import {
   releaseWatchAuthority,
   renewWatchAuthority,
 } from '../src/watch/epoch-store.ts';
-import { isWatchEpoch, mintWatchEpoch } from '../src/watch/epoch.ts';
+import {
+  isWatchEpoch,
+  mintWatchEpoch,
+  WATCH_AUTHORITY_FUTURE_SKEW_MS,
+  WATCH_AUTHORITY_MAX_AGE_MS,
+} from '../src/watch/epoch.ts';
 
 const T0 = Date.parse('2026-10-20T03:00:00.000Z');
 const at = (ms: number): Date => new Date(ms);
@@ -103,6 +108,34 @@ describe('acquire', () => {
     expect(current()).toEqual({ heartbeat: iso(T0) });
   });
 
+  test('a pid-less authority is unknown even when its heartbeat is old', () => {
+    const epoch = mintWatchEpoch();
+    seed({ epoch, heartbeat: iso(T0) });
+    const result = acquireWatchAuthority(agents, 'crew', { now: at(T0 + 60_000) });
+    expect(result.kind).toBe('held');
+    expect(current()).toEqual({ epoch, heartbeat: iso(T0) });
+  });
+
+  test('a record the read door dropped still refuses acquire, and the file is left as it stood', () => {
+    writeFileSync(join(agents, STATE_FILE), JSON.stringify({
+      format: 1,
+      sessions: { crew: { watch: { pid: 4242, heartbeat: 42 } } },
+    }));
+    const before = readFileSync(join(agents, STATE_FILE), 'utf8');
+    const result = acquireWatchAuthority(agents, 'crew', { now: at(T0) });
+    expect(result).toEqual({ kind: 'held', holder: { pid: 4242 } });
+    expect(readFileSync(join(agents, STATE_FILE), 'utf8')).toBe(before);
+    expect(current()).toBeUndefined();
+  });
+
+  test('a stale fenced record of this runtime is an old host and is not re-acquired', () => {
+    const epoch = mintWatchEpoch();
+    seed({ pid: process.pid, epoch, heartbeat: iso(T0) });
+    const result = acquireWatchAuthority(agents, 'crew', { now: at(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1) });
+    expect(result.kind).toBe('held');
+    expect(current()).toEqual({ pid: process.pid, epoch, heartbeat: iso(T0) });
+  });
+
   test('a malformed epoch never becomes permission for a silent takeover', () => {
     seed({ heartbeat: iso(T0), epoch: 'watch_NOTHEX' });
     const result = acquireWatchAuthority(agents, 'crew', { now: at(T0 + 1_000) });
@@ -142,6 +175,36 @@ describe('renew', () => {
     });
     if (renewed.kind !== 'renewed') throw new Error('renew failed');
     expect(current()).toEqual(renewed.authority);
+  });
+
+  test('an expired proof is not renewed, and the record stays as it was', () => {
+    const acquired = acquireWatchAuthority(agents, 'crew', { now: at(T0) });
+    if (acquired.kind !== 'acquired') throw new Error('acquire failed');
+    expect(renewWatchAuthority(agents, 'crew', acquired.authority.epoch, { now: at(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1) })).toEqual({ kind: 'lost' });
+    expect(current()).toEqual(acquired.authority);
+  });
+
+  test('the freshness edge still renews, inclusive', () => {
+    const acquired = acquireWatchAuthority(agents, 'crew', { now: at(T0) });
+    if (acquired.kind !== 'acquired') throw new Error('acquire failed');
+    expect(renewWatchAuthority(agents, 'crew', acquired.authority.epoch, { now: at(T0 + WATCH_AUTHORITY_MAX_AGE_MS) })).toEqual({
+      kind: 'renewed',
+      authority: { pid: process.pid, epoch: acquired.authority.epoch, heartbeat: iso(T0 + WATCH_AUTHORITY_MAX_AGE_MS) },
+    });
+  });
+
+  test('a proof stamped too far in the future is not renewed', () => {
+    const acquired = acquireWatchAuthority(agents, 'crew', { now: at(T0) });
+    if (acquired.kind !== 'acquired') throw new Error('acquire failed');
+    expect(renewWatchAuthority(agents, 'crew', acquired.authority.epoch, { now: at(T0 - WATCH_AUTHORITY_FUTURE_SKEW_MS - 1) })).toEqual({ kind: 'lost' });
+    expect(current()).toEqual(acquired.authority);
+  });
+
+  test('an unreadable heartbeat is not renewed', () => {
+    const epoch = mintWatchEpoch();
+    seed({ pid: process.pid, epoch, heartbeat: 'not a time' });
+    expect(renewWatchAuthority(agents, 'crew', epoch, { now: at(T0) })).toEqual({ kind: 'lost' });
+    expect(current()).toEqual({ pid: process.pid, epoch, heartbeat: 'not a time' });
   });
 
   test('a successor epoch makes the old holder lost, and its beat writes nothing', () => {
