@@ -63,6 +63,32 @@ export {
   type HeadlessResumeTarget,
   type ResolvedHeadlessResumeBudget,
 } from './push-adapters/headless-resume.ts';
+export {
+  DEFAULT_RUNTIME_VERSIONS,
+  deliverRuntimeRelayRoute,
+  probeRuntimeRelayRoute,
+  RUNTIME_RELAY_ROUTES,
+  runtimeRelayCapabilities,
+  walkRuntimeRelayRoutes,
+  type RuntimeRelayAdapterOutcome,
+  type RuntimeRelayAttempt,
+  type RuntimeRelayCapabilities,
+  type RuntimeRelayDeliverOptions,
+  type RuntimeRelayDurableCopyTarget,
+  type RuntimeRelayHeadlessCapability,
+  type RuntimeRelayHeadlessTarget,
+  type RuntimeRelayMessage,
+  type RuntimeRelayNativeCapability,
+  type RuntimeRelayNativeTarget,
+  type RuntimeRelayProbeOptions,
+  type RuntimeRelayProbeOutcome,
+  type RuntimeRelayRoute,
+  type RuntimeRelaySocketCapability,
+  type RuntimeRelaySocketTarget,
+  type RuntimeRelayTarget,
+  type RuntimeRelayWalkInput,
+  type RuntimeRelayWalkResult,
+} from './push-adapters/relay-runtime.ts';
 
 /**
  * The runtime-push adapters this build carries.

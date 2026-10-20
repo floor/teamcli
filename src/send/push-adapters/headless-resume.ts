@@ -370,18 +370,12 @@ function readSeatState(root: string, home: string, session: string, seat: string
   try {
     const loaded = loadTeamFile(root, { home });
     if (!loaded.ok) {
-      const fallbackDir = join(root, '.agents');
-      if (existsSync(join(fallbackDir, 'team.state.json'))) {
-        dir = fallbackDir;
-      } else {
-        return {
-          ok: false,
-          why: `the team file could not be read, so the seat state folder cannot be resolved (${loaded.errors[0]?.message ?? 'unknown error'})`,
-        };
-      }
-    } else {
-      dir = dirname(loaded.path);
+      return {
+        ok: false,
+        why: `the team file could not be read, so the seat state folder cannot be resolved (${loaded.errors[0]?.message ?? 'unknown error'})`,
+      };
     }
+    dir = dirname(loaded.path);
   } catch (error) {
     return {
       ok: false,
