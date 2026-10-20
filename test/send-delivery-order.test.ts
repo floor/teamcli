@@ -1186,7 +1186,9 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
       "team send: lead: unreachable: no leg of its delivery order took the send (native: unavailable; the native leg is the sending session's own SendMessage)\n",
     );
     expect(host.dials()).toBe(0);
-    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+    // The skipped native leg is still an attempt the walk records, so its signed copy is on disk
+    // as the message's durable record even though no route took the send.
+    expect(inboxDrop(dropDir(w.root, 'lead'))).toMatch(MESSAGE_ID);
   });
   test('a word naming only the headless-resume leg ends unreachable, typing nothing into the seat', async () => {
     const w = world();
