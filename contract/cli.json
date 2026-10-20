@@ -691,6 +691,12 @@
               "takesValue": true
             },
             {
+              "hidden": false,
+              "name": "--watch",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -702,7 +708,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon install [--root <folder>] [--presence] [--dry-run] [--json]"
+            "team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -736,6 +742,12 @@
               "takesValue": true
             },
             {
+              "hidden": false,
+              "name": "--watch",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": true,
               "name": "-h",
               "repeatable": false,
@@ -747,7 +759,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon run [--root <folder>] [--started-by <source>] [--presence]"
+            "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]"
           ],
           "who": {
             "gate": "owner-only",
@@ -823,8 +835,8 @@
       ],
       "usage": [
         "team daemon status [--json]",
-        "team daemon run [--root <folder>] [--started-by <source>] [--presence]",
-        "team daemon install [--root <folder>] [--presence] [--dry-run] [--json]",
+        "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]",
+        "team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]",
         "team daemon uninstall [--json]"
       ],
       "who": {

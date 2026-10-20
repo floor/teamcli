@@ -13,8 +13,8 @@ machine with no broker handler never falls back to a per-clone broker.
 ## Synopsis
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>] [--presence]
-    team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
+    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon uninstall [--json]
 
 A subcommand is required. `--root` is repeatable and names the checkouts this one daemon hosts;
@@ -54,6 +54,15 @@ that record's binding is the seat's current presence binding; a missing, malform
 earlier-incarnation record stays unproven. The hosted send server asks the same per-seat answer
 before typing in the last mile, so a seat that is not proven current is held, not typed into.
 
+`run --watch` also hosts one watch per checkout on the daemon's existing heartbeat. Without the
+flag no checkout's watch is hosted, and the daemon reads no pane for one. The opt-in is the `run`
+flag alone; `install --watch` writes that same flag into the unit's run command, so a
+service-managed daemon hosts a watch only after an owner installs it that way. Presence and watch
+are independent flags: a daemon may host either, both or neither. A hosted watch renews and
+verifies its own authority on every fixed heartbeat beat and does not blur that beat into the
+watch's sweep rhythm; `status` and `check` name a watch that is standing down, stopped, failed or
+whose outbound gate is closed, and say nothing while it is simply cycling.
+
 `install` writes the user service unit and registers it with the system service manager. It
 prints `team daemon: installed for <n> checkout(s); the system service manager starts it at login
 and restarts it after a failure`. `--dry-run` prints what it would do, including the unit path
@@ -70,6 +79,7 @@ under `--json`, and writes nothing: `… would install …; nothing was written`
 | `--root` | a checkout folder | host that checkout; repeatable, and validated when the unit is written; belongs to `run` and `install` |
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
 | `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
+| `--watch` | — | host one watch per checkout on the daemon's heartbeat; belongs to `run` and `install`, is written into the unit by `install`, is independent of `--presence`, and is off by default |
 | `--dry-run` | — | print the install plan and write nothing; belongs to `install` |
 | `--json` | — | one JSON document instead of the line; belongs to `status`, `install` and `uninstall` |
 | `--help`, `-h` | — | the usage, and exit 0 |
@@ -87,8 +97,10 @@ folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of stage
 append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,
 `current.json` and session `status.json`, and writes the applied fence
 (`presence_applied`) into the seat's state record. That record's `codex_endpoint` entry is then
-read when a Codex seat's target is resolved; it is never written here. Nothing in this command
-reads a credential store.
+read when a Codex seat's target is resolved; it is never written here. Under `run --watch` the
+daemon additionally reads each hosted checkout's team file, state record and panes for its watch;
+that watch types nothing itself and can take the send command's own direct-wake legs only while
+its captured authority verifies for the route. Nothing in this command reads a credential store.
 
 ## Who may run it
 

@@ -403,6 +403,36 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(unit).toContain('service-manager');
   });
 
+  test('the unit carries the watch opt-in exactly when the install program asks for it', () => {
+    const { home } = scratch();
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    expect(plain.ok).toBe(true);
+    if (!plain.ok) return;
+    expect(readFileSync(plain.unitPath, 'utf8')).not.toContain('--watch');
+
+    // The watch opt-in is independent of presence: a presence-only unit carries no watch flag.
+    const presenceOnly = manager.install(home, {
+      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], presence: true,
+    });
+    expect(presenceOnly.ok).toBe(true);
+    if (!presenceOnly.ok) return;
+    expect(readFileSync(presenceOnly.unitPath, 'utf8')).not.toContain('--watch');
+
+    const opted = manager.install(home, {
+      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], watch: true,
+    });
+    expect(opted.ok).toBe(true);
+    if (!opted.ok) return;
+    const unit = readFileSync(opted.unitPath, 'utf8');
+    expect(unit).toContain('--watch');
+    expect(unit).not.toContain('--presence');
+    // The same run command, one flag longer: the service manager still starts `daemon run` as the
+    // owner with no terminal, and the opt-in survives login restarts with the unit.
+    expect(unit).toContain('--started-by');
+    expect(unit).toContain('service-manager');
+  });
+
   test('a refused registration carries a neutral why, never the platform facility name', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({
@@ -513,6 +543,16 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(io.out).toContain('team daemon: installed');
   });
 
+  test('install --watch records the watch opt-in and leaves presence off', async () => {
+    const { root, home } = scratch();
+    const service = fakeService();
+    const io = testIo(root, owner);
+    expect(await runDaemon(['install', '--watch'], io, sourcesOf(home, { service }))).toBe(0);
+    expect(service.programs.at(-1)).toMatchObject({ roots: [root], watch: true });
+    expect(service.programs.at(-1)?.presence).toBeUndefined();
+    expect(io.out).toContain('team daemon: installed');
+  });
+
   test('a seat cannot install or start the machine daemon', async () => {
     const { root, home } = scratch();
     const seat = { kind: 'seat', name: 'worker-1', pane: 'w1:p2', session: 'acme' } as const;
@@ -593,6 +633,45 @@ describe('team daemon status, install, uninstall and run', () => {
     const refused = testIo(root, owner);
     expect(await runDaemon(['status', '--presence'], refused, sourcesOf(home))).toBe(2);
     expect(refused.err).toContain('--presence belongs to run or install');
+  });
+
+  test('run hosts a watch only when --watch is given; --watch belongs to run or install', async () => {
+    const { root, home } = scratch();
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(['run', '--presence'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(['run', '--watch'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
+    // Presence and watch are independent opt-ins: neither flag implies the other.
+    expect(seen.map((input) => input.watchHosting)).toEqual([undefined, undefined, true]);
+    expect(seen.map((input) => input.presenceHosting)).toEqual([undefined, true, undefined]);
+
+    const refused = testIo(root, owner);
+    expect(await runDaemon(['status', '--watch'], refused, sourcesOf(home))).toBe(2);
+    expect(refused.err).toContain('--watch belongs to run or install');
+  });
+
+  test('the service-manager start admits the watch opt-in; a manual no-terminal start does not', async () => {
+    const { root, home } = scratch();
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    // The unit is the one admitted no-terminal start, and it carries --watch only when it was
+    // installed with it; the run side accepts the same pair.
+    const unitCaller = testIo(root, { kind: 'owner-no-tty' });
+    expect(await runDaemon(['run', '--watch', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start }))).toBe(0);
+    expect(seen[0]?.watchHosting).toBe(true);
+    expect(seen[0]?.startedBy).toBe('service-manager');
+
+    const manual = testIo(root, { kind: 'owner-no-tty' });
+    expect(await runDaemon(['run', '--watch'], manual, sourcesOf(home, { start }))).toBe(1);
+    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(seen.length).toBe(1);
   });
 
   test('the service-manager start admits the presence opt-in; a manual no-terminal start does not', async () => {

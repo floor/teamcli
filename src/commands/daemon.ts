@@ -1,10 +1,10 @@
 // `team daemon`: the one machine-wide TeamCLI daemon. `run` is the foreground process the
 // system service manager starts (it hosts the existing send and bus servers in this one process
 // and serves the machine socket); `run --presence` additionally hosts the presence pipeline, and
-// without the flag the daemon does not read presence at all. `install` and `uninstall` write and
-// register the user service unit through a neutral interface, with the platform's own file and
-// command only inside the adapter. `status` is the one-line health reading every other command
-// and person reads.
+// `run --watch` hosts one watch per checkout on the same heartbeat; without a flag the daemon
+// hosts neither. `install` and `uninstall` write and register the user service unit through a
+// neutral interface, with the platform's own file and command only inside the adapter. `status`
+// is the one-line health reading every other command and person reads.
 //
 // The machine daemon holds no credential and reads no credential store. The broker feature is
 // not hosted in this build, and the catalogue's `daemon.broker` policy is off by default, so a
@@ -26,8 +26,8 @@ import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { version as installedVersion } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
-       team daemon run [--root <folder>] [--started-by <source>] [--presence]
-       team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
+       team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
+       team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
        team daemon uninstall [--json]
 
 One machine-wide daemon serves every team and clone on this machine. It answers its own
@@ -37,6 +37,8 @@ and bus endpoints in the same process, so no second or third daemon process runs
 \`run --presence\` additionally hosts each checkout's presence pipeline: the spool ingester, the
 activity reconciler, the publisher and the per-seat health answer. Without the flag the daemon
 does not read presence at all.
+\`run --watch\` additionally hosts one watch per checkout on the daemon's existing heartbeat.
+Without the flag no checkout's watch is hosted, and the daemon reads no pane for one.
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
 it after a failure; \`uninstall\` removes it. \`status\` prints one line: running, not running, or
 unknown.
@@ -78,13 +80,14 @@ type Parsed = {
   json: boolean;
   dryRun: boolean;
   presence: boolean;
+  watch: boolean;
   startedBy: string | undefined;
   extra: string | undefined;
   error: string | null;
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['root', 'started-by'], ['json', 'dry-run', 'presence']);
+  const args = readArgs(argv, ['root', 'started-by'], ['json', 'dry-run', 'presence', 'watch']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`.
@@ -116,6 +119,7 @@ function parse(argv: string[]): Parsed {
     json: args.flags.has('json'),
     dryRun: args.flags.has('dry-run'),
     presence: args.flags.has('presence'),
+    watch: args.flags.has('watch'),
     startedBy: args.values['started-by'],
     extra: args.rest[1],
     error: args.error ?? null,
@@ -130,6 +134,7 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.verb === 'run' && parsed.json) return '--json belongs to status, install or uninstall';
   if (parsed.verb === 'run' && parsed.dryRun) return '--dry-run belongs to install';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
+  if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.watch) return '--watch belongs to run or install';
   if (parsed.verb === 'status' && parsed.dryRun) return '--dry-run belongs to install';
   if (parsed.verb === 'status' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'status' && parsed.startedBy !== undefined) return '--started-by belongs to run';
@@ -316,6 +321,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         // no home folder is consulted and no shared endpoint is guessed in its place.
         presenceCodexEndpoint: (route, stateDir, seat) => currentCodexEndpoint(stateDir, route.session, seat),
       } : {}),
+      // One hosted watch per route on the same heartbeat. Its outbound effects stay behind the
+      // shared authority verifier and the direct sender, and no presence pipeline is implied: a
+      // run may host either, both or neither.
+      ...(parsed.watch ? { watchHosting: true } : {}),
     });
     if (started.kind === 'already-running') {
       io.stdout(`team daemon: already running${started.pid === null ? '' : ` (pid ${String(started.pid)})`}\n`);
@@ -409,10 +418,11 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   const fullProgram: ServiceProgram = {
     ...program,
     roots: named.roots,
-    // The installed unit is the service-managed run lifecycle; the flag an owner gives here is
-    // written into its run command, so presence hosting survives login restarts. A plain install
-    // writes no flag and starts exactly the daemon it did before.
+    // The installed unit is the service-managed run lifecycle; the flags an owner gives here are
+    // written into its run command, so presence and watch hosting survive login restarts. A plain
+    // install writes no flag and starts exactly the daemon it did before.
     ...(parsed.presence ? { presence: true } : {}),
+    ...(parsed.watch ? { watch: true } : {}),
   };
   const plan = manager.plan(home, fullProgram);
   if (parsed.dryRun) {

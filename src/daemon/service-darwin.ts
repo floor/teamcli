@@ -38,9 +38,11 @@ function escapeXml(text: string): string {
 function programOf(program: ServiceProgram): string[] {
   const args = [program.execPath, program.entry, 'daemon', 'run', '--started-by', 'service-manager'];
   for (const root of program.roots) args.push('--root', root);
-  // The unit records the same opt-in a foreground run takes: without it the service-managed
-  // daemon hosts no presence at all, and with it every hosted route's pipeline starts at login.
+  // The unit records the same opt-ins a foreground run takes: each flag is written only when the
+  // install program asked for it, so a plain unit hosts neither presence nor a watch.
   if (program.presence === true) args.push('--presence');
+  // The watch opt-in is separate: a unit may record either, both or neither.
+  if (program.watch === true) args.push('--watch');
   return args;
 }
 

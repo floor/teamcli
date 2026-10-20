@@ -17,6 +17,9 @@ export type ServiceProgram = {
   /** Whether the unit's run command carries the presence opt-in. Absent means the unit starts
    *  the daemon without presence hosting, exactly as a plain `run` does. */
   presence?: boolean;
+  /** Whether the unit's run command carries the watch opt-in. Absent means the unit starts the
+   *  daemon without a hosted watch, exactly as a plain `run` does. Independent of `presence`. */
+  watch?: boolean;
 };
 
 export type ServicePlan = {

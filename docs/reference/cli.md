@@ -424,8 +424,8 @@ Hidden: no
 Usage:
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>] [--presence]
-    team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
+    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon uninstall [--json]
 
 ### Who may run it
@@ -449,7 +449,7 @@ Hidden: no
 
 Usage:
 
-    team daemon install [--root <folder>] [--presence] [--dry-run] [--json]
+    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
 
 #### Who may run it
 
@@ -464,6 +464,7 @@ Usage:
 | `--json` | no | no | no |
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
+| `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -476,7 +477,7 @@ Hidden: no
 
 Usage:
 
-    team daemon run [--root <folder>] [--started-by <source>] [--presence]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
 
 #### Who may run it
 
@@ -490,6 +491,7 @@ Usage:
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
 | `--started-by` | yes | no | no |
+| `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
