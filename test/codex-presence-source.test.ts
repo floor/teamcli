@@ -45,6 +45,7 @@ import {
   type CodexPresenceSource,
   type CodexPresenceSourceState,
 } from '../src/daemon/presence/codex-source.ts';
+import { stageCodexPresence, type CodexPresenceOutcome } from '../src/daemon/presence/codex-app-server.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
 
 const NOW = new Date('2026-10-19T04:00:00.000Z');
@@ -308,7 +309,11 @@ async function startAppServer(
   };
 }
 
-function startSource(scene: Scene, server: ServerHandle): CodexPresenceSource {
+function startSource(
+  scene: Scene,
+  server: ServerHandle,
+  sink?: (notification: unknown) => CodexPresenceOutcome,
+): CodexPresenceSource {
   const started = codexPresenceFor({
     target: {
       stateDir: scene.dir,
@@ -321,6 +326,7 @@ function startSource(scene: Scene, server: ServerHandle): CodexPresenceSource {
     policy: 'on',
     feature: true,
     now: () => scene.clock.at,
+    ...(sink === undefined ? {} : { sink }),
   });
   if (started.kind !== 'subscribed') throw new Error(`the source refused to start: ${started.why}`);
   return started.source;
@@ -337,6 +343,11 @@ const active = (threadId = THREAD) => ({
 const idle = (threadId = THREAD) => ({
   method: 'thread/status/changed',
   params: { threadId, status: { type: 'idle' } },
+});
+
+const statusFrame = (status: Record<string, unknown>, threadId = THREAD) => ({
+  method: 'thread/status/changed',
+  params: { threadId, status },
 });
 
 describe('the Codex presence source', () => {
@@ -424,10 +435,10 @@ describe('the Codex presence source', () => {
     }
   });
 
-  test('a transport loss keeps the gap and a reconnect baseline requalifies', async () => {
+  test('a transport loss keeps the gap and a reconnect baseline reanchors even the same word', async () => {
     const scene = makeScene();
     const server = await startAppServer(scene.socketPath, {
-      replies: [{ type: 'idle' }, { type: 'active', activeFlags: [] }],
+      replies: [{ type: 'idle' }, { type: 'idle' }],
     });
     try {
       const source = startSource(scene, server);
@@ -455,8 +466,13 @@ describe('the Codex presence source', () => {
       expect(second.channel).toBe('connected');
       expect(second.baseline).toBe('read');
       expect(second.gap).toBe(true);
+      // The same idle word is staged again with the reconnect's receipt instant: the old
+      // idle-since cannot span a window whose transitions are missing.
       expect(second.events).toBe(2);
-      expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end', 'turn-start']);
+      const records = spoolRecords(scene.dir);
+      expect(records.map((record) => record.event)).toEqual(['turn-end', 'turn-end']);
+      expect(records[1]!.ts).toBe(scene.clock.at.toISOString());
+      expect(records[0]!.ts).toBe(NOW.toISOString());
       expect(await source.close()).toEqual({ quiesced: true });
     } finally {
       await server.close();
@@ -549,6 +565,112 @@ describe('the Codex presence source', () => {
       server.push(active());
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(statusOf(source, scene).events).toBe(1);
+      expect(await source.close()).toEqual({ quiesced: true });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('not-loaded, system-error and malformed bound statuses hold the channel unknown', async () => {
+    const scene = makeScene();
+    const server = await startAppServer(scene.socketPath);
+    try {
+      const source = startSource(scene, server);
+      await source.step(NOW);
+      expect(statusOf(source, scene).channel).toBe('connected');
+
+      scene.clock.at = new Date(NOW.getTime() + 1_000);
+      server.push(statusFrame({ type: 'notLoaded' }));
+      await waitFor('the not-loaded verdict', () => statusOf(source, scene).reason === 'thread-not-loaded');
+      expect(statusOf(source, scene).channel).toBe('unknown');
+      expect(statusOf(source, scene).events).toBe(1);
+      expect(statusOf(source, scene).evidenceAt).toBe(scene.clock.at.toISOString());
+
+      scene.clock.at = new Date(NOW.getTime() + 2_000);
+      server.push(statusFrame({ type: 'systemError' }));
+      await waitFor('the system-error verdict', () => statusOf(source, scene).reason === 'system-error');
+      expect(statusOf(source, scene).channel).toBe('unknown');
+
+      scene.clock.at = new Date(NOW.getTime() + 3_000);
+      server.push(statusFrame({ type: 'active' }));
+      await waitFor('the malformed-status verdict', () => statusOf(source, scene).reason === 'status-unrecognized');
+      expect(statusOf(source, scene).channel).toBe('unknown');
+      // An unrecognized status is not evidence of a presence state.
+      expect(statusOf(source, scene).evidenceAt).toBe(new Date(NOW.getTime() + 2_000).toISOString());
+
+      scene.clock.at = new Date(NOW.getTime() + 4_000);
+      server.push(statusFrame({ type: 'mysteryState' }));
+      await waitFor('the unknown-type verdict', () => statusOf(source, scene).ignored === 4);
+      expect(statusOf(source, scene).reason).toBe('status-unrecognized');
+
+      scene.clock.at = new Date(NOW.getTime() + 5_000);
+      server.push(active());
+      await waitFor('the requalifying active frame', () => statusOf(source, scene).channel === 'connected');
+      expect(statusOf(source, scene).reason).toBeNull();
+      expect(statusOf(source, scene).events).toBe(2);
+      expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end', 'turn-start']);
+      expect(await source.close()).toEqual({ quiesced: true });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('a failed staging keeps the previous idle from reading healthy', async () => {
+    const scene = makeScene();
+    const server = await startAppServer(scene.socketPath);
+    let fail = true;
+    const sink = (notification: unknown): CodexPresenceOutcome => {
+      if (fail) return { kind: 'refused', why: 'synthetic stage failure' };
+      return stageCodexPresence({
+        stateDir: scene.dir,
+        session: SESSION,
+        seat: SEAT,
+        binding: BINDING,
+        threadId: THREAD,
+      }, notification);
+    };
+    try {
+      const source = startSource(scene, server, sink);
+      await source.step(NOW);
+      expect(statusOf(source, scene).channel).toBe('connected');
+
+      scene.clock.at = new Date(NOW.getTime() + 1_000);
+      server.push(active());
+      await waitFor('the stage failure', () => statusOf(source, scene).reason === 'stage-failed');
+      const failed = statusOf(source, scene);
+      expect(failed.channel).toBe('unknown');
+      expect(failed.gap).toBe(true);
+      expect(failed.events).toBe(1);
+      expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end']);
+
+      fail = false;
+      scene.clock.at = new Date(NOW.getTime() + 2_000);
+      server.push(active());
+      await waitFor('the reconciled stage', () => statusOf(source, scene).channel === 'connected');
+      expect(statusOf(source, scene).events).toBe(2);
+      expect(spoolRecords(scene.dir).map((record) => record.event)).toEqual(['turn-end', 'turn-start']);
+      expect(await source.close()).toEqual({ quiesced: true });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('a baseline response never launders a newer unknown verdict into connected', async () => {
+    const scene = makeScene();
+    const server = await startAppServer(scene.socketPath, {
+      threadRead: (_threadId, handle) => {
+        handle.push(statusFrame({ type: 'systemError' }));
+        return { type: 'idle' };
+      },
+    });
+    try {
+      const source = startSource(scene, server);
+      const state = await source.step(NOW);
+      expect(state.baseline).toBe('read');
+      expect(state.channel).toBe('unknown');
+      expect(state.reason).toBe('system-error');
+      expect(state.events).toBe(0);
+      expect(spoolRecords(scene.dir)).toEqual([]);
       expect(await source.close()).toEqual({ quiesced: true });
     } finally {
       await server.close();

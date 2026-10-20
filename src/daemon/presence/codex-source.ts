@@ -79,6 +79,8 @@ export type CodexPresenceReason =
   | 'thread-read-failed'
   | 'thread-not-loaded'
   | 'system-error'
+  | 'status-unrecognized'
+  | 'stage-failed'
   | 'thread-closed'
   | 'binding-changed'
   | 'source-stopped';
@@ -416,10 +418,21 @@ function bindingCurrent(input: Internals): boolean {
   return true;
 }
 
-function stageEvent(input: Internals, event: PresenceEvent, raw: string, receipt: Date): void {
-  if (input.closed || !input.admissions) return;
-  if (!bindingCurrent(input)) return;
-  if (event === input.lastApplied) return;
+type StageResult = 'staged' | 'deduped' | 'failed' | 'stopped';
+
+/** Stages one presence event. A fresh baseline passes `force` so a reconnect reanchors the
+ *  durable state even when the word is the same as before the gap: the old idle-since instant
+ *  must not survive a window whose transitions are missing. Live duplicates stay deduped. */
+function stageEvent(
+  input: Internals,
+  event: PresenceEvent,
+  raw: string,
+  receipt: Date,
+  force = false,
+): StageResult {
+  if (input.closed || !input.admissions) return 'stopped';
+  if (!bindingCurrent(input)) return 'stopped';
+  if (!force && event === input.lastApplied) return 'deduped';
   const staged = stagePresenceRecord(input.stateDir, {
     session: input.target.session,
     seat: input.target.seat,
@@ -432,9 +445,10 @@ function stageEvent(input: Internals, event: PresenceEvent, raw: string, receipt
   if (staged.kind === 'staged') {
     input.state.events += 1;
     input.lastApplied = event;
-  } else {
-    input.state.ignored += 1;
+    return 'staged';
   }
+  input.state.ignored += 1;
+  return 'failed';
 }
 
 function failAttempt(input: Internals, reason: CodexPresenceReason): void {
@@ -469,11 +483,11 @@ function applyBaseline(
   if (!bindingCurrent(input)) return;
 
   // A bound transition already received after this read was written is newer than the snapshot;
-  // the response proves attachment but must not overwrite it.
+  // the response proves attachment but must not overwrite the stream's verdict. That verdict may
+  // be connected OR unknown (a not-loaded/system-error status, or a failed stage): a baseline
+  // never launders an unknown current state into healthy.
   const newerStream = input.streamSeq !== input.readSeq;
   if (newerStream) {
-    input.state.channel = 'connected';
-    input.state.reason = null;
     input.phase = 'streaming';
     writeDiagnostic(input);
     settleAttempt(input);
@@ -485,13 +499,19 @@ function applyBaseline(
     input.target.threadId,
   );
   if (mapped.kind === 'event') {
-    stageEvent(input, mapped.event, mapped.raw, receipt);
-    // Staging may have stopped admissions (the managed binding changed under us); nothing after
-    // that point may report this incarnation as healthy.
-    if (input.closed || !input.admissions) return;
-    input.state.channel = 'connected';
-    input.state.reason = null;
+    const staged = stageEvent(input, mapped.event, mapped.raw, receipt, true);
+    if (staged === 'stopped') return;
     input.phase = 'streaming';
+    if (staged === 'staged') {
+      input.state.channel = 'connected';
+      input.state.reason = null;
+    } else {
+      // A reconnect whose current state cannot be made durable is not healthy and not safe as
+      // its previous idle word; the host keeps the seat unproven until a later state stages.
+      input.state.channel = 'unknown';
+      input.state.reason = 'stage-failed';
+      input.state.gap = true;
+    }
   } else {
     input.state.channel = 'unknown';
     input.state.reason = status.type === 'notLoaded' ? 'thread-not-loaded' : 'system-error';
@@ -517,12 +537,20 @@ function applyBoundNotification(
   if (method === 'thread/closed') {
     if (isObject(params) && params.threadId === input.target.threadId) {
       if (input.state.channel !== 'gone') {
-        stageEvent(input, 'session-end', 'thread/closed', receipt);
-        if (input.closed || !input.admissions) return;
+        const staged = stageEvent(input, 'session-end', 'thread/closed', receipt);
+        if (staged === 'stopped') return;
         input.state.evidenceAt = receipt.toISOString();
         input.state.lastRefreshAt = input.state.evidenceAt;
-        input.state.channel = 'gone';
-        input.state.reason = 'thread-closed';
+        if (staged === 'staged') {
+          input.state.channel = 'gone';
+          input.state.reason = 'thread-closed';
+        } else {
+          // The closure is measured but its record is not durable: the seat is unproven, never
+          // silently gone.
+          input.state.channel = 'unknown';
+          input.state.reason = 'stage-failed';
+          input.state.gap = true;
+        }
         input.phase = 'terminal';
         input.admissions = false;
         input.generation += 1;
@@ -551,6 +579,27 @@ function applyBoundNotification(
   }
   if (reading.kind === 'ignored') {
     input.state.ignored += 1;
+    // A status for the bound thread that is not a presence word is still the current state:
+    // not-loaded/system-error are explicitly unknown, and a malformed or unknown status HOLDS
+    // the channel unproven rather than leaving a previous idle reading healthy. Its receipt also
+    // advances the baseline race counter, so a stale snapshot cannot launder it to connected.
+    if (method === 'thread/status/changed' && isObject(params) && params.threadId === input.target.threadId) {
+      if (!bindingCurrent(input)) return;
+      input.streamSeq += 1;
+      const status = params.status;
+      const known = isObject(status) && typeof status.type === 'string'
+        && (status.type === 'notLoaded' || status.type === 'systemError');
+      if (known) {
+        input.state.evidenceAt = receipt.toISOString();
+        input.state.lastRefreshAt = input.state.evidenceAt;
+      }
+      input.state.channel = 'unknown';
+      input.state.reason = known
+        ? (status.type === 'notLoaded' ? 'thread-not-loaded' : 'system-error')
+        : 'status-unrecognized';
+      input.phase = 'streaming';
+    }
+    writeDiagnostic(input);
     return;
   }
 
@@ -558,12 +607,9 @@ function applyBoundNotification(
   input.streamSeq += 1;
   input.state.evidenceAt = receipt.toISOString();
   input.state.lastRefreshAt = input.state.evidenceAt;
-  if (input.initializedSent) {
-    input.state.channel = 'connected';
-    input.state.reason = null;
-    input.phase = 'streaming';
-  }
-  if (reading.event === input.lastApplied) {
+  // A continuous run may dedupe the same word. After an unknown verdict the same word is a new
+  // transition and is staged, reanchoring the durable state instead of inheriting old idle.
+  if (reading.event === input.lastApplied && input.state.channel === 'connected') {
     writeDiagnostic(input);
     return;
   }
@@ -571,10 +617,19 @@ function applyBoundNotification(
   if (outcome.kind === 'staged') {
     input.state.events += 1;
     input.lastApplied = reading.event;
-  } else if (outcome.kind === 'ignored' || outcome.kind === 'refused') {
+    if (input.initializedSent) {
+      input.state.channel = 'connected';
+      input.state.reason = null;
+      input.phase = 'streaming';
+    }
+  } else {
+    // A working transition that could not be made durable must never leave the previous idle
+    // reading healthy: the seat is unproven until a later state stages.
     input.state.ignored += 1;
-  } else if (outcome.kind === 'other-thread') {
-    input.state.otherThread += 1;
+    input.state.channel = 'unknown';
+    input.state.reason = 'stage-failed';
+    input.state.gap = true;
+    input.phase = 'streaming';
   }
   writeDiagnostic(input);
 }
