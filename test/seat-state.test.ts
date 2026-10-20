@@ -93,6 +93,61 @@ describe('the reading, best source first', () => {
   });
 });
 
+describe("the daemon's presence projection", () => {
+  const presence = (state: 'working' | 'idle' | 'waiting-for-a-person' | 'gone', seconds: number) =>
+    ({ state, since: ago(seconds) });
+
+  test('a young working word is working, whatever the idle prompt shows', () => {
+    expect(seatState({ presence: presence('working', 30), screen: { kind: 'idle' } }, NOW))
+      .toEqual({ state: 'working', source: 'presence', blind: false });
+  });
+
+  test('past the working window a readable screen answers, and an unreadable one leaves presence', () => {
+    const stale = DEFAULT_STATE_THRESHOLDS.hook_working_seconds + 30;
+    expect(seatState({ presence: presence('working', stale), screen: { kind: 'idle' } }, NOW))
+      .toEqual({ state: 'idle', source: 'cli', blind: false });
+    expect(seatState({ presence: presence('working', stale), screen: { kind: 'unknown' } }, NOW))
+      .toEqual({ state: 'working', source: 'presence', blind: false });
+  });
+
+  test('idle loses to a trace inside the window and answers without one', () => {
+    expect(seatState({ presence: presence('idle', 30), trace: ago(30) }, NOW))
+      .toEqual({ state: 'working', source: 'trace', blind: false });
+    expect(seatState({ presence: presence('idle', 30) }, NOW))
+      .toEqual({ state: 'idle', source: 'presence', blind: false });
+  });
+
+  test('a runtime waiting on a person is blocked, whatever any clock says', () => {
+    expect(seatState({ presence: presence('waiting-for-a-person', 30), screen: { kind: 'idle' }, trace: ago(30) }, NOW))
+      .toEqual({ state: 'blocked', source: 'presence', blind: false });
+  });
+
+  test('a session end is done, before a trace could read working', () => {
+    expect(seatState({ presence: presence('gone', 30), trace: ago(30) }, NOW))
+      .toEqual({ state: 'done', source: 'presence', blind: false });
+  });
+
+  test('a projection an interrupted turn left behind loses to a blocked screen', () => {
+    expect(seatState({ presence: presence('working', 30), screen: { kind: 'permission' } }, NOW))
+      .toEqual({ state: 'blocked', source: 'cli', blind: false });
+  });
+
+  test('a projection older than a day, or dated ahead, says nothing', () => {
+    expect(seatState({ presence: presence('idle', 24 * 60 * 60 + 1), screen: { kind: 'working' } }, NOW))
+      .toEqual({ state: 'working', source: 'cli', blind: false });
+    expect(seatState({ presence: { state: 'idle', since: ago(-61) }, screen: { kind: 'working' } }, NOW))
+      .toEqual({ state: 'working', source: 'cli', blind: false });
+  });
+
+  test('presence answers before the hook file a second signal from the same launch', () => {
+    expect(seatState({ presence: presence('idle', 30), hook: { state: 'working', since: ago(30) } }, NOW))
+      .toEqual({ state: 'idle', source: 'presence', blind: false });
+    // Without a projection the hook keeps answering exactly as before.
+    expect(seatState({ hook: { state: 'working', since: ago(30) } }, NOW))
+      .toEqual({ state: 'working', source: 'cli-hook', blind: false });
+  });
+});
+
 describe('the gatherer the readers share', () => {
   test('an idle pane reads idle from the CLI itself', () => {
     const reading = observedSeatState({

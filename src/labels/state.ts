@@ -3,15 +3,22 @@
 //
 //   1. a screen that is neither mid-turn nor at its prompt — a dialog, a question, an error, a
 //      composer holding unsent text: blocked, whatever any clock says;
-//   2. the CLI's own signal through the hooks this run installed: working at turn start, idle at
+//   2. the daemon's presence projection for the seat's runtime incarnation: the runtime's own
+//      turn start, turn end, human wait and session end, written to the daemon's event log and
+//      read back as one standing state. A `working` word outranks the screen only while its
+//      turn is young (`state_hook_working_seconds`), so an interrupted turn cannot leave it
+//      standing for the day; a person the runtime waits on is blocked whatever any clock says;
+//   3. the CLI's own signal through the hooks this run installed: working at turn start, idle at
 //      turn end, with the instant it wrote — the working word outranking the screen only while
 //      its turn is young (`state_hook_working_seconds`), so an interrupted turn cannot leave a
 //      stale `working` standing for the day;
-//   3. the pane's screen, read against the seat's CLI — working, or idle at its prompt;
-//   4. herdr's own screen status;
-//   5. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
-//      fresh means working, and it outranks an idle word, from the hook, the screen or herdr;
-//   6. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
+//   4. the pane's screen, read against the seat's CLI — working, or idle at its prompt; this is
+//      the terminal-host classification, and it is the labelled fallback once a runtime speaks;
+//   5. herdr's own screen status;
+//   6. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
+//      fresh means working, and it outranks an idle word, from the presence log, the hook, the
+//      screen or herdr;
+//   7. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
 //      and `check` flag the seat `blind` as a must-fix.
 //
 // TeamCLI's own bookkeeping answers first where it is certain about something a screen cannot
@@ -24,9 +31,18 @@ import { readScreen } from '../watch/screen.ts';
 
 export type SeatStateWord = 'working' | 'idle' | 'done' | 'blocked' | 'held' | 'unreachable' | 'unknown';
 
-/** Where a reading came from: the CLI's own screen, the state file the CLI's hooks keep, herdr's
- *  status, TeamCLI's traces, the seat's own process, the hold over the team, or nothing at all. */
-export type StateSource = 'cli' | 'cli-hook' | 'herdr' | 'trace' | 'process' | 'hold' | 'none';
+/** Where a reading came from: the CLI's own screen, its presence projection, the state file its
+ *  hooks keep, herdr's status, TeamCLI's traces, the seat's own process, the hold over the team,
+ *  or nothing at all. These are display labels: a projection's runtime source (`runtime-hook`,
+ *  `runtime-event`, `daemon-launch`) stays in the event log, not in this word. */
+export type StateSource = 'cli' | 'presence' | 'cli-hook' | 'herdr' | 'trace' | 'process' | 'hold' | 'none';
+
+/** The daemon's presence projection, already read for the seat's current binding: one of the
+ *  four presence words and the instant of the event behind it, ISO 8601. */
+export type PresenceObservation = {
+  state: 'working' | 'idle' | 'waiting-for-a-person' | 'gone';
+  since: string;
+};
 
 /** One reading the seat's CLI wrote through the hooks its launch installed: `working` when a turn
  *  started, `idle` when the turn ended, and the instant it wrote, ISO 8601. */
@@ -57,6 +73,9 @@ export type SeatStateObservation = {
   present?: boolean;
   /** The CLI's own signal: the pane's screen, read against the seat's CLI, when one was read. */
   screen?: Screen;
+  /** The daemon's presence projection, when the seat's state names the binding it was written
+   *  under and the projection carries that same binding. */
+  presence?: PresenceObservation | null;
   /** The state file the CLI's own hooks keep for the seat, when the launch installed them. */
   hook?: CliHookReading | null;
   /** herdr's own screen status for the seat's agent, when herdr reports one. */
@@ -76,13 +95,13 @@ export type SeatStateReading = {
 
 /**
  * The reading itself. First answer wins, in the order above — save two: a trace inside the
- * window beats an idle word, from the hook, the screen or from herdr, because a seat that just
- * committed, acked or was messaged is working even while its prompt shows; and a screen that
- * still reads outranks a `working` hook older than the short working window, because an
- * interrupted turn leaves that word behind while the prompt is what the seat shows now. An
- * absent or unrecognised screen, like a herdr word that is neither `working` nor `idle`, falls
- * through to the next source. `unknown` carries `blind`: no trace at all, or none younger than
- * the blind threshold.
+ * window beats an idle word, from the presence log, the hook, the screen or from herdr, because a
+ * seat that just committed, acked or was messaged is working even while its prompt shows; and a
+ * screen that still reads outranks a `working` word older than the short working window, from the
+ * presence log or the hook, because an interrupted turn leaves that word behind while the prompt
+ * is what the seat shows now. An absent or unrecognised screen, like a herdr word that is neither
+ * `working` nor `idle`, falls through to the next source. `unknown` carries `blind`: no trace at
+ * all, or none younger than the blind threshold.
  */
 export function seatState(
   observation: SeatStateObservation,
@@ -108,6 +127,34 @@ export function seatState(
   if (screen !== undefined && screen.kind !== 'working' && screen.kind !== 'idle'
     && screen.kind !== 'unknown') {
     return { state: 'blocked', source: 'cli', blind: false };
+  }
+  // The daemon's presence projection: the runtime's own words, with the instant of the event
+  // behind the standing one. A fresh `working` is working while its turn is young — past that
+  // window a screen that still reads answers instead, exactly as with the hook file, because a
+  // runtime that died mid-turn leaves the word behind; an `idle` is idle unless a trace inside
+  // the window says the seat is still finishing; a runtime waiting on a person is blocked
+  // whatever any clock says; a session end is done. A projection older than the hook file's day,
+  // or dated further ahead of this machine's clock than its small skew, says nothing at all.
+  const presence = observation.presence;
+  if (presence !== undefined && presence !== null) {
+    const wrote = Date.parse(presence.since);
+    if (Number.isFinite(wrote)
+      && wrote - now.getTime() <= CLI_HOOK_FUTURE_SKEW_SECONDS * 1000
+      && now.getTime() - wrote <= CLI_HOOK_FRESH_SECONDS * 1000) {
+      if (presence.state === 'working') {
+        const fresh = now.getTime() - wrote <= limits.hook_working_seconds * 1000;
+        if (fresh || screen === undefined || screen.kind === 'unknown') {
+          return { state: 'working', source: 'presence', blind: false };
+        }
+      } else if (presence.state === 'idle') {
+        if (withinWindow) return { state: 'working', source: 'trace', blind: false };
+        return { state: 'idle', source: 'presence', blind: false };
+      } else if (presence.state === 'waiting-for-a-person') {
+        return { state: 'blocked', source: 'presence', blind: false };
+      } else {
+        return { state: 'done', source: 'presence', blind: false };
+      }
+    }
   }
   // The CLI's own hook: a fresh `working` is working while its turn is young; a fresh `idle`
   // is idle unless a trace inside the window says the seat is still in the middle of its work.
@@ -164,6 +211,8 @@ export type ObservedSeatInput = {
   screenText?: string;
   /** The state file the CLI's own hooks keep for the seat, when the launch installed them. */
   hook?: CliHookReading | null;
+  /** The daemon's presence projection for the seat's current binding, when one was read. */
+  presence?: PresenceObservation | null;
   /** The seat's newest recorded trace, ISO. */
   trace?: string | null;
   /** The file stops this seat: its process is gone on purpose, and it is done. */
@@ -188,6 +237,7 @@ export function observedSeatState(input: ObservedSeatInput): SeatStateReading {
       ? { screen: readScreen(input.cli, input.screenText) }
       : {}),
     hook: input.hook ?? null,
+    presence: input.presence ?? null,
     trace: input.trace ?? null,
   };
   return seatState(observation, input.now, input.limits ?? DEFAULT_STATE_THRESHOLDS);

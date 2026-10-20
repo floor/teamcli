@@ -19,6 +19,7 @@ import {
 } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { observedSeatState, sayThreshold, type SeatStateWord, type StateSource } from '../labels/state.ts';
+import { readPresenceForSeat } from '../labels/presence.ts';
 import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
@@ -229,7 +230,15 @@ export function seatRegistryRows(
       && supportsCliHook(cli)
       ? readCliHook(traceSources.stateDir, traceSources.session, row.name)
       : null;
-    // The seat-state reading: the CLI's own hook when its launch keeps one, the CLI's own
+    // The daemon's presence projection, only when the seat's state records the binding it was
+    // written under: a projection a predecessor launch wrote is not this seat's reading. Read
+    // for every CLI — an adapter that writes presence for a runtime without a hook file is the
+    // point of the log — and never for a pane TeamCLI did not launch.
+    const presence = !untrusted && traceSources?.stateDir !== undefined && traceSources.session !== undefined
+      ? readPresenceForSeat(traceSources.stateDir, traceSources.session, row.name, recorded?.presence_binding)
+      : null;
+    // The seat-state reading: the daemon's presence projection for this launch, the CLI's own
+    // hook when its launch keeps one, the CLI's own
     // screen, then herdr, then the traces (a fresh one even over an idle word) — and the
     // certainties the comparison already judged. The
     // comparison's own 'missing'/'stopped' is such a certainty — it read the pane's processes —
@@ -260,6 +269,7 @@ export function seatRegistryRows(
       ...(agent !== undefined && !untrusted ? { agent: { pane: agent.pane, status: agent.status } } : {}),
       ...(screenText !== undefined ? { screenText } : {}),
       hook,
+      presence,
       trace,
       ...(goneOnPurpose ? { stopped: true } : {}),
       ...(held ? { held: true } : {}),

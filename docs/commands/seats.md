@@ -32,7 +32,7 @@ when `--all` is given, with its human name when the file writes one, its stable 
 | EFFORT | the effort level, or `-` when unset |
 | STATUS | the comparison's phrase for the seat against the session (`working`, `missing`, `stopped`, …) |
 | STATE | the seat's own reading, best source first — `working`, `idle`, `done`, `blocked`, `held`, `unreachable` or `unknown`; an `unknown` past the blind threshold (five minutes shipped, tightened by the machine, an entity, a project, the team or the seat, and opened again only by a project) reads `unknown (blind)` |
-| SOURCE | where that reading came from — `cli`, `cli-hook`, `herdr`, `trace`, `process`, `hold` or `none` |
+| SOURCE | where that reading came from — `cli`, `presence`, `cli-hook`, `herdr`, `trace`, `process`, `hold` or `none`; `presence` is the daemon's reading of the seat's own turn events, and `cli` is the screen's fallback classification |
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
 

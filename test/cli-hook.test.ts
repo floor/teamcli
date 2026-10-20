@@ -27,6 +27,7 @@ import { messageKeyState } from '../src/store/keys.ts';
 import {
   cliHookSettingsPath, cliHookStatePath, dropReadRunner, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
+import { presencePaths } from '../src/daemon/presence/spool.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
@@ -702,7 +703,7 @@ describe('the reading the hook feeds', () => {
 describe('a registry row reads the state file', () => {
   const SESSION = 'teamcli';
 
-  function row(options: { cli?: string; stateDir?: string; session?: string }): SeatRegistryRow {
+  function row(options: { cli?: string; stateDir?: string; session?: string; binding?: string }): SeatRegistryRow {
     const team = {
       project: 'acme',
       seats: [{ role: 'implementer', name: 'worker', cli: options.cli ?? 'claude-code', model: 'Claude Opus', version: '5.5', launch: CLAUDE, cwd: '.' }],
@@ -718,6 +719,7 @@ describe('a registry row reads the state file', () => {
       version: '5.5',
       launch_line: CLAUDE,
     };
+    if (options.binding !== undefined) state.seats.worker.presence_binding = options.binding;
     const live: Live = { running: true, agents: [], workspaces: [], screens: {} };
     const comparison: Comparison = {
       rows: [{ name: 'worker', state: 'idle', model: 'Claude Opus', pane: 'w1:p1' }],
@@ -737,6 +739,37 @@ describe('a registry row reads the state file', () => {
     mkdirSync(join(dir, 'seat-state', session), { recursive: true, mode: 0o700 });
     writeFileSync(join(dir, 'seat-state', session, 'worker.json'), text);
   }
+
+  function writePresence(binding: string, state: 'working' | 'idle'): void {
+    const paths = presencePaths(dir, SESSION, 'worker');
+    if (paths === null) throw new Error('the scene names no presence folder');
+    mkdirSync(paths.root, { recursive: true });
+    const since = ago(5);
+    writeFileSync(paths.current, JSON.stringify({
+      v: 1,
+      seq: 1,
+      id: `${since}-ab12cd34`,
+      state,
+      source: 'runtime-hook',
+      event: state === 'working' ? 'turn-start' : 'turn-end',
+      binding,
+      since,
+      observedAt: since,
+    }));
+  }
+
+  test('a presence projection under the recorded binding answers; a predecessor’s does not', () => {
+    const binding = 'prs_0123456789ab';
+    writePresence(binding, 'working');
+    expect(row({ stateDir: dir, session: SESSION, binding }))
+      .toMatchObject({ state: 'working', state_source: 'presence', blind: false });
+    // The same projection under a binding a relaunch recorded since: last known, never this
+    // launch's reading — the screen and herdr answer again.
+    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_ba9876543210' }))
+      .toMatchObject({ state: 'unknown', state_source: 'none' });
+    expect(row({ stateDir: dir, session: SESSION }))
+      .toMatchObject({ state: 'unknown', state_source: 'none' });
+  });
 
   test('a fresh hook answers when the screen and herdr have nothing', () => {
     writeState(`{"state":"working","since":"${ago(5)}"}\n`);
