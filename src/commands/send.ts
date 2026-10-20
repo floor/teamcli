@@ -34,7 +34,13 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor } from '../send/names.ts';
-import { deliverCodexNativeRoute } from '../send/push-adapters.ts';
+import {
+  deliverCodexNativeRoute,
+  deliverHeadlessResumeRoute,
+  HEADLESS_RESUME_UNAVAILABLE_REASON,
+  isHeadlessResumeCli,
+  type HeadlessResumeSpawn,
+} from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
@@ -315,6 +321,8 @@ export type SendHost = {
   /** The watch's own sender principal, set only by the internal `sendWatchDirect`. Absent, the
    *  caller is placed from the ordinary sources (`io.caller`, `io.callerSources`, ancestry). */
   watch?: WatchSendPrincipal;
+  /** Optional process runner override for the `headless-resume` leg (`gemini` / `cursor-agent`). */
+  headlessResumeSpawn?: HeadlessResumeSpawn;
 };
 
 export const realHost: SendHost = {
@@ -940,6 +948,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
       else if (leg === 'socket') failures.push("socket: the pane is a human's, and no frame is sent");
+      else if (leg === 'headless-resume') failures.push("headless-resume: the pane is a human's, and no session is resumed");
       else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
     }
   }
@@ -1011,7 +1020,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       const live = inboxLive(dropDir, to.root, to.session, to.seat, host.build?.());
       if (!live.live) {
         failures.push(`mcp-inbox: ${live.reason}`);
-        note(walkAttempt('mcp-inbox', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: live.reason }));
+        note(walkAttempt('mcp-inbox', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: live.reason }));
         continue;
       }
       await ensureEpisode();
@@ -1027,17 +1036,17 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // is transport, never a read.
       if (to.cli !== 'claude-code') {
         failures.push(`socket: ${to.cli} sessions have no cross-session socket`);
-        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: `${to.cli} sessions have no cross-session socket` }));
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: `${to.cli} sessions have no cross-session socket` }));
         continue;
       }
       if (!SOCKET_SEND) {
         failures.push('socket: this build does not carry the cross-session socket');
-        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: 'this build does not carry the cross-session socket' }));
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: 'this build does not carry the cross-session socket' }));
         continue;
       }
       if (inbound.policy !== 'accept') {
         failures.push(`socket: ${inboundSkipReason(inbound.policy)}`);
-        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: inboundSkipReason(inbound.policy) }));
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: inboundSkipReason(inbound.policy) }));
         continue;
       }
       // The dial is the route attempt: the signed record is staged before the frame reaches the
@@ -1062,7 +1071,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return delivered(io, to.seat, report, 'socket');
       }
       if (attempt.kind === 'held') {
-        const remaining = liveRoutesAfter(walk, at);
+        const remaining = liveRoutesAfter(walk, at, to.cli);
         note(walkAttempt('socket', 'held', remaining, host.now(), startedAt, { reason: attempt.reason }));
         // A held frame is not a delivery, and a live route behind it may still take the send:
         // the frame stays in the receiver's folder as its durable copy and the walk moves on.
@@ -1075,7 +1084,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
       }
       failures.push(`socket: ${attempt.reason}`);
-      note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: attempt.reason }));
+      note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
       socketNote = `typed, socket ${attempt.reason}`;
       // The fallback's own line, only where the typed leg is still ahead to take the send.
       if (walk.slice(at + 1).includes('typed')) {
@@ -1105,7 +1114,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         if (staged === null || !staged.ok) {
           const why = staged === null ? 'the record could not be written' : staged.reason;
           failures.push(`native: ${why}`);
-          note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: why }));
+          note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
           continue;
         }
         // The receiving seat's signed chain sets the attempt budget. A chain that does not read
@@ -1139,7 +1148,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
             startedAt,
             routeStartedAt,
             deliveryTimeout,
-            liveRoutesRemain: liveRoutesAfter(walk, at),
+            liveRoutesRemain: liveRoutesAfter(walk, at, to.cli),
             skipStage: true,
             // Readiness is always read live: a queue that would hold the pointer is a route that
             // did not take the send, never a hopeful enqueue.
@@ -1195,33 +1204,102 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         if (off.kind === 'handed') return handed(io, to.dir, who, to.seat, off.record, host, report);
         failures.push(`native: ${off.reason}`);
         await ensureEpisode();
-        note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: off.reason }));
+        note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: off.reason }));
         continue;
       }
       failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
       await ensureEpisode();
-      note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: NATIVE_LEG_UNAVAILABLE }));
+      note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: NATIVE_LEG_UNAVAILABLE }));
       continue;
     }
     if (leg === 'headless-resume') {
-      // The seat's own CLI resumed headlessly for one turn: no TUI pane, so no keystroke. This
-      // build carries no headless runtime yet, so the declared leg is recorded as unavailable and
-      // the walk moves on; it never falls through to the typed leg in its place.
+      // The seat's own CLI resumed headlessly for one turn: no TUI pane, so no keystroke.
+      // Supported for Gemini (`gemini`) and Cursor (`cursor-agent`) seats with a bound
+      // `recordedSeatSession`; any other CLI has no headless runtime in this build, so the
+      // declared leg is recorded as unavailable and the walk moves on.
       //
       // A direct-only caller's authority is rechecked before this leg's own route as well, even
-      // while the build carries no resume runtime: a refusal here ends the walk rather than
-      // recording an unavailable leg, and when a functional resume lands here it sits behind the
-      // same recheck, never after it. A refusal never reaches the walk's next route. The
-      // composed guard is the watch principal's own verifier first and any narrowing guard its
-      // caller handed in.
+      // when the receiver's CLI carries no resume runtime: a refusal here ends the walk rather than
+      // recording an unavailable leg, and the functional resume sits behind the same recheck, never
+      // after it. A refusal never reaches the walk's next route. The composed guard is the watch
+      // principal's own verifier first and any narrowing guard its caller handed in.
       const resumeGuard = guardRefusal(directGuard);
       if (resumeGuard !== null) {
         failures.push(`headless-resume: refused: ${resumeGuard.why}`);
         note(walkAttempt('headless-resume', 'refused', false, host.now(), startedAt, { reason: resumeGuard.why }));
         break;
       }
-      failures.push('headless-resume: this build carries no headless resume runtime');
-      note(walkAttempt('headless-resume', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: 'this build carries no headless resume runtime' }));
+      if (!isHeadlessResumeCli(to.cli)) {
+        failures.push(`headless-resume: ${HEADLESS_RESUME_UNAVAILABLE_REASON}`);
+        note(walkAttempt('headless-resume', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: HEADLESS_RESUME_UNAVAILABLE_REASON }));
+        continue;
+      }
+      const routeStartedAt = host.now().getTime();
+      await ensureEpisode();
+      const staged = stagedRecordOf();
+      if (staged === null || !staged.ok) {
+        const why = staged === null ? 'the record could not be written' : staged.reason;
+        failures.push(`headless-resume: ${why}`);
+        note(walkAttempt('headless-resume', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      const policyTeam = receiving.ok ? receiving.team : null;
+      const deliveryTimeout = policyTeam === null
+        ? { ok: false as const, why: 'the receiving team file could not be read; the headless-resume attempt budget is undecided' }
+        : deliveryTimeoutInForce({
+            home: host.home,
+            entity: policyTeam.entity ?? '',
+            projectId: projectIdOfTeam(host.home, policyTeam, to.root) ?? '',
+            root: to.root,
+            team: policyTeam,
+            seat: to.seat,
+            now: host.now(),
+          });
+      const seatCwd = declared?.cwd === undefined ? to.root : resolve(to.root, declared.cwd);
+      const attempt = await deliverHeadlessResumeRoute(
+        {
+          route: 'headless-resume',
+          cli: to.cli,
+          copy: { dir: dropDir, name: msgId },
+          root: to.root,
+          home: host.home,
+          session: to.session,
+          seat: to.seat,
+          sender: { seat: from, team: teamIdOf(root) },
+          cwd: seatCwd,
+        },
+        { id: msgId, record: staged.record },
+        {
+          now: host.now,
+          startedAt,
+          routeStartedAt,
+          deliveryTimeout,
+          liveRoutesRemain: liveRoutesAfter(walk, at, to.cli),
+          skipStage: true,
+          ...(host.headlessResumeSpawn === undefined ? {} : { spawn: host.headlessResumeSpawn }),
+        },
+      );
+      note(attempt.walkAttempt);
+      if (attempt.outcome === 'enqueue') {
+        report.sent = msgId;
+        const failed = failures.length > 0 ? { failed: [...failures] } : {};
+        const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
+        if (wait) {
+          return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'headless-resume', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+        }
+        const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
+        if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
+          clearPending(dropDir, msgId);
+          logLine(dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, headless-resume receipt)`, host.now());
+          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'headless-resume', ...failed });
+          return delivered(io, to.seat, report, 'read', 'headless-resume');
+        }
+        const ms = host.now().getTime() - startedAt;
+        logLine(dir, 'send', who, `${to.seat}: resumed headlessly (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'headless-resume', ...failed });
+        return sentUnconfirmed(io, to.seat, report, ms, 'headless-resume');
+      }
+      failures.push(`headless-resume: ${attempt.reason}`);
       continue;
     }
     // The drop leg: the same 0600 drop file the typed leg writes, and no keystroke at all — no
@@ -1274,7 +1352,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // history line for this ending — the leg that takes the send writes the one line.
       if (viaDaemon.outcome === 'unreachable' && viaDaemon.fall_through === true) {
         failures.push(`typed: ${viaDaemon.detail}`);
-        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: viaDaemon.detail }));
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: viaDaemon.detail }));
         continue;
       }
       noteDaemonOutcome(note, viaDaemon, host.now(), startedAt);
@@ -1292,7 +1370,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
       if (at + 1 < walk.length) {
         failures.push(`typed: ${found.reason}`);
-        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: found.reason }));
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: found.reason }));
         continue;
       }
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) };
@@ -1352,6 +1430,7 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
   // receiver only the sender's own handoff — a sender whose own file declares Claude Code.
   const socketWalkable = SOCKET_SEND && socketDialable;
   const nativeWalkable = cli === 'codex' || (cli === 'claude-code' && handoffEligible);
+  const resumeWalkable = isHeadlessResumeCli(cli);
   const typed = profileFor(cli)?.compose != null
     ? 'a typed brief through its own screens'
     : 'a 0600 drop file and one trigger line';
@@ -1360,11 +1439,20 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
     if (leg === 'native') {
       return cli === 'codex' ? 'its native runtime queue' : 'the native handoff (your own SendMessage, then --confirm)';
     }
+    if (leg === 'headless-resume') return 'its headless session resume';
     if (leg === 'mcp-inbox') return "the seat's own MCP inbox";
     if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
     return typed;
   };
-  const walkable = order.filter((leg) => leg === 'drop' || leg === 'mcp-inbox' || leg === 'typed' || (leg === 'socket' && socketWalkable) || (leg === 'native' && nativeWalkable));
+  const walkable = order.filter(
+    (leg) =>
+      leg === 'drop'
+      || leg === 'mcp-inbox'
+      || leg === 'typed'
+      || (leg === 'socket' && socketWalkable)
+      || (leg === 'native' && nativeWalkable)
+      || (leg === 'headless-resume' && resumeWalkable),
+  );
   const [first] = walkable;
   if (first === undefined) return 'no leg of its delivery order this build can walk';
   // The drop leg is a file and no keystroke: it always takes the send, so nothing stands behind it.
@@ -1438,8 +1526,10 @@ function walkAttempt(
 /** Whether a leg after this one can still take the send: a walk's remaining routes, less the one
  *  this build carries no runtime for. A route is live when it stands; the drop leg's file always
  *  stands in front of a copy. */
-function liveRoutesAfter(walk: readonly DeliveryLeg[], at: number): boolean {
-  return walk.slice(at + 1).some((leg) => leg !== 'headless-resume');
+function liveRoutesAfter(walk: readonly DeliveryLeg[], at: number, cli?: string): boolean {
+  return walk
+    .slice(at + 1)
+    .some((leg) => leg !== 'headless-resume' || (cli !== undefined && isHeadlessResumeCli(cli)));
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
@@ -2104,7 +2194,7 @@ async function finishThreadWait(
   seatName: string,
   dropDir: string,
   payload: RecordPayload,
-  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native',
+  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume',
   timeoutS: number,
   host: SendHost,
   report: Report,
@@ -3562,7 +3652,7 @@ function seatList(team: TeamFile): string {
  *  `socket` — and `read` for a signed receipt (the mcp-inbox leg's, or a typed trigger's own),
  *  whose own words are `delivered (read)`: the seat read the message, which is not a claim that
  *  it acted on it. `via` names the channel for a read that came through the typed leg. */
-function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed' | 'native'): number {
+function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed' | 'native' | 'headless-resume'): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   const read = note === 'read';
   if (report.json) {
@@ -3582,7 +3672,7 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
  *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
  *  composer and the drop is still the message. The `note` says which — a typed send's names the
  *  trigger and the receipt that has not come back. Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed' | 'native', note?: string): number {
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed' | 'native' | 'headless-resume', note?: string): number {
   const summary = `${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`;
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
@@ -3599,7 +3689,7 @@ function answered(
   seat: string,
   read: { reply: string; msg_id: string | null },
   report: Report,
-  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' = 'socket',
+  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' = 'socket',
   thread: string | null = report.sent,
 ): number {
   const summary = `${seat}: answered`;
@@ -3715,9 +3805,9 @@ type ActionFields = {
   status: 'delivered' | 'delivered (read)' | 'sent (unconfirmed)' | 'answered' | 'recorded' | 'native' | 'dry-run';
   summary: string;
   dryRun?: boolean;
-  /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, or `native` for a
+  /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, `headless-resume`, or `native` for a
    *  record or handoff. */
-  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | null;
+  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
   /** The reply record's own id, on an answered wait. */
