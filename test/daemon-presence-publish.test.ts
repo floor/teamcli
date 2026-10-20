@@ -187,6 +187,13 @@ describe('an actual ingester → publisher → verified feed', () => {
       expect(event.recordId).toBe(presenceRecordIdOf(SEAT, { binding: BINDING, seq: index + 1, id: expected.id }));
       expect(Number.isFinite(Date.parse(event.observedAt))).toBe(true);
     }
+
+    // A follower's cursor is exclusive: the same feed after seq 2 carries only the newer pair.
+    const tail = feedAfter(world, 2);
+    expect(tail.kind).toBe('ok');
+    if (tail.kind !== 'ok') return;
+    expect(tail.events.map((event) => event.seq)).toEqual([3, 4]);
+    expect(tail.cursor).toBe(4);
   });
 
   test('a daemon restart replays the durable log and the bus log answers duplicate', async () => {
