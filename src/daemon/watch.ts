@@ -20,6 +20,10 @@ export type HostedWatchInput = {
   required?: boolean;
   /** Start standing down because a live pane watch already owns the session. */
   standby?: string;
+  /** Runs on every daemon heartbeat tick, before any due waiter is settled. A route's own
+   *  pulses ride the existing fixed interval; the host adds no timer and never shortens a wait.
+   *  `false` closes effects: the host then settles every outstanding wait false at once. */
+  onTick?: (at: Date) => boolean | void;
   now?: () => Date;
 };
 
@@ -51,6 +55,10 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       waiter.resolve(ok);
     }
   };
+
+  // A run that ends must not overwrite a host already stood down or failed by a pulse. Read
+  // through a function so a tick's write is seen here, not a narrowing from construction time.
+  const settled = (): boolean => stopped || phase === 'standby' || phase === 'failed';
 
   const loop: HostedLoop = {
     signal: controller.signal,
@@ -86,13 +94,13 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     : (async () => {
       try {
         const code = await input.run(loop);
-        if (stopped || phase === 'standby') return;
+        if (settled()) return;
         // The loop ended on its own — its own reasons reached the log. That is a stop, not a
         // failure, and the host never silently restarts a loop that chose to leave.
         phase = 'stopped';
         why = code === 0 ? 'the watch loop ended' : `the watch loop ended with code ${String(code)}`;
       } catch (error) {
-        if (stopped || phase === 'standby') return;
+        if (settled()) return;
         failures += 1;
         lastCycleOutcome = 'failed';
         phase = 'failed';
@@ -103,7 +111,33 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     })();
 
   const tick = (at: Date): void => {
-    if (stopped || phase === 'standby' || phase === 'stopped' || phase === 'failed') return;
+    // While this daemon is closing there is no further beat to ride: the run's own cleanup
+    // already ran, and a release it left pending stays honestly pending for explicit recovery.
+    if (stopped) return;
+    // The route's own pulse rides every beat, including after its run has ended, so cleanup a
+    // route left pending can be retried while this daemon lives. It runs before any due waiter:
+    // a pass starts only under authority renewed on this very beat.
+    let live = true;
+    try {
+      live = input.onTick?.(at) !== false;
+    } catch (error) {
+      // A throwing pulse is not a line to log and keep acting past: effects close and the loop
+      // drains. The failure stays in the host's state for the daemon's own status.
+      failures += 1;
+      lastCycleOutcome = 'failed';
+      phase = 'failed';
+      why = error instanceof Error ? error.message : 'the watch tick failed';
+      controller.abort();
+      settleWaiters(false);
+      return;
+    }
+    // Recheck after the pulse: it may have stood this host down, ended it, or closed effects.
+    // A closed pulse settles every outstanding wait false now — an aborted signal alone never
+    // resolves an inner wait.
+    if (!live || phase === 'standby' || phase === 'stopped' || phase === 'failed') {
+      settleWaiters(false);
+      return;
+    }
     const ms = at.getTime();
     for (const waiter of [...waiters]) {
       if (ms < waiter.due) continue;

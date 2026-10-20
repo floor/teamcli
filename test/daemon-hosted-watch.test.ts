@@ -341,3 +341,79 @@ describe('the daemon heartbeat hosting', () => {
     }
   });
 });
+
+describe('the daemon beat', () => {
+  test('a pulse runs before a due wait resolves', async () => {
+    const clock = { at: NOW };
+    const order: string[] = [];
+    const host = createHostedWatch({
+      route: routeOf(root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']),
+      now: () => new Date(clock.at),
+      run: async (loop) => {
+        order.push('pass');
+        const ok = await loop.wait(120_000);
+        order.push(`wait:${String(ok)}`);
+        return 0;
+      },
+      onTick: (at) => {
+        order.push(`tick:${String(at.getTime() - NOW)}`);
+        return true;
+      },
+    });
+    await waitUntil(() => order.includes('pass'));
+    clock.at = NOW + 120_000;
+    host.tick(new Date(clock.at));
+    await waitUntil(() => order.some((one) => one.startsWith('wait:')));
+    expect(order).toEqual(['pass', 'tick:120000', 'wait:true']);
+    await host.stop('done');
+  });
+
+  test('a closed pulse settles an outstanding wait false at once', async () => {
+    const clock = { at: NOW };
+    let settled: boolean | undefined;
+    let closed = false;
+    const host = createHostedWatch({
+      route: routeOf(root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']),
+      now: () => new Date(clock.at),
+      run: async (loop) => {
+        settled = await loop.wait(600_000);
+        return 0;
+      },
+      onTick: () => !closed,
+    });
+    await waitUntil(() => host.state().phase === 'starting');
+    closed = true;
+    // Far short of the wait's own due instant: closing must not wait for it.
+    clock.at = NOW + 5_000;
+    host.tick(new Date(clock.at));
+    await waitUntil(() => settled !== undefined);
+    expect(settled).toBe(false);
+    expect(host.state().phase).toBe('stopped');
+    await host.stop('done');
+  });
+
+  test('a throwing pulse fails the host and drains the loop', async () => {
+    const clock = { at: NOW };
+    let settled: boolean | undefined;
+    const host = createHostedWatch({
+      route: routeOf(root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']),
+      now: () => new Date(clock.at),
+      run: async (loop) => {
+        settled = await loop.wait(600_000);
+        return 0;
+      },
+      onTick: () => {
+        throw new Error('the beat broke');
+      },
+    });
+    await waitUntil(() => host.state().phase === 'starting');
+    clock.at = NOW + 5_000;
+    host.tick(new Date(clock.at));
+    await waitUntil(() => settled !== undefined);
+    expect(settled).toBe(false);
+    expect(host.state()).toMatchObject({
+      phase: 'failed', why: 'the beat broke', failures: 1, lastCycleOutcome: 'failed',
+    });
+    await host.stop('done');
+  });
+});

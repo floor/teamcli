@@ -35,7 +35,7 @@ import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, routeOf, type HostedRoute } from './routes.ts';
 import { createHostedWatch, type HostedWatch } from './watch.ts';
-import { hostedWatchRun } from './watch-run.ts';
+import { hostedWatchAuthority } from './watch-authority.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import {
   ensureMachineDir,
@@ -65,6 +65,11 @@ export type HostedWatchBuild = {
   effects?: 'blocked' | 'open';
   /** Defaults to true: a host is created only when the route was started to carry a watch. */
   required?: boolean;
+  /** The route cannot host a watch: the watch starts standing down with this reason. */
+  standby?: string;
+  /** Runs on every daemon heartbeat tick for this route, before due waits are settled.
+   *  `false` closes effects: the host then resolves every outstanding wait false. */
+  tick?: (at: Date) => boolean | void;
 };
 
 export type StartMachineDaemonInput = {
@@ -262,6 +267,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const inFlight = new Map<string, InFlight>();
   const roots: MachineRootStatus[] = [];
   const routes: HostedRoute[] = [];
+  /** The team file each route was actually loaded from, by canonical root. */
+  const teamFiles = new Map<string, string>();
   // Filled once the roots loop has resolved every route; a status entry gains its `watch`
   // record on each state write, and only entries that actually got a host ever have one.
   const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
@@ -410,6 +417,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         loaded.team.seats.map((seat) => seat.name),
       ),
     );
+    teamFiles.set(canonical, loaded.path);
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
     let send: Awaited<ReturnType<typeof startSendDaemon>>;
     try {
@@ -494,10 +502,21 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const route = routes.find((candidate) => candidate.root === status.root);
       if (route === undefined) continue;
       if (hostedWatches.some((one) => one.watch.route === route)) continue;
-      const build = input.hostedWatch?.(route, log) ?? { run: hostedWatchRun({ route, log }) };
+      const teamFile = teamFiles.get(route.root);
+      if (teamFile === undefined) continue;
+      const build = input.hostedWatch?.(route, log)
+        ?? hostedWatchAuthority({ route, teamFile, log });
       hostedWatches.push({
         status,
-        watch: createHostedWatch({ route, run: build.run, effects: build.effects, required: build.required, now }),
+        watch: createHostedWatch({
+          route,
+          run: build.run,
+          effects: build.effects,
+          required: build.required,
+          standby: build.standby,
+          ...(build.tick === undefined ? {} : { onTick: build.tick }),
+          now,
+        }),
       });
     }
   }
