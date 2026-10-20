@@ -93,9 +93,9 @@ export default reply;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
 /** One record this run answers: the folder it was found in, its path, and its envelope. */
-type Found = { seat: string; path: string; record: SignedRecord };
+export type Found = { seat: string; path: string; record: SignedRecord };
 
-type Lookup =
+export type Lookup =
   | { kind: 'found'; found: Found }
   | { kind: 'none' }
   | { kind: 'legacy' }
@@ -121,7 +121,7 @@ function isDir(path: string): boolean {
 }
 
 /** Two spellings of one folder: the real paths where both can be read, the strings otherwise. */
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   try {
     return realpathSync(a) === realpathSync(b);
   } catch {
@@ -171,7 +171,7 @@ function candidatesOf(root: string, session: string): { seat: string; path: stri
 }
 
 /** Whether the store an earlier build wrote holds this id for any seat of the checkout. */
-function legacyHolds(root: string, id: string): boolean {
+export function legacyHolds(root: string, id: string): boolean {
   const dir = join(root, '.agents', 'messages');
   if (!isDir(dir)) return false;
   let seats: string[];
@@ -185,7 +185,7 @@ function legacyHolds(root: string, id: string): boolean {
 
 /** The candidate files named exactly `id` in this session's tree: what a lookup has to weigh,
  *  before any key is read. A name no record can take is not one of them. */
-function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
+export function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
   return candidatesOf(root, session).filter((candidate) => basename(candidate.path) === id);
 }
 
@@ -196,7 +196,7 @@ function recordHits(root: string, session: string, id: string): { seat: string; 
  * folder, is refused for the same reason `team messages` shows it as a difference — a copy is
  * not the message.
  */
-function findRecord(hits: { seat: string; path: string }[], root: string, session: string, id: string, me: string, key: KeyObject): Lookup {
+export function findRecord(hits: { seat: string; path: string }[], root: string, session: string, id: string, me: string, key: KeyObject): Lookup {
   const verified: Found[] = [];
   for (const hit of hits) {
     const read = readRecord(hit.path, id);
@@ -327,7 +327,7 @@ function seatList(team: TeamFile): string {
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
  *  caller's seat, the seat it addressed and the folder the call stood in — never the message. */
-function raiseSecurityRefusal(
+export function raiseSecurityRefusal(
   team: TeamFile,
   root: string,
   home: string,

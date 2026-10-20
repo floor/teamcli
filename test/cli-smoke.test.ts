@@ -46,6 +46,7 @@ const allCommandNames = Array.from(
  * state, require live tmux/herdr panes or network/Keychain access, or run long-lived daemons.
  */
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
+  ack: "writes one signed read receipt into the addressee's folder",
   answer: 'types an answer into a live herdr pane dialog',
   client: 'writes an Ed25519 client key pair into an owner folder and reads no project state',
   'development-mode': 'reads or writes the machine development-mode record, which is an owner setting with no registered output schema',

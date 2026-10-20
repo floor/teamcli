@@ -17,6 +17,7 @@ import { rulesOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
+import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
@@ -906,9 +907,29 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(to.dir, to.session, to.seat)), inbound);
   const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
   const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
-  const ordered: readonly DeliveryLeg[] = !declaredOrder && to.cli === 'claude-code' && socketNow
-    ? ['socket', ...order]
-    : order;
+  // The second implied default: a receiving Codex seat with no declared order walks its own
+  // runtime's queue first while its effective `codex-daemon` policy is `on` (the signed default).
+  // The policy is read here, ahead of the leg's own fail-closed read, because a policy that is
+  // off or cannot be verified must add no attempt at all: the walk then keeps the file default
+  // and `native` stays reachable only where a chain names it. A declared order is walked as
+  // written, so a chain that places another runtime's leg first is never preempted.
+  const nativeFirst =
+    !declaredOrder &&
+    to.cli === 'codex' &&
+    codexDaemonForSeat({
+      home: host.home,
+      root: to.root,
+      ...(receiving.ok ? { team: receiving.team } : {}),
+      seat: to.seat,
+      session: to.session,
+      now: host.now(),
+    }) === 'on';
+  const ordered: readonly DeliveryLeg[] =
+    !declaredOrder && to.cli === 'claude-code' && socketNow
+      ? ['socket', ...order]
+      : nativeFirst
+        ? ['native', ...order]
+        : order;
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
   // order names is kept out, and each one's human reason is recorded on the history line, so a

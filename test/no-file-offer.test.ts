@@ -60,6 +60,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
  *  held to. A run that stopped before the message would pass the offer check vacuously, so
  *  the set of nodes that printed it is pinned. */
 const REACHED = [
+  'ack',
   'broker',
   'bus',
   'delegate',

@@ -72,6 +72,11 @@ export const COMMAND_GATES: Readonly<Record<string, Gate>> = buildGates();
 
 function buildGates(): Record<string, Gate> {
   const gates: Record<string, Gate> = {
+    ack: {
+      kind: 'owner-or-own-team',
+      why: 'marking a message read is the record\'s addressee on its own pane, or the owner: the signed receipt is the same gate team messages writes, and it never reaches another seat\'s folder',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
+    },
     init: {
       kind: 'owner-only',
       why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`',
