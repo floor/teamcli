@@ -794,6 +794,6 @@ exit 1
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: dry-run: codex via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written
+gpt-reviewer: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written
 exit 0
 ```
