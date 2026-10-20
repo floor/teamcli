@@ -1502,6 +1502,30 @@ describe('team add delegated', () => {
     expect(asked[0]!.io).toBe(io);
   });
 
+  test('a verdict that folded the approval is printed and logged, and the add goes on as a delegated one', async () => {
+    approve(DELEGATE_FILE);
+    const made = world();
+    const io = testIo(project, pilot);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const live = join(project, '.agents', 'team.yaml');
+    const line = `warning: delegation needs a verified approval: the file was never approved on this machine; the live team file ${live} counts as approved; dev mode continues`;
+    const asked: Parameters<NonNullable<AddSources['delegateGate']>>[0][] = [];
+    const code = await runAdd(['worker'], io, sources(made, {
+      delegateGate: (input) => {
+        asked.push(input);
+        return { kind: 'passed' as const, pane: 'main/w1:p1', devApproval: line };
+      },
+    }));
+    // The dev run asked with its own verdict and the live file's path; the line is printed
+    // before the same-copy rule still refuses the add of a stopped seat, and it is logged.
+    expect(asked[0]!.dev?.on).toBe(true);
+    expect(asked[0]!.file).toBe(live);
+    expect(code).toBe(1);
+    expect(io.err).toBe(`team add: ${line}\n${EDIT_REFUSAL}`);
+    expect(made.creates).toEqual([]);
+    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toContain(`add [pilot] ${line}`);
+  });
+
   test('a delegated add that would clear stopped is refused before any write or signing', async () => {
     approve(DELEGATE_FILE);
     const made = world();

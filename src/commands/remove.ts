@@ -262,7 +262,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const session = judged.session;
   // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
-  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  // exactly `1` keeps its behaviour. The caller line and the approval are folded below, and the
+  // delegate and swap gates' approval folds carry their own lines.
   const dev = resolveDevMode('remove', io, {
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     team,
@@ -302,9 +303,18 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       // A swap is admitted by the entry's `swap` word alone, and its `--keep` is then the
       // delegate's: `remove` in an entry never reaches a lead.
       ...(swap ? { swap: true } : {}),
+      // Dev mode folds the delegation's approval precondition, and the verdict carries the
+      // warning naming the live file; the removal then goes on as a delegated one.
+      dev,
+      file: path,
     });
     if (decided.kind === 'refused') return delegateRefused(io, json, decided);
     delegatePane = decided.pane;
+    if (decided.devApproval !== undefined) {
+      if (json) collect(decided.devApproval);
+      else io.stderr(`team remove: ${decided.devApproval}\n`);
+      logDevMode(dir, 'remove', describeCaller(shown), decided.devApproval, sources.now());
+    }
   }
   if (verdict.kind === 'no-pane' && delegatePane === null) {
     refuse(io, json, 'remove', { id: 'remove.no-pane', message: noPaneRefusal(verdict.name), repair: null });

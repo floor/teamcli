@@ -33,6 +33,7 @@ import { runRemove } from '../../src/commands/remove.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, type DelegateVerdict } from '../../src/delegate.ts';
 import type { ActingCommand } from '../../src/delegate-types.ts';
+import type { DevModeRun } from '../../src/dev_mode.ts';
 import type { TeamFile } from '../../src/file/types.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
@@ -111,6 +112,9 @@ type Scene = {
   agents?: HerdrAgent[] | null;
   flags?: readonly string[];
   swap?: boolean;
+  dev?: DevModeRun;
+  /** The live team file's path, when the scene asks the dev-mode fold to name it. */
+  liveFile?: string;
 };
 
 function gate(scene: Scene = {}): DelegateVerdict {
@@ -124,6 +128,7 @@ function gate(scene: Scene = {}): DelegateVerdict {
     dir: '/proj/.agents',
     flags: scene.flags ?? [],
     io: { env: {}, stdinIsTTY: true, caller: scene.caller ?? pilot },
+    ...(scene.dev === undefined ? {} : { dev: scene.dev, file: scene.liveFile ?? '/proj/.agents/team.yaml' }),
     sources: {
       standing: () => scene.standing ?? verified(judged, file),
       state: () => scene.state ?? empty,
@@ -174,6 +179,36 @@ describe("a file's words are its own, and they are all a delegate holds", () => 
   test('a pass hands back the acting pane and nothing beside it', () => {
     // The verdict is the pane and no authority of its own: a delegate is an actor.
     expect(gate()).toEqual({ kind: 'passed', pane: 'main/w1:p1' });
+  });
+
+  test('dev mode stands the live file in for the delegation\'s approval — never for approve, and never for the checks after it', () => {
+    const dev: DevModeRun = { on: true, by: 'env', governed: false, ignored: false, expired: null, refusals: [] };
+    const noRecord: Standing = { kind: 'none' };
+    const said = 'delegation needs a verified approval: the file was never approved on this machine';
+    // Unset: the precondition refuses, exactly as before.
+    expect(refused({ standing: noRecord })).toEqual({ id: 'up.delegate-approval', text: said });
+    // On: the live file this run reads counts as approved, and the verdict carries the line
+    // the command prints and logs — the precondition's own words, the file that counted, the fold.
+    expect(gate({ standing: noRecord, dev })).toEqual({
+      kind: 'passed',
+      pane: 'main/w1:p1',
+      devApproval: `warning: ${said}; the live team file /proj/.agents/team.yaml counts as approved; dev mode continues`,
+    });
+    // A dev run that is off folds nothing.
+    expect(refused({ standing: noRecord, dev: { ...dev, on: false, by: null } })).toEqual({ id: 'up.delegate-approval', text: said });
+    // `approve` writes the verified record: it never runs on a file only dev mode stands behind,
+    // and the no-dev refusal is byte for byte the same.
+    expect(refused({ command: 'approve', standing: noRecord, dev })).toEqual({ id: 'approve.delegate-approval', text: said });
+    // Only the approval folds. The entry's own words still refuse inside it.
+    expect(refused({ command: 'add', standing: noRecord, dev })).toEqual({
+      id: 'add.delegate-command',
+      text: 'the approved delegate main/w1:p1 may not run `add`; its approved commands are up, down',
+    });
+    // And the owner's flags still refuse.
+    expect(refused({ command: 'up', standing: noRecord, dev, flags: ['file'] })).toEqual({
+      id: 'up.delegate-flag',
+      text: '--file is the owner\'s; the approved delegate cannot use it',
+    });
   });
 });
 

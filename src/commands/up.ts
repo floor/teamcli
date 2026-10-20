@@ -780,6 +780,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     delegated: string | null;
     grantedSeat: string | null;
     grantRefusal: string | null;
+    /** The warning line a dev-mode approval fold owed, and the file whose folder logs it. */
+    approval: string | null;
+    approvalDir: string;
   } => {
     const verdict = delegatesFile
       ? (sources.delegateGate ?? delegateGate)({
@@ -790,6 +793,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           flags: [...args.flags, ...Object.keys(args.values)],
           io,
           home: sources.home,
+          // Dev mode folds the delegation's approval precondition, and the verdict carries
+          // the warning naming the live file. `aimedDev` is that same default file's chain.
+          dev: aimedDev,
+          file: delegatesFile.path,
         })
       : null;
     // The approved `<session>/<pane id>` when this run is a delegated one: the default file's
@@ -802,12 +809,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
     let grantedSeat: string | null = null;
     let grantRefusal: string | null = null;
+    let approval: string | null = verdict?.kind === 'passed' ? verdict.devApproval ?? null : null;
+    let approvalDir = aimedDir;
     if (delegated === null && delegateMissed && grantFile) {
-      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
-      if (said.kind === 'passed') grantedSeat = said.grant.seat;
-      else grantRefusal = said.text;
+      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home, dev: aimedDev });
+      if (said.kind === 'passed') {
+        grantedSeat = said.grant.seat;
+        if (said.devApproval !== undefined) {
+          approval = said.devApproval;
+          approvalDir = dirname(grantFile.path);
+        }
+      } else grantRefusal = said.text;
     }
-    return { verdict, delegated, grantedSeat, grantRefusal };
+    return { verdict, delegated, grantedSeat, grantRefusal, approval, approvalDir };
   };
   if (!mayLaunchSeats(walked) && aimed) {
     const gates = judgeGates();
@@ -932,7 +946,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const dir = dirname(loaded.path);
   // The run's own dev mode, from the file it mounts: a policy value anywhere in the caller's
   // chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable
-  // set to exactly `1` keeps its behaviour. Only the caller gate is ever folded (below).
+  // set to exactly `1` keeps its behaviour. The caller gate is folded here; the grant and
+  // delegate gates folded theirs earlier, from the default file's chain (`aimedDev`).
   const dev = resolveDevMode('up', io, { home: sources.home, team, root, now: sources.now?.() ?? new Date() });
   // The configuration lines the run owes once: the variable ignored under a governing policy,
   // and a policy source that could not be read or ordered. Written before any refusal returns,
@@ -1375,14 +1390,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const warning = foldedLine;
   // The one override sentence every lifecycle command prints, its tail included.
   const folded = warning ? devModeCallerGate(dev, warning) ?? warning : '';
-  // The audit line the fold owes: written where the gate is used, on a real run, whether a
+  // A grant or delegate gate that folded its own approval comes with the line the gate
+  // returned: the refusal's words, the live file that counted, the fold. It printed where the
+  // gate is used, so it is one more warning line beside the caller's, never wrapped again.
+  const gateApproval = gates?.approval ?? null;
+  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval])];
+  // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
-  if (!dry && folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
+  if (!dry) {
+    if (folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
+    if (gateApproval !== null) {
+      logDevMode(gates?.approvalDir ?? dir, 'up', callerLabel(caller), gateApproval, sources.now?.() ?? new Date());
+    }
+  }
 
   if (dry) {
     stampLobbyTrust(false);
     if (!json) {
-      if (folded) out.stdout(`! ${plainText(folded)}\n`);
+      for (const line of warnings) out.stdout(`! ${plainText(line)}\n`);
       // The same cause can reach the list twice — the gate and `doctor` both read the
       // approval — so a refusal is said once. A refusal leaves through the real run's
       // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -1401,10 +1426,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // A dev-mode warning rides in the same sentence, so it is not lost in the envelope.
     if (json) {
       const first = refusals[0]!;
-      const message = folded ? `${plainText(folded)}; ${plainText(first.message)}` : plainText(first.message);
+      const lead = warnings.map(plainText).join('; ');
+      const message = lead === '' ? plainText(first.message) : `${lead}; ${plainText(first.message)}`;
       refuse(io, true, 'up', { id: first.id, message, repair: first.repair ?? null });
     } else if (!dry) {
-      if (folded) out.stderr(`team up: ${plainText(folded)}\n`);
+      for (const line of warnings) out.stderr(`team up: ${plainText(line)}\n`);
       for (const refusal of uniqueRefusals(refusals)) out.stderr(`team up: ${plainText(refusal.message)}\n`);
     }
     // exit: up.never-approved
@@ -1417,13 +1443,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.placement
     return 1;
   }
-  if (!dry && folded) stderrLine(`team up: ${plainText(folded)}\n`);
+  if (!dry) for (const line of warnings) stderrLine(`team up: ${plainText(line)}\n`);
   if (dry) {
     if (json) {
       // The plan is the document's: the warning first when there is one, then one step per
       // plan line, each with the prefix the terminal draws (`+`, `!`, `skip`).
       const plan: PlanStep[] = [
-        ...(folded ? [{ step: 'warning', detail: folded, prefix: '!' as const }] : []),
+        ...warnings.map((line) => ({ step: 'warning' as const, detail: line, prefix: '!' as const })),
         ...planStepsOf(buildPlan()),
       ];
       writeJson(io, 'team.up', {

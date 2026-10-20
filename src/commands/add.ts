@@ -314,7 +314,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const session = judged.session;
   // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
-  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  // exactly `1` keeps its behaviour. The caller line and the approval are folded below, and the
+  // delegate gate's approval fold carries its own line.
   const dev = resolveDevMode('add', io, { home: sources.home, team, root, now: sources.now() });
   if (!dry) logDevModeState(dir, 'add', describeCaller(shown), dev, sources.now());
   let devFolded = false;
@@ -362,9 +363,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // The second half of a swap: an entry that lists `swap` starts the lead it
       // stopped, as an entry that lists `add` already could.
       ...(!temporary && isLeadSeat(team, args.rest[0] ?? '') ? { swap: true } : {}),
+      // Dev mode folds the delegation's approval precondition, and the verdict carries the
+      // warning naming the live file; the add then goes on as a delegated one.
+      dev,
+      file: path,
     });
     if (verdict.kind === 'refused') return delegateRefused(io, json, verdict);
     delegatePane = verdict.pane;
+    if (verdict.devApproval !== undefined) {
+      devFolded = true;
+      if (json) (dry ? finalRecords : jsonNotes).push(verdict.devApproval);
+      else if (dry) out.stdout(`! ${verdict.devApproval}\n`);
+      else out.stderr(`team add: ${plainText(verdict.devApproval)}\n`);
+      if (!dry) logDevMode(dir, 'add', describeCaller(caller), verdict.devApproval, sources.now());
+    }
   }
   // The who-may-run-it gate: the map's `add` row, the owner's alone, with the standing grant the
   // delegate gate above may have answered read as its opening. Set to exactly `1`, dev mode says

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
@@ -1270,6 +1270,34 @@ describe('team remove delegated', () => {
     expect(readFileSync(join(dir, '.agents', 'team.log'), 'utf8').startsWith(
       '1970-01-01T00:00:00.000Z delegate [delegate] main/w1:p1 remove\n',
     )).toBe(true);
+  });
+
+  test('a verdict that folded the approval is printed and logged, and the removal goes on as a delegated one', async () => {
+    const store = approveFile(FILE + DELEGATES);
+    const made = world();
+    made.agents.push({ name: 'worker', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null });
+    const record = readFileSync(join(store, 'approval.json'), 'utf8');
+    const io = testIo(dir, pilot);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const live = realpathSync(file);
+    const line = `warning: delegation needs a verified approval: the file was never approved on this machine; the live team file ${live} counts as approved; dev mode continues`;
+    const asked: Parameters<NonNullable<RemoveSources['delegateGate']>>[0][] = [];
+    const code = await runRemove(['worker'], io, {
+      ...made.sources,
+      delegateGate: (input) => {
+        asked.push(input);
+        return { kind: 'passed' as const, pane: 'main/w1:p1', devApproval: line };
+      },
+    });
+    expect(asked[0]!.dev?.on).toBe(true);
+    expect(asked[0]!.file).toBe(live);
+    expect(code).toBe(0);
+    expect(io.err).toBe(`team remove: ${line}\n`);
+    expect(io.out).toContain('removed worker\n');
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+    // The delegated audit line is written first, then the fold's warning.
+    expect(readFileSync(join(dir, '.agents', 'team.log'), 'utf8')).toContain(`remove [pilot] ${line}`);
+    expect(readFileSync(join(store, 'approval.json'), 'utf8')).toBe(record);
   });
 
   test('a delegated removal of an idle leftover leaves the pane and logs the audit line', async () => {
