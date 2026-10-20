@@ -52,6 +52,8 @@ import {
   DELIVERY_TIMEOUT_DEFAULTS,
   type DeliveryTimeoutRoute,
 } from '../../policy/types.ts';
+import { isPresenceBinding } from '../../daemon/presence/contract.ts';
+import { codexEndpointPath, inspectRecordedCodexEndpoint } from '../../daemon/presence/endpoint-record.ts';
 import { loadTeamFile } from '../../file/load.ts';
 import {
   recordedSeatSession,
@@ -282,6 +284,38 @@ export type CodexNativeProbeOutcome =
       reason: string;
     };
 
+type SeatStateRead = { ok: true; state: SeatState | undefined } | { ok: false; why: string };
+
+/**
+ * The seat's own state record, read beside the team file that actually loads — a plain-folder or
+ * custom-layout team keeps it elsewhere than `.agents`. A team file that cannot be read is not a
+ * seat with no state: it is a hold, and the same for a state file that cannot be parsed.
+ */
+function readSeatState(root: string, home: string, session: string, seat: string): SeatStateRead {
+  let dir: string;
+  try {
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok) {
+      return {
+        ok: false,
+        why: `the team file could not be read, so the seat state folder cannot be resolved (${loaded.errors[0]?.message ?? 'unknown error'})`,
+      };
+    }
+    dir = dirname(loaded.path);
+  } catch (error) {
+    return {
+      ok: false,
+      why: `the seat state folder could not be resolved (${error instanceof Error ? error.message : String(error)})`,
+    };
+  }
+  if (!existsSync(join(dir, 'team.state.json'))) return { ok: true, state: undefined };
+  try {
+    return { ok: true, state: readState(dir).sessions[session]?.seats[seat] };
+  } catch {
+    return { ok: false, why: 'no trusted runtime session is recorded for this seat (seat state could not be read)' };
+  }
+}
+
 /**
  * Synchronous local policy/session/pointer validation for the Codex `native` route (zero
  * child-process spawn): verifies `codex-daemon` signed policy (`on`), bound `recordedSeatSession`
@@ -352,42 +386,14 @@ export function probeCodexNativeRoute(input: CodexNativeProbeInput): CodexNative
 
   let binding = input.sessionBinding;
   if (binding === undefined) {
-    // The seat state lives beside the team file that was actually loaded, never at a hardcoded
-    // `.agents`: a plain-folder or custom layout keeps it elsewhere. A folder that cannot be
-    // resolved is unproven and holds; it is never taken for a seat with no state.
-    let dir: string;
-    try {
-      const loaded = loadTeamFile(input.root, { home: input.home });
-      if (!loaded.ok) {
-        return {
-          status: 'unavailable',
-          reason: `the team file could not be read, so the seat state folder cannot be resolved (${loaded.errors[0]?.message ?? 'unknown error'})`,
-        };
-      }
-      dir = dirname(loaded.path);
-    } catch (error) {
-      return {
-        status: 'unavailable',
-        reason: `the seat state folder could not be resolved (${error instanceof Error ? error.message : String(error)})`,
-      };
-    }
-    let state: SeatState | undefined;
-    if (existsSync(join(dir, 'team.state.json'))) {
-      try {
-        state = readState(dir).sessions[input.session]?.seats[input.seat];
-      } catch {
-        return {
-          status: 'unavailable',
-          reason: 'no trusted runtime session is recorded for this seat (seat state could not be read)',
-        };
-      }
-    }
+    const read = readSeatState(input.root, input.home, input.session, input.seat);
+    if (!read.ok) return { status: 'unavailable', reason: read.why };
     binding = recordedSeatSession({
       home: input.home,
       root: input.root,
       herdrSession: input.session,
       seat: { name: input.seat, cli: 'codex' },
-      state,
+      state: read.state,
     });
   }
 
@@ -1279,12 +1285,86 @@ export async function deliverCodexNativeRoute(
     };
   }
 
+  // A managed Codex launch records the app-server it owns on the seat's state record, keyed to
+  // the seat's current presence binding. That record is the one endpoint this seat's thread can
+  // be reached at: when it is usable, the probe and the queue both take its URL exactly, never the
+  // shared control socket or a home-derived path. On a managed seat an absent or unusable record
+  // holds — a launch that could not record its socket is unproven, not legacy — while a seat with
+  // no managed binding and no record keeps today's measured behavior. An explicit remote or
+  // socket that names another endpoint is refused rather than split across two daemons.
+  const seatState = readSeatState(target.root, target.home, target.session, target.seat);
+  if (!seatState.ok) {
+    const at = nowFn();
+    const reason = `the seat state could not be read, so its recorded Codex endpoint cannot be checked (${seatState.why})`;
+    return {
+      route: CODEX_NATIVE_ROUTE,
+      outcome: 'unreachable',
+      reason,
+      receipt: copyReceipt,
+      walkAttempt: buildWalkAttempt('unreachable', liveRoutesRemain, at, startedAt, reason, {
+        kind: 'stored',
+        id: message.id,
+      }),
+    };
+  }
+  const presenceBinding = seatState.state?.presence_binding;
+  const recorded = inspectRecordedCodexEndpoint(seatState.state?.codex_endpoint, presenceBinding);
+  let recordedRemote: string | undefined;
+  if (recorded.kind === 'invalid') {
+    const at = nowFn();
+    const reason = `the seat's recorded Codex endpoint cannot be used (${recorded.why}); refusing the shared app-server path`;
+    return {
+      route: CODEX_NATIVE_ROUTE,
+      outcome: 'unreachable',
+      reason,
+      receipt: copyReceipt,
+      walkAttempt: buildWalkAttempt('unreachable', liveRoutesRemain, at, startedAt, reason, {
+        kind: 'stored',
+        id: message.id,
+      }),
+    };
+  }
+  if (recorded.kind === 'ok') {
+    recordedRemote = recorded.record.url;
+    if (target.remote !== undefined) {
+      const named = resolveCodexControlSocketPath(target.home, target.remote);
+      const recordedPath = codexEndpointPath(recorded.record);
+      if (named === null || recordedPath === null || resolvePath(named) !== resolvePath(recordedPath)) {
+        const at = nowFn();
+        const reason = `the explicit remote ${target.remote} names another endpoint than the seat's recorded ${recorded.record.url}; refusing to probe one and enqueue to another`;
+        return {
+          route: CODEX_NATIVE_ROUTE,
+          outcome: 'unsupported',
+          reason,
+          receipt: copyReceipt,
+          walkAttempt: buildWalkAttempt('unreachable', liveRoutesRemain, at, startedAt, reason, {
+            kind: 'stored',
+            id: message.id,
+          }),
+        };
+      }
+    }
+  } else if (isPresenceBinding(presenceBinding)) {
+    const at = nowFn();
+    const reason = 'the managed seat records no Codex endpoint its launch wrote; refusing the shared app-server path';
+    return {
+      route: CODEX_NATIVE_ROUTE,
+      outcome: 'unreachable',
+      reason,
+      receipt: copyReceipt,
+      walkAttempt: buildWalkAttempt('unreachable', liveRoutesRemain, at, startedAt, reason, {
+        kind: 'stored',
+        id: message.id,
+      }),
+    };
+  }
+
   // The endpoint a live probe reads is the one the queue below is given. Left to their own
   // defaults the two can name different daemons: the probe reads the team home's `.codex` while
   // `codex queue` reads the queue process's inherited `CODEX_HOME`. A contradictory pair of
   // options is refused here, before either operation, rather than probing one endpoint and
-  // enqueuing to the other.
-  const endpoint = resolveCodexAttemptEndpoint(target.home, target.remote, options.socketPath);
+  // enqueuing to the other. A recorded managed endpoint replaces both defaults with itself.
+  const endpoint = resolveCodexAttemptEndpoint(target.home, recordedRemote ?? target.remote, options.socketPath);
   if (!endpoint.ok) {
     const at = nowFn();
     return {
@@ -1330,7 +1410,7 @@ export async function deliverCodexNativeRoute(
       sender: target.sender,
       pointer: precheck.pointer,
       agentSession: precheck.threadId,
-      ...(target.remote !== undefined ? { remote: target.remote } : {}),
+      ...(endpoint.remote !== undefined ? { remote: endpoint.remote } : {}),
       codexDaemon: 'on',
       sessionBinding: { kind: 'bound', recorded: precheck.recorded },
       timeoutMs: Math.min(CODEX_PREPROBE_TIMEOUT_MS, remainingBeforeProbeMs),

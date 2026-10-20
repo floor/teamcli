@@ -23,8 +23,13 @@
 // 6. A relative control socket is resolved the same way by `deliverCodexNativeRoute` itself.
 // 7. An explicit remote and a control socket that name different endpoints are refused before
 //    any probe connection or queue process.
+// 8. A managed seat's recorded endpoint is the one the probe reads and the queue is handed; the
+//    inherited CODEX_HOME default socket is not created, so only the recorded endpoint can answer.
+// 9-10. A record bound to a predecessor, or absent on a managed seat, holds before any probe
+//    connection or queue process: the shared endpoint is never guessed in its place.
+// 11. An explicit remote naming another endpoint than the recorded one is refused before either.
 //
-// Scenes 5 run through `runSend`; scene 6 and 7 call `deliverCodexNativeRoute` directly because
+// Scenes 5 run through `runSend`; scenes 6-11 call `deliverCodexNativeRoute` directly because
 // `runSend` supplies neither an explicit socket nor an explicit remote — the pair the refusal
 // exists for is only reachable at the route function, and this suite does not edit the product to
 // expose it.
@@ -418,6 +423,54 @@ function nativeAttemptOptions(extra: { socketPath?: string | null } = {}) {
   };
 }
 
+const RECORD_BINDING = 'prs_0123456789ab';
+
+/** Writes the managed-launch fields onto this fixture's seat state: the binding the launch minted
+ *  and, when given, the app-server endpoint it recorded for that binding. */
+function recordSeatState(scene: Scene, extras: Record<string, unknown>): void {
+  const path = join(scene.dir, 'team.state.json');
+  const state = JSON.parse(readFileSync(path, 'utf8')) as {
+    sessions: Record<string, { seats: Record<string, Record<string, unknown>> }>;
+  };
+  Object.assign(state.sessions[SESSION]!.seats[SEAT]!, extras);
+  writeFileSync(path, `${JSON.stringify(state)}\n`);
+}
+
+function recordedEndpointState(
+  socketPath: string,
+  recordBinding: string,
+  seatBinding: string,
+): Record<string, unknown> {
+  return {
+    presence_binding: seatBinding,
+    codex_endpoint: {
+      url: `unix://${socketPath}`,
+      binding: recordBinding,
+      pid: 4242,
+      started_at: '2026-10-20T03:59:00.000Z',
+    },
+  };
+}
+
+/** The hold the route reports when the recorded endpoint cannot stand, as its whole attempt. */
+function heldEndpoint(scene: Scene, why: string) {
+  return {
+    route: 'native' as const,
+    outcome: 'unreachable' as const,
+    reason: why,
+    receipt: { copy: join(scene.dropDir, MESSAGE_ID), at: NOW.toISOString() },
+    walkAttempt: {
+      route: 'native' as const,
+      outcome: 'unreachable' as const,
+      liveRoutesRemain: true,
+      at: NOW,
+      ms: 0,
+      reason: why,
+      receipt: { kind: 'stored' as const, id: MESSAGE_ID },
+    },
+  };
+}
+
 /** The refusal the route reports for a contradictory pair, as its whole attempt. */
 function refusedPair(scene: Scene, why: string) {
   return {
@@ -733,5 +786,134 @@ describe('the ordinary send native leg (Codex)', () => {
     expect(server.requests).toEqual([]);
     expect(queueCalls(scene.queueLog)).toEqual([]);
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
+  });
+
+  test("a managed seat's recorded endpoint is the one probed and queued, never the home default", async () => {
+    const scene = makeScene();
+    const recordedSocket = join(scene.dir, 'state', 'codex-app-server.sock');
+    const server = await startAppServer(recordedSocket, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    recordSeatState(scene, recordedEndpointState(recordedSocket, RECORD_BINDING, RECORD_BINDING));
+
+    const saved = installEnv(scene, scene.codexHome);
+    let attempt;
+    try {
+      attempt = await deliverCodexNativeRoute(
+        nativeTarget(scene),
+        { id: MESSAGE_ID, record: '{}' },
+        nativeAttemptOptions(),
+      );
+    } finally {
+      restoreEnv(saved);
+      await server.close();
+    }
+
+    expect(attempt.outcome).toBe('enqueue');
+    expect(server.requests).toEqual([
+      { method: 'initialize' },
+      { method: 'thread/read', threadId: THREAD_ID },
+    ]);
+    // The queue is handed the recorded URL itself, so the probe and the queue name one endpoint.
+    // Nothing listens at the inherited CODEX_HOME's default socket: only the recorded one could
+    // have answered.
+    expect(queueCalls(scene.queueLog)).toEqual([
+      ['queue', '--remote', `unix://${recordedSocket}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+    expect(existsSync(join(scene.codexHome, 'app-server-control', 'app-server-control.sock'))).toBe(false);
+  });
+
+  test('a recorded endpoint bound to a predecessor holds: no probe, no queue', async () => {
+    const scene = makeScene();
+    const recordedSocket = join(scene.dir, 'state', 'codex-app-server.sock');
+    const server = await startAppServer(recordedSocket, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    recordSeatState(scene, recordedEndpointState(recordedSocket, 'prs_ffffffffffff', RECORD_BINDING));
+
+    const saved = installEnv(scene, scene.codexHome);
+    let attempt;
+    try {
+      attempt = await deliverCodexNativeRoute(
+        nativeTarget(scene),
+        { id: MESSAGE_ID, record: '{}' },
+        nativeAttemptOptions(),
+      );
+    } finally {
+      restoreEnv(saved);
+      await server.close();
+    }
+
+    expect(attempt).toEqual(
+      heldEndpoint(
+        scene,
+        "the seat's recorded Codex endpoint cannot be used (the endpoint record names another presence binding); refusing the shared app-server path",
+      ),
+    );
+    expect(server.requests).toEqual([]);
+    expect(queueCalls(scene.queueLog)).toEqual([]);
+  });
+
+  test('a managed seat that recorded no endpoint holds instead of guessing a shared one', async () => {
+    const scene = makeScene();
+    recordSeatState(scene, { presence_binding: RECORD_BINDING });
+
+    const saved = installEnv(scene, scene.codexHome);
+    let attempt;
+    try {
+      attempt = await deliverCodexNativeRoute(
+        nativeTarget(scene),
+        { id: MESSAGE_ID, record: '{}' },
+        nativeAttemptOptions(),
+      );
+    } finally {
+      restoreEnv(saved);
+    }
+
+    expect(attempt).toEqual(
+      heldEndpoint(
+        scene,
+        'the managed seat records no Codex endpoint its launch wrote; refusing the shared app-server path',
+      ),
+    );
+    expect(queueCalls(scene.queueLog)).toEqual([]);
+  });
+
+  test('an explicit remote naming another endpoint than the recorded one is refused', async () => {
+    const scene = makeScene();
+    const recordedSocket = join(scene.dir, 'state', 'codex-app-server.sock');
+    const otherSocket = join(scene.base, 'other-app-server.sock');
+    const server = await startAppServer(recordedSocket, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    recordSeatState(scene, recordedEndpointState(recordedSocket, RECORD_BINDING, RECORD_BINDING));
+
+    const saved = installEnv(scene, scene.codexHome);
+    let mismatch;
+    try {
+      mismatch = await deliverCodexNativeRoute(
+        nativeTarget(scene, `unix://${otherSocket}`),
+        { id: MESSAGE_ID, record: '{}' },
+        nativeAttemptOptions(),
+      );
+    } finally {
+      restoreEnv(saved);
+      await server.close();
+    }
+
+    expect(mismatch).toEqual(
+      refusedPair(
+        scene,
+        `the explicit remote unix://${otherSocket} names another endpoint than the seat's recorded unix://${recordedSocket}; refusing to probe one and enqueue to another`,
+      ),
+    );
+    expect(server.requests).toEqual([]);
+    expect(queueCalls(scene.queueLog)).toEqual([]);
   });
 });
