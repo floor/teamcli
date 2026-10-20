@@ -237,7 +237,10 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // message that does not verify cannot be read, so it neither earns a wake nor spends one,
       // and a message whose wake is already reserved is a spent attempt of its own: it is not
       // woken again, and it does not stand in the way of the messages behind it.
-      const wakeable = due.filter((one) => !existsSync(wakePath(dropDir, one.id)));
+      // A receipt that landed after the pass listed the folder is the read itself: the folder is
+      // read again under the seat's lock, so an already-read message is not reminded.
+      const unreadNow = new Set(listUnread(dropDir, context, home).map((one) => one.id));
+      const wakeable = due.filter((one) => unreadNow.has(one.id) && !existsSync(wakePath(dropDir, one.id)));
       const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
       if (audited === undefined || audited.payload === null) continue;

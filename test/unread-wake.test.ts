@@ -266,6 +266,38 @@ describe('wakeUnreadDrops', () => {
     expect(one.enters).toBe(1);
   });
 
+  test('a message read after the listing is not woken', async () => {
+    // The pass lists the folder before it takes the seat's lock; the seat's own read lands in
+    // between. The receipt is the read itself, so the wake would be a duplicate reminder: the
+    // folder is read again under the lock, nothing is typed, and no wake marker is spent.
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const base = scripts(one);
+    let read = false;
+    const scene = sceneOf(made, team, one, said, {
+      sources: {
+        ...base,
+        screen: () => {
+          if (!read) {
+            read = true;
+            readInbox(made, UNREAD_A, 'lead', 'acme');
+          }
+          return one.screen;
+        },
+      },
+    });
+
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(said).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+  });
+
   test('a native hold types no wake line and takes no trigger; the unread message stays reportable', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

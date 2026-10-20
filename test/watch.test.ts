@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runStatus } from '../src/commands/status.ts';
-import { plantMessage, type MessagePayload } from '../src/commands/messages.ts';
+import { plantMessage, receiptFile, type MessagePayload } from '../src/commands/messages.ts';
+import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { findRoot } from '../src/file/load.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
@@ -1932,6 +1933,18 @@ describe('team watch', () => {
     return payload;
   }
 
+  /** The receipt `team messages` writes for a message read from the older store: signed with the
+   *  message key over the receipt's own domain, so the watch's unread filter verifies it. */
+  function readMailbox(payload: MessagePayload): void {
+    const home = join(dir, 'home');
+    const receipt = {
+      kind: 'receipt', id: payload.id, to: payload.to, root: payload.root, session: payload.session,
+      at: '2026-10-03T13:59:30.000Z',
+    };
+    const signature = signDomain(RECEIPT_DOMAIN, receipt as Json, messageKeyOf(home));
+    writeFileSync(receiptFile(payload.root, payload.to, payload.id), `${JSON.stringify({ payload: receipt, signature }, null, 2)}\n`);
+  }
+
   test('--no-nudge types no ring and presses no Enter; the record stays', async () => {
     // The older `--no-nudge` test already has a report waiting, so the nudge branch runs and the
     // ring branch does not. This pass has no report: the ring would be the only typed line.
@@ -1960,6 +1973,26 @@ describe('team watch', () => {
     expect(io.out).toContain(`rang claude-operator-acme: ${ringFor('claude-operator-acme')}`);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
+  });
+
+  test('a message read after the pass read the mailbox is not rung', async () => {
+    // The mailbox snapshot is taken at the top of the pass; the seat reads the message while the
+    // pass is still reporting it. The receipt is the seat's own word, so the ring would be a
+    // duplicate reminder: the line is not typed, and the watch says the message is already read.
+    const body = 'the message body itself';
+    const payload = planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources(1, {
+      home: join(dir, 'home'),
+      notify: (text) => {
+        notified.push(text);
+        if (text.includes('asked a question')) readMailbox(payload);
+      },
+    }));
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
+    expect(io.out).toContain('ring not typed: message m1 is already read');
+    expect(io.out).not.toContain('rang claude-operator-acme');
   });
 
   test('a waiting report is never the typed line: the ring is', async () => {

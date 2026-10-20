@@ -383,6 +383,61 @@ describe('retryHeldDrops', () => {
     ]);
   });
 
+  test('a message read before the retry types is settled as read and no line is typed', async () => {
+    // The retry records are read first; the seat's own read lands before the delivery. The
+    // receipt is the read itself, so the trigger would be a duplicate reminder: the marker is
+    // settled with the words a receipt inside the retry's window earns, and nothing is typed.
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-read-first', 'from the owner\n\nhello');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const base = scripts(one);
+    let read = false;
+    const at = {
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: {
+        ...base,
+        screen: () => {
+          if (!read) {
+            read = true;
+            readByHook(made, dropDir, 'drop-read-first', 'lead', 'acme');
+          }
+          return one.screen;
+        },
+      },
+      now: NOW,
+      say: (text: string) => said.push(text),
+    };
+
+    await retryHeldDrops(at);
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(said).toEqual(['lead: a held send from owner was read on retry (receipt)']);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([
+      {
+        ts: NOW.toISOString(),
+        from: 'owner',
+        to: 'lead',
+        body: 'from the owner\n\nhello',
+        id: 'drop-read-first',
+        outcome: 'delivered (read)',
+        via: 'typed',
+      },
+    ]);
+  });
+
   test('a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

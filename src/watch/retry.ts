@@ -179,6 +179,26 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
       return;
     }
     const receipt = (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
+    // A receipt that landed since the retry records were read is the read itself: nothing is
+    // typed, and the marker is settled with the words a receipt inside the retry's window earns.
+    // A trigger typed for an already-read message is a duplicate reminder, not a delivery.
+    if (receipt()) {
+      clearPending(dropDir, drop.id);
+      if (home !== undefined) {
+        appendHistory(scene.team.project, scene.root, home, {
+          ts: scene.now.toISOString(),
+          from: drop.from,
+          to: drop.to,
+          body: drop.body,
+          id: drop.id,
+          outcome: 'delivered (read)',
+          via: 'typed',
+          ...(drop.leg === 'mcp-inbox' ? { failed: [INBOX_FALLBACK_REASON] } : {}),
+        });
+      }
+      scene.say(`${drop.to}: ${heldWords(drop)} was read on retry (receipt)`, false);
+      return;
+    }
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),

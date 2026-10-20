@@ -234,7 +234,8 @@ held-send retry and the unread wake.
   the file omits it.
 - **The ring**: `Team: run team drops --read --seat <seat> --session <session>`, named for the
   waiting seat and its own session, typed when a message already waits for that seat and the
-  seat's box is an empty idle prompt.
+  seat's box is an empty idle prompt. A signed read receipt that lands after the pass read the
+  mailbox keeps the line untyped: the mailbox is read again before the ring is delivered.
 - **The held-send retry**: `Run team drops --read --seat <seat> --session <session> and do
   that.`, the seat's own drop read for the drop of a send held while a pane was busy, typed on a
   local pass unless `--no-nudge` is set. It is the same line a typed send types, so a seat that
@@ -243,19 +244,22 @@ held-send retry and the unread wake.
   seat's status to be `idle` or `done` and a readable screen that is either an idle prompt or
   holds exactly that trigger unsent, and it takes the seat lock before delivering. The pending
   marker beside the drop is its ownership evidence: a trigger another sender process left may be
-  submitted, and another person's draft is never typed. The retry is bounded, and giving up says
-  the drop's path. The default nudge body `NUDGE_TEXT` is never typed.
+  submitted, and another person's draft is never typed. A receipt that has already landed when
+  the retry would type settles the marker as `delivered (read)` and types nothing. The retry is
+  bounded, and giving up says the drop's path. The default nudge body `NUDGE_TEXT` is never
+  typed.
 - **The unread wake**: the same line, `Run team drops --read --seat <seat> --session
   <session> and do that.`, typed once for a seat whose message has had no signed receipt for
   `watch.unread_after` seconds (600 when the file omits it) and whose box is free. It is the
   same delivery the retry makes, with the same status, screen, seat-lock and human-pane rules,
-  and it skips a message a held send's retry owns (a `.pending` marker). One line serves every
-  message due for that seat at that instant; the history records `sent (unconfirmed)` until a
-  signed receipt verifies, then `delivered (read)`. The wake writes its `<id>.wake` reservation
-  before the line is typed and holds it through the attempt: a crash after the reservation never
-  types a second line, a definite not-delivered outcome (`held`, `not-submitted`) gives the
-  reservation back so a later pass may wake, and an uncertain one (`unreachable`) keeps it,
-  spent. At twice the window a message still unread is reported once to its sender and to the
+  and it skips a message a held send's retry owns (a `.pending` marker). A receipt that lands
+  after the listing is read again under the seat's lock, and an already-read message is not
+  woken. One line serves every message due for that seat at that instant; the history records
+  `sent (unconfirmed)` until a signed receipt verifies, then `delivered (read)`. The wake
+  writes its `<id>.wake` reservation before the line is typed and holds it through the
+  attempt: a crash after the reservation never types a second line, a definite not-delivered
+  outcome (`held`, `not-submitted`) gives the reservation back so a later pass may wake, and an
+  uncertain one (`unreachable`) keeps it, spent. At twice the window a message still unread is reported once to its sender and to the
   team's lead as a signed Runtime mailbox record — never by typing into a pane — after a
   `<id>.reported` reservation of its own; the record is published write-once, so a mailbox
   already holding it keeps those bytes. The sender's mailbox is resolved from the signed
@@ -428,10 +432,12 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    nudge, the ring, the held-send retry and the unread wake are the only delivery paths; the
    retry MUST use the persisted marker as its ownership evidence, and the wake MUST leave a
    message a retry marker owns alone; both MUST require an idle or done status and a readable
-   idle or exact-trigger screen, and MUST hold the seat lock; `--no-nudge` MUST suppress the
-   wake too. The wake and the unread report MUST reserve their marker before their effect and
-   MUST keep a reservation whose attempt is uncertain, so no crash repeats a typed line or a
-   published record. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `ringText`), `src/watch/retry.ts`,
+   idle or exact-trigger screen, and MUST hold the seat lock; a reminder MUST NOT be typed for
+   a message whose signed read receipt already verifies — the ring reads the mailbox again
+   before typing, and the wake reads the folder again under the lock; `--no-nudge` MUST
+   suppress the wake too. The wake and the unread report MUST reserve their marker before
+   their effect and MUST keep a reservation whose attempt is uncertain, so no crash repeats a
+   typed line or a published record. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `ringText`), `src/watch/retry.ts`,
    `src/watch/unread.ts`, `src/send/native.ts` (`triggerLine`), the watch command. *Proof:*
    `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`, `test/held-retry.test.ts`,
    `test/unread-wake.test.ts`.

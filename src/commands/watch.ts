@@ -1059,13 +1059,19 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // undelivered to the lead), and a stored signed copy waiting unread is not a wake. When
         // the daemon hosts the watch, the hosted loop owns the ring and this pass types nothing;
         // an unverified pace holds the ring with the rest of the automatic work.
-        if (result.ring && delivered.size === 0 && !suppressed.has(result.ring.to) && hosted === undefined && paceVerified) {
-          if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${result.ring.text}`, false);
-          else await deliver({
-            pane: result.ring.pane,
-            text: result.ring.text,
-            cli: result.ring.cli,
-            ring: { to: result.ring.to },
+        const ring = result.ring;
+        if (ring && delivered.size === 0 && !suppressed.has(ring.to) && hosted === undefined && paceVerified && sources.home !== undefined) {
+          if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${ring.text}`, false);
+          // A read that landed since the pass read the mailbox is the seat's own word: the signed
+          // receipt is read again here, and an already-read message is not reminded. The snapshot
+          // held it only because the read came after that read.
+          else if (!listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id)) {
+            say(`ring not typed: message ${ring.id} is already read`, false);
+          } else await deliver({
+            pane: ring.pane,
+            text: ring.text,
+            cli: ring.cli,
+            ring: { to: ring.to },
           }, team, session, sources, memory, say, tell, told);
         }
         // An inbox send the seat's client has read since the last pass is promoted here: the
