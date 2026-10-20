@@ -13,9 +13,11 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startMachineDaemon, type StartMachineDaemonInput } from '../src/daemon/host.ts';
+import { daemonHealth, probeDaemonHealth } from '../src/daemon/health.ts';
 import { daemonLockPath, daemonSocketPath } from '../src/daemon/paths.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 import type { PresenceActivityResult } from '../src/daemon/presence/activity.ts';
+import { PRESENCE_HEALTH_GRACE_MS } from '../src/daemon/presence/health.ts';
 import type { PresenceIngestResult, PresenceIngester } from '../src/daemon/presence/ingest.ts';
 
 const CREW = `format: 1
@@ -52,6 +54,10 @@ seats:
 function emptyIngest(): PresenceIngestResult {
   // A fake closed result is not the ingester's verdict on a live channel: it is never healthy.
   return { ingested: [], rejected: [], stale: [], repaired: [], errors: [], healthy: false, pending: false, closed: false };
+}
+
+function ingest(over: Partial<PresenceIngestResult> = {}): PresenceIngestResult {
+  return { ...emptyIngest(), ...over };
 }
 
 function activityResult(): PresenceActivityResult {
@@ -322,5 +328,166 @@ describe('closing', () => {
     expect(existsSync(daemonLockPath(world.home))).toBe(false);
     expect(existsSync(daemonSocketPath(world.home))).toBe(false);
     expect(readDaemonState(world.home).kind).toBe('missing');
+  }, 15_000);
+});
+
+// The existing read-only health answer carries each route's presence answer, derived in memory
+// for the request. Nothing here is persisted or read back from `status.json`; the only healthy
+// answer is the producer's typed one, current inside the fixed grace, with the daemon open.
+describe('the health answer', () => {
+  const canonical = (): string => realpathSync(world.root);
+
+  function handle(over: Partial<PresenceIngester> = {}): PresenceIngester {
+    return {
+      step: async () => ingest(),
+      close: async () => ({ quiesced: true }),
+      isClosed: () => false,
+      ...over,
+    };
+  }
+
+  test('presence hosting off omits presence, so no health is known', async () => {
+    const daemon = await start({});
+    const snapshot = daemon.health();
+    expect(snapshot.roots).toEqual([{ root: canonical() }]);
+    expect(snapshot.roots?.[0]?.presence).toBeUndefined();
+    await daemon.close();
+  }, 15_000);
+
+  test('a typed healthy step answers serving; a fault and a backlog answer pending with a why', async () => {
+    let clock = new Date('2026-10-20T00:00:00.000Z');
+    let current = ingest({ healthy: true });
+    let steps = 0;
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => handle({
+        step: async () => { steps += 1; return current; },
+      }),
+      presenceActivity: () => async () => activityResult(),
+    });
+    await waitUntil(() => steps >= 1);
+    const serving = daemon.health().roots?.[0]?.presence;
+    expect(serving).toMatchObject({ session: 'crew', state: 'serving', healthy: true, why: null });
+    expect(serving?.checkedAt).toBe(clock.toISOString());
+
+    // The next request is fresh: the clock moved, so its checkedAt is its own instant, and the
+    // producer's typed fault replaces the old serving record rather than being averaged with it.
+    clock = new Date(clock.getTime() + 1_000);
+    current = ingest({ errors: [{ seat: 'worker-1', id: '', why: 'the presence log is faulted' }] });
+    let mark = steps;
+    await waitUntil(() => steps > mark);
+    const faulted = daemon.health().roots?.[0]?.presence;
+    expect(faulted).toMatchObject({
+      session: 'crew', state: 'pending', healthy: false, why: 'the presence log is faulted',
+    });
+    expect(faulted?.checkedAt).toBe(clock.toISOString());
+
+    // Healthy true with pending true is the producer's own backlog: not caught up, not serving.
+    clock = new Date(clock.getTime() + 1_000);
+    current = ingest({ healthy: true, pending: true });
+    mark = steps;
+    await waitUntil(() => steps > mark);
+    expect(daemon.health().roots?.[0]?.presence).toMatchObject({
+      state: 'pending', healthy: false, why: 'the presence channel still has a backlog',
+    });
+    await daemon.close();
+  }, 15_000);
+
+  test('a gap past the fixed grace answers pending, never the last serving word', async () => {
+    let clock = new Date('2026-10-20T00:00:00.000Z');
+    let steps = 0;
+    let hang = false;
+    let release: (() => void) | null = null;
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => handle({
+        step: () => {
+          steps += 1;
+          if (!hang) return Promise.resolve(ingest({ healthy: true }));
+          return new Promise<PresenceIngestResult>((resolve) => {
+            release = () => {
+              hang = false;
+              resolve(ingest({ healthy: true }));
+            };
+          });
+        },
+      }),
+      presenceActivity: () => async () => activityResult(),
+    });
+    later(() => release?.());
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.healthy === true);
+
+    hang = true;
+    const mark = steps;
+    await waitUntil(() => steps > mark);
+    clock = new Date(clock.getTime() + PRESENCE_HEALTH_GRACE_MS + 1);
+    expect(daemon.health().roots?.[0]?.presence).toMatchObject({
+      state: 'pending',
+      healthy: false,
+      why: 'no presence step finished inside the liveness window',
+    });
+
+    release!();
+    await daemon.close();
+  }, 15_000);
+
+  test('a closing daemon answers pending with why, never the last serving word', async () => {
+    let release: (() => void) | null = null;
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      presenceIngest: () => handle({
+        step: async () => ingest({ healthy: true }),
+        close: () => new Promise((resolve) => {
+          release = () => resolve({ quiesced: true });
+        }),
+      }),
+      presenceActivity: () => async () => activityResult(),
+    });
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.healthy === true);
+
+    // Admission stops synchronously at the first line of the close; the endpoint refuses, and
+    // the in-process snapshot names the close instead of repeating the last serving answer.
+    const closing = daemon.close();
+    expect(daemon.health().roots?.[0]?.presence).toMatchObject({
+      state: 'pending', healthy: false, why: 'the daemon is closing',
+    });
+    await waitUntil(() => release !== null);
+    release!();
+    await closing;
+  }, 15_000);
+
+  test('the socket answer and the client reading carry the same fresh presence by canonical root', async () => {
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      presenceIngest: () => handle({ step: async () => ingest({ healthy: true }) }),
+      presenceActivity: () => async () => activityResult(),
+    });
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.healthy === true);
+
+    const answer = await probeDaemonHealth(daemonSocketPath(world.home), { id: 'health-scene' });
+    expect(answer.kind).toBe('answered');
+    if (answer.kind === 'answered') {
+      expect(answer.health.roots).toHaveLength(1);
+      expect(answer.health.roots?.[0]).toMatchObject({
+        root: canonical(),
+        presence: { session: 'crew', state: 'serving', healthy: true, why: null },
+      });
+    }
+
+    const reading = await daemonHealth(world.home);
+    expect(reading.state).toBe('running');
+    expect(reading.probe.state).toBe('answered');
+    expect(reading.roots).toHaveLength(1);
+    expect(reading.roots[0]?.root).toBe(canonical());
+    expect(reading.roots[0]?.presence).toMatchObject({
+      session: 'crew', state: 'serving', healthy: true, why: null,
+    });
+    await daemon.close();
   }, 15_000);
 });

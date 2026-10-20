@@ -53,6 +53,23 @@ describe('the channel health answer', () => {
     health.stepped(true, after(PRESENCE_HEALTH_GRACE_MS));
     expect(health.healthy(START)).toBe(false);
   });
+
+  test('the display reason names the false answer without ever changing it', () => {
+    const health = createPresenceChannelHealth();
+    expect(health.reason(START)).toBe('the presence channel did not answer healthy');
+    health.stepped(false, START, 'the presence log is faulted');
+    expect(health.healthy(START)).toBe(false);
+    expect(health.reason(START)).toBe('the presence log is faulted');
+    health.stepped(false, after(10));
+    expect(health.reason(after(10))).toBe('the presence channel did not answer healthy');
+    health.stepped(true, after(20));
+    expect(health.healthy(after(20))).toBe(true);
+    expect(health.reason(after(20))).toBeNull();
+    // The grace boundary is inclusive, so one millisecond past it is the gap.
+    expect(health.reason(after(PRESENCE_HEALTH_GRACE_MS + 21))).toBe(
+      'no presence step finished inside the liveness window',
+    );
+  });
 });
 
 describe('a step is not healthy just because it finished', () => {

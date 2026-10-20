@@ -52,7 +52,11 @@ function stateOf(home: string): DaemonState {
   };
 }
 
-function serve(home: string, answer: boolean): Promise<Server> {
+function serve(
+  home: string,
+  answer: boolean,
+  healthSnapshot: DaemonHealthSnapshot = snapshot,
+): Promise<Server> {
   const socketPath = daemonSocketPath(home);
   mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
   const server = createServer((socket) => {
@@ -64,7 +68,7 @@ function serve(home: string, answer: boolean): Promise<Server> {
       if (nl === -1) return;
       const parsed = parseDaemonRequest(buffer.slice(0, nl));
       const response = parsed.ok
-        ? answerDaemonRequest(parsed.request, snapshot)
+        ? answerDaemonRequest(parsed.request, healthSnapshot)
         : { v: DAEMON_PROTOCOL_VERSION, id: parsed.id, ok: false as const, error: parsed.error };
       socket.end(formatDaemonResponse(response));
     });
@@ -172,5 +176,97 @@ describe('one machine daemon: health reading', () => {
     expect(health.running).toBe(true);
     expect(health.pid).toBe(process.pid);
     expect(health.probe).toMatchObject({ state: 'unanswered', reason: 'timeout' });
+  });
+});
+
+// The fresh presence record rides the existing health answer, keyed by the canonical root the
+// daemon accepted. The reader merges it only onto that exact root and only from the same daemon
+// epoch; everything else stays unknown, so a projection is held rather than trusted.
+describe('the reading carries fresh presence by canonical root', () => {
+  const ROOT = '/tmp/acme-web';
+  const CHECKED = '2026-10-20T12:00:00.000Z';
+  const serving = {
+    session: 'crew',
+    state: 'serving' as const,
+    healthy: true,
+    checkedAt: CHECKED,
+    why: null,
+  };
+
+  function stateWithRoots(home: string, roots: string[]): DaemonState {
+    return {
+      ...stateOf(home),
+      roots: roots.map((root) => ({ root, team: 'acme-web', send: 'serving' as const, bus: 'serving' as const, why: null })),
+    };
+  }
+
+  test('a same-epoch serving answer merges onto the root it names', async () => {
+    const home = scratchHome();
+    writeDaemonState(home, stateWithRoots(home, [ROOT]));
+    await serve(home, true, {
+      ...snapshot,
+      roots: [{ root: ROOT, presence: serving }],
+    });
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots).toEqual([{
+      root: ROOT, team: 'acme-web', send: 'serving', bus: 'serving', why: null,
+      presence: serving,
+    }]);
+  });
+
+  test('a pending answer keeps its why and is never healthy', async () => {
+    const home = scratchHome();
+    writeDaemonState(home, stateWithRoots(home, [ROOT]));
+    const pending = {
+      session: 'crew', state: 'pending' as const, healthy: false,
+      checkedAt: CHECKED, why: 'the presence channel still has a backlog',
+    };
+    await serve(home, true, { ...snapshot, roots: [{ root: ROOT, presence: pending }] });
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots[0]?.presence).toEqual(pending);
+  });
+
+  test('an answer from another daemon epoch is not pasted onto the record', async () => {
+    const home = scratchHome();
+    writeDaemonState(home, stateWithRoots(home, [ROOT]));
+    await serve(home, true, {
+      ...snapshot,
+      since: '2026-10-20T09:00:00.000Z',
+      roots: [{ root: ROOT, presence: serving }],
+    });
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots[0]?.presence).toBeUndefined();
+  });
+
+  test('a self-contradicting or incomplete record is dropped, never repaired', async () => {
+    const home = scratchHome();
+    const roots = ['/tmp/a', '/tmp/b', '/tmp/c', '/tmp/d'];
+    writeDaemonState(home, stateWithRoots(home, roots));
+    await serve(home, true, {
+      ...snapshot,
+      roots: [
+        // Serving must be healthy: one without the other is not known.
+        { root: '/tmp/a', presence: { ...serving, healthy: false } },
+        // Pending must say what it is waiting for.
+        { root: '/tmp/b', presence: { ...serving, state: 'pending', healthy: false, why: '' } },
+        // The session names the loaded team; an empty one names nothing.
+        { root: '/tmp/c', presence: { ...serving, session: '' } },
+        // A fresh route the record does not carry is never invented into it.
+        { root: '/tmp/elsewhere', presence: serving },
+      ],
+    });
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots.map((root) => root.root)).toEqual(roots);
+    expect(health.roots.every((root) => root.presence === undefined)).toBe(true);
+  });
+
+  test('an answer without fresh roots leaves the recorded roots alone', async () => {
+    const home = scratchHome();
+    writeDaemonState(home, stateWithRoots(home, [ROOT]));
+    await serve(home, true);
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots).toEqual([{
+      root: ROOT, team: 'acme-web', send: 'serving', bus: 'serving', why: null,
+    }]);
   });
 });
