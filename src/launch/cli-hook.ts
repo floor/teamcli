@@ -159,7 +159,9 @@ export function dropReadRunner(): string {
 }
 
 /** The fields the presence hook needs: every one is written into its argv at install time. The
- *  hook reads nothing from the CLI's stdin, so a turn's prompt bytes never pass through it. */
+ *  turn commands read nothing from the CLI's stdin, so a turn's prompt bytes never pass through
+ *  them; the notification command reads the bounded Notification payload the CLI hands it and
+ *  stages only the exact measured permission prompt. */
 export type CliHookPresence = {
   dir: string;
   session: string;
@@ -168,13 +170,20 @@ export type CliHookPresence = {
 };
 
 /**
- * One presence hook: stage the turn event with the launch's binding. The hidden subcommand
+ * One presence hook: stage the runtime event with the launch's binding. The hidden subcommand
  * validates every field again and writes only the seat's spool record. Its output is discarded
  * and its exit ignored — a presence observation must never break the turn it observes — and a
- * failed stage leaves the previous state in place rather than a guessed one.
+ * failed stage leaves the previous state in place rather than a guessed one. The notification
+ * command carries `--notification permission_prompt`: the hook then stages `human-wait` only if
+ * the CLI's payload names that exact notification, so a dialog or an idle notice cannot claim a
+ * person is being waited on.
  */
-function presenceHookCommand(presence: CliHookPresence, event: 'turn-start' | 'turn-end'): string {
-  return `${cliRunner()} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event} >/dev/null 2>&1 || true`;
+function presenceHookCommand(
+  presence: CliHookPresence,
+  event: 'turn-start' | 'turn-end' | 'human-wait',
+): string {
+  const filter = event === 'human-wait' ? ' --notification permission_prompt' : '';
+  return `${cliRunner()} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event}${filter} >/dev/null 2>&1 || true`;
 }
 
 /**
@@ -245,7 +254,9 @@ function dropReadCommand(seat: string, session: string, epoch?: string): string 
  *  read that takes a moment still leaves the seat reading `working`, then the folder read whose
  *  stdout the CLI adds to the turn. `presence`, when the launch has a binding, adds one command
  *  after each state word: the hidden hook stages the turn's presence event under that binding, so
- *  the reading comes from the runtime itself rather than from a screen.
+ *  the reading comes from the runtime itself rather than from a screen. It also adds the
+ *  `Notification` entry, whose one command stages `human-wait` only when the payload is the
+ *  measured permission prompt; the filter lives in the hook, not in a settings matcher.
  *
  *  `inbound`, when the seat's own launch line declares one, is written into this same file as the
  *  top-level `crossSessionInbound`. The launch command appends this file's flag at the END of the
@@ -275,6 +286,9 @@ export function cliHookSettings(
   }
   const hooks: Record<string, unknown> = {};
   if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
+  if (presence !== undefined) {
+    hooks.Notification = [{ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'human-wait') }] }];
+  }
   hooks.UserPromptSubmit = start;
   hooks.Stop = stop;
   const document: Record<string, unknown> = { hooks };

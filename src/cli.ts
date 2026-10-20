@@ -157,8 +157,9 @@ export async function main(argv: string[], io: Io): Promise<number> {
     const { default: run } = await import('./conformance/adapter.ts');
     return run(rest, io);
   }
-  // Hidden: a seat's settings-file hook stages one presence event. Every word is in argv; the
-  // command reads no stdin and prints nothing. It is not a command in the help text.
+  // Hidden: a seat's settings-file hook stages one presence event. Turn words are in argv and the
+  // command reads no stdin; the notification command also exact-filters the CLI's payload. It
+  // prints nothing. It is not a command in the help text.
   if (name === 'presence-hook') {
     const { default: run } = await import('./daemon/presence/hook.ts');
     return run(rest);
