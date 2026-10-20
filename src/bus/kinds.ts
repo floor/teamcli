@@ -69,6 +69,11 @@ export const EVENT_KINDS = [
   'seat.unblocked',
   'seat.unreachable',
   'seat.done',
+  // Presence: one applied, current-binding transition from a seat's runtime, published by the
+  // daemon's presence publisher. Not a message: it carries no sender, recipient or body, and it
+  // is addressed to nobody by default. The words are the presence contract's own, never the
+  // terminal's seat-state words.
+  'presence.changed',
   // Work & tasks
   'work.claimed',
   'work.done',

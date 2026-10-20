@@ -75,6 +75,9 @@ export const EVENT_ROUTING_DEFAULTS: EventRouting = {
   'seat.unblocked': ['lead', 'operator'],
   'seat.unreachable': ['lead', 'operator'],
   'seat.done': ['lead', 'operator'],
+  // A presence transition is a feed record, not an instruction: no seat is told by default. A
+  // lead or a watch that wants it adds itself through the routing setting.
+  'presence.changed': [],
   'work.claimed': ['lead'],
   'work.done': ['lead'],
   'work.released': ['lead'],
