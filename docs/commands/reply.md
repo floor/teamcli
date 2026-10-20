@@ -12,11 +12,11 @@ written. A message an earlier build left in `.agents/messages/` carries no threa
 not answered.
 
 A reply goes to the sender of the record it answers, never to a third seat, and the pair is
-admitted exactly as a send's own pair is — the team and entity seat rules admit the ordinary pairs
-first, and the reply rule (`reply-on-open-thread`) is asked last, so a reply between two seats no
-other rule pairs, two teams of different entities, is admitted while the thread is open. The rule
-reads the thread, not the invitation: it admits a reply on any open thread, and a thread is open
-until it is closed or the clock or the cap ends it.
+judged by the same rules as a send's, with the reply rule (`reply-on-open-thread`) asked after
+the targeted and grant rules and before the declared-seat rule: a reply on an open thread is
+admitted by the reply rule even between two seats no earlier rule pairs. The rule reads the
+thread, not the invitation: it admits a reply on any open thread, and a thread is open until it
+is closed or the clock or the cap ends it.
 
 A record a client wrote is not answered in this release. A record carrying `from_client` is
 refused with `reply.client-refused` before any grant is read or any client inbox is created, and
