@@ -9,6 +9,7 @@ import { startMachineDaemon } from '../src/daemon/host.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath, machineConfigDir } from '../src/daemon/paths.ts';
 import { mintPresenceBinding } from '../src/daemon/presence/contract.ts';
 import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
+import type { HostedRoute } from '../src/daemon/routes.ts';
 import { STATE_FILE } from '../src/state.ts';
 import { daemonSocketPath as sendSocketPath } from '../src/send/daemon.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
@@ -512,7 +513,7 @@ describe('team daemon status, install, uninstall and run', () => {
 
   test('run hosts presence only when --presence is given; --presence belongs to run', async () => {
     const { root, home } = scratch();
-    const seen: Array<{ presenceHosting?: boolean }> = [];
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
     const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
       seen.push(input);
       return { kind: 'already-running' as const, pid: 42 };
@@ -520,6 +521,36 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
     expect(await runDaemon(['run', '--presence'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
     expect(seen.map((input) => input.presenceHosting)).toEqual([undefined, true]);
+
+    // A start without the flag carries no endpoint reader at all.
+    expect(seen[0]?.presenceCodexEndpoint).toBeUndefined();
+    const binding = mintPresenceBinding();
+    const dir = join(root, '.agents');
+    const url = `unix:///private/tmp/launch/${binding}.sock`;
+    const located = (current: string): string => `${JSON.stringify({
+      format: 1,
+      sessions: {
+        acme: {
+          seats: {
+            clerk: {
+              id: 'seat_0123456789ab',
+              presence_binding: current,
+              codex_endpoint: { url, binding, pid: 4242, started_at: '2026-10-20T05:00:00.000Z' },
+            },
+          },
+          worktrees: {},
+        },
+      },
+    })}\n`;
+    const route: HostedRoute = { root, team: 'acme', session: 'acme', seats: ['clerk', 'op-1'] };
+    writeFileSync(join(dir, STATE_FILE), located(binding));
+    const endpoint = seen[1]?.presenceCodexEndpoint;
+    expect(endpoint?.(route, dir, 'clerk')).toBe(url);
+    // A seat with no state record has no recorded endpoint; nothing is guessed for it.
+    expect(endpoint?.(route, dir, 'op-1')).toBeNull();
+    // The same record under a different current binding belongs to an earlier incarnation.
+    writeFileSync(join(dir, STATE_FILE), located(mintPresenceBinding()));
+    expect(endpoint?.(route, dir, 'clerk')).toBeNull();
 
     const refused = testIo(root, owner);
     expect(await runDaemon(['status', '--presence'], refused, sourcesOf(home))).toBe(2);

@@ -17,6 +17,7 @@ import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { daemonHealth } from '../daemon/health.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
+import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
 import { systemServiceManager, type ServiceManager, type ServiceProgram } from '../daemon/service.ts';
 import type { DaemonHost } from '../send/daemon.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -307,7 +308,14 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       ...(sources.now !== undefined ? { now: sources.now } : {}),
       ...(sources.heartbeatMs !== undefined ? { heartbeatMs: sources.heartbeatMs } : {}),
       ...(sources.sendHost !== undefined ? { sendHost: sources.sendHost } : {}),
-      ...(parsed.presence ? { presenceHosting: true } : {}),
+      ...(parsed.presence ? {
+        presenceHosting: true,
+        // The seat's own state record is the only source of an explicit endpoint. The shared
+        // reader accepts it only under the seat's current presence binding, so a missing,
+        // malformed or earlier-incarnation record stays null and the seat is reported unproven;
+        // no home folder is consulted and no shared endpoint is guessed in its place.
+        presenceCodexEndpoint: (route, stateDir, seat) => currentCodexEndpoint(stateDir, route.session, seat),
+      } : {}),
     });
     if (started.kind === 'already-running') {
       io.stdout(`team daemon: already running${started.pid === null ? '' : ` (pid ${String(started.pid)})`}\n`);

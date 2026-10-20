@@ -47,6 +47,9 @@ reconciler, the publisher and the per-seat health answer. Without the flag the d
 read presence at all, and a start without it behaves exactly as before. The opt-in is a `run`
 flag alone; there is no second policy key for it. A seat whose native attachment is expected but
 cannot be proven is answered as unproven for that seat, never silently as its route's hook seat.
+A Codex seat attaches only to the explicit endpoint its own state record carries, and only while
+that record's binding is the seat's current presence binding; a missing, malformed or
+earlier-incarnation record stays unproven.
 
 `install` writes the user service unit and registers it with the system service manager. It
 prints `team daemon: installed for <n> checkout(s); the system service manager starts it at login
@@ -80,8 +83,9 @@ endpoints. Under `run --presence` the daemon additionally reads each hosted chec
 folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of staged records, the
 append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,
 `current.json` and session `status.json`, and writes the applied fence
-(`presence_applied`) into the seat's state record. Nothing in this command reads a credential
-store.
+(`presence_applied`) into the seat's state record. That record's `codex_endpoint` entry is then
+read when a Codex seat's target is resolved; it is never written here. Nothing in this command
+reads a credential store.
 
 ## Who may run it
 
