@@ -126,27 +126,27 @@ now: "2026-10-04T09:00:00Z"
 state:
   briefs:
     claude-keeper:
-      id: d64248d1-f88e-58d0-9851-0189307071d8
+      id: b29e2052-1f11-5d7d-a7f0-64cde27cb4ff
       at: "2026-10-04T08:00:00.000Z"
       incarnation: inc_000000000000
       epoch: run_000000000000
-      sha256: db80706f94e98bfee95fcd32990f0855920da80d4c701ebf151a18e842fcd3d9
+      sha256: de005217022dde970d94aa7fa0c32155bc1769ce4711b332eb3e541b712aa658
       attempt: 0
       stage: claimed
     claude-beacon:
-      id: e766cb22-fda1-537b-a879-d21f4087280d
+      id: 47d139b7-ba7e-5b1d-baa8-ad11180ae73b
       at: "2026-10-04T08:00:00.000Z"
       incarnation: inc_000000000001
       epoch: run_000000000001
-      sha256: db80706f94e98bfee95fcd32990f0855920da80d4c701ebf151a18e842fcd3d9
+      sha256: de005217022dde970d94aa7fa0c32155bc1769ce4711b332eb3e541b712aa658
       attempt: 0
       stage: claimed
     desk:
-      id: 4ad84eea-34fc-5d78-8040-edae3e822b8c
+      id: 5965c0c1-fa15-5faf-ab52-e8ebdc6bf5c8
       at: "2026-10-04T08:00:00.000Z"
       incarnation: inc_000000000002
       epoch: run_000000000002
-      sha256: db80706f94e98bfee95fcd32990f0855920da80d4c701ebf151a18e842fcd3d9
+      sha256: de005217022dde970d94aa7fa0c32155bc1769ce4711b332eb3e541b712aa658
       attempt: 0
       stage: claimed
 ```
@@ -202,8 +202,8 @@ the claim was stopped before its drop. The dry run plans the deliveries and writ
 
 ```console
 $ team brief rollout ; echo "exit $?"
-deliver claude-keeper: db80706f94e9 -> d64248d1-f88e-58d0-9851-0189307071d8
-deliver claude-beacon: db80706f94e9 -> e766cb22-fda1-537b-a879-d21f4087280d
+deliver claude-keeper: de005217022d -> b29e2052-1f11-5d7d-a7f0-64cde27cb4ff
+deliver claude-beacon: de005217022d -> 47d139b7-ba7e-5b1d-baa8-ad11180ae73b
 human desk: delivery only
 exit 1
 ```
@@ -213,8 +213,8 @@ exit 1
 
 ```console
 $ team brief rollout --apply ; echo "exit $?"
-deliver claude-keeper: db80706f94e9 -> d64248d1-f88e-58d0-9851-0189307071d8
-deliver claude-beacon: db80706f94e9 -> e766cb22-fda1-537b-a879-d21f4087280d
+deliver claude-keeper: de005217022d -> b29e2052-1f11-5d7d-a7f0-64cde27cb4ff
+deliver claude-beacon: de005217022d -> 47d139b7-ba7e-5b1d-baa8-ad11180ae73b
 human desk: delivery only
 exit 0
 ```
@@ -224,8 +224,8 @@ still reported as delivery only, because it is never read:
 
 ```console
 $ team brief rollout ; echo "exit $?"
-brief claude-keeper: current db80706f94e9 d64248d1-f88e-58d0-9851-0189307071d8
-brief claude-beacon: current db80706f94e9 e766cb22-fda1-537b-a879-d21f4087280d
+brief claude-keeper: current de005217022d b29e2052-1f11-5d7d-a7f0-64cde27cb4ff
+brief claude-beacon: current de005217022d 47d139b7-ba7e-5b1d-baa8-ad11180ae73b
 human desk: delivery only
 exit 0
 ```
@@ -233,14 +233,14 @@ exit 0
 A name that is not this brief's is never replaced. Here another file sits at the implementer's
 expected id; the plan moves the delivery to the claim's next attempt and says what it found:
 
-```file file=.agents/send-drops/beacon/claude-beacon/e766cb22-fda1-537b-a879-d21f4087280d
+```file file=.agents/send-drops/beacon/claude-beacon/47d139b7-ba7e-5b1d-baa8-ad11180ae73b
 not a message record: another program's file, left where it is
 ```
 
 ```console
 $ team brief rollout ; echo "exit $?"
-brief claude-keeper: current db80706f94e9 d64248d1-f88e-58d0-9851-0189307071d8
-recover claude-beacon: the name at e766cb22-fda1-537b-a879-d21f4087280d is not this brief's; would deliver at a6c34fb5-c640-5b0d-b6bd-3bce9ac92274
+brief claude-keeper: current de005217022d b29e2052-1f11-5d7d-a7f0-64cde27cb4ff
+recover claude-beacon: the name at 47d139b7-ba7e-5b1d-baa8-ad11180ae73b is not this brief's; would deliver at 2e199754-5af6-5bdd-952c-deda62c9d761
 human desk: delivery only
 exit 1
 ```
@@ -249,8 +249,8 @@ exit 1
 
 ```console
 $ team brief rollout --apply ; echo "exit $?"
-brief claude-keeper: current db80706f94e9 d64248d1-f88e-58d0-9851-0189307071d8
-recovered claude-beacon: the name at e766cb22-fda1-537b-a879-d21f4087280d is not this brief's; delivered at a6c34fb5-c640-5b0d-b6bd-3bce9ac92274
+brief claude-keeper: current de005217022d b29e2052-1f11-5d7d-a7f0-64cde27cb4ff
+recovered claude-beacon: the name at 47d139b7-ba7e-5b1d-baa8-ad11180ae73b is not this brief's; delivered at 2e199754-5af6-5bdd-952c-deda62c9d761
 human desk: delivery only
 exit 0
 ```
@@ -272,8 +272,8 @@ $ team brief rollout --json ; echo "exit $?"
     {
       "seat": "claude-keeper",
       "action": "current",
-      "hash12": "db80706f94e9",
-      "id": "d64248d1-f88e-58d0-9851-0189307071d8",
+      "hash12": "de005217022d",
+      "id": "b29e2052-1f11-5d7d-a7f0-64cde27cb4ff",
       "from": null,
       "reason": null,
       "current": true
@@ -281,8 +281,8 @@ $ team brief rollout --json ; echo "exit $?"
     {
       "seat": "claude-beacon",
       "action": "current",
-      "hash12": "db80706f94e9",
-      "id": "a6c34fb5-c640-5b0d-b6bd-3bce9ac92274",
+      "hash12": "de005217022d",
+      "id": "2e199754-5af6-5bdd-952c-deda62c9d761",
       "from": null,
       "reason": null,
       "current": true
@@ -290,8 +290,8 @@ $ team brief rollout --json ; echo "exit $?"
     {
       "seat": "desk",
       "action": "human",
-      "hash12": "db80706f94e9",
-      "id": "4ad84eea-34fc-5d78-8040-edae3e822b8c",
+      "hash12": "de005217022d",
+      "id": "5965c0c1-fa15-5faf-ab52-e8ebdc6bf5c8",
       "from": null,
       "reason": null,
       "current": true
