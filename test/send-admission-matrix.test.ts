@@ -258,6 +258,48 @@ describe('the same-team role matrix', () => {
   });
 });
 
+describe('the final target: every seat reaches its own orchestrator', () => {
+  // The first half of the target is already the rules' shape: whatever a seat's role, its own
+  // team's orchestrator is one of the pairs admitted, and the rule that answers it is named here.
+  // The second half — every same-team seat-to-seat pair admitted through the declared signed
+  // rule — is the implementation slice builder-3 owns; the refusal table above stays the
+  // baseline record until that rule lands, then the pair expectations flip in one commit.
+  const ownLeadRule: Record<string, string> = {
+    lead: RULE.leads,
+    'operator-place': RULE.briefs,
+    'operator-word': RULE.seat,
+    architect: RULE.seat,
+    writer: RULE.seat,
+    erato: RULE.seat,
+    builder: RULE.seat,
+    tester: RULE.seat,
+    reviewer: RULE.seat,
+    implementer: RULE.seat,
+    documentarist: RULE.seat,
+    'coordinator-word': RULE.seat,
+    'assistant-capability': RULE.assistant,
+    'assistant-word': RULE.seat,
+  };
+
+  test('every role in the grid reaches its own team\'s orchestrator', () => {
+    for (const row of grid) {
+      expect({ role: row.id, ...admitSend(row.side, floorLead, teams) }).toEqual({ role: row.id, ok: true, rule: ownLeadRule[row.id]! });
+    }
+  });
+
+  test('a declared seat reaches its own team\'s orchestrator by the same rules', () => {
+    const declared: DeclaredSender[] = [
+      { seat: 'architect', team: 'floor', role: 'architect', declared: true },
+      { seat: 'writer-06', team: 'floor', role: 'writer', declared: true },
+      { seat: 'operator-02', team: 'floor', role: 'operator', declared: true },
+      { seat: 'assistant-word', team: 'floor', role: 'assistant', declared: true },
+    ];
+    for (const side of declared) {
+      expect({ seat: side.seat, ...admitSend(side, floorLead, teams) }).toEqual({ seat: side.seat, ok: true, rule: RULE.seat });
+    }
+  });
+});
+
 describe('team relations: what crosses an edge', () => {
   const crossRows: GridRow[] = [
     { id: 'entity-lead', side: cliLead },
